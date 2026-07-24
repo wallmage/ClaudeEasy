@@ -1338,12 +1338,15 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
             Join-Path $sandbox "route-redirect-sink-ready"
         $routeRedirectAuthorized =
             Join-Path $sandbox "route-redirect-authorized"
+        $routeRedirectObserved =
+            Join-Path $sandbox "route-redirect-observed"
         $routeRedirectSinkHit = Join-Path $sandbox "route-redirect-sink-hit"
         $routeRedirectJob = Start-Job -ArgumentList @(
             $routeRedirectPort,
             $routeRedirectSinkPort,
             $routeRedirectReady,
             $routeRedirectAuthorized,
+            $routeRedirectObserved,
             $routeSecretCanary
         ) -ScriptBlock {
             param(
@@ -1351,6 +1354,7 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                 [int]$SinkPort,
                 [string]$ReadyPath,
                 [string]$AuthorizedPath,
+                [string]$ObservedPath,
                 [string]$ExpectedSecret
             )
             $listener = [System.Net.Sockets.TcpListener]::new(
@@ -1383,6 +1387,17 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                                 $line.Substring($separator + 1).Trim()
                         }
                     }
+                    [System.IO.File]::WriteAllText(
+                        $ObservedPath,
+                        (
+                            "length={0};bearer={1}" -f
+                                $authorization.Length,
+                                $authorization.StartsWith(
+                                    "Bearer ",
+                                    [System.StringComparison]::Ordinal
+                                )
+                        )
+                    )
                     if ($authorization -eq ("Bearer " + $ExpectedSecret)) {
                         [System.IO.File]::WriteAllText(
                             $AuthorizedPath,
@@ -1462,16 +1477,27 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                     "-Json"
                 ) `
                 $routeSecretCanary
-            Assert-JsonResult $routeRedirectResult "verify_routes" 1 |
-                Out-Null
+            $routeRedirectResultJson =
+                Assert-JsonResult $routeRedirectResult "verify_routes" 1
             Assert-True (
                 -not $routeRedirectResult.Output.Contains($routeSecretCanary)
             ) "route verifier exposed its secret after a redirect response"
             Wait-Job $routeRedirectJob -Timeout 5 | Out-Null
             Wait-Job $routeRedirectSinkJob -Timeout 5 | Out-Null
+            $routeRedirectObservation =
+                if (Test-Path -LiteralPath $routeRedirectObserved) {
+                    Get-Content -LiteralPath $routeRedirectObserved -Raw
+                } else {
+                    "request_not_observed"
+                }
             Assert-True (
                 Test-Path -LiteralPath $routeRedirectAuthorized
-            ) "route redirect fixture did not receive the stdin secret"
+            ) (
+                "route redirect fixture did not receive the stdin secret; " +
+                "observed=$routeRedirectObservation; " +
+                "job=$($routeRedirectJob.State); " +
+                "code=$($routeRedirectResultJson.code)"
+            )
             Assert-True (
                 -not (Test-Path -LiteralPath $routeRedirectSinkHit)
             ) "route verifier followed a controller redirect with its credentials"
