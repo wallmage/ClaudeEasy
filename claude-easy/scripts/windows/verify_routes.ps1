@@ -41,7 +41,7 @@ function Read-ControllerSecretFromStandardInput {
 }
 
 function Test-StrictIpv4LoopbackHost([string]$HostName) {
-    $parts = @($HostName.Split("."))
+    $parts = @($HostName.Split([char[]]@(".")))
     if ($parts.Count -ne 4 -or $parts[0] -cne "127") { return $false }
     foreach ($part in $parts) {
         if ($part -notmatch '^(?:0|[1-9][0-9]{0,2})$' -or
@@ -55,7 +55,7 @@ function Test-StrictIpv4LoopbackHost([string]$HostName) {
 function Get-ValidatedControllerBaseUri([string]$Value) {
     [Uri]$parsed = $null
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains("\") -or
-        -not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$parsed)) {
+        -not [Uri]::TryCreate($Value, [System.UriKind]::Absolute, [ref]$parsed)) {
         throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"
     }
     $authorityMatch = [regex]::Match(
@@ -102,16 +102,23 @@ function Get-ValidatedControllerBaseUri([string]$Value) {
         throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址，且不能包含凭据、查询或片段。"
     }
     $hostName = [string]$parsed.DnsSafeHost
-    $isLoopback = [string]::Equals(
+    $parsedHostMatchesRaw = [string]::Equals(
         $hostName,
-        "localhost",
-        [StringComparison]::OrdinalIgnoreCase
-    ) -or $hostName -ceq "::1" -or $hostName -ceq "[::1]" -or
-        (Test-StrictIpv4LoopbackHost $hostName)
-    if (-not $isLoopback) {
+        $rawHost,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+    if ($rawHost -ceq "[::1]") {
+        [System.Net.IPAddress]$parsedAddress = $null
+        $parsedHostMatchesRaw =
+            [System.Net.IPAddress]::TryParse(
+                $hostName.Trim([char[]]@("[", "]")),
+                [ref]$parsedAddress
+            ) -and [System.Net.IPAddress]::IsLoopback($parsedAddress)
+    }
+    if (-not $parsedHostMatchesRaw) {
         throw "控制器地址必须使用本机回环地址。"
     }
-    return $parsed.GetLeftPart([UriPartial]::Path).TrimEnd("/")
+    return $parsed.GetLeftPart([System.UriPartial]::Path).TrimEnd([char[]]@("/"))
 }
 
 function Invoke-ControllerJson([string]$Endpoint) {
