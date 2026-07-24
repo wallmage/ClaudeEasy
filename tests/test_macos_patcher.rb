@@ -8922,20 +8922,22 @@ class MacosPatcherTest < Minitest::Test
     Dir.mktmpdir do |directory|
       ClaudeEasy.stub(:remote_subscription_targets, []) do
         ClaudeEasy.stub(:selected_profile_name, "friend") do
-          ClaudeEasy.stub(
-            :safe_update_all,
-            { status: :runtime_restore_pending, runtime_status: :reload_failed_restore_pending }
-          ) do
-            output, error = capture_io do
-              assert_equal 1, ClaudeEasy.cli([
-                "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-              ])
+          ClaudeEasy.stub(:saved_usage_profile, 3) do
+            ClaudeEasy.stub(
+              :safe_update_all,
+              { status: :runtime_restore_pending, runtime_status: :reload_failed_restore_pending }
+            ) do
+              output, error = capture_io do
+                assert_equal 1, ClaudeEasy.cli([
+                  "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
+                ])
+              end
+              assert_empty error
+              result = JSON.parse(output)
+              assert_equal "partial", result.fetch("status")
+              assert_equal "safe_update_runtime_pending", result.fetch("code")
+              assert_includes result.fetch("summary_zh"), "运行内核"
             end
-            assert_empty error
-            result = JSON.parse(output)
-            assert_equal "partial", result.fetch("status")
-            assert_equal "safe_update_runtime_pending", result.fetch("code")
-            assert_includes result.fetch("summary_zh"), "运行内核"
           end
         end
       end

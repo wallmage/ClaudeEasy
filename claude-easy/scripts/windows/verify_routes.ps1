@@ -220,14 +220,16 @@ function Test-SafeLiveChain(
     [string[]]$Chains,
     [string[]]$ProviderChains
 ) {
-    if ($Chains.Count -eq 0) { return $false }
+    $chainItems = @($Chains)
+    $providerChainItems = @($ProviderChains)
+    if ($chainItems.Count -eq 0) { return $false }
     $nonProxyNames = @("DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "DNS")
     $nonProxyTypes = @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")
-    for ($index = 0; $index -lt $Chains.Count; $index++) {
-        $name = [string]$Chains[$index]
+    for ($index = 0; $index -lt $chainItems.Count; $index++) {
+        $name = [string]$chainItems[$index]
         if ([string]::IsNullOrWhiteSpace($name) -or $name -in $nonProxyNames) { return $false }
         $providerName = ""
-        if ($index -lt $ProviderChains.Count) { $providerName = [string]$ProviderChains[$index] }
+        if ($index -lt $providerChainItems.Count) { $providerName = [string]$providerChainItems[$index] }
         $proxy = Get-LiveChainProxy $Proxies $Providers $name $providerName
         if ($null -eq $proxy) { return $false }
         $type = [string]$proxy.type
@@ -301,22 +303,27 @@ function Test-RouteChains(
     [object]$Providers = $null,
     [string[]]$ProviderChains = @()
 ) {
-    if (-not (Test-SafeLiveChain $Proxies $Providers $Chains $ProviderChains)) { return $false }
+    $chainItems = @($Chains)
+    $providerChainItems = @($ProviderChains)
+    if (-not (Test-SafeLiveChain $Proxies $Providers $chainItems $providerChainItems)) { return $false }
     $expectedProperty = $Proxies.PSObject.Properties[$ExpectedGroup]
-    if ($null -eq $expectedProperty -or
-        -not (Test-SupportedRouteGroupType ([string]$expectedProperty.Value.type))) {
+    if ($null -eq $expectedProperty) { return $false }
+    $expectedType = [string]$expectedProperty.Value.type
+    if (-not (Test-SupportedRouteGroupType $expectedType) -or
+        ([string]::IsNullOrWhiteSpace($ExpectedSelection) -and
+            $expectedType -ne "LoadBalance")) {
         return $false
     }
     if (-not $AllowExplicitProxyGroup) {
-        return $Chains -contains $ExpectedGroup
+        return $chainItems -contains $ExpectedGroup
     }
-    if ($Chains -contains $AiGroup) { return $false }
-    if ($Chains -contains $ExpectedGroup) { return $true }
-    for ($index = 0; $index -lt $Chains.Count; $index++) {
-        $name = [string]$Chains[$index]
+    if ($chainItems -contains $AiGroup) { return $false }
+    if ($chainItems -contains $ExpectedGroup) { return $true }
+    for ($index = 0; $index -lt $chainItems.Count; $index++) {
+        $name = [string]$chainItems[$index]
         if ($name -notmatch '(?i)google') { continue }
         $providerName = ""
-        if ($index -lt $ProviderChains.Count) { $providerName = [string]$ProviderChains[$index] }
+        if ($index -lt $providerChainItems.Count) { $providerName = [string]$providerChainItems[$index] }
         $proxy = Get-LiveChainProxy $Proxies $Providers $name $providerName
         if ($null -ne $proxy -and (Test-SupportedRouteGroupType ([string]$proxy.type))) { return $true }
     }
@@ -351,8 +358,21 @@ function Observe-Route(
                 $connectionSourcePort = 0
                 if (-not [int]::TryParse([string]$connection.metadata.sourcePort, [ref]$connectionSourcePort)) { continue }
                 if ($connectionSourcePort -ne $sourcePort) { continue }
-                $chains = @($connection.chains | ForEach-Object { [string]$_ })
-                $providerChains = @($connection.providerChains | ForEach-Object { [string]$_ })
+                $chains = @(
+                    @($connection.chains) |
+                        Where-Object { $null -ne $_ } |
+                        ForEach-Object { [string]$_ }
+                )
+                $providerChains = @()
+                $providerChainsProperty =
+                    $connection.PSObject.Properties["providerChains"]
+                if ($null -ne $providerChainsProperty) {
+                    $providerChains = @(
+                        @($providerChainsProperty.Value) |
+                            Where-Object { $null -ne $_ } |
+                            ForEach-Object { [string]$_ }
+                    )
+                }
                 $passed = Test-RouteChains $Proxies $chains $ExpectedGroup $ExpectedSelection $AiGroup $AllowExplicitProxyGroup $Providers $providerChains
                 [void]$script:ClaudeEasyChecks.Add([ordered]@{ name = $Label.ToLowerInvariant(); ok = $passed; status = $(if ($passed) { "passed" } else { "failed" }) })
                 if (-not $Json) { Write-Host ("{0}：{1}" -f $Label, $(if ($passed) { "通过" } else { "失败" })) }

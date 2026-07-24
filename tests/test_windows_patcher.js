@@ -1244,6 +1244,18 @@ test('Windows route verifier accepts an explicit non-AI Google proxy group', () 
   assert.doesNotMatch(source, /Observe-Route "Google"[^\r\n]+"google"/);
 });
 
+test('Windows route verifier keeps PowerShell 5 route arrays and empty selections safe', () => {
+  const source = fs.readFileSync(routeVerifierPath, 'utf8');
+
+  assert.match(source, /\$chainItems = @\(\$Chains\)/);
+  assert.match(source, /\$providerChainItems = @\(\$ProviderChains\)/);
+  assert.match(source, /\$connection\.PSObject\.Properties\["providerChains"\]/);
+  assert.match(
+    source,
+    /\[string\]::IsNullOrWhiteSpace\(\$ExpectedSelection\)[\s\S]*?\$expectedType -ne "LoadBalance"/
+  );
+});
+
 test('PowerShell scripts never assign to read-only automatic variables', () => {
   const scriptsRoot = path.join(root, 'claude-easy/scripts');
   const pending = [scriptsRoot];
