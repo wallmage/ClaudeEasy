@@ -1,8 +1,8 @@
 require "json"
 
 root = File.expand_path("..", __dir__)
-policy_path = File.join(root, "clash-patch/references/policy.json")
-engine_path = File.join(root, "clash-patch/scripts/windows/clash_verge_global.js")
+policy_path = File.join(root, "claude-easy/references/policy.json")
+engine_path = File.join(root, "claude-easy/scripts/windows/clash_verge_global.js")
 policy = JSON.parse(File.binread(policy_path).force_encoding(Encoding::UTF_8))
 mapping = {
   "version" => "version",
@@ -19,9 +19,9 @@ mapping = {
   "ai_rules" => "aiRules"
 }
 embedded = mapping.each_with_object({}) { |(source, target), result| result[target] = policy.fetch(source) }
-block = "// CLASH PATCH POLICY BEGIN\nconst CLASH_PATCH_POLICY = #{JSON.pretty_generate(embedded)};\n// CLASH PATCH POLICY END"
+block = "// CLAUDEEASY POLICY BEGIN\nconst CLAUDE_EASY_POLICY = #{JSON.pretty_generate(embedded)};\n// CLAUDEEASY POLICY END"
 source = File.binread(engine_path).force_encoding(Encoding::UTF_8)
-generated = source.sub(%r{// CLASH PATCH POLICY BEGIN.*?// CLASH PATCH POLICY END}m, block)
+generated = source.sub(%r{// CLAUDEEASY POLICY BEGIN.*?// CLAUDEEASY POLICY END}m, block)
 abort "找不到 Windows 策略标记" if generated == source && !source.include?(block)
 
 if ARGV.include?("--check")

@@ -9,8 +9,8 @@ ROOT = File.expand_path("..", __dir__) unless defined?(ROOT)
 
 class MutationSafetyTest < Minitest::Test
   def with_repo_copy
-    Dir.mktmpdir("clash-patch-mutation-") do |directory|
-      %w[.github clash-patch tests README.md].each do |entry|
+    Dir.mktmpdir("claude-easy-mutation-") do |directory|
+      %w[.github claude-easy tests README.md].each do |entry|
         FileUtils.cp_r(File.join(ROOT, entry), File.join(directory, entry))
       end
       yield directory
@@ -70,7 +70,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/verify_routes.ps1",
+        "claude-easy/scripts/windows/verify_routes.ps1",
         '$connectionHost = [string]$connection.metadata.host',
         '$host = [string]$connection.metadata.host'
       )
@@ -88,7 +88,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/verify_routes.ps1",
+        "claude-easy/scripts/windows/verify_routes.ps1",
         '$main = Get-LiveMainGroup $proxies',
         '$main = Find-Group $proxies @($policy.main_group_names) $MainGroup "主代理组"'
       )
@@ -105,7 +105,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "def locked_profile_current?(handle, path)\n",
         "def locked_profile_current?(handle, path)\n    return true\n"
       )
@@ -122,7 +122,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/backups.rb",
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "      recovery = resume_profile_transaction(\n" \
           "        backup_root, roots: directories, work_items: work_items, reload_runtime: true,\n" \
           "        require_tun: :preserve, precommit_condition: precommit_condition\n" \
@@ -142,7 +142,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "        remove_profile_transaction(transaction)\n" \
           "        return { status: :aborted, failed_profile: \"\", reason: :concurrent_change }\n",
         "        true\n" \
@@ -161,7 +161,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         "    if ! rollback_profile_selection; then\n",
         "    if false; then\n"
       )
@@ -178,14 +178,14 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "        item.fetch(\"Path\"), current, original, expected_path: item.fetch(\"WritePath\")\n",
         "        item.fetch(\"Path\"), current, current, expected_path: item.fetch(\"WritePath\")\n"
       )
 
       assert_mutation_is_killed(
         root,
-        { "CLASH_PATCH_RUN_PRODUCTION_PROBES" => "1" },
+        { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" },
         RbConfig.ruby, "tests/test_macos_patcher.rb",
         "--name", "test_production_probe_next_safe_update_recovers_batch_killed_after_first_swap"
       )
@@ -196,7 +196,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "    return :runtime_restore_pending unless\n" \
           "      reload_runtime &&\n" \
           "      reload_recovered_profile_runtime(\n" \
@@ -219,7 +219,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "      backup_root, roots: roots, keep_transaction: pending\n",
         "      backup_root, roots: roots, keep_transaction: false\n"
       )
@@ -236,7 +236,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "          backup_root, roots: roots, work_items: work_items, reload_runtime: auto_reload,\n",
         "          backup_root, roots: roots, work_items: work_items, reload_runtime: true,\n"
       )
@@ -253,7 +253,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "              keep_transaction: results.any? do |result|\n" \
           "                result[:status] == :reload_failed_restore_pending\n" \
           "              end\n",
@@ -272,7 +272,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/backups.rb",
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    create_versioned_backup(target, backup_root, content: current_bytes, reason: \"pre-restore\")\n" \
           "    transaction = prepare_profile_transaction(\n" \
           "      [{ path: target, original: current_bytes, candidate: backup_bytes }], backup_root\n" \
@@ -293,7 +293,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/backups.rb",
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    result = activation.call(result) if activation\n" \
           "    finish_backup_restore_transaction(transaction, result)\n",
         "    remove_profile_transaction(transaction)\n" \
@@ -313,7 +313,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/backups.rb",
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    if %i[updated no_change reload_failed_rolled_back].include?(result.fetch(:status))\n",
         "    if true\n"
       )
@@ -330,7 +330,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/backups.rb",
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    if current_bytes == backup_bytes\n" \
           "      transaction = prepare_profile_transaction(\n" \
           "        [{ path: target, original: current_bytes, candidate: backup_bytes }], backup_root\n" \
@@ -351,7 +351,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "  def safe_update_item_restored?(item)\n",
         "  def safe_update_item_restored?(item)\n    return false\n"
       )
@@ -368,7 +368,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "      if profile_transaction_pending?(backup_root)\n" \
           "        selected = selected_name\n" \
           "        active_root = active_profile_root(roots, selected)\n" \
@@ -400,7 +400,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "        items, transaction, backup_root, roots, keep_transaction: runtime_restore_pending\n",
         "        items, transaction, backup_root, roots, keep_transaction: false\n"
       )
@@ -417,7 +417,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "    all_restored = items.all? { |item| safe_update_item_restored?(item) }\n",
         "    all_restored = true\n"
       )
@@ -434,7 +434,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "    if items.none? { |item| item[:committed_identity] } && !candidate_remains\n",
         "    if false\n"
       )
@@ -451,14 +451,14 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "    candidate_remains = items.any? { |item| safe_update_item_candidate_or_unknown?(item) }\n",
         "    candidate_remains = false\n"
       )
 
       assert_mutation_is_killed(
         root,
-        { "CLASH_PATCH_RUN_PRODUCTION_PROBES" => "1" },
+        { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" },
         RbConfig.ruby, "tests/test_macos_patcher.rb",
         "--name", "test_production_probe_safe_update_restores_a_swap_when_bookkeeping_raises"
       )
@@ -469,7 +469,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "    [stat.dev, stat.ino] == item.fetch(:candidate_identity) &&\n",
         "    true &&\n"
       )
@@ -486,7 +486,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "      File.binread(item.fetch(:write_path)) == item.fetch(:candidate)\n" \
           "  rescue StandardError\n" \
           "    true\n" \
@@ -511,8 +511,8 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_windows.ps1",
-        "            Assert-ClashPatchProxyGroupCollection $text ([string]$item.File)\n",
+        "claude-easy/scripts/install_windows.ps1",
+        "            Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)\n",
         ""
       )
 
@@ -529,8 +529,8 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_windows.ps1",
-        "        Assert-ClashPatchManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript\n",
+        "claude-easy/scripts/install_windows.ps1",
+        "        Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript\n",
         ""
       )
 
@@ -547,7 +547,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/safe_update.ps1",
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
         "$flowLines += @($lines[($groupsNode.Start + 1)..($lines.Count - 1)])\n",
         "$flowLines += @($lines[($groupsNode.Start + 1)..($groupsNode.End - 1)])\n"
       )
@@ -565,7 +565,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/safe_update.ps1",
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
         "            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget)\n",
         "            Invoke-VerifiedFileTransaction $targets\n"
       )
@@ -583,7 +583,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/safe_update.ps1",
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
         "            if ([string]::IsNullOrWhiteSpace($observedHash)) {\n",
         "            if ($false) {\n"
       )
@@ -601,7 +601,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         '        if (-not $target.Exists) { continue }',
         '        if (-not $target.Exists) { throw "mutant rejected a main-journal cleanup" }'
       )
@@ -619,7 +619,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         "    \$recovered = Invoke-InterruptedTransactionRecovery \$plan \$preCommitCondition\n",
         "    \$recovered = Invoke-InterruptedTransactionRecovery \$plan \$null\n"
       )
@@ -637,7 +637,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         "                Test-InterruptedRecoveryCommitCondition \$preCommitCondition\n",
         "                \$true\n"
       )
@@ -655,7 +655,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_windows.ps1",
+        "claude-easy/scripts/uninstall_windows.ps1",
         "        $writeTargets $deletePlans $clientStoppedPreCommit\n",
         "        $writeTargets $deletePlans $null\n"
       )
@@ -673,7 +673,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         "    $committed = Invoke-VerifiedPathTransaction $Targets @() $PreCommitCondition\n",
         "    $committed = Invoke-VerifiedPathTransaction $Targets @() $null\n"
       )
@@ -691,7 +691,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_windows.ps1",
+        "claude-easy/scripts/install_windows.ps1",
         "$installCommitted = Invoke-VerifiedFileTransaction $targets $clientStoppedPreCommit\n",
         "$installCommitted = Invoke-VerifiedFileTransaction $targets $null\n"
       )
@@ -709,7 +709,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_windows.ps1",
+        "claude-easy/scripts/install_windows.ps1",
         ") $clientStoppedPreCommit\n" \
           "    if (-not $restoreCommitted)",
         ") $null\n" \
@@ -729,7 +729,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_windows.ps1",
+        "claude-easy/scripts/uninstall_windows.ps1",
         "    if ($safeUpdateStateSnapshot.Exists) {\n" \
           "        Complete-PendingSafeUpdateUninstall\n" \
           "    }\n",
@@ -751,7 +751,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/transform.rb",
+        "claude-easy/scripts/macos/patch_profiles/transform.rb",
         "    groups = route_groups(config)\n",
         "    groups = selectable_groups(config)\n"
       )
@@ -768,9 +768,9 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/clash_verge_global.js",
-        "  const groups = clashPatchRouteGroups(config);\n",
-        "  const groups = clashPatchSelectableGroups(config);\n"
+        "claude-easy/scripts/windows/clash_verge_global.js",
+        "  const groups = claudeEasyRouteGroups(config);\n",
+        "  const groups = claudeEasySelectableGroups(config);\n"
       )
 
       assert_mutation_is_killed(
@@ -786,7 +786,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/transform.rb",
+        "claude-easy/scripts/macos/patch_profiles/transform.rb",
         "    groups.first&.fetch(\"name\")\n",
         "    nil\n"
       )
@@ -803,7 +803,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/clash_verge_global.js",
+        "claude-easy/scripts/windows/clash_verge_global.js",
         "  return groups.length ? groups[0].name : null;\n",
         "  return null;\n"
       )
@@ -821,7 +821,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/transform.rb",
+        "claude-easy/scripts/macos/patch_profiles/transform.rb",
         "(owned_safe_names - [route_group])",
         "owned_safe_names"
       )
@@ -838,7 +838,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/clash_verge_global.js",
+        "claude-easy/scripts/windows/clash_verge_global.js",
         ".concat(ownedNames.safe.filter(function (name) { return name !== routeGroup; }))",
         ".concat(ownedNames.safe)"
       )
@@ -856,7 +856,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "    begin\n      source.rewind\n      restored = source.write(original_bytes)",
         "    begin\n      raise write_error\n      source.rewind\n      restored = source.write(original_bytes)"
       )
@@ -873,7 +873,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "        if File.exist?(temporary.path) && File.exist?(write_path) &&\n" \
           "           same_file_identity?(source_stat, temporary.path) &&\n" \
           "           File.binread(write_path) == replacement_bytes\n" \
@@ -898,14 +898,14 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/mihomo.rb",
+        "claude-easy/scripts/macos/patch_profiles/mihomo.rb",
         "    unless completed\n",
         "    if completed\n"
       )
 
       assert_mutation_is_killed(
         root,
-        { "CLASH_PATCH_RUN_PRODUCTION_PROBES" => "1" },
+        { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" },
         RbConfig.ruby, "tests/test_macos_patcher.rb",
         "--name", "test_production_probe_mihomo_does_not_survive_a_killed_validator"
       )
@@ -916,7 +916,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/verify_routes.rb",
+        "claude-easy/scripts/macos/verify_routes.rb",
         '/(?:\A|\.)google\.com\z/i',
         "/google/i"
       )
@@ -933,7 +933,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/verify_routes.rb",
+        "claude-easy/scripts/macos/verify_routes.rb",
         "          metadata[\"network\"].to_s.casecmp(\"tcp\").zero? &&\n" \
           "          metadata[\"sourcePort\"].to_i == source_port\n",
         "          metadata[\"network\"].to_s.casecmp(\"tcp\").zero?\n"
@@ -951,7 +951,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/clash_verge_global.js",
+        "claude-easy/scripts/windows/clash_verge_global.js",
         "  if (JSON.stringify(candidate) !== JSON.stringify(secondPass)) return config;\n",
         "  if (JSON.stringify(candidate) !== JSON.stringify(secondPass)) return candidate;\n"
       )
@@ -969,7 +969,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles.rb",
+        "claude-easy/scripts/macos/patch_profiles.rb",
         "patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime",
         "patch_profiles/profile_writer patch_profiles/missing_subscriptions patch_profiles/runtime"
       )
@@ -986,7 +986,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         "  if ! run_committing_profile_operation \\\n" \
           "      --profile-dir \"$CUSTOM_PROFILE_DIR\" \\\n" \
           "      --policy \"$POLICY_SOURCE\" \\\n" \
@@ -1009,7 +1009,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "    unless preflight.all? { |result| %i[updated unchanged].include?(result[:status]) }\n",
         "    if false && !preflight.all? { |result| %i[updated unchanged].include?(result[:status]) }\n"
       )
@@ -1026,7 +1026,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         'disabled) AUTO_UPDATE_CHANGED=1; say "已自动关闭订阅更新，并保存修改前状态。" ;;',
         'disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;'
       )
@@ -1043,7 +1043,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         "preserve_profile_operation_state() {\n" \
           "  commit_profile_selection\n" \
           "  AUTO_UPDATE_CHANGED=0\n" \
@@ -1065,7 +1065,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         "  trap ':' HUP INT TERM\n" \
           "  set +e\n" \
           "  /usr/bin/ruby \"$OPERATION_LOCK_SOURCE\" \"$OPERATION_LOCK_PATH\" /bin/sh \"$0\" \"$@\"\n",
@@ -1085,7 +1085,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         '    "1:$PROFILE_OPERATION_RECEIPT_NONCE") PROFILE_OPERATION_RECEIPT_COMMITTED=1 ;;',
         '    "1:$PROFILE_OPERATION_RECEIPT_NONCE") PROFILE_OPERATION_RECEIPT_COMMITTED=0 ;;'
       )
@@ -1102,7 +1102,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/cli.rb",
+        "claude-easy/scripts/macos/patch_profiles/cli.rb",
         "    mark_wrapper_commit_receipt(options) if operation_succeeded\n",
         ""
       )
@@ -1119,7 +1119,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/cli.rb",
+        "claude-easy/scripts/macos/patch_profiles/cli.rb",
         "        mark_wrapper_commit_receipt(options)\n",
         ""
       )
@@ -1136,7 +1136,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         '  elif [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 75 ]; then',
         '  elif [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 76 ]; then'
       )
@@ -1153,7 +1153,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         "    PROFILE_OPERATION_RESULT_UNKNOWN=1\n",
         "    PROFILE_OPERATION_RESULT_UNKNOWN=0\n"
       )
@@ -1170,7 +1170,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
+        "claude-easy/scripts/install_macos.sh",
         "  elif [ \"\$PROFILE_OPERATION_RECEIPT_INVALID\" -eq 1 ] ||\n" \
         "       [ \"\$PROFILE_OPERATION_CHILD_STATUS\" -ge 128 ]; then",
         "  elif [ \"\$PROFILE_OPERATION_RECEIPT_INVALID\" -eq 1 ]; then"
@@ -1188,7 +1188,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/cli.rb",
+        "claude-easy/scripts/macos/patch_profiles/cli.rb",
         '    raise WrapperCommitReceiptError, "wrapper commit receipt publication failed"',
         '    raise IOError, "wrapper commit receipt publication failed"'
       )
@@ -1205,7 +1205,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "      ownership = write_auto_update_ownership_state(\n" \
           "        backup_root, domain, original, \"installed\", existing: auto_update_ownership_state(backup_root)\n" \
           "      )\n",
@@ -1224,7 +1224,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/result_contract.rb",
+        "claude-easy/scripts/macos/result_contract.rb",
         'value.match?(/\A[1-3]\z/) ? value.to_i : nil',
         'value.match?(/\A[1-4]\z/) ? value.to_i : nil'
       )
@@ -1241,7 +1241,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/mihomo.rb",
+        "claude-easy/scripts/macos/patch_profiles/mihomo.rb",
         "  def validate_with_mihomo(path, core_path: AUTO_CORE, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)\n" \
           "    core = core_path.equal?(AUTO_CORE) ? mihomo_core_path : core_path\n",
         "  def validate_with_mihomo(path, core_path: AUTO_CORE, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)\n" \
@@ -1260,7 +1260,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/runtime.rb",
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
         '    return false unless dns_runtime_healthy?(requester, "www.google.com")',
         '    true'
       )
@@ -1277,7 +1277,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         '      raise InvalidConfigError, "远程订阅地址不是 HTTPS" unless url.start_with?("https://")',
         '      true'
       )
@@ -1330,7 +1330,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/mihomo.ps1",
+        "claude-easy/scripts/windows/install_windows/mihomo.ps1",
         "        Start-MihomoCandidateCleanupWatcher $temporary\n" +
           "        [System.IO.File]::Move($staging, $temporary)",
         "        [System.IO.File]::Move($staging, $temporary)\n" +
@@ -1350,8 +1350,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "tests/run_macos_production_probes.rb",
-        'probe_environment = { "CLASH_PATCH_RUN_PRODUCTION_PROBES" => "1" }.freeze',
-        'probe_environment = { "CLASH_PATCH_RUN_PRODUCTION_PROBES" => "0" }.freeze'
+        'probe_environment = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" }.freeze',
+        'probe_environment = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "0" }.freeze'
       )
 
       assert_mutation_is_killed(
@@ -1489,20 +1489,20 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_macos.sh",
+        "claude-easy/scripts/uninstall_macos.sh",
         "\ndelete_staged_install_files\n\nAUTO_UPDATE_RESTORED=0",
         "\nAUTO_UPDATE_RESTORED=0"
       )
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_macos.sh",
+        "claude-easy/scripts/uninstall_macos.sh",
         "\ncommit_staged_install_files\n/bin/rmdir",
         "\ndelete_staged_install_files\ncommit_staged_install_files\n/bin/rmdir"
       )
 
       assert_mutation_is_killed(
         root,
-        "/usr/bin/env", "CLASH_PATCH_RUN_PRODUCTION_PROBES=1",
+        "/usr/bin/env", "CLAUDE_EASY_RUN_PRODUCTION_PROBES=1",
         RbConfig.ruby, "tests/test_macos_wrappers.rb",
         "--name", "test_production_probe_uninstall_preserves_a_file_replaced_after_staging"
       )
@@ -1513,7 +1513,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/runtime.rb",
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
         "    unless runtime_precommit_allowed?(precommit_condition)\n" \
           "      status = restore_profile_bytes(result) ?",
         "    if false\n" \
@@ -1533,7 +1533,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "        if batch_committed &&\n" \
           "           !runtime_committed &&\n" \
           "           results.any? { |result| result[:status] == :updated } &&\n" \
@@ -1557,7 +1557,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/runtime.rb",
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
         "    return false if expected_tun == :unknown\n" \
           "    return false unless runtime_precommit_allowed?(precommit_condition)\n",
         "    return false if expected_tun == :unknown\n" \
@@ -1577,7 +1577,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/subscriptions.rb",
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "    return nil unless matching_paths.length == 1\n",
         "    return nil if matching_paths.length > 1\n"
       )
@@ -1595,7 +1595,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/profile_writer.rb",
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "    needs_runtime_context = selected_name.nil? && !dry_run\n",
         "    needs_runtime_context = selected_name.nil? && auto_reload && !dry_run\n"
       )
@@ -1613,7 +1613,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/macos/patch_profiles/runtime.rb",
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
         "    return :reload_failed_restore_pending unless runtime_precommit_allowed?(precommit_condition)\n",
         "    return :reload_failed_restore_pending if false\n"
       )
@@ -1629,8 +1629,8 @@ class MutationSafetyTest < Minitest::Test
 
   def test_macos_wrapper_operation_lock_mutations_are_killed
     %w[
-      clash-patch/scripts/install_macos.sh
-      clash-patch/scripts/uninstall_macos.sh
+      claude-easy/scripts/install_macos.sh
+      claude-easy/scripts/uninstall_macos.sh
     ].each do |relative_path|
       with_repo_copy do |root|
         replace_once(
@@ -1642,7 +1642,7 @@ class MutationSafetyTest < Minitest::Test
 
         assert_mutation_is_killed(
           root,
-          "/usr/bin/env", "CLASH_PATCH_RUN_PRODUCTION_PROBES=1",
+          "/usr/bin/env", "CLAUDE_EASY_RUN_PRODUCTION_PROBES=1",
           RbConfig.ruby, "tests/test_macos_wrappers.rb",
           "--name",
           "test_production_probe_shared_wrapper_lock_prevents_uninstall_from_deleting_a_concurrent_install"
@@ -1655,14 +1655,16 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/install_macos.sh",
-        "recover_interrupted_uninstall\n\nif [ -z \"\$USAGE_PROFILE\" ]",
-        ": # mutant: skip pending uninstall recovery\n\nif [ -z \"\$USAGE_PROFILE\" ]"
+        "claude-easy/scripts/install_macos.sh",
+        "  migrate_legacy_state_under_lock\n  recover_interrupted_uninstall\n" \
+        "  resolve_usage_profile",
+        "  migrate_legacy_state_under_lock\n  : # mutant: skip pending uninstall recovery\n" \
+        "  resolve_usage_profile"
       )
 
       assert_mutation_is_killed(
         root,
-        "/usr/bin/env", "CLASH_PATCH_RUN_PRODUCTION_PROBES=1",
+        "/usr/bin/env", "CLAUDE_EASY_RUN_PRODUCTION_PROBES=1",
         RbConfig.ruby, "tests/test_macos_wrappers.rb",
         "--name",
         "test_production_probe_install_recovers_a_killed_ready_uninstall_before_changing_profile"
@@ -1674,14 +1676,14 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_macos.sh",
+        "claude-easy/scripts/uninstall_macos.sh",
         "recover_pending_profile_transaction\nrestore_uncommitted_uninstall",
         ": # mutant: skip pending profile recovery\nrestore_uncommitted_uninstall"
       )
 
       assert_mutation_is_killed(
         root,
-        "/usr/bin/env", "CLASH_PATCH_RUN_PRODUCTION_PROBES=1",
+        "/usr/bin/env", "CLAUDE_EASY_RUN_PRODUCTION_PROBES=1",
         RbConfig.ruby, "tests/test_macos_wrappers.rb",
         "--name",
         "test_production_probe_uninstall_recovers_a_killed_profile_transaction_before_enabling_updates"
@@ -1693,7 +1695,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_macos.sh",
+        "claude-easy/scripts/uninstall_macos.sh",
         "  if /bin/ln \"$slot\" \"$destination\"; then\n" \
         "    return 0\n" \
         "  fi\n",
@@ -1712,7 +1714,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/uninstall_macos.sh",
+        "claude-easy/scripts/uninstall_macos.sh",
         "  if [ ! -f \"$UNINSTALL_STAGING/READY\" ]; then\n" \
         "    /bin/rm -rf \"$UNINSTALL_STAGING\"\n" \
         "    return 0\n" \
@@ -1783,7 +1785,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         '            if ($snapshot.Exists -and' + "\n" +
           '                $currentHash -ne $replacementHash -and -not $isInterruptedReplacement) {' + "\n" +
           '                throw "中断事务新建目标有无法自动合并的新改动：$($action.Path)"' + "\n" +
@@ -1805,7 +1807,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         '            -not ($action.Action -eq "delete" -and $isInterruptedOriginal)) {',
         '            $true) {'
       )
@@ -1822,7 +1824,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/script_js.ps1",
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
         "                Assert-JavaScriptDoesNotBindMain $suffix\n",
         "                Assert-JavaScriptReservedIdentifiers $suffix\n"
       )
@@ -1839,7 +1841,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/script_js.ps1",
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
         "    Assert-JavaScriptDoesNotBindMain $withoutDeclaration\n",
         "    Assert-JavaScriptReservedIdentifiers $withoutDeclaration\n"
       )
@@ -1856,7 +1858,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         "        [System.IO.File]::Move($temporary, $destination)\n",
         "        [System.IO.File]::Copy($temporary, $destination)\n"
       )
@@ -1873,7 +1875,7 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "clash-patch/scripts/windows/install_windows/transaction.ps1",
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
         '    if ($existing.Count -gt 1) {',
         '    if ($false) {'
       )
@@ -1891,8 +1893,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "tests/test_windows_installer.ps1",
-        '        $env:CLASH_PATCH_TEST_UNINSTALL_CRASH_READY = $publicUninstallCrashReady',
-        '        $env:CLASH_PATCH_TEST_UNINSTALL_PROBE_REMOVED = $publicUninstallCrashReady'
+        '        $env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY = $publicUninstallCrashReady',
+        '        $env:CLAUDE_EASY_TEST_UNINSTALL_PROBE_REMOVED = $publicUninstallCrashReady'
       )
 
       assert_mutation_is_killed(

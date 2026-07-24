@@ -1,8 +1,10 @@
-# Clash Patch
+# ClaudeEasy
 
-Clash Patch 是给 AI 助手使用的网络补丁与诊断 Skill，支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev。它包含 Patch 和 Diagnostics 两个模块：Patch 按你选择的用途档位，只做该档位需要的最少配置改动；Diagnostics 从一句模糊的网络故障描述出发，主动复现、取证、修复并复测。
+ClaudeEasy 是给 AI 助手使用的网络补丁与诊断 Skill，支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev。它包含 Patch 和 Diagnostics 两个模块：Patch 按你选择的用途档位，只做该档位需要的最少配置改动；Diagnostics 从一句模糊的网络故障描述出发，主动复现、取证、修复并复测。
 
-本文档面向用户，说明它能做什么、怎么做、绝不会做什么。给代理执行的流程规定在 `clash-patch/SKILL.md`，更细的产品规则和全部状态文案以 `clash-patch/references/patch-policy.md` 为准。
+ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关系；名称用于说明它重点支持 Claude 和 Claude Code 的联网场景。
+
+本文档面向用户，说明它能做什么、怎么做、绝不会做什么。给代理执行的流程规定在 `claude-easy/SKILL.md`，更细的产品规则和全部状态文案以 `claude-easy/references/patch-policy.md` 为准。
 
 ## 支持范围
 
@@ -21,7 +23,7 @@ Clash Patch 是给 AI 助手使用的网络补丁与诊断 Skill，支持 macOS 
 - 只有用户选择的档位明确要求时，才通过客户端自己的界面切换 TUN 或 Clash 自己的系统代理；绝不改写第三方 PAC，也不切换订阅、代理组或节点。唯一的第三方兼容操作是：在符合后述条件时，通过 AdGuard for Mac 自己的界面切换过滤模式或配置出站代理。
 - 只处理客户端当前存储位置中的订阅；读不到存储模式、或多个 iCloud 容器无法通过当前订阅唯一判断时停止，不猜。
 - 每份候选配置都必须通过 YAML 重读、二次转换一致性检查和 Mihomo 校验（最长 30 秒）；任何一步失败都保留原文件。
-- 不安装永久监听、LaunchAgent、`WatchPaths`、计划任务或后台服务；只清理能确认属于旧版 Clash Patch 的遗留监听，无法确认所有权的服务保持不动并报告。
+- 不安装永久监听、LaunchAgent、`WatchPaths`、计划任务或后台服务；只清理能确认属于旧版（Clash Patch 时代）的遗留监听，无法确认所有权的服务保持不动并报告。
 - 一切输出都不包含订阅地址、密码、UUID、私钥、控制器密钥或完整节点地址。
 - macOS 修改当前订阅后会通过本地控制器自动刷新并检查运行状态，失败时恢复修改前的内容。
 
@@ -36,8 +38,8 @@ Diagnostics 不要求你会看日志，也不会因为提到 Clash 就先改配�
 
 第一次在一台电脑上配置时，Skill 会问：“你使用网络代理主要用于哪些用途？”选择会保存在本机，以后可以修改：
 
-- macOS 保存在 `~/Library/Application Support/ClashPatch/usage-profile.plist`；
-- Windows 保存在 Clash Verge Rev 应用目录中的 `clash-patch-usage-profile.json`；
+- macOS 保存在 `~/Library/Application Support/ClaudeEasy/usage-profile.plist`；
+- Windows 保存在 Clash Verge Rev 应用目录中的 `claude-easy-usage-profile.json`；
 - 两个文件都只记录版本号和数字档位，不含任何订阅信息。
 
 | 档位 | 用途 | 会做什么 | 明确不做 | 验收 |
@@ -52,7 +54,7 @@ Diagnostics 不要求你会看日志，也不会因为提到 Clash 就先改配�
 
 ### 改档与降档
 
-你可以随时改档。升档时只补新增能力。从档位 3 降到档位 1 或 2 时，先读取并记录旧档位，运行对应平台的安全卸载（macOS 用 `bash clash-patch/scripts/uninstall_macos.sh`，Windows 用 `.\clash-patch\scripts\uninstall_windows.cmd`），再保存并执行新选择。卸载只能撤销能确认属于本工具且之后没有被继续修改的设置，不会为了降档覆盖你后来的改动；无法可靠恢复的旧订阅增强会明确说明仍然保留，不会伪装成已经恢复。
+你可以随时改档。升档时只补新增能力。从档位 3 降到档位 1 或 2 时，先读取并记录旧档位，运行对应平台的安全卸载（macOS 用 `bash claude-easy/scripts/uninstall_macos.sh`，Windows 用 `.\claude-easy\scripts\uninstall_windows.cmd`），再保存并执行新选择。卸载只能撤销能确认属于本工具且之后没有被继续修改的设置，不会为了降档覆盖你后来的改动；无法可靠恢复的旧订阅增强会明确说明仍然保留，不会伪装成已经恢复。
 
 ### 档位同时约束诊断
 
@@ -66,7 +68,7 @@ Diagnostics 不要求你会看日志，也不会因为提到 Clash 就先改配�
 
 ## 三档共同的国内域名直连基线
 
-三个档位都会把同一份 MetaCubeX ChinaMax `cn.mrs` 规则提供器应用到当前存储位置中的全部订阅，并让 DNS 与连接路由共同引用它：国内域名由阿里和 DNSPod 的大陆 IP DoH 解析，再命中 `DIRECT`。规则提供器每天由 Mihomo 更新；安全更新订阅后也会重新应用。显式用户域名规则和档位 3 的 AI 规则优先，受管国内规则位于宽泛 GEO、其他规则集与 `MATCH` 前。默认名称或缓存路径被用户占用时自动编号，不覆盖用户配置。
+三个档位都会把同一份 MetaCubeX ChinaMax `cn.mrs` 规则提供器应用到当前存储位置中的全部订阅，并让 DNS 与连接路由共同引用它：国内域名由阿里和 DNSPod 的大陆 IP DoH 解析，再命中 `DIRECT`。规则提供器每天由 Mihomo 更新；安全更新订阅后也会重新应用。显式用户域名规则和档位 3 的 AI 规则优先，受管国内规则位于宽泛 GEO、其他规则集与 `MATCH` 前。默认名称或缓存路径被用户占用时自动编号，不覆盖用户配置。旧版写入配置中的规则提供器 `clash-patch-cn-domain` 会在下次补丁运行时迁移为 `claude-easy-cn-domain`。
 
 这是一项第一档共享修复：国内网站或应用间歇性打不开、同步失败，而实时连接误命中海外代理时，修复的是所有订阅的国内域名识别，不为 Kimi、欧陆词典或其他单站添加例外。诊断会直接核对每份订阅的规则提供器、DNS 引用、路由引用与实时 `DIRECT` 连接。
 
@@ -92,13 +94,13 @@ Diagnostics 不要求你会看日志，也不会因为提到 Clash 就先改配�
 
 - 主代理组支持 Mihomo 的 `select`、`url-test`、`fallback`、`load-balance` 和 `relay` 代理组，按顺序识别：最后一个 `MATCH` 指向的非 `DIRECT` 非 AI 组 → 被宽泛规则（`MATCH`、`GEOIP`、`GEOSITE` 或广域 `RULE-SET`）引用超过一次的非 AI 组 → 常见名称（`Proxy`、`Final`、`节点选择` 等）→ 第一个含代理成员的非 AI 组。只有找不到独立主组时，才以含代理成员的 AI 组或最终任一合法代理组作为保底，不猜单个节点。
 - 已有可选 AI 分组时（名称含独立的 `AI`、`OpenAI`、`人工智能` 或 `🤖 AI`）直接复用：成员、顺序、图标和当前选择全部保持原样，只补全规则。
-- 没有 AI 分组时创建独立选择器「🤖 AI · Clash Patch」，加入订阅的全部真实节点和全部代理提供者；名称被占用时自动编号；找不到任何可用节点或代理提供者时不创建空组，保持原文件并说明原因。
-- 不创建额外的安全代理分组，也不替你选择节点；从旧版补丁升级时，会删除能确认属于旧版的安全代理分组，并把旧补丁 AI 组迁移为上述独立节点选择器。
+- 没有 AI 分组时创建独立选择器「🤖 AI · ClaudeEasy」，加入订阅的全部真实节点和全部代理提供者；名称被占用时自动编号；找不到任何可用节点或代理提供者时不创建空组，保持原文件并说明原因。
+- 不创建额外的安全代理分组，也不替你选择节点；从旧版补丁升级时，会删除能确认属于旧版的安全代理分组，并把旧补丁 AI 组迁移为上述独立节点选择器（旧组名「🤖 AI · Clash Patch」保持不变，继续受管复用）。
 - 有独立主组时，普通流量和 AI 流量可以分开选路：主代理组可选低倍率节点浏览、下载和看视频，AI 分组可单独选信誉更好的家宽节点。订阅只有 AI 分组时，两类流量暂时共用它，但共同基线和档位 3 增强仍会应用。
 
 ### AI 规则
 
-规则的唯一数据来源是 `clash-patch/references/policy.json`（Windows 脚本内嵌的同一份策略由生成器写入并受一致性测试约束），覆盖：
+规则的唯一数据来源是 `claude-easy/references/policy.json`（Windows 脚本内嵌的同一份策略由生成器写入并受一致性测试约束），覆盖：
 
 - Anthropic 与 Claude：应用、内容、MCP 和静态服务域名，以及官方公布的入站 IPv4 `160.79.104.0/23` 与 IPv6 `2607:6bc0::/48`（带 `no-resolve`）；
 - OpenAI、ChatGPT、Codex 使用的域名，含实时语音、静态资源、上传和明确属于 OpenAI 的验证服务；
@@ -155,23 +157,23 @@ Mihomo 使用 Fake-IP 时，AdGuard 自动代理可能继续保存某个旧假�
 ## 安装
 
 ```bash
-git clone https://github.com/wallmage/clash-patch.git
+git clone https://github.com/wallmage/ClaudeEasy.git
 ```
 
-把仓库中的 `clash-patch` 文件夹复制到 `~/.codex/skills/clash-patch`，然后告诉 Codex：
+把仓库中的 `claude-easy` 文件夹复制到 `~/.codex/skills/claude-easy`，然后告诉 Codex：
 
 ```text
-请使用 $clash-patch 诊断当前网络问题，或检查并增强 Clash 当前存储位置中的订阅。不要退出、停止或重启 Clash。
+请使用 $claude-easy 诊断当前网络问题，或检查并增强 Clash 当前存储位置中的订阅。不要退出、停止或重启 Clash。
 ```
 
 也可以手动保存并执行选择，把 `N` 换成 `1`、`2` 或 `3`：
 
 ```bash
-bash clash-patch/scripts/install_macos.sh --profile N
+bash claude-easy/scripts/install_macos.sh --profile N
 ```
 
 ```powershell
-.\clash-patch\scripts\install_windows.cmd -UsageProfile N
+.\claude-easy\scripts\install_windows.cmd -UsageProfile N
 ```
 
 前置条件：两个平台都必须让 Clash 保持运行。macOS 请用当前登录用户直接运行（不要 sudo 或 root），需要系统 Ruby 和已安装的 ClashX Meta；Windows 需要安装并打开过 Clash Verge Rev。不带参数再次运行安装程序时，按已保存的档位执行。
@@ -181,21 +183,21 @@ bash clash-patch/scripts/install_macos.sh --profile N
 - macOS 安装器：`--profile N`（保存并执行档位）、`--show-profile`（读取已保存档位，未保存时输出 `unset`）、`--safe-update`（安全更新全部远程订阅）、`--json`。
 - macOS 补丁程序 `scripts/macos/patch_profiles.rb`：`--dry-run`（只预览不写入）、`--no-reload`（只更新文件不刷新）、`--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`、`--snapshot-initial`、`--print-core-status`、`--print-tun-state` 等；完整列表见 `--help`。
 - Windows 安装器：`-UsageProfile N`、`-ShowUsageProfile`、`-SnapshotProfiles`、`-VerifySafeUpdate`、`-ListBackups`、`-CompareBackup ID`、`-RestoreBackup ID -ExpectedCurrentSha256 SHA256`、`-AppHome`（指定应用目录）、`-MihomoPath`（指定内核路径）、`-Json`。
-- 分流验证：macOS 运行 `ruby clash-patch/scripts/macos/verify_routes.rb`；Windows 运行 `powershell.exe -NoProfile -File clash-patch/scripts/windows/verify_routes.ps1`（默认连接 `http://127.0.0.1:9097`，可用 `-ControllerUrl`、`-Secret`、`-MainGroup`、`-AiGroup` 调整）。
+- 分流验证：macOS 运行 `ruby claude-easy/scripts/macos/verify_routes.rb`；Windows 运行 `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1`（默认连接 `http://127.0.0.1:9097`，可用 `-ControllerUrl`、`-Secret`、`-MainGroup`、`-AiGroup` 调整）。
 
 ### JSON v1 机器输出
 
-所有公开命令都支持 JSON v1：macOS 加 `--json`，Windows 加 `-Json`。不加参数时输出中文说明；开启后，标准输出只有一个 JSON 对象，`exit_code` 与进程退出码一致，`code` 和 `operation` 是稳定的机器标识，`command` 只会是 `install`、`uninstall`、`patch` 或 `verify_routes`，字段及类型以 [`clash-patch/references/result-contract.json`](clash-patch/references/result-contract.json) 为准。机器输出经过统一脱敏，不会包含订阅 URL、密钥、完整本机路径或节点名称；AI 助手调用脚本时优先读取 JSON，不从中文句子猜状态。
+所有公开命令都支持 JSON v1：macOS 加 `--json`，Windows 加 `-Json`。不加参数时输出中文说明；开启后，标准输出只有一个 JSON 对象，`exit_code` 与进程退出码一致，`code` 和 `operation` 是稳定的机器标识，`command` 只会是 `install`、`uninstall`、`patch` 或 `verify_routes`，字段及类型以 [`claude-easy/references/result-contract.json`](claude-easy/references/result-contract.json) 为准。机器输出经过统一脱敏，不会包含订阅 URL、密钥、完整本机路径或节点名称；AI 助手调用脚本时优先读取 JSON，不从中文句子猜状态。
 
 常见退出码：`0` 成功；`1` 操作失败（已恢复或保持原样）；`2` 平台或客户端不受支持；`6` 安装包不完整；`10` 尚未选择用途档位；`64` 参数错误。macOS 安装器另有：`3` 缺系统 Ruby、`4` 找不到 ClashX Meta、`5` 找不到指定配置目录、`7` 档位保存位置不安全、`8` Mihomo 不可用或版本过旧、`9` 无法关闭订阅自动更新。Windows 安装器另有：`3` 安装包不完整（缺少全局扩展脚本）。
 
 ## macOS 平台机制
 
-公开入口和参数保持兼容，内部实现按配置转换、备份与事务、Mihomo 校验、订阅识别、安全更新、运行状态和命令行输出拆开。
+ClaudeEasy 的公开入口固定在 `claude-easy/`，参数在后续版本中保持兼容；这次品牌迁移会停用旧 Skill 路径和旧名称，旧版持久状态由新入口自动识别。内部实现按配置转换、备份与事务、Mihomo 校验、订阅识别、安全更新、运行状态和命令行输出拆开。
 
 - 安装程序单次运行，只处理当前使用的本地目录（`~/.config/clash.meta`）或当前 iCloud 容器；只枚举客户端实际使用的顶层 `.yaml`/`.yml`，排除旧 iCloud 容器、缓存、备份、日志和临时文件。`config.yaml` 是 ClashX Meta 的默认基础配置，不会被删除；当前选择其他订阅时安静跳过它。
 - 三个档位的安装程序都检查 Mihomo，并把共同国内域名直连基线写入当前存储位置中的全部订阅。普通安装也先生成并校验整批候选；任一份失败时整批不写。档位 1、2 不增加 TUN、IPv6、WebRTC 或 AI 分组设置，也不改自动更新。通过基础环境检查并建立初始快照后，macOS 先把用户明确选择的新档位保存为恢复意图，再修改自动更新和订阅；普通失败会恢复旧档位，进程被强制结束时保留新选择，下一次 Patch 或安全更新按它完成未完成的配置，不能退回旧档位继续。档位 3 额外把 ClashX Meta 的 `kAutoUpdateEnable` 设为 `0`，回读确认后才继续，并记录仅用于撤销这次改动的所有权状态；后续步骤失败或安全卸载时恢复并再次回读原状态。原本已经关闭、用户后来已经恢复或没有所有权记录时不会擅自改写。
-- 每份顶层 YAML 都经过 YAML 1.2 读取、二次转换和 Mihomo 校验，最长等待 30 秒。第一次运行保存初始快照；以后每次写入前都创建带日期时间的版本化备份（独占创建，目录权限 `700`、文件权限 `600`），保存在 `~/Library/Application Support/ClashPatch/backups`。
+- 每份顶层 YAML 都经过 YAML 1.2 读取、二次转换和 Mihomo 校验，最长等待 30 秒。第一次运行保存初始快照；以后每次写入前都创建带日期时间的版本化备份（独占创建，目录权限 `700`、文件权限 `600`），保存在 `~/Library/Application Support/ClaudeEasy/backups`。从旧版升级时，写操作先取得旧版操作锁，再把旧状态目录 `~/Library/Application Support/ClashPatch` 和未完成卸载状态改为新名称，继续沿用其中的用途档位、初始快照和备份；帮助、读取档位和无效请求不会迁移或创建状态。新旧目录或同一状态的新旧名称同时存在时停止，不自动合并。
 - 写入有并发保护：文件加独占锁，校验或写入期间订阅被客户端刷新会重新读取并重试，连续变化则跳过该份并标记稍后重试；符号链接订阅写入真实目标，不用重命名替换符号链接本身。
 - 当前订阅写入后通过本地控制器自动刷新（`PUT /configs?force=true`），依次清除旧 Fake-IP 与 DNS 缓存，再检查 TUN 仍启用、原有代理组选择没有变化、国内和境外 DNS 查询成功、外网可连接；任一步失败都在当前进程内恢复修改前的内容，候选已被内核采用时再次加载原配置。不调用 AppleScript，不切换 TUN、订阅、代理组或节点。
 - 普通 Patch 若在当前订阅已经加载候选后被强制结束，下一次 Patch 会先恢复原文件，再重新加载原订阅并完成运行检查，然后才允许校验或写入新候选；自动刷新失败后原运行配置仍未恢复时同样保留事务记录，供下次 Patch 继续。此时使用 `--no-reload` 只恢复文件并保留事务，不处理新候选，不能让文件与实际运行配置长期不一致。
@@ -209,18 +211,18 @@ bash clash-patch/scripts/install_macos.sh --profile N
 - 档位 3 且客户端原本没有运行时，安装程序才事务式更新应用级设置：`verge.yaml` 的 `enable_tun_mode` 设为 `true`、`enable_dns_settings` 设为 `false`，`config.yaml` 关闭 `ipv6` 并写入托管 TUN 块（保留非托管的 TUN 设置和行内注释）；同时把两份文件的原始字节和安装后哈希写入本地安装状态文件，供卸载核对。同一应用目录用目录内独占锁文件互斥，路径大小写、扩展路径和目录改名不能绕过；操作期间持有配置目录与目标父目录句柄，目录联接、符号链接、重解析点和硬链接目标都会被拒绝。全部目标先备份，再持有禁止外部读取、写入、改名或替换的句柄，确认仍与候选生成时完全一致后统一写入或删除；任一失败整体恢复。进程在批量修改中被强制结束时，下次公开操作会先按持久事务记录恢复原状态，不能在半完成状态上继续。
 - Windows 在已锁定的原文件句柄内写入替换内容或恢复原内容时，先把文件截为零长度，再写入完整目标字节并同步。即使较短内容覆盖较长文件期间被强制结束，磁盘上也只会留下空文件或目标内容的前缀；下次公开操作可据事务记录恢复精确原字节，不会因旧文件尾部残留而失去自动恢复能力。
 - 事务需要创建原本不存在的文件时，会在任何最终路径出现前先发布私有准备记录。若进程在主事务记录发布前被强制结束，下次公开操作只清理记录中仍为空的新目标；目标已经包含内容、变成链接或身份在检查期间变化时停止，不能把外部文件当成本工具的残留。主事务发布后先移除准备记录，再开始写入。
-- 每次写入前都创建带日期时间的版本化备份，保存在应用目录的 `clash-patch-backups`；备份编号由相对应用目录的规范路径生成，目录改名或路径别名不会改变目标身份。备份停止继承目录权限，只允许当前用户、SYSTEM 和 Administrators 访问。
+- 每次写入前都创建带日期时间的版本化备份，保存在应用目录的 `claude-easy-backups`；备份编号由相对应用目录的规范路径生成，目录改名或路径别名不会改变目标身份。备份停止继承目录权限，只允许当前用户、SYSTEM 和 Administrators 访问。从旧版升级时，新入口固定按旧锁、新锁的顺序同时加锁；先用旧文件名恢复未完成事务，再把旧的 `clash-patch-*` 普通状态文件与 `clash-patch-backups` 备份目录改为对应的新名称。新旧事务或同一普通状态的新旧名称同时存在时停止，不猜测覆盖顺序。
 - 脚本不会结束 Clash 进程。Windows Computer Use 已在 2026 年 7 月提供；当前会话实际启用时，它与 macOS 一样负责界面开关、原应用复现和浏览器验收，但只能操作前台桌面，设备必须保持解锁，不能操作 UAC 或管理员授权窗口。
 
 ## 安全更新
 
 用户要求“更新节点”或“更新订阅”时，Skill 会更新当前存储位置中的全部远程订阅，而不是只更新当前使用的一份。安全更新是单次、由用户主动触发的操作；档位 3 继续关闭自动更新且不依赖 Computer Use，档位 1、2 不额外修改自动更新设置。每次写入前都会留下带日期时间的备份。
 
-- **macOS**：运行 `bash clash-patch/scripts/install_macos.sh --safe-update`。在内存中下载全部远程订阅（订阅地址只经标准输入交给 `curl`，不会出现在进程参数、日志或错误提示中；只接受 HTTPS 成功响应和有效 UTF-8 YAML）。三个档位都给每份候选重打共同国内域名直连基线；档位 3 再应用完整补丁，档位 1、2 不增加第三档改动。只有全部候选通过 YAML 重读、二次转换和 Mihomo 校验、且当前文件哈希仍与读取时一致，才在锁内统一替换；任一份失败时尝试全部恢复，恢复本身出错会逐份明确报告，不会误报“全部保持原样”。批量替换前会保存持久事务记录，进程被强制结束时，下次 Patch 或安全更新先恢复未完成的整批操作；若中断发生在当前订阅已经加载候选之后，还会在下载前重新加载恢复后的原订阅并完成运行检查，不能恢复运行内核时停止。更新后刷新当前订阅并复核运行状态，失败时整批回滚。
+- **macOS**：运行 `bash claude-easy/scripts/install_macos.sh --safe-update`。在内存中下载全部远程订阅（订阅地址只经标准输入交给 `curl`，不会出现在进程参数、日志或错误提示中；只接受 HTTPS 成功响应和有效 UTF-8 YAML）。三个档位都给每份候选重打共同国内域名直连基线；档位 3 再应用完整补丁，档位 1、2 不增加第三档改动。只有全部候选通过 YAML 重读、二次转换和 Mihomo 校验、且当前文件哈希仍与读取时一致，才在锁内统一替换；任一份失败时尝试全部恢复，恢复本身出错会逐份明确报告，不会误报“全部保持原样”。批量替换前会保存持久事务记录，进程被强制结束时，下次 Patch 或安全更新先恢复未完成的整批操作；若中断发生在当前订阅已经加载候选之后，还会在下载前重新加载恢复后的原订阅并完成运行检查，不能恢复运行内核时停止。更新后刷新当前订阅并复核运行状态，失败时整批回滚。
 - **macOS 运行恢复**：安全更新会从当前存储位置重新识别活动配置，不会假定活动配置一定属于远程订阅清单。只有原文件重新加载且缓存、TUN、代理组选择、DNS 与连接检查全部通过，才删除事务记录；控制器或运行检查失败时保留记录，让下一次 Patch 或安全更新继续恢复。本次安全更新回滚时也遵守同一条件。
 - **macOS 客户端切换保护**：普通 Patch、安全更新、备份恢复和未完成事务恢复在每次控制器加载前重新核对当前订阅和存储位置。用户在校验、下载或写入期间切换时绝不加载旧订阅；首次加载前发现变化会恢复本次文件批次，加载后回退阶段发现变化则保留事务，等客户端状态稳定后继续。
   当前订阅或存储偏好无法可靠读取、当前目录无法唯一匹配活动配置时也会停止，不把读取失败当成默认 `config.yaml`，不删除待恢复事务。
-- **Windows**：先运行 `.\clash-patch\scripts\install_windows.cmd -SnapshotProfiles` 核对每个远程订阅与本地文件一一对应、建立脱敏清单并逐份备份（存在尚未验收的清单时必须先完成验收，不会覆盖）；再通过 Clash Verge Rev 界面的“全部更新”处理，没有该入口时逐份触发，但必须覆盖清单中的每一份。随后运行 `-VerifySafeUpdate`，确认已安装的受管全局脚本与当前安装包及保存档位一致，并逐份确认 `proxy-groups` 是非空的块状或行内列表，再做 YAML、Mihomo 和自动更新状态检查；缺少代理组或列表为空时整批恢复，不能误报成功。若 `profiles.yaml` 的映射未变但订阅文件缺失，验收会从清单绑定的可信备份原子重建缺失文件，并与清单删除一起提交；同一路径重新出现时不覆盖，清单也会保留。失败时在独占文件期间再次核对 SHA-256，只恢复没有再次变化的文件——发现订阅又被刷新时不覆盖新内容，保留清单并明确报告。整批恢复与删除本次清单属于同一个可恢复事务；中断后不能拿已经恢复的旧订阅重新验收并误报更新成功。文件恢复后仍会单独检查运行内核，不会把文件恢复冒充运行状态恢复；档位 3 的全局脚本会在每份订阅随后加载时重打补丁。
+- **Windows**：先运行 `.\claude-easy\scripts\install_windows.cmd -SnapshotProfiles` 核对每个远程订阅与本地文件一一对应、建立脱敏清单并逐份备份（存在尚未验收的清单时必须先完成验收，不会覆盖）；再通过 Clash Verge Rev 界面的“全部更新”处理，没有该入口时逐份触发，但必须覆盖清单中的每一份。随后运行 `-VerifySafeUpdate`，确认已安装的受管全局脚本与当前安装包及保存档位一致，并逐份确认 `proxy-groups` 是非空的块状或行内列表，再做 YAML、Mihomo 和自动更新状态检查；缺少代理组或列表为空时整批恢复，不能误报成功。若 `profiles.yaml` 的映射未变但订阅文件缺失，验收会从清单绑定的可信备份原子重建缺失文件，并与清单删除一起提交；同一路径重新出现时不覆盖，清单也会保留。失败时在独占文件期间再次核对 SHA-256，只恢复没有再次变化的文件——发现订阅又被刷新时不覆盖新内容，保留清单并明确报告。整批恢复与删除本次清单属于同一个可恢复事务；中断后不能拿已经恢复的旧订阅重新验收并误报更新成功。文件恢复后仍会单独检查运行内核，不会把文件恢复冒充运行状态恢复；档位 3 的全局脚本会在每份订阅随后加载时重打补丁。
 - 网络在某次改动后异常时，Skill 会先做当前配置与备份的配置差异比较；确需回滚时先备份当前版本，再校验目标和当前 SHA-256，失败时恢复回滚前版本。
 
 ## 配置历史与恢复
@@ -246,11 +248,11 @@ macOS 恢复备份前若发现未完成的 Patch，会先恢复原文件和原�
 ## 卸载
 
 ```bash
-bash clash-patch/scripts/uninstall_macos.sh
+bash claude-easy/scripts/uninstall_macos.sh
 ```
 
 ```powershell
-.\clash-patch\scripts\uninstall_windows.cmd
+.\claude-easy\scripts\uninstall_windows.cmd
 ```
 
 卸载不要求关闭客户端，也不会删除备份。安全卸载成功后会清除已保存的用途档位，因此可以按“先卸载、再安装”的流程从档位 3 改为档位 1 或 2；卸载失败时保留原档位，避免绕过未完成的恢复。

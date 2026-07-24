@@ -283,7 +283,7 @@
   "transform_cases": [
     {
       "name": "automatic-main-group-receives-full-patch",
-      "expected_config_sha256": "0aaeb2e1f4c26480f10ae857b739390087cf07d5e7cb6a19991c893b76f72665",
+      "expected_config_sha256": "f603b9d91bf68abe503a4df10ab1d6d2c565af5342503e0b88b942fbb7164068",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -293,16 +293,16 @@
       },
       "expected_changed": true,
       "expected_main_group": "Auto",
-      "expected_ai_group": "🤖 AI · Clash Patch",
+      "expected_ai_group": "🤖 AI · ClaudeEasy",
       "expected_status": "updated",
       "expected_present_strings": [
         "\"proxy\":\"Auto\"",
-        "NETWORK,UDP,🤖 AI · Clash Patch"
+        "NETWORK,UDP,🤖 AI · ClaudeEasy"
       ]
     },
     {
       "name": "reuse-existing-ai-group",
-      "expected_config_sha256": "c7de18d54d6e3476166c4246435fdc93a44875d17512ca201b342638c36a8691",
+      "expected_config_sha256": "66ebbb5fcb387d6088db9ae264628548501927bbbe43fe0b7581a898b6e5a27f",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -318,7 +318,7 @@
     },
     {
       "name": "create-independent-ai-from-provider",
-      "expected_config_sha256": "f39898ef6efa7b076f9e495d61a2d530c254fab5453f33630a8672fbc555e6d2",
+      "expected_config_sha256": "a5b476bfa319c852be77c8e83b482e7c97fde2ae8b2991252ee2c2dbae056e95",
       "input": {
         "proxy-providers": {
           "provider-a": { "type": "http", "url": "https://fixture.invalid/sub", "interval": 3600 }
@@ -330,12 +330,12 @@
       },
       "expected_changed": true,
       "expected_main_group": "Main",
-      "expected_ai_group": "🤖 AI · Clash Patch",
+      "expected_ai_group": "🤖 AI · ClaudeEasy",
       "expected_status": "updated"
     },
     {
       "name": "normalize-dns-and-managed-rule-whitespace",
-      "expected_config_sha256": "910e73fb12fff0e4c5353f157572e24b4fec5ac9c7b45a4c98c42a03912de6d2",
+      "expected_config_sha256": "2c230ed1a0485ea89df709ea42f5603a570d2e835d9e3406a91c5ac9aafe45fc",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -361,7 +361,7 @@
     },
     {
       "name": "migrate-owned-legacy-groups",
-      "expected_config_sha256": "ea04861d52417b7397285e2c7d88bcd274f54d57d5d395647b8a455efd33afe6",
+      "expected_config_sha256": "c1917962b15fb8a47cf291b940ec41de7fdfe146251b0320b39cfe383f4a3978",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -406,8 +406,50 @@
       ]
     },
     {
+      "name": "migrate-legacy-cn-provider",
+      "expected_config_sha256": "7f0ce430b54b37b5c354f3cfffa48ed52418d877c7f35d3c9f4930f46022313a",
+      "input": {
+        "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
+        "proxy-groups": [
+          { "name": "Main", "type": "select", "proxies": ["node-a"] },
+          { "name": "AI", "type": "select", "proxies": ["node-a"] }
+        ],
+        "rule-providers": {
+          "clash-patch-cn-domain": {
+            "type": "http",
+            "behavior": "domain",
+            "format": "mrs",
+            "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs",
+            "path": "./ruleset/clash-patch-cn-domain.mrs",
+            "interval": 86400,
+            "proxy": "Main",
+            "size-limit": 2097152
+          }
+        },
+        "dns": {
+          "nameserver-policy": {
+            "rule-set:clash-patch-cn-domain": ["https://223.5.5.5/dns-query#DIRECT"]
+          }
+        },
+        "rules": ["RULE-SET,clash-patch-cn-domain,DIRECT", "GEOSITE,CN,DIRECT", "MATCH,Main"]
+      },
+      "expected_changed": true,
+      "expected_main_group": "Main",
+      "expected_ai_group": "AI",
+      "expected_status": "updated",
+      "expected_absent_strings": [
+        "clash-patch-cn-domain"
+      ],
+      "expected_present_strings": [
+        "\"claude-easy-cn-domain\"",
+        "./ruleset/claude-easy-cn-domain.mrs",
+        "RULE-SET,claude-easy-cn-domain,DIRECT",
+        "rule-set:claude-easy-cn-domain"
+      ]
+    },
+    {
       "name": "ai-only-main-receives-full-patch",
-      "expected_config_sha256": "eb166a20442a79996a2d97d5660b38370eeb4df9c9fedd0b13308bfccab05878",
+      "expected_config_sha256": "0cb6893f08cbf3f4fdedcb089165bb56ce2b1e42056601330a2cef0da13413db",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -427,7 +469,7 @@
     },
     {
       "name": "owned-safe-group-remains-when-it-is-the-only-main",
-      "expected_config_sha256": "37c489ce55b7d496a61cdf9f8666ddcf4b879bf68f37343f877f89582157c428",
+      "expected_config_sha256": "9c8049807090cc5a4fd590b3213482648a52a92f6d40d359ed1783b4cb8314af",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -453,7 +495,7 @@
       },
       "expected_changed": true,
       "expected_main_group": "🛡 安全代理 · Clash Patch",
-      "expected_ai_group": "🤖 AI · Clash Patch",
+      "expected_ai_group": "🤖 AI · ClaudeEasy",
       "expected_status": "updated",
       "expected_present_strings": [
         "\"name\":\"🛡 安全代理 · Clash Patch\"",

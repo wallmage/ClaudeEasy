@@ -7,13 +7,13 @@ const { isDeepStrictEqual } = require('node:util');
 const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
-const enginePath = path.join(root, 'clash-patch/scripts/windows/clash_verge_global.js');
-const policyPath = path.join(root, 'clash-patch/references/policy.json');
-const installerPath = path.join(root, 'clash-patch/scripts/install_windows.ps1');
-const uninstallerPath = path.join(root, 'clash-patch/scripts/uninstall_windows.ps1');
-const routeVerifierPath = path.join(root, 'clash-patch/scripts/windows/verify_routes.ps1');
-const resultContractPath = path.join(root, 'clash-patch/scripts/windows/result_contract.ps1');
-const installerModuleDir = path.join(root, 'clash-patch/scripts/windows/install_windows');
+const enginePath = path.join(root, 'claude-easy/scripts/windows/clash_verge_global.js');
+const policyPath = path.join(root, 'claude-easy/references/policy.json');
+const installerPath = path.join(root, 'claude-easy/scripts/install_windows.ps1');
+const uninstallerPath = path.join(root, 'claude-easy/scripts/uninstall_windows.ps1');
+const routeVerifierPath = path.join(root, 'claude-easy/scripts/windows/verify_routes.ps1');
+const resultContractPath = path.join(root, 'claude-easy/scripts/windows/result_contract.ps1');
+const installerModuleDir = path.join(root, 'claude-easy/scripts/windows/install_windows');
 const installerModuleNames = [
   'common.ps1', 'yaml.ps1', 'profiles.ps1', 'mihomo.ps1',
   'transaction.ps1', 'script_js.ps1', 'safe_update.ps1'
@@ -22,8 +22,8 @@ const installerModulePaths = installerModuleNames.map((name) => path.join(instal
 function readInstallerBundle() {
   return [installerPath, ...installerModulePaths].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
 }
-const installWrapperPath = path.join(root, 'clash-patch/scripts/install_windows.cmd');
-const uninstallWrapperPath = path.join(root, 'clash-patch/scripts/uninstall_windows.cmd');
+const installWrapperPath = path.join(root, 'claude-easy/scripts/install_windows.cmd');
+const uninstallWrapperPath = path.join(root, 'claude-easy/scripts/uninstall_windows.cmd');
 const windowsInstallerTestPath = path.join(root, 'tests/test_windows_installer.ps1');
 const fixturePath = path.join(root, 'tests/fixtures/main_group_cases.json');
 const available = fs.existsSync(enginePath) && fs.existsSync(policyPath);
@@ -134,16 +134,16 @@ test('Windows engine files exist', () => {
 });
 
 test('global transform applies common policy', { skip: !available }, () => {
-  const patched = engine.clashPatchTransform(baseConfig(), 'fixture');
+  const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
-  const safeGroup = engine.clashPatchRouteGroupName(patched);
+  const safeGroup = engine.claudeEasyRouteGroupName(patched);
 
   assert.equal(patched.ipv6, false);
   assert.equal(patched.dns.ipv6, false);
   assert.deepEqual(patched.tun['dns-hijack'], ['any:53', 'tcp://any:53']);
-  assert.deepEqual(patched.dns['direct-nameserver'], engine.CLASH_PATCH_POLICY.directResolvers);
+  assert.deepEqual(patched.dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.equal(patched.dns['direct-nameserver-follow-policy'], false);
-  assert.deepEqual(patched.dns['nameserver-policy']['geosite:cn'], engine.CLASH_PATCH_POLICY.directResolvers);
+  assert.deepEqual(patched.dns['nameserver-policy']['geosite:cn'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith(`#${ai.name}`)));
   assert.deepEqual(ai.proxies, ['Main']);
   const udpIndex = patched.rules.indexOf(`NETWORK,UDP,${ai.name}`);
@@ -159,32 +159,32 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
     const input = baseConfig();
     input.ipv6 = true;
     input.tun = { enable: false };
-    const patched = engine.clashPatchTransform(input, 'fixture', usageProfile);
-    const providerName = engine.CLASH_PATCH_POLICY.cnDomainProvider.name;
+    const patched = engine.claudeEasyTransform(input, 'fixture', usageProfile);
+    const providerName = engine.CLAUDE_EASY_POLICY.cnDomainProvider.name;
     const provider = patched['rule-providers'][providerName];
 
     assert.equal(provider.type, 'http');
     assert.equal(provider.behavior, 'domain');
     assert.equal(provider.format, 'mrs');
-    assert.equal(provider.url, engine.CLASH_PATCH_POLICY.cnDomainProvider.url);
+    assert.equal(provider.url, engine.CLAUDE_EASY_POLICY.cnDomainProvider.url);
     assert.equal(provider.proxy, 'Main');
-    assert.deepEqual(patched.dns['nameserver-policy'][`rule-set:${providerName}`], engine.CLASH_PATCH_POLICY.directResolvers);
+    assert.deepEqual(patched.dns['nameserver-policy'][`rule-set:${providerName}`], engine.CLAUDE_EASY_POLICY.directResolvers);
     assert.ok(patched.rules.indexOf(`RULE-SET,${providerName},DIRECT`) < patched.rules.indexOf('GEOSITE,CN,DIRECT'));
     assert.equal(patched.ipv6, true);
     assert.deepEqual(patched.tun, { enable: false });
     assert.equal(patched.rules.some((rule) => rule.startsWith('NETWORK,UDP,')), false);
-    assert.deepEqual(engine.clashPatchTransform(patched, 'fixture', usageProfile), patched);
+    assert.deepEqual(engine.claudeEasyTransform(patched, 'fixture', usageProfile), patched);
   }
 });
 
 test('common China-domain baseline preserves a colliding user provider', { skip: !available }, () => {
   const input = baseConfig();
-  const providerName = engine.CLASH_PATCH_POLICY.cnDomainProvider.name;
+  const providerName = engine.CLAUDE_EASY_POLICY.cnDomainProvider.name;
   input['rule-providers'] = {
     [providerName]: { type: 'file', behavior: 'domain', path: './user-owned.yaml' }
   };
 
-  const patched = engine.clashPatchTransform(input, 'fixture', 1);
+  const patched = engine.claudeEasyTransform(input, 'fixture', 1);
 
   assert.equal(patched['rule-providers'][providerName].path, './user-owned.yaml');
   assert.ok(patched['rule-providers'][`${providerName}-2`]);
@@ -193,12 +193,12 @@ test('common China-domain baseline preserves a colliding user provider', { skip:
 
 test('common China-domain baseline preserves a colliding user provider path', { skip: !available }, () => {
   const input = baseConfig();
-  const provider = engine.CLASH_PATCH_POLICY.cnDomainProvider;
+  const provider = engine.CLAUDE_EASY_POLICY.cnDomainProvider;
   input['rule-providers'] = {
     'user-cn': { type: 'file', behavior: 'domain', path: provider.path }
   };
 
-  const patched = engine.clashPatchTransform(input, 'fixture', 1);
+  const patched = engine.claudeEasyTransform(input, 'fixture', 1);
 
   assert.equal(patched['rule-providers']['user-cn'].path, provider.path);
   assert.equal(patched['rule-providers'][`${provider.name}-2`].path, `./ruleset/${provider.name}-2.mrs`);
@@ -209,10 +209,10 @@ test('reuses the existing AI group without creating visible groups', { skip: !av
   const config = baseConfig();
   const originalAi = structuredClone(config['proxy-groups'].find((group) => group.name === 'AI'));
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
 
   assert.deepEqual(patched['proxy-groups'].find((group) => group.name === 'AI'), originalAi);
-  assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · Clash Patch(?: \d+)?$/.test(group.name)), false);
+  assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
   assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,AI', 'NETWORK,UDP,REJECT']);
@@ -224,15 +224,15 @@ test('creates an AI group with all inline nodes when the subscription has none',
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
 
-  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch');
+  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
   assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
   assert.equal(Object.hasOwn(ai, 'use'), false);
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch(?: \d+)?$/.test(group.name)), false);
-  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'));
-  assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,🤖 AI · Clash Patch', 'NETWORK,UDP,REJECT']);
-  assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#🤖 AI · Clash Patch')));
+  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
+  assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,🤖 AI · ClaudeEasy', 'NETWORK,UDP,REJECT']);
+  assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#🤖 AI · ClaudeEasy')));
 });
 
 test('new AI group includes every proxy provider', { skip: !available }, () => {
@@ -243,8 +243,8 @@ test('new AI group includes every proxy provider', { skip: !available }, () => {
     'airport-b': { type: 'file', path: './providers/b.yaml' }
   };
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
-  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
 
   assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
   assert.deepEqual(ai.use, ['airport-a', 'airport-b']);
@@ -259,12 +259,12 @@ test('new AI group supports provider-only subscriptions', { skip: !available }, 
   };
   config.rules = ['MATCH,Main'];
 
-  const first = engine.clashPatchTransform(config, 'fixture');
-  const ai = first['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch');
+  const first = engine.claudeEasyTransform(config, 'fixture');
+  const ai = first['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
 
   assert.deepEqual(ai.proxies, []);
   assert.deepEqual(ai.use, ['airport-a']);
-  assert.deepEqual(engine.clashPatchTransform(first, 'fixture'), first);
+  assert.deepEqual(engine.claudeEasyTransform(first, 'fixture'), first);
 });
 
 test('does not create an AI group without nodes or providers', { skip: !available }, () => {
@@ -274,7 +274,7 @@ test('does not create an AI group without nodes or providers', { skip: !availabl
   config['proxy-groups'] = [{ name: 'Main', type: 'select', proxies: ['Ghost'] }];
   config.rules = ['MATCH,Main'];
 
-  assert.deepEqual(engine.clashPatchTransform(config, 'fixture'), config);
+  assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config);
 });
 
 test('migrates owned single-main AI group to an independent node selector', { skip: !available }, () => {
@@ -282,9 +282,9 @@ test('migrates owned single-main AI group to an independent node selector', { sk
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const aiName = '🤖 AI · Clash Patch';
   config['proxy-groups'].push({ name: aiName, type: 'select', proxies: ['Main'] });
-  config.rules = engine.clashPatchRenderAiRules(aiName).concat(config.rules);
+  config.rules = engine.claudeEasyRenderAiRules(aiName).concat(config.rules);
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === aiName);
 
   assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
@@ -303,9 +303,9 @@ test('removes groups created by an older patch', { skip: !available }, () => {
   config.dns.nameserver = [`https://dns.alidns.com/dns-query#${safeName}`];
   config.dns['nameserver-policy'] = { '+.openai.com': [`https://dns.alidns.com/dns-query#${safeName}`] };
   config.rules = [`NETWORK,UDP,${safeName}`, 'NETWORK,UDP,REJECT']
-    .concat(engine.clashPatchRenderAiRules(aiName), config.rules);
+    .concat(engine.claudeEasyRenderAiRules(aiName), config.rules);
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
 
   assert.equal(patched['proxy-groups'].some((group) => group.name === aiName || group.name === safeName), false);
   assert.equal(patched.rules.some((rule) => rule.includes(aiName) || rule.includes(safeName)), false);
@@ -319,11 +319,11 @@ test('preserves bootstrap and replaces direct resolvers with managed mainland Do
   config.dns['proxy-server-nameserver'] = ['223.5.5.5', '120.53.53.53'];
   config.dns['direct-nameserver'] = ['system'];
 
-  const dns = engine.clashPatchTransform(config, 'fixture').dns;
+  const dns = engine.claudeEasyTransform(config, 'fixture').dns;
 
   assert.deepEqual(dns['default-nameserver'], ['223.5.5.5', '119.29.29.29']);
   assert.deepEqual(dns['proxy-server-nameserver'], ['223.5.5.5', '120.53.53.53']);
-  assert.deepEqual(dns['direct-nameserver'], engine.CLASH_PATCH_POLICY.directResolvers);
+  assert.deepEqual(dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.equal(dns['direct-nameserver-follow-policy'], false);
 });
 
@@ -333,8 +333,8 @@ test('managed DNS uses bootstrap-free IP DoH and rewrites other endpoints', { sk
     'https://94.140.14.141/dns-query',
     'https://101.101.101.101/dns-query'
   ];
-  assert.deepEqual(engine.CLASH_PATCH_POLICY.resolvers, expectedResolvers);
-  assert.deepEqual(engine.CLASH_PATCH_POLICY.directResolvers, [
+  assert.deepEqual(engine.CLAUDE_EASY_POLICY.resolvers, expectedResolvers);
+  assert.deepEqual(engine.CLAUDE_EASY_POLICY.directResolvers, [
     'https://223.5.5.5/dns-query#DIRECT',
     'https://1.12.12.12/dns-query#DIRECT'
   ]);
@@ -347,7 +347,7 @@ test('managed DNS uses bootstrap-free IP DoH and rewrites other endpoints', { sk
     '+.managed.example': ['https://94.140.14.140/dns-query#台湾家宽 01']
   };
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const policies = patched.dns['nameserver-policy'];
   const managed = expectedResolvers.map((resolver) => `${resolver}#台湾家宽 01`);
 
@@ -358,11 +358,11 @@ test('managed DNS uses bootstrap-free IP DoH and rewrites other endpoints', { sk
 });
 
 test('uses system only when proxy bootstrap is missing', { skip: !available }, () => {
-  const dns = engine.clashPatchTransform(baseConfig(), 'fixture').dns;
+  const dns = engine.claudeEasyTransform(baseConfig(), 'fixture').dns;
 
   assert.equal(Object.hasOwn(dns, 'default-nameserver'), false);
   assert.deepEqual(dns['proxy-server-nameserver'], ['system']);
-  assert.deepEqual(dns['direct-nameserver'], engine.CLASH_PATCH_POLICY.directResolvers);
+  assert.deepEqual(dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.equal(dns['direct-nameserver-follow-policy'], false);
 });
 
@@ -371,41 +371,41 @@ test('migrates the old unsafe bootstrap signature to system', { skip: !available
   config.dns['default-nameserver'] = ['1.1.1.1', '8.8.8.8'];
   config.dns['proxy-server-nameserver'] = ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'];
 
-  const dns = engine.clashPatchTransform(config, 'fixture').dns;
+  const dns = engine.claudeEasyTransform(config, 'fixture').dns;
 
   assert.deepEqual(dns['default-nameserver'], ['system']);
   assert.deepEqual(dns['proxy-server-nameserver'], ['system']);
 });
 
 test('main delegates to the same transform', { skip: !available }, () => {
-  assert.deepEqual(engine.main(baseConfig(), 'fixture'), engine.clashPatchTransform(baseConfig(), 'fixture'));
+  assert.deepEqual(engine.main(baseConfig(), 'fixture'), engine.claudeEasyTransform(baseConfig(), 'fixture'));
 });
 
 test('transform is idempotent', { skip: !available }, () => {
-  const once = engine.clashPatchTransform(baseConfig(), 'fixture');
-  const twice = engine.clashPatchTransform(once, 'fixture');
+  const once = engine.claudeEasyTransform(baseConfig(), 'fixture');
+  const twice = engine.claudeEasyTransform(once, 'fixture');
   assert.deepEqual(twice, once);
 });
 
 test('global transform verifies a second pass before returning a candidate', () => {
   const source = fs.readFileSync(enginePath, 'utf8');
 
-  assert.match(source, /function clashPatchApply/);
-  assert.match(source, /const secondPass = clashPatchApply\(clashPatchClone\(candidate\)/);
+  assert.match(source, /function claudeEasyApply/);
+  assert.match(source, /const secondPass = claudeEasyApply\(claudeEasyClone\(candidate\)/);
   const sandbox = {};
   vm.runInNewContext(
     `${source}\n` +
-      'globalThis.clashPatchTestTransform = clashPatchTransform;\n' +
-      'globalThis.clashPatchTestSetApply = function (replacement) { clashPatchApply = replacement; };\n',
+      'globalThis.claudeEasyTestTransform = claudeEasyTransform;\n' +
+      'globalThis.claudeEasyTestSetApply = function (replacement) { claudeEasyApply = replacement; };\n',
     sandbox
   );
   let passes = 0;
-  sandbox.clashPatchTestSetApply((config) => {
+  sandbox.claudeEasyTestSetApply((config) => {
     passes += 1;
     return { ...config, mutation: passes };
   });
   const original = { fixture: true };
-  const result = sandbox.clashPatchTestTransform(original, 'fixture', 3);
+  const result = sandbox.claudeEasyTestTransform(original, 'fixture', 3);
 
   assert.equal(passes, 2);
   assert.strictEqual(result, original);
@@ -415,8 +415,8 @@ test('new AI group lists US home broadband without auto selecting it', { skip: !
   const config = baseConfig();
   config.proxies = config.proxies.filter((proxy) => proxy.name === '美国家宽 01');
   config['proxy-groups'] = [{ name: 'Main', type: 'select', proxies: ['美国家宽 01'] }];
-  const patched = engine.clashPatchTransform(config, 'fixture');
-  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
   assert.deepEqual(ai.proxies, ['美国家宽 01']);
   assert.equal(Object.hasOwn(ai, 'now'), false);
 });
@@ -425,7 +425,7 @@ test('does not select Japan home broadband automatically', { skip: !available },
   const config = baseConfig();
   config.proxies = config.proxies.filter((proxy) => !proxy.name.includes('台湾'));
   config['proxy-groups'][0].proxies = config['proxy-groups'][0].proxies.filter((name) => !name.includes('台湾'));
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   assert.deepEqual(ai.proxies, ['Main']);
 });
@@ -433,7 +433,7 @@ test('does not select Japan home broadband automatically', { skip: !available },
 test('puts the UDP guard ahead of a narrow rule set', { skip: !available }, () => {
   const config = baseConfig();
   config.rules.splice(2, 0, 'RULE-SET,private-special,DIRECT');
-  const rules = engine.clashPatchTransform(config, 'fixture').rules;
+  const rules = engine.claudeEasyTransform(config, 'fixture').rules;
   const udpIndex = rules.findIndex((rule) => rule.startsWith('NETWORK,UDP,') && rule !== 'NETWORK,UDP,REJECT');
   assert.equal(udpIndex, 0);
   assert.equal(rules[udpIndex + 1], 'NETWORK,UDP,REJECT');
@@ -446,7 +446,7 @@ test('preserves a user AI target ahead of the managed rule', { skip: !available 
   config['proxy-groups'].push({ name: 'MyGroup', type: 'select', proxies: ['台湾家宽 01'] });
   const userRule = 'DOMAIN-SUFFIX,openai.com,MyGroup';
   config.rules.unshift(userRule);
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const managed = 'DOMAIN-SUFFIX,openai.com,AI';
   assert.equal(patched.rules.filter((rule) => rule === userRule).length, 1);
   assert.ok(patched.rules.indexOf(userRule) < patched.rules.indexOf(managed));
@@ -462,8 +462,8 @@ test('main-group AI rules do not bypass the independent AI selector', { skip: !a
   ];
   config.rules = providerRules.concat(config.rules);
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
-  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
 
   for (const rule of providerRules) assert.equal(patched.rules.includes(rule), false, rule);
   assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${ai.name}`));
@@ -480,7 +480,7 @@ test('UDP guard precedes leaking rules without deleting them', { skip: !availabl
     'PROCESS-NAME,chrome.exe,DIRECT'
   ];
   config.rules = userRules.concat(config.rules);
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const guard = 'NETWORK,UDP,AI';
   assert.equal(patched.rules.indexOf(guard), 0);
   assert.equal(patched.rules[1], 'NETWORK,UDP,REJECT');
@@ -493,8 +493,8 @@ test('UDP guard precedes leaking rules without deleting them', { skip: !availabl
 test('managed AI rules precede every rule set', { skip: !available }, () => {
   const config = baseConfig();
   config.rules = ['RULE-SET,gfw,DIRECT', 'RULE-SET,geolocation-!cn,Main', 'MATCH,Main'];
-  const patched = engine.clashPatchTransform(config, 'fixture');
-  const managed = patched.rules.find((rule) => rule.startsWith('DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'));
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const managed = patched.rules.find((rule) => rule.startsWith('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
   assert.ok(patched.rules.indexOf(managed) < patched.rules.indexOf('RULE-SET,gfw,DIRECT'));
   assert.ok(patched.rules.indexOf(managed) < patched.rules.indexOf('RULE-SET,geolocation-!cn,Main'));
 });
@@ -515,20 +515,20 @@ test('exports the canonical policy without divergence', { skip: !available }, ()
     ai_rules: 'aiRules'
   };
   for (const [jsonKey, jsKey] of Object.entries(mapping)) {
-    assert.deepEqual(engine.CLASH_PATCH_POLICY[jsKey], policy[jsonKey], `policy divergence at ${jsonKey}`);
+    assert.deepEqual(engine.CLAUDE_EASY_POLICY[jsKey], policy[jsonKey], `policy divergence at ${jsonKey}`);
   }
 });
 
 test('unknown policy version is rejected without mutation', { skip: !available }, () => {
   const config = baseConfig();
   const snapshot = JSON.parse(JSON.stringify(config));
-  const originalVersion = engine.CLASH_PATCH_POLICY.version;
+  const originalVersion = engine.CLAUDE_EASY_POLICY.version;
   try {
-    engine.CLASH_PATCH_POLICY.version = 2;
-    assert.deepEqual(engine.clashPatchTransform(config, 'fixture'), config);
+    engine.CLAUDE_EASY_POLICY.version = 2;
+    assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config);
     assert.deepEqual(config, snapshot);
   } finally {
-    engine.CLASH_PATCH_POLICY.version = originalVersion;
+    engine.CLAUDE_EASY_POLICY.version = originalVersion;
   }
 });
 
@@ -538,9 +538,9 @@ test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvaila
   const cases = shared.cases;
   for (const fixture of cases) {
     const snapshot = JSON.parse(JSON.stringify(fixture.config));
-    assert.equal(engine.clashPatchDetectMain(fixture.config), fixture.expected_main_group, fixture.name);
+    assert.equal(engine.claudeEasyDetectMain(fixture.config), fixture.expected_main_group, fixture.name);
     if (fixture.expected_main_group === null) {
-      engine.clashPatchTransform(fixture.config, 'fixture');
+      engine.claudeEasyTransform(fixture.config, 'fixture');
       assert.deepEqual(fixture.config, snapshot, fixture.name);
     }
   }
@@ -551,13 +551,13 @@ test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAv
   for (const fixture of fixtures) {
     const input = structuredClone(fixture.input);
     const snapshot = structuredClone(input);
-    const patched = engine.clashPatchTransform(input, 'fixture');
+    const patched = engine.claudeEasyTransform(input, 'fixture');
     const changed = !isDeepStrictEqual(patched, input);
     const valid = input && typeof input === 'object' && !Array.isArray(input) &&
       Array.isArray(input['proxy-groups']) && (input.rules == null || Array.isArray(input.rules)) &&
       (Array.isArray(input.proxies) ||
         (input['proxy-providers'] && typeof input['proxy-providers'] === 'object' && !Array.isArray(input['proxy-providers'])));
-    const mainGroup = valid ? engine.clashPatchDetectMain(input) : null;
+    const mainGroup = valid ? engine.claudeEasyDetectMain(input) : null;
     const udp = patched && Array.isArray(patched.rules) ? patched.rules.find((rule) => /^NETWORK\s*,\s*UDP\s*,/i.test(rule)) : null;
     const aiGroup = udp ? udp.split(',').map((field) => field.trim()).at(-1) : null;
 
@@ -583,7 +583,7 @@ test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAv
     }
 
     if (fixture.expected_changed) {
-      assert.deepEqual(engine.clashPatchTransform(patched, 'fixture'), patched, `${fixture.name}: second pass`);
+      assert.deepEqual(engine.claudeEasyTransform(patched, 'fixture'), patched, `${fixture.name}: second pass`);
     }
   }
 });
@@ -592,15 +592,15 @@ test('keeps a non-select AI group and creates a non-conflicting selector', { ski
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   config['proxy-groups'].push({ name: 'AI', type: 'url-test', proxies: ['台湾家宽 01'], url: 'https://example.invalid', interval: 300 });
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
 
   const original = patched['proxy-groups'].find((group) => group.name === 'AI');
   assert.equal(original.type, 'url-test');
-  const created = patched['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch');
+  const created = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
   assert.ok(created, 'a new AI selector must be created');
   assert.equal(created.type, 'select');
-  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'));
-  assert.ok(patched.rules.includes('NETWORK,UDP,🤖 AI · Clash Patch'));
+  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
+  assert.ok(patched.rules.includes('NETWORK,UDP,🤖 AI · ClaudeEasy'));
   for (const group of patched['proxy-groups']) {
     assert.ok(!(Array.isArray(group.proxies) && group.proxies.includes(group.name)), `group ${group.name} references itself`);
   }
@@ -612,10 +612,10 @@ test('an AI-only selectable group receives the full patch as a last resort', { s
     'proxy-groups': [{ name: 'AI', type: 'select', proxies: ['台湾家宽 01'] }],
     rules: ['MATCH,AI']
   };
-  assert.equal(engine.clashPatchDetectMain(config), 'AI');
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  assert.equal(engine.claudeEasyDetectMain(config), 'AI');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.notStrictEqual(patched, config);
-  assert.equal(patched['rule-providers']['clash-patch-cn-domain'].proxy, 'AI');
+  assert.equal(patched['rule-providers']['claude-easy-cn-domain'].proxy, 'AI');
   assert.ok(patched.rules.includes('NETWORK,UDP,AI'));
 });
 
@@ -629,9 +629,9 @@ test('patches and preserves a provider-only profile', { skip: !available }, () =
     ],
     rules: ['MATCH,Main']
   };
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
 
-  assert.equal(engine.clashPatchDetectMain(config), 'Main');
+  assert.equal(engine.claudeEasyDetectMain(config), 'Main');
   assert.deepEqual(patched['proxy-providers'], providers);
   assert.deepEqual(patched['proxy-groups'].find((group) => group.name === 'Main').use, ['provider1']);
   assert.ok(patched.rules.includes('NETWORK,UDP,AI'));
@@ -640,19 +640,19 @@ test('patches and preserves a provider-only profile', { skip: !available }, () =
   }
 });
 
-test('composes an existing main before Clash Patch', { skip: !available }, () => {
+test('composes an existing main before ClaudeEasy', { skip: !available }, () => {
   const previous = (config) => {
     config.marker = 'previous-ran';
     return config;
   };
-  const patched = engine.clashPatchCompose(previous, baseConfig(), 'fixture');
+  const patched = engine.claudeEasyCompose(previous, baseConfig(), 'fixture');
   assert.equal(patched.marker, 'previous-ran');
   assert.equal(patched.ipv6, false);
 });
 
 test('returns invalid configurations unchanged', { skip: !available }, () => {
   const invalid = { message: '401 unauthorized' };
-  assert.deepEqual(engine.clashPatchTransform(invalid, 'fixture'), invalid);
+  assert.deepEqual(engine.claudeEasyTransform(invalid, 'fixture'), invalid);
 });
 
 test('PowerShell installer uses the documented global script and app settings', () => {
@@ -676,10 +676,10 @@ test('PowerShell safe update checks installed script and proxy-group prerequisit
   const installer = fs.readFileSync(installerPath, 'utf8');
   const safeUpdateModule = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
   const scriptCheck = installer.indexOf(
-    'Assert-ClashPatchManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript'
+    'Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript'
   );
   const profileCheck = installer.indexOf(
-    'Assert-ClashPatchProxyGroupCollection $text ([string]$item.File)'
+    'Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)'
   );
   const mihomoCheck = installer.indexOf('Test-MihomoCandidate $core $text $profilesDirectory');
   const manifestRemoval = installer.indexOf(
@@ -731,12 +731,12 @@ test('DNS fragments must resolve to a non-direct proxy or group', { skip: !avail
     '+.option.example': ['https://1.1.1.1/dns-query#h3=true'],
     '+.interface.example': ['https://1.1.1.1/dns-query#en0']
   };
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const policy = patched.dns['nameserver-policy'];
-  assert.deepEqual(policy['+.proxy.example'], engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#台湾家宽 01`));
-  assert.deepEqual(policy['+.group.example'], engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#SafeExisting`));
+  assert.deepEqual(policy['+.proxy.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#台湾家宽 01`));
+  assert.deepEqual(policy['+.group.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#SafeExisting`));
   for (const pattern of ['+.direct.example', '+.option.example', '+.interface.example']) {
-    assert.ok(policy[pattern].every((value) => value.endsWith(`#${engine.clashPatchRouteGroupName(patched)}`)), pattern);
+    assert.ok(policy[pattern].every((value) => value.endsWith(`#${engine.claudeEasyRouteGroupName(patched)}`)), pattern);
   }
 });
 
@@ -751,10 +751,10 @@ test('DNS policy rejects plaintext and dynamic group targets', { skip: !availabl
     '+.provider.example': ['https://1.1.1.1/dns-query#ProviderGroup'],
     '+.include-all.example': ['https://1.1.1.1/dns-query#IncludeAllGroup']
   };
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const policies = patched.dns['nameserver-policy'];
-  const safeSuffix = `#${engine.clashPatchRouteGroupName(patched)}`;
-  assert.deepEqual(policies['+.encrypted.example'], engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#台湾家宽 01`));
+  const safeSuffix = `#${engine.claudeEasyRouteGroupName(patched)}`;
+  assert.deepEqual(policies['+.encrypted.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#台湾家宽 01`));
   for (const pattern of ['+.plaintext.example', '+.provider.example', '+.include-all.example']) {
     assert.ok(policies[pattern].every((endpoint) => endpoint.endsWith(safeSuffix)), pattern);
   }
@@ -778,13 +778,13 @@ test('DNS policy accounts for exclusion, empty fallback, and DNS outbounds', { s
     '+.dns-out.example': ['https://1.1.1.1/dns-query#DnsOutboundGroup']
   };
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const policies = patched.dns['nameserver-policy'];
-  const safeName = engine.clashPatchRouteGroupName(patched);
+  const safeName = engine.claudeEasyRouteGroupName(patched);
   const safeSuffix = `#${safeName}`;
   const mainGroup = patched['proxy-groups'].find((group) => group.name === safeName);
   assert.ok(policies['+.compatible.example'].every((endpoint) => endpoint.endsWith(safeSuffix)));
-  assert.deepEqual(policies['+.fallback.example'], engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#FilteredToSafeProxy`));
+  assert.deepEqual(policies['+.fallback.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#FilteredToSafeProxy`));
   assert.ok(policies['+.dns-out.example'].every((endpoint) => endpoint.endsWith(safeSuffix)));
   assert.deepEqual(mainGroup, originalMain);
 });
@@ -804,11 +804,11 @@ test('DNS policy rejects unsafe group filters and honors case-insensitive exclus
     '+.invalid-filter.example': ['https://1.1.1.1/dns-query#InvalidFilter']
   };
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
-  const routeGroup = engine.clashPatchRouteGroupName(patched);
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const routeGroup = engine.claudeEasyRouteGroupName(patched);
   assert.deepEqual(
     patched.dns['nameserver-policy']['+.case-filtered.example'],
-    engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#CaseFiltered`)
+    engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#CaseFiltered`)
   );
   assert.ok(patched.dns['nameserver-policy']['+.invalid-filter.example'].every((endpoint) => {
     return endpoint.endsWith(`#${routeGroup}`);
@@ -821,7 +821,7 @@ test('nested rules and the legacy QUIC guard are handled without weakening user 
   const legacyQuicGuard = 'AND,((NETWORK,UDP),(DST-PORT,443)),REJECT';
   config.rules.unshift(nestedUserRule, legacyQuicGuard);
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.ok(patched.rules.includes(nestedUserRule), 'a user nested rule was removed');
   assert.equal(patched.rules.includes(legacyQuicGuard), false, 'the managed legacy guard was retained');
 });
@@ -835,10 +835,10 @@ test('DNS policy rejects privacy-weakening resolver options', { skip: !available
     '+.ecs.example': [`https://1.1.1.1/dns-query#${target}&ecs=203.0.113.0/24&ecs-override=true`]
   };
 
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const policies = patched.dns['nameserver-policy'];
-  const safeSuffix = `#${engine.clashPatchRouteGroupName(patched)}`;
-  assert.deepEqual(policies['+.h3.example'], engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#${target}&h3=true`));
+  const safeSuffix = `#${engine.claudeEasyRouteGroupName(patched)}`;
+  assert.deepEqual(policies['+.h3.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#${target}&h3=true`));
   for (const pattern of ['+.skip-cert.example', '+.ecs.example']) {
     assert.ok(policies[pattern].every((endpoint) => endpoint.endsWith(safeSuffix)), pattern);
   }
@@ -851,9 +851,9 @@ test('null proxy providers do not crash DNS validation', { skip: !available }, (
   config.dns['nameserver-policy'] = {
     '+.null-provider.example': ['https://1.1.1.1/dns-query#NullProviderGroup']
   };
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.ok(patched.dns['nameserver-policy']['+.null-provider.example'].every((endpoint) => {
-    return endpoint.endsWith(`#${engine.clashPatchRouteGroupName(patched)}`);
+    return endpoint.endsWith(`#${engine.claudeEasyRouteGroupName(patched)}`);
   }));
 });
 
@@ -864,7 +864,7 @@ test('direct and rematch home names are not selected automatically', { skip: !av
     { name: '台湾家宽 REMATCH', type: 'rematch', 'target-rematch-name': 'again' }
   );
   config['proxy-groups'][0].proxies.unshift('台湾家宽 DIRECT', '台湾家宽 REMATCH');
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   const mainGroup = patched['proxy-groups'].find((group) => group.name === 'Main');
   assert.deepEqual(ai.proxies, ['Main']);
@@ -876,7 +876,7 @@ test('direct and rematch home names are not selected automatically', { skip: !av
 test('tun arrays are replaced by a mapping', { skip: !available }, () => {
   const config = baseConfig();
   config.tun = [];
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.equal(Array.isArray(patched.tun), false);
   assert.equal(patched.tun.enable, true);
 });
@@ -884,12 +884,12 @@ test('tun arrays are replaced by a mapping', { skip: !available }, () => {
 test('owned AI group is independent and collision safe', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
-  config['proxy-groups'].push({ name: '🤖 AI · Clash Patch', type: 'url-test', proxies: ['台湾家宽 01'] });
-  config['proxy-groups'].push({ name: '🤖 AI · Clash Patch 2', type: 'url-test', proxies: ['台湾家宽 01'] });
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  config['proxy-groups'].push({ name: '🤖 AI · ClaudeEasy', type: 'url-test', proxies: ['台湾家宽 01'] });
+  config['proxy-groups'].push({ name: '🤖 AI · ClaudeEasy 2', type: 'url-test', proxies: ['台湾家宽 01'] });
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   const names = patched['proxy-groups'].map((group) => group.name);
   assert.deepEqual(names, [...new Set(names)]);
-  const managed = patched['proxy-groups'].find((group) => group.name === '🤖 AI · Clash Patch 3');
+  const managed = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy 3');
   assert.deepEqual(managed.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
 });
 
@@ -903,8 +903,8 @@ test('user-owned branded select group is preserved', { skip: !available }, () =>
     icon: 'https://example.invalid/user-icon.png'
   };
   config['proxy-groups'].push(userGroup);
-  const first = engine.clashPatchTransform(config, 'fixture');
-  const second = engine.clashPatchTransform(first, 'fixture');
+  const first = engine.claudeEasyTransform(config, 'fixture');
+  const second = engine.claudeEasyTransform(first, 'fixture');
   assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
   assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · Clash Patch 2'), false);
   assert.ok(first.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'));
@@ -925,8 +925,8 @@ test('branded user group with AI rules is not mistaken for patch ownership', { s
     'DOMAIN-SUFFIX,anthropic.com,🤖 AI · Clash Patch',
     'DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'
   );
-  const first = engine.clashPatchTransform(config, 'fixture');
-  const second = engine.clashPatchTransform(first, 'fixture');
+  const first = engine.claudeEasyTransform(config, 'fixture');
+  const second = engine.claudeEasyTransform(first, 'fixture');
   assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
   assert.deepEqual(second['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
   assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · Clash Patch 2'), false);
@@ -937,11 +937,11 @@ test('inline proxy names reserve managed group names', { skip: !available }, () 
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   config.proxies.unshift(
-    { name: '🤖 AI · Clash Patch', type: 'ss', server: 'ai.example', port: 443 },
+    { name: '🤖 AI · ClaudeEasy', type: 'ss', server: 'ai.example', port: 443 },
     { name: '🛡 安全代理 · Clash Patch', type: 'ss', server: 'safe.example', port: 443 }
   );
-  const patched = engine.clashPatchTransform(config, 'fixture');
-  assert.ok(patched['proxy-groups'].some((group) => group.name === '🤖 AI · Clash Patch 2'));
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  assert.ok(patched['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'));
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch(?: \d+)?$/.test(group.name)), false);
 });
 
@@ -956,12 +956,12 @@ test('migrates legacy owned AI rules and DNS pattern', { skip: !available }, () 
     'exclude-type': 'Direct|Dns|Reject|Pass|Compatible|Rematch', 'empty-fallback': 'REJECT'
   });
   old.rules = [`NETWORK,UDP,${safeGroup}`, 'NETWORK,UDP,REJECT']
-    .concat(engine.clashPatchRenderAiRules(aiGroup).map((rule) => rule.replace('160.79.104.0/23', '160.79.104.0/21')),
+    .concat(engine.claudeEasyRenderAiRules(aiGroup).map((rule) => rule.replace('160.79.104.0/23', '160.79.104.0/21')),
       [`DOMAIN-SUFFIX,ai.com,${aiGroup}`], old.rules);
   old.dns.nameserver = [`https://dns.alidns.com/dns-query#${safeGroup}`];
   old.dns['nameserver-policy'] = { '+.ai.com': old.dns.nameserver.slice() };
 
-  const patched = engine.clashPatchTransform(old, 'fixture');
+  const patched = engine.claudeEasyTransform(old, 'fixture');
   assert.ok(!patched.rules.includes(`DOMAIN-SUFFIX,ai.com,${aiGroup}`));
   assert.ok(!patched.rules.includes(`IP-CIDR,160.79.104.0/21,${aiGroup},no-resolve`));
   assert.ok(patched.rules.includes(`IP-CIDR,160.79.104.0/23,${aiGroup},no-resolve`));
@@ -973,16 +973,16 @@ test('preserves user legacy AI rules and DNS pattern', { skip: !available }, () 
   config['proxy-groups'].push({ name: 'Friend', type: 'select', proxies: ['台湾家宽 01'] });
   config.rules.unshift('DOMAIN-SUFFIX,ai.com,Friend', 'IP-CIDR,160.79.104.0/21,Friend,no-resolve');
   config.dns['nameserver-policy']['+.ai.com'] = ['https://1.1.1.1/dns-query#Friend'];
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,ai.com,Friend'));
   assert.ok(patched.rules.includes('IP-CIDR,160.79.104.0/21,Friend,no-resolve'));
-  assert.deepEqual(patched.dns['nameserver-policy']['+.ai.com'], engine.CLASH_PATCH_POLICY.resolvers.map((resolver) => `${resolver}#Friend`));
+  assert.deepEqual(patched.dns['nameserver-policy']['+.ai.com'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#Friend`));
 });
 
 test('patches config without a rules array', { skip: !available }, () => {
   const config = baseConfig();
   delete config.rules;
-  const patched = engine.clashPatchTransform(config, 'fixture');
+  const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.ok(Array.isArray(patched.rules));
   assert.ok(patched.rules.some((rule) => rule.startsWith('DOMAIN-SUFFIX,openai.com,')));
 });
@@ -994,15 +994,15 @@ test('existing AI group is reused even when many similar names exist', { skip: !
   for (let suffix = 2; suffix <= 9; suffix += 1) {
     config['proxy-groups'].push({ name: `${base} ${suffix}`, type: 'select', proxies: ['Main'] });
   }
-  const first = engine.clashPatchTransform(config, 'fixture');
-  const second = engine.clashPatchTransform(first, 'fixture');
+  const first = engine.claudeEasyTransform(config, 'fixture');
+  const second = engine.claudeEasyTransform(first, 'fixture');
   assert.ok(first.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
   assert.equal(first['proxy-groups'].some((group) => group.name === `${base} 10`), false);
   assert.deepEqual(second, first);
 });
 
 test('rule templates insert selector names literally', { skip: !available }, () => {
-  const rules = engine.clashPatchRenderAiRules('AI $&');
+  const rules = engine.claudeEasyRenderAiRules('AI $&');
   assert.ok(rules.includes('DOMAIN-SUFFIX,openai.com,AI $&'));
 });
 
@@ -1093,7 +1093,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'common.ps1': ['Write-Info', 'Complete-InstallResult', 'Get-SavedUsageProfile', 'Save-UsageProfile'],
     'transaction.ps1': [
       'Protect-BackupAcl', 'ConvertTo-NormalizedWindowsPath', 'Resolve-ClashVergeAppHome',
-      'Get-AppHomeRelativePath',
+      'Get-AppHomeRelativePath', 'Rename-ClaudeEasyLegacyState',
+      'Get-ClaudeEasyMigrationItem', 'Open-ClaudeEasyMutationLockStream',
       'Enter-AppHomeMutationLock', 'Exit-AppHomeMutationLock',
       'Get-PathKey', 'Assert-NoReparsePointPath', 'Backup-Versioned', 'Backup-InitialOnce', 'Write-BytesAtomic',
       'ConvertTo-Utf8Bytes', 'Write-Utf8Atomic', 'Get-BytesSha256', 'Get-FileSha256',
@@ -1132,8 +1133,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Assert-JavaScriptDoesNotBindMain', 'Assert-JavaScriptCanCompose', 'Build-GlobalScript'
     ],
     'safe_update.ps1': [
-      'Get-BackupTarget', 'Get-ClashPatchManagedScriptBlock', 'Assert-ClashPatchManagedScriptCurrent',
-      'Test-ClashPatchFlowSequenceHasItem', 'Assert-ClashPatchProxyGroupCollection', 'Test-RestoreCandidate',
+      'Get-BackupTarget', 'Get-ClaudeEasyManagedScriptBlock', 'Assert-ClaudeEasyManagedScriptCurrent',
+      'Test-ClaudeEasyFlowSequenceHasItem', 'Assert-ClaudeEasyProxyGroupCollection', 'Test-RestoreCandidate',
       'Get-SafeUpdateRecoveryItems', 'Get-SafeUpdateVerificationTargets', 'Restore-SafeUpdateFiles'
     ]
   };
@@ -1160,11 +1161,11 @@ test('Windows installer is split into side-effect-free modules with stable funct
 
 test('Windows engine contains no unused rule-identity helper', () => {
   const source = fs.readFileSync(enginePath, 'utf8');
-  assert.doesNotMatch(source, /function clashPatchRuleIdentity/);
+  assert.doesNotMatch(source, /function claudeEasyRuleIdentity/);
 });
 
 test('all shipped and test PowerShell scripts are strict UTF-8 with a BOM', () => {
-  const pending = [path.join(root, 'clash-patch/scripts')];
+  const pending = [path.join(root, 'claude-easy/scripts')];
   const powershellFiles = [path.join(root, 'tests/test_windows_installer.ps1')];
   while (pending.length > 0) {
     const directory = pending.pop();
@@ -1193,7 +1194,7 @@ test('PowerShell files have balanced syntax delimiters before Windows CI', () =>
     'broken-fixture'
   ));
 
-  const pending = [path.join(root, 'clash-patch/scripts')];
+  const pending = [path.join(root, 'claude-easy/scripts')];
   const powershellFiles = [path.join(root, 'tests/test_windows_installer.ps1')];
   while (pending.length > 0) {
     const directory = pending.pop();
@@ -1210,18 +1211,18 @@ test('PowerShell files have balanced syntax delimiters before Windows CI', () =>
 
 test('Windows public commands share the JSON v1 result contract', () => {
   const contract = fs.readFileSync(resultContractPath, 'utf8');
-  assert.match(contract, /\$script:ClashPatchResultSchema = "clash-patch\.result"/);
-  assert.match(contract, /\$script:ClashPatchResultVersion = 1/);
-  assert.match(contract, /function New-ClashPatchResult/);
-  assert.match(contract, /function Write-ClashPatchResult/);
-  assert.match(contract, /function Protect-ClashPatchResultValue/);
+  assert.match(contract, /\$script:ClaudeEasyResultSchema = "claude-easy\.result"/);
+  assert.match(contract, /\$script:ClaudeEasyResultVersion = 1/);
+  assert.match(contract, /function New-ClaudeEasyResult/);
+  assert.match(contract, /function Write-ClaudeEasyResult/);
+  assert.match(contract, /function Protect-ClaudeEasyResultValue/);
   assert.match(contract, /ConvertTo-Json -Depth/);
 
   for (const entry of [installerPath, uninstallerPath, routeVerifierPath]) {
     const source = entry === installerPath ? readInstallerBundle() : fs.readFileSync(entry, 'utf8');
     assert.match(source, /\[switch\]\$Json/, entry);
     assert.match(source, /result_contract\.ps1/, entry);
-    assert.match(source, /Write-ClashPatchResult/, entry);
+    assert.match(source, /Write-ClaudeEasyResult/, entry);
   }
 
   assert.match(fs.readFileSync(path.join(installerModuleDir, 'common.ps1'), 'utf8'), /-Command "install"/);
@@ -1240,7 +1241,7 @@ test('Windows route verifier accepts an explicit non-AI Google proxy group', () 
 });
 
 test('PowerShell scripts never assign to read-only automatic variables', () => {
-  const scriptsRoot = path.join(root, 'clash-patch/scripts');
+  const scriptsRoot = path.join(root, 'claude-easy/scripts');
   const pending = [scriptsRoot];
   const powershellFiles = [];
   while (pending.length > 0) {

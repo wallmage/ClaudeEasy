@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "resolvers": [
+    "https://94.140.14.140/dns-query",
+    "https://94.140.14.141/dns-query",
+    "https://101.101.101.101/dns-query"
+  ],
+  "direct_resolvers": [
+    "https://223.5.5.5/dns-query#DIRECT",
+    "https://1.12.12.12/dns-query#DIRECT"
+  ],
+  "bootstrap_fallback_resolvers": [
+    "system"
+  ],
+  "cn_domain_provider": {
+    "name": "claude-easy-cn-domain",
+    "type": "http",
+    "behavior": "domain",
+    "format": "mrs",
+    "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs",
+    "path": "./ruleset/claude-easy-cn-domain.mrs",
+    "interval": 86400,
+    "size_limit": 2097152
+  },
+  "main_group_names": [
+    "Proxy",
+    "PROXY",
+    "Final",
+    "Fallback",
+    "节点选择",
+    "节点列表",
+    "兜底分流"
+  ],
+  "ai_group_names": [
+    "AI",
+    "OpenAI",
+    "人工智能",
+    "🤖 AI"
+  ],
+  "taiwan_tokens": [
+    "台湾",
+    "台灣",
+    "Taiwan",
+    "TW",
+    "🇹🇼"
+  ],
+  "japan_tokens": [
+    "日本",
+    "Japan",
+    "JP",
+    "🇯🇵"
+  ],
+  "forbidden_ai_domains": [
+    "raw.githubusercontent.com",
+    "storage.googleapis.com"
+  ],
+  "legacy_ai_rules": [
+    "DOMAIN-SUFFIX,ai.com,{AI}",
+    "IP-CIDR,160.79.104.0/21,{AI},no-resolve"
+  ],
+  "ai_rules": [
+    "DOMAIN-SUFFIX,anthropic.com,{AI}",
+    "DOMAIN-SUFFIX,claude.ai,{AI}",
+    "DOMAIN-SUFFIX,claude.com,{AI}",
+    "DOMAIN-SUFFIX,claude.site,{AI}",
+    "DOMAIN-SUFFIX,claudeusercontent.com,{AI}",
+    "DOMAIN-SUFFIX,claudemcpclient.com,{AI}",
+    "DOMAIN-SUFFIX,claudemcpcontent.com,{AI}",
+    "DOMAIN,servd-anthropic-website.b-cdn.net,{AI}",
+    "DOMAIN-SUFFIX,openai.com,{AI}",
+    "DOMAIN-SUFFIX,chatgpt.com,{AI}",
+    "DOMAIN-SUFFIX,chatgpt.livekit.cloud,{AI}",
+    "DOMAIN-SUFFIX,oaistatic.com,{AI}",
+    "DOMAIN-SUFFIX,oaiusercontent.com,{AI}",
+    "DOMAIN-SUFFIX,oaistatsig.com,{AI}",
+    "DOMAIN-SUFFIX,cdn.openaimerge.com,{AI}",
+    "DOMAIN,openai-api.arkoselabs.com,{AI}",
+    "DOMAIN,chat.openai.com.cdn.cloudflare.net,{AI}",
+    "DOMAIN,openaiapi-site.azureedge.net,{AI}",
+    "DOMAIN,openaicom.imgix.net,{AI}",
+    "DOMAIN,openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net,{AI}",
+    "DOMAIN,openaicomproductionae4b.blob.core.windows.net,{AI}",
+    "DOMAIN,production-openaicom-storage.azureedge.net,{AI}",
+    "DOMAIN,ai.google.dev,{AI}",
+    "DOMAIN-SUFFIX,aistudio.google.com,{AI}",
+    "DOMAIN-SUFFIX,gemini.google.com,{AI}",
+    "DOMAIN-SUFFIX,gemini.google,{AI}",
+    "DOMAIN-SUFFIX,gemini.gstatic.com,{AI}",
+    "DOMAIN-SUFFIX,bard.google.com,{AI}",
+    "DOMAIN-SUFFIX,makersuite.google.com,{AI}",
+    "DOMAIN,alkalimakersuite-pa.clients6.google.com,{AI}",
+    "DOMAIN,webchannel-alkalimakersuite-pa.clients6.google.com,{AI}",
+    "DOMAIN-SUFFIX,generativelanguage.googleapis.com,{AI}",
+    "DOMAIN,aiplatform.googleapis.com,{AI}",
+    "DOMAIN-SUFFIX,generativeai.google,{AI}",
+    "DOMAIN-KEYWORD,openai,{AI}",
+    "IP-CIDR,160.79.104.0/23,{AI},no-resolve",
+    "IP-CIDR6,2607:6bc0::/48,{AI},no-resolve"
+  ]
+}

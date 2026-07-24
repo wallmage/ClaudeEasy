@@ -4,7 +4,7 @@ docs/*
 docs/superpowers/*
 !docs/superpowers/specs/
 docs/superpowers/specs/*
-!docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md
+!docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md
 dist/
 *.zip
 *.log

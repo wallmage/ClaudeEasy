@@ -5,9 +5,9 @@ require "rbconfig"
 ROOT = File.expand_path("..", __dir__)
 PROBE_FILTER = "/production_probe/".freeze
 
-current_ruby = ENV.fetch("CLASH_PATCH_CURRENT_RUBY", RbConfig.ruby)
-system_ruby = ENV.fetch("CLASH_PATCH_SYSTEM_RUBY", "/usr/bin/ruby")
-probe_environment = { "CLASH_PATCH_RUN_PRODUCTION_PROBES" => "1" }.freeze
+current_ruby = ENV.fetch("CLAUDE_EASY_CURRENT_RUBY", RbConfig.ruby)
+system_ruby = ENV.fetch("CLAUDE_EASY_SYSTEM_RUBY", "/usr/bin/ruby")
+probe_environment = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" }.freeze
 commands = [
   [current_ruby, "tests/test_macos_patcher.rb"],
   [current_ruby, "tests/test_macos_wrappers.rb"],

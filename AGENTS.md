@@ -1,12 +1,12 @@
-# Clash Patch 开发约定
+# ClaudeEasy 开发约定
 
 ## 执行
 
 - 需求明确且在已有授权范围内时，从实现、验证、安装到提交推送连续做完。不得停在方案、计划、等待用户操作或“尚未提交”的中间状态，也不得要求用户重复确认；只有缺少必要权限或操作会明显超出用户授权时才能停下。
 - 始终在 `main` 上工作，不使用 worktree、功能分支或 PR。
 - 实际修改项目后，除非用户明确要求不要提交，否则自动完成本地测试、commit 和 push，让 GitHub CI 自动运行。不得把“尚未 commit 或 push”作为常规收尾。
-- 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `clash-patch/`，都必须在同一流程中把仓库里的 `clash-patch/` 安装到 `~/.codex/skills/clash-patch/`。如果 `~/.agents/skills/clash-patch/` 已存在，也要同步更新，避免 Codex 读取旧副本。安装后逐文件校验源目录与安装目录一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动安装。
-- 文档位置固定。不得自行新增需求汇总、入口、方案或计划文档：`README.md` 面向用户，`clash-patch/SKILL.md` 规定代理流程，`clash-patch/references/patch-policy.md` 保存详细产品规则，`docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md` 保存产品需求与架构，`tests/baseline.md` 记录现行自动化测试范围。
+- 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。如果 `~/.agents/skills/claude-easy/` 或旧版 `~/.agents/skills/clash-patch/` 存在，也要同步安装 Agents 副本。新副本逐文件校验一致后，移除两个 skills 根目录中的旧版 `clash-patch/`，不得让新旧 Skill 同时可调用；安装、校验或旧副本清理失败时不得把任务报告为完成，也不得要求用户另行手动处理。
+- 文档位置固定。不得自行新增需求汇总、入口、方案或计划文档：`README.md` 面向用户，`claude-easy/SKILL.md` 规定代理流程，`claude-easy/references/patch-policy.md` 保存详细产品规则，`docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md` 保存产品需求与架构，`tests/baseline.md` 记录现行自动化测试范围。
 - 功能需求变化时，代码、Skill 和相关产品文档必须在同一次改动中同步更新。
 
 ## 项目边界
@@ -29,13 +29,13 @@ ruby tests/coverage_ruby.rb
 ruby tests/test_macos_wrappers.rb
 ruby tests/test_skill_contract.rb
 ruby tests/test_mutation_safety.rb
-node --experimental-test-coverage --test --test-coverage-include=clash-patch/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
+node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
 ruby tests/generate_windows_policy.rb --check
-ruby -c clash-patch/scripts/macos/patch_profiles.rb
-ruby -c clash-patch/scripts/macos/verify_routes.rb
-node --check clash-patch/scripts/windows/clash_verge_global.js
-sh -n clash-patch/scripts/install_macos.sh
-sh -n clash-patch/scripts/uninstall_macos.sh
+ruby -c claude-easy/scripts/macos/patch_profiles.rb
+ruby -c claude-easy/scripts/macos/verify_routes.rb
+node --check claude-easy/scripts/windows/clash_verge_global.js
+sh -n claude-easy/scripts/install_macos.sh
+sh -n claude-easy/scripts/uninstall_macos.sh
 git diff --check
 ```
 

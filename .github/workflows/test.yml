@@ -31,14 +31,14 @@ jobs:
       - name: macOS command wrapper behavior
         run: ruby tests/test_macos_wrappers.rb
       - name: Windows engine suite
-        run: node --experimental-test-coverage --test --test-coverage-include=clash-patch/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
+        run: node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
       - name: Generated policy parity
         run: ruby tests/generate_windows_policy.rb --check
       - name: Ruby 3.3 syntax checks
         run: |
-          ruby -c clash-patch/scripts/macos/patch_profiles.rb
-          ruby -c clash-patch/scripts/macos/verify_routes.rb
-          node --check clash-patch/scripts/windows/clash_verge_global.js
+          ruby -c claude-easy/scripts/macos/patch_profiles.rb
+          ruby -c claude-easy/scripts/macos/verify_routes.rb
+          node --check claude-easy/scripts/windows/clash_verge_global.js
       - name: Confirm the supported system Ruby
         run: /usr/bin/ruby -e 'abort "expected Ruby 2.6" unless RUBY_VERSION.start_with?("2.6.")'
       - name: Ruby regressions on the production runtime
@@ -49,10 +49,10 @@ jobs:
         run: /usr/bin/ruby tests/test_macos_wrappers.rb
       - name: macOS syntax checks
         run: |
-          /usr/bin/ruby -c clash-patch/scripts/macos/patch_profiles.rb
-          /usr/bin/ruby -c clash-patch/scripts/macos/verify_routes.rb
-          sh -n clash-patch/scripts/install_macos.sh
-          sh -n clash-patch/scripts/uninstall_macos.sh
+          /usr/bin/ruby -c claude-easy/scripts/macos/patch_profiles.rb
+          /usr/bin/ruby -c claude-easy/scripts/macos/verify_routes.rb
+          sh -n claude-easy/scripts/install_macos.sh
+          sh -n claude-easy/scripts/uninstall_macos.sh
       - name: Source tree whitespace checks
         env:
           PUSH_BASE_SHA: ${{ github.event.before }}
@@ -122,12 +122,12 @@ jobs:
           done
       - name: Validate all profiles with minimum Mihomo
         env:
-          CLASH_PATCH_REQUIRE_REAL_MIHOMO: "1"
-        run: CLASH_PATCH_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby tests/run_macos_mihomo_validation.rb
+          CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
+        run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby tests/run_macos_mihomo_validation.rb
       - name: Validate all profiles with current Mihomo
         env:
-          CLASH_PATCH_REQUIRE_REAL_MIHOMO: "1"
-        run: CLASH_PATCH_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
+          CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
+        run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
 
   windows-installer-powershell-5:
     runs-on: windows-2022
@@ -140,7 +140,7 @@ jobs:
       - name: PowerShell 5.1 installer, uninstaller, and route regressions
         shell: powershell
         run: |
-          $receipt = Join-Path $env:RUNNER_TEMP "clash-patch-windows-full-5.json"
+          $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-full-5.json"
           Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
           $runtime = (Get-Command powershell.exe).Source
           & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5 -CompletionReceiptPath $receipt
@@ -162,7 +162,7 @@ jobs:
       - name: PowerShell 7 installer, uninstaller, and route regressions
         shell: pwsh
         run: |
-          $receipt = Join-Path $env:RUNNER_TEMP "clash-patch-windows-full-7.json"
+          $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-full-7.json"
           Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
           $runtime = (Get-Command pwsh.exe).Source
           & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7 -CompletionReceiptPath $receipt
@@ -229,7 +229,7 @@ jobs:
           $core = @(Get-ChildItem -LiteralPath $destination -Filter "mihomo*.exe" -File -Recurse)
           if ($core.Count -ne 1) { throw "Mihomo executable is missing before validation" }
           $targetPowerShell = (Get-Command '${{ matrix.executable }}').Source
-          $receipt = Join-Path $env:RUNNER_TEMP "clash-patch-windows-mihomo.json"
+          $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-mihomo.json"
           Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
           $nonce = [Guid]::NewGuid().ToString("N")
           & $targetPowerShell -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 `

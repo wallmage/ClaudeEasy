@@ -10,14 +10,14 @@ require "tmpdir"
 ROOT = File.expand_path("..", __dir__)
 TEST_NAME = "test_generated_profile_passes_installed_mihomo_validation".freeze
 
-Dir.mktmpdir("clash-patch-mihomo-validation-") do |directory|
+Dir.mktmpdir("claude-easy-mihomo-validation-") do |directory|
   receipt_path = File.join(directory, "completion.json")
   receipt_nonce = SecureRandom.hex(32)
-  core_path = ENV["CLASH_PATCH_TEST_MIHOMO"].to_s
+  core_path = ENV["CLAUDE_EASY_TEST_MIHOMO"].to_s
   environment = {
-    "CLASH_PATCH_REQUIRE_REAL_MIHOMO" => "1",
-    "CLASH_PATCH_MIHOMO_RECEIPT_PATH" => receipt_path,
-    "CLASH_PATCH_MIHOMO_RECEIPT_NONCE" => receipt_nonce
+    "CLAUDE_EASY_REQUIRE_REAL_MIHOMO" => "1",
+    "CLAUDE_EASY_MIHOMO_RECEIPT_PATH" => receipt_path,
+    "CLAUDE_EASY_MIHOMO_RECEIPT_NONCE" => receipt_nonce
   }
   stdout, stderr, status = Open3.capture3(
     environment,
@@ -50,7 +50,7 @@ Dir.mktmpdir("clash-patch-mihomo-validation-") do |directory|
              counts == [1, counts&.fetch(1, 0), 0, 0, 0] &&
              counts&.fetch(1, 0).positive? &&
              receipt == {
-               "schema" => "clash-patch.mihomo-validation",
+               "schema" => "claude-easy.mihomo-validation",
                "version" => 1,
                "nonce" => receipt_nonce,
                "core_sha256" => expected_core_sha256,

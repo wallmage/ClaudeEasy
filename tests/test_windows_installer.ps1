@@ -26,13 +26,13 @@ if ([string]$childVersion.PSEdition -ne $ExpectedPSEdition -or
     throw "PowerShellPath runtime mismatch: expected $ExpectedPSEdition $ExpectedPSMajor"
 }
 $root = Split-Path -Parent $PSScriptRoot
-$installer = Join-Path (Join-Path $root "clash-patch/scripts") "install_windows.ps1"
-$uninstaller = Join-Path (Join-Path $root "clash-patch/scripts") "uninstall_windows.ps1"
-$installWrapper = Join-Path (Join-Path $root "clash-patch/scripts") "install_windows.cmd"
-$uninstallWrapper = Join-Path (Join-Path $root "clash-patch/scripts") "uninstall_windows.cmd"
-$routeVerifier = Join-Path (Join-Path $root "clash-patch/scripts/windows") "verify_routes.ps1"
-$resultContract = Join-Path (Join-Path $root "clash-patch/scripts/windows") "result_contract.ps1"
-$installerModuleRoot = Join-Path (Join-Path $root "clash-patch/scripts/windows") "install_windows"
+$installer = Join-Path (Join-Path $root "claude-easy/scripts") "install_windows.ps1"
+$uninstaller = Join-Path (Join-Path $root "claude-easy/scripts") "uninstall_windows.ps1"
+$installWrapper = Join-Path (Join-Path $root "claude-easy/scripts") "install_windows.cmd"
+$uninstallWrapper = Join-Path (Join-Path $root "claude-easy/scripts") "uninstall_windows.cmd"
+$routeVerifier = Join-Path (Join-Path $root "claude-easy/scripts/windows") "verify_routes.ps1"
+$resultContract = Join-Path (Join-Path $root "claude-easy/scripts/windows") "result_contract.ps1"
+$installerModuleRoot = Join-Path (Join-Path $root "claude-easy/scripts/windows") "install_windows"
 $installerModules = @(
     "common.ps1", "yaml.ps1", "profiles.ps1", "mihomo.ps1",
     "transaction.ps1", "script_js.ps1", "safe_update.ps1"
@@ -40,10 +40,10 @@ $installerModules = @(
 $uninstallerModules = @(
     "yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1"
 ) | ForEach-Object { Join-Path $installerModuleRoot $_ }
-$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("clash-patch-windows-test-" + [System.Guid]::NewGuid().ToString("N"))
+$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("claude-easy-windows-test-" + [System.Guid]::NewGuid().ToString("N"))
 $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
-$previousUsageProfile = $env:CLASH_PATCH_USAGE_PROFILE
-$env:CLASH_PATCH_USAGE_PROFILE = "3"
+$previousUsageProfile = $env:CLAUDE_EASY_USAGE_PROFILE
+$env:CLAUDE_EASY_USAGE_PROFILE = "3"
 $script:deferredProbeFailures = New-Object System.Collections.ArrayList
 $fakeCore = Join-Path $sandbox $(if ($onWindows) { "mihomo-test.cmd" } else { "mihomo-test.sh" })
 $hangingCore = Join-Path $sandbox $(if ($onWindows) { "mihomo-hang.cmd" } else { "mihomo-hang.sh" })
@@ -225,7 +225,7 @@ $safeGuardAst = [System.Management.Automation.Language.Parser]::ParseInput(
 if ($safeGuardErrors.Count -gt 0) { throw ($safeGuardErrors | Out-String) }
 Assert-NoReadOnlyAutomaticVariableWrites $safeGuardAst "automatic-variable-safe-fixture"
 
-$productionPowerShellFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "clash-patch/scripts") -Filter "*.ps1" -File -Recurse)
+$productionPowerShellFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "claude-easy/scripts") -Filter "*.ps1" -File -Recurse)
 foreach ($productionPowerShellFile in $productionPowerShellFiles) {
     $productionTokens = $null
     $productionParseErrors = $null
@@ -335,7 +335,7 @@ function Get-TreeContentSnapshot([string]$Path) {
         )
         if ($_.PSIsContainer) {
             "D:$relative"
-        } elseif ($_.Name -eq ".clash-patch.lock") {
+        } elseif ($_.Name -eq ".claude-easy.lock") {
             "F:${relative}:<locked>"
         } else {
             "F:${relative}:" + [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($_.FullName))
@@ -396,7 +396,7 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
     foreach ($field in @("schema", "version", "command", "platform", "client", "operation", "ok", "status", "code", "exit_code", "summary_zh", "profile", "changes", "checks", "items", "messages", "warnings")) {
         Assert-True ($null -ne $result.PSObject.Properties[$field]) "JSON result omitted $field"
     }
-    Assert-True ($result.schema -eq "clash-patch.result") "JSON result schema mismatch"
+    Assert-True ($result.schema -eq "claude-easy.result") "JSON result schema mismatch"
     Assert-True ([int]$result.version -eq 1) "JSON result version mismatch"
     Assert-True ($result.command -eq $Command) "JSON result command mismatch"
     Assert-True ($result.platform -eq "windows") "JSON result platform mismatch"
@@ -481,9 +481,9 @@ try {
     [System.IO.File]::WriteAllText($fakeCore, $fakeCoreText, [System.Text.Encoding]::ASCII)
     if (-not $onWindows) { & /bin/chmod 700 $fakeCore }
     if ($onWindows) {
-        $mutatingCoreText = "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nif not `"%CLASH_PATCH_MUTATE_TARGET%`"==`"`" (`r`n  >`"%CLASH_PATCH_MUTATE_TARGET%`" echo friend_concurrent: true`r`n)`r`nexit /b 0`r`n"
+        $mutatingCoreText = "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nif not `"%CLAUDE_EASY_MUTATE_TARGET%`"==`"`" (`r`n  >`"%CLAUDE_EASY_MUTATE_TARGET%`" echo friend_concurrent: true`r`n)`r`nexit /b 0`r`n"
         [System.IO.File]::WriteAllText($mutatingCore, $mutatingCoreText, [System.Text.Encoding]::ASCII)
-        $identityMutatingCoreText = "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nif not `"%CLASH_PATCH_MUTATE_TARGET%`"==`"`" (`r`n  copy /b `"%CLASH_PATCH_MUTATE_TARGET%`" `"%CLASH_PATCH_MUTATE_TARGET%.replacement`" >nul`r`n  del /f /q `"%CLASH_PATCH_MUTATE_TARGET%`"`r`n  move /y `"%CLASH_PATCH_MUTATE_TARGET%.replacement`" `"%CLASH_PATCH_MUTATE_TARGET%`" >nul`r`n)`r`nexit /b 0`r`n"
+        $identityMutatingCoreText = "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nif not `"%CLAUDE_EASY_MUTATE_TARGET%`"==`"`" (`r`n  copy /b `"%CLAUDE_EASY_MUTATE_TARGET%`" `"%CLAUDE_EASY_MUTATE_TARGET%.replacement`" >nul`r`n  del /f /q `"%CLAUDE_EASY_MUTATE_TARGET%`"`r`n  move /y `"%CLAUDE_EASY_MUTATE_TARGET%.replacement`" `"%CLAUDE_EASY_MUTATE_TARGET%`" >nul`r`n)`r`nexit /b 0`r`n"
         [System.IO.File]::WriteAllText(
             $identityMutatingCore,
             $identityMutatingCoreText,
@@ -697,7 +697,7 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
             [System.IO.File]::WriteAllText($duplicateJournalTarget, "old")
             $duplicateJournalLock = Enter-AppHomeMutationLock $duplicateJournalHome
             try {
-                $duplicateJournalPath = Join-Path $duplicateJournalHome ".clash-patch-transaction.json"
+                $duplicateJournalPath = Join-Path $duplicateJournalHome ".claude-easy-transaction.json"
                 $duplicateJournalText = '{"Version":1,"Actions":[{"Action":"delete","Action":"write","Path":"target.txt","Existed":true,"OriginalBase64":"b2xk","ReplacementBase64":"bmV3"}]}'
                 [System.IO.File]::WriteAllText(
                     $duplicateJournalPath,
@@ -784,7 +784,7 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                 [System.IO.File]::WriteAllText($transactionJournalSentinel, "sentinel")
                 $transactionJournalLock = Enter-AppHomeMutationLock $transactionJournalHome
                 Exit-AppHomeMutationLock $transactionJournalLock
-                $transactionJournalPath = Join-Path $transactionJournalHome ".clash-patch-transaction.json"
+                $transactionJournalPath = Join-Path $transactionJournalHome ".claude-easy-transaction.json"
                 $transactionJournalBytes = if ($null -ne $transactionJournalCase.Bytes) {
                     [byte[]]$transactionJournalCase.Bytes
                 } else {
@@ -833,7 +833,7 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                 (Get-Content -LiteralPath $newFileTransactionTarget -Raw) -ceq "created"
             ) "new-file transaction could not journal an empty original byte sequence"
             Assert-True (
-                -not (Test-Path -LiteralPath (Join-Path $newFileTransactionHome ".clash-patch-transaction.json"))
+                -not (Test-Path -LiteralPath (Join-Path $newFileTransactionHome ".claude-easy-transaction.json"))
             ) "new-file transaction left a stale journal"
         }
 
@@ -896,7 +896,7 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         $wrapperJsonOutput = & $installWrapper -ShowUsageProfile -AppHome $wrapperCase -Json 2>&1 | Out-String
         Assert-True ($LASTEXITCODE -eq 0) "install_windows.cmd did not propagate JSON-mode success; $(Get-TestOutputDiagnostic $wrapperJsonOutput)"
         $wrapperJson = $wrapperJsonOutput.Trim() | ConvertFrom-Json
-        Assert-True ($wrapperJson.schema -eq "clash-patch.result") "install_windows.cmd did not pass -Json through"
+        Assert-True ($wrapperJson.schema -eq "claude-easy.result") "install_windows.cmd did not pass -Json through"
 
         $invalidWrapperOutput = & $installWrapper -UsageProfile 9 -AppHome $wrapperCase -Json 2>&1 | Out-String
         $invalidWrapperExit = $LASTEXITCODE
@@ -904,12 +904,122 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         $invalidWrapperJson = $invalidWrapperOutput.Trim() | ConvertFrom-Json
         Assert-True ([int]$invalidWrapperJson.exit_code -eq $invalidWrapperExit) "install_windows.cmd changed the JSON failure exit code"
 
-        $wrapperBackup = Join-Path (Join-Path $wrapperCase "clash-patch-backups") "keep.backup"
+        $wrapperBackup = Join-Path (Join-Path $wrapperCase "claude-easy-backups") "keep.backup"
         New-Item -ItemType Directory -Path (Split-Path -Parent $wrapperBackup) -Force | Out-Null
         [System.IO.File]::WriteAllText($wrapperBackup, "keep")
         $uninstallWrapperOutput = & $uninstallWrapper -AppHome $wrapperCase 2>&1 | Out-String
         Assert-True ($LASTEXITCODE -eq 0) "uninstall_windows.cmd did not propagate a successful exit; $(Get-TestOutputDiagnostic $uninstallWrapperOutput)"
         Assert-True (Test-Path -LiteralPath $wrapperBackup -PathType Leaf) "uninstall_windows.cmd deleted configuration history"
+
+        $legacyMigrationCase = Join-Path $sandbox "legacy-state-migration-case"
+        New-Item -ItemType Directory -Path $legacyMigrationCase -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $legacyMigrationCase "clash-patch-usage-profile.json"),
+            '{"Version":1,"Profile":2}' + "`r`n"
+        )
+        $legacyBackup = Join-Path (Join-Path $legacyMigrationCase "clash-patch-backups") "keep.backup"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $legacyBackup) -Force | Out-Null
+        [System.IO.File]::WriteAllText($legacyBackup, "keep")
+        $legacyMigration = Invoke-TestPowerShell $installer @(
+            "-AppHome", $legacyMigrationCase,
+            "-ShowUsageProfile",
+            "-Json"
+        )
+        $legacyMigrationJson = Assert-JsonResult $legacyMigration "install" 0
+        Assert-True ($legacyMigrationJson.code -eq "usage_profile_shown") "legacy usage profile was not readable after migration"
+        Assert-True ([int]$legacyMigrationJson.profile -eq 2) "legacy usage profile changed during migration"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $legacyMigrationCase "clash-patch-usage-profile.json"))) "legacy usage state name remained after migration"
+        Assert-True (Test-Path -LiteralPath (Join-Path $legacyMigrationCase "claude-easy-usage-profile.json") -PathType Leaf) "current usage state was not published"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $legacyMigrationCase "clash-patch-backups"))) "legacy backup directory name remained after migration"
+        Assert-True ((Get-Content -LiteralPath (Join-Path (Join-Path $legacyMigrationCase "claude-easy-backups") "keep.backup") -Raw) -ceq "keep") "legacy backup content changed during migration"
+
+        $legacyConflictCase = Join-Path $sandbox "legacy-state-conflict-case"
+        New-Item -ItemType Directory -Path $legacyConflictCase -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $legacyConflictCase "clash-patch-usage-profile.json"),
+            '{"Version":1,"Profile":1}' + "`r`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $legacyConflictCase "claude-easy-usage-profile.json"),
+            '{"Version":1,"Profile":2}' + "`r`n"
+        )
+        [System.IO.File]::WriteAllText((Join-Path $legacyConflictCase ".clash-patch.lock"), "")
+        [System.IO.File]::WriteAllText((Join-Path $legacyConflictCase ".claude-easy.lock"), "")
+        $legacyConflictBefore = Get-TreeContentSnapshot $legacyConflictCase
+        $legacyConflict = Invoke-TestPowerShell $installer @(
+            "-AppHome", $legacyConflictCase,
+            "-ShowUsageProfile",
+            "-Json"
+        )
+        $legacyConflictJson = Assert-JsonResult $legacyConflict "install" 1
+        Assert-True ($legacyConflictJson.code -eq "legacy_state_conflict") "conflicting legacy state did not fail explicitly"
+        Assert-True ((Get-TreeContentSnapshot $legacyConflictCase) -ceq $legacyConflictBefore) "legacy-state conflict changed AppHome"
+
+        $legacyLockCase = Join-Path $sandbox "legacy-lock-compatibility-case"
+        $legacyLockReady = Join-Path $sandbox "legacy-lock-compatibility.ready"
+        $legacyLockRelease = Join-Path $sandbox "legacy-lock-compatibility.release"
+        $legacyLockHolderPath = Join-Path $sandbox "legacy-lock-compatibility-holder.ps1"
+        New-Item -ItemType Directory -Path $legacyLockCase -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $legacyLockCase "clash-patch-usage-profile.json"),
+            '{"Version":1,"Profile":1}' + "`r`n"
+        )
+        $legacyLockHolderSource = @'
+param(
+    [string]$LockPath,
+    [string]$ReadyPath,
+    [string]$ReleasePath
+)
+$stream = [System.IO.File]::Open(
+    $LockPath,
+    [System.IO.FileMode]::OpenOrCreate,
+    [System.IO.FileAccess]::ReadWrite,
+    [System.IO.FileShare]::None
+)
+try {
+    [System.IO.File]::WriteAllText($ReadyPath, "ready")
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while (-not (Test-Path -LiteralPath $ReleasePath -PathType Leaf) -and
+        [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 25
+    }
+} finally {
+    $stream.Dispose()
+}
+'@
+        [System.IO.File]::WriteAllText(
+            $legacyLockHolderPath,
+            $legacyLockHolderSource,
+            [System.Text.Encoding]::ASCII
+        )
+        $legacyLockHolder = Start-Process -FilePath $PowerShellPath -ArgumentList @(
+            "-NoLogo", "-NoProfile", "-File", $legacyLockHolderPath,
+            "-LockPath", (Join-Path $legacyLockCase ".clash-patch.lock"),
+            "-ReadyPath", $legacyLockReady,
+            "-ReleasePath", $legacyLockRelease
+        ) -PassThru
+        try {
+            $legacyLockDeadline = [DateTime]::UtcNow.AddSeconds(5)
+            while (-not (Test-Path -LiteralPath $legacyLockReady -PathType Leaf) -and
+                [DateTime]::UtcNow -lt $legacyLockDeadline) {
+                Start-Sleep -Milliseconds 25
+            }
+            Assert-True (Test-Path -LiteralPath $legacyLockReady -PathType Leaf) "legacy lock holder did not become ready"
+            $legacyLockBefore = Get-TreeContentSnapshot $legacyLockCase
+            $legacyLockInstall = Invoke-TestPowerShell $installer @(
+                "-AppHome", $legacyLockCase,
+                "-ShowUsageProfile",
+                "-Json"
+            )
+            $legacyLockJson = Assert-JsonResult $legacyLockInstall "install" 1
+            Assert-True ($legacyLockJson.code -eq "operation_in_progress") "legacy lock did not block the new installer"
+            Assert-True ((Get-TreeContentSnapshot $legacyLockCase) -ceq $legacyLockBefore) "installer changed state before acquiring the legacy lock"
+        } finally {
+            [System.IO.File]::WriteAllText($legacyLockRelease, "release")
+            if (-not $legacyLockHolder.WaitForExit(5000)) {
+                Stop-Process -Id $legacyLockHolder.Id -Force
+            }
+        }
 
         $mutexCase = Join-Path $sandbox "app-home-mutex-case"
         $mutexReadyPath = Join-Path $sandbox "app-home-mutex.ready"
@@ -1025,11 +1135,11 @@ try {
     if (-not $onWindows) { & /bin/chmod 700 $hangingCore }
 
     if ($onWindows) {
-        $releaseZip = Join-Path $sandbox "clash-patch-release.zip"
+        $releaseZip = Join-Path $sandbox "claude-easy-release.zip"
         $releaseExtracted = Join-Path $sandbox "发布 包"
-        Compress-Archive -Path (Join-Path $root "clash-patch") -DestinationPath $releaseZip
+        Compress-Archive -Path (Join-Path $root "claude-easy") -DestinationPath $releaseZip
         Expand-Archive -LiteralPath $releaseZip -DestinationPath $releaseExtracted
-        $releasePackage = Join-Path $releaseExtracted "clash-patch"
+        $releasePackage = Join-Path $releaseExtracted "claude-easy"
         $releaseInstaller = Join-Path (Join-Path $releasePackage "scripts") "install_windows.ps1"
         Assert-True (Test-Path -LiteralPath $releaseInstaller -PathType Leaf) "release archive omitted the Windows installer"
 
@@ -1070,14 +1180,14 @@ try {
     }
 
     . $resultContract
-    $contractResult = New-ClashPatchResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成"
+    $contractResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成"
     foreach ($field in @("schema", "version", "command", "platform", "client", "operation", "ok", "status", "code", "exit_code", "summary_zh", "profile", "changes", "checks", "items", "messages", "warnings")) {
         Assert-True ($null -ne $contractResult.PSObject.Properties[$field]) "result contract omitted $field"
     }
     $invalidContractCommandRejected = $false
-    try { New-ClashPatchResult -Command "contract-test" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" | Out-Null } catch { $invalidContractCommandRejected = $true }
+    try { New-ClaudeEasyResult -Command "contract-test" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" | Out-Null } catch { $invalidContractCommandRejected = $true }
     Assert-True $invalidContractCommandRejected "result contract accepted an unstable command name"
-    $nestedSecretResult = New-ClashPatchResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Checks @([pscustomobject]@{ nested = [ordered]@{ url = "https://secret.invalid/path"; path = "C:\Users\friend\secret.yaml"; token = "token=private"; uuid = "11111111-2222-3333-4444-555555555555" } })
+    $nestedSecretResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Checks @([pscustomobject]@{ nested = [ordered]@{ url = "https://secret.invalid/path"; path = "C:\Users\friend\secret.yaml"; token = "token=private"; uuid = "11111111-2222-3333-4444-555555555555" } })
     $nestedSecretJson = $nestedSecretResult | ConvertTo-Json -Depth 8 -Compress
     Assert-True ($nestedSecretJson -notmatch 'secret\.invalid|C:\\Users\\friend|token=private|11111111-2222-3333-4444-555555555555') "result contract leaked nested sensitive text"
 
@@ -1123,7 +1233,7 @@ try {
 $ErrorActionPreference = "Stop"
 $ObservationSeconds = 1
 $Json = $true
-$script:ClashPatchChecks = New-Object System.Collections.ArrayList
+$script:ClaudeEasyChecks = New-Object System.Collections.ArrayList
 function Get-ConnectionIds { return @{} }
 function Start-TestTraffic([string]$Url) {
     $process = [pscustomobject]@{ HasExited = $true }
@@ -1258,11 +1368,11 @@ using System.Threading;
 public static class FakeCurl {
     public static int Main(string[] args) {
         File.WriteAllText(
-            Environment.GetEnvironmentVariable("CLASH_PATCH_TEST_CURL_ARGS_PATH"),
+            Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_ARGS_PATH"),
             String.Join(" ", args)
         );
         File.AppendAllText(
-            Environment.GetEnvironmentVariable("CLASH_PATCH_TEST_CURL_PIDS_PATH"),
+            Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_PIDS_PATH"),
             Process.GetCurrentProcess().Id.ToString() + Environment.NewLine
         );
         Thread.Sleep(10000);
@@ -1291,8 +1401,8 @@ public static class FakeCurl {
             throw "failed to compile fake curl.exe"
         }
         $previousPath = $env:PATH
-        $previousCurlArgsPath = $env:CLASH_PATCH_TEST_CURL_ARGS_PATH
-        $previousCurlPidsPath = $env:CLASH_PATCH_TEST_CURL_PIDS_PATH
+        $previousCurlArgsPath = $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH
+        $previousCurlPidsPath = $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH
         $fakeCurlPids = @()
         try {
             $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -1301,8 +1411,8 @@ public static class FakeCurl {
             }
             Assert-True (Test-Path -LiteralPath $controllerReadyPath) "route success controller did not start: $(Receive-Job $routeControllerJob -Keep | Out-String)"
             $env:PATH = $fakeCurlDirectory + [System.IO.Path]::PathSeparator + $previousPath
-            $env:CLASH_PATCH_TEST_CURL_ARGS_PATH = $fakeCurlArgsPath
-            $env:CLASH_PATCH_TEST_CURL_PIDS_PATH = $fakeCurlPidsPath
+            $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $fakeCurlArgsPath
+            $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH = $fakeCurlPidsPath
             $routeSuccess = Invoke-TestPowerShell $routeVerifier @(
                 "-ControllerUrl", "http://127.0.0.1:$routeControllerPort",
                 "-Secret", "fixture-secret",
@@ -1331,8 +1441,8 @@ public static class FakeCurl {
             Assert-True ($survivingCurlPids.Count -eq 0) "route verifier left hanging curl processes after observation"
         } finally {
             $env:PATH = $previousPath
-            $env:CLASH_PATCH_TEST_CURL_ARGS_PATH = $previousCurlArgsPath
-            $env:CLASH_PATCH_TEST_CURL_PIDS_PATH = $previousCurlPidsPath
+            $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $previousCurlArgsPath
+            $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH = $previousCurlPidsPath
             foreach ($fakeCurlPid in $fakeCurlPids) {
                 $fakeCurlProcess = Get-Process -Id $fakeCurlPid -ErrorAction SilentlyContinue
                 if ($null -ne $fakeCurlProcess) {
@@ -1383,23 +1493,23 @@ public static class FakeCurl {
     $lightScript = Join-Path (Join-Path $lightCase "profiles") "Script.js"
     Assert-True (Test-Path -LiteralPath $lightScript -PathType Leaf) "profile 1 did not install the shared subscription patch"
     $profileOneScript = Get-Content -LiteralPath $lightScript -Raw
-    Assert-True ($profileOneScript.Contains("const CLASH_PATCH_USAGE_PROFILE = 1;")) "profile 1 script has the wrong usage profile"
+    Assert-True ($profileOneScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 1;")) "profile 1 script has the wrong usage profile"
     Assert-True ($profileOneScript.Contains("cnDomainProvider")) "profile 1 script omitted the China-domain provider"
-    $savedProfileOne = Get-Content -LiteralPath (Join-Path $lightCase "clash-patch-usage-profile.json") -Raw | ConvertFrom-Json
+    $savedProfileOne = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$savedProfileOne.Profile -eq 1) "profile 1 was not saved"
     $profileTwo = Invoke-TestPowerShell $installer @("-AppHome", $lightCase, "-UsageProfile", "2", "-MihomoPath", $fakeCore)
     Assert-True ($profileTwo.ExitCode -eq 0) "profile 2 installer failed; $(Get-TestOutputDiagnostic $profileTwo.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "config.yaml") -Raw) -eq $lightConfig) "profile 2 modified config.yaml"
     Assert-True (Test-Path -LiteralPath $lightScript -PathType Leaf) "profile 2 removed the shared subscription patch"
     $profileTwoScript = Get-Content -LiteralPath $lightScript -Raw
-    Assert-True ($profileTwoScript.Contains("const CLASH_PATCH_USAGE_PROFILE = 2;")) "profile 2 script has the wrong usage profile"
+    Assert-True ($profileTwoScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 2;")) "profile 2 script has the wrong usage profile"
     Assert-True ($profileTwoScript.Contains("cnDomainProvider")) "profile 2 script omitted the China-domain provider"
-    $savedProfileTwo = Get-Content -LiteralPath (Join-Path $lightCase "clash-patch-usage-profile.json") -Raw | ConvertFrom-Json
+    $savedProfileTwo = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$savedProfileTwo.Profile -eq 2) "profile 2 was not saved"
 
     $downgradeCase = Join-Path $sandbox "downgrade-without-uninstall-case"
     New-Item -ItemType Directory -Path $downgradeCase -Force | Out-Null
-    $downgradeStatePath = Join-Path $downgradeCase "clash-patch-usage-profile.json"
+    $downgradeStatePath = Join-Path $downgradeCase "claude-easy-usage-profile.json"
     $downgradeState = '{"Version":1,"Profile":3}' + "`r`n"
     [System.IO.File]::WriteAllText($downgradeStatePath, $downgradeState)
     $downgradeResult = Invoke-TestPowerShell $installer @("-AppHome", $downgradeCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore)
@@ -1644,7 +1754,7 @@ items:
     }
     $snapshotResult = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles")
     Assert-True ($snapshotResult.ExitCode -eq 0) "safe update snapshot failed; $(Get-TestOutputDiagnostic $snapshotResult.Output)"
-    $safeBackups = @(Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "clash-patch-backups") -File | Where-Object { $_.Name -like "*--pre-update--*" })
+    $safeBackups = @(Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--pre-update--*" })
     Assert-True ($safeBackups.Count -eq 2) "snapshot did not back up exactly the two remote subscriptions"
     $pendingSafeUpdateBeforeUninstall = Get-TreeContentSnapshot $safeUpdateCase
     $pendingSafeUpdateUninstall = Invoke-TestPowerShell $uninstaller @(
@@ -1668,7 +1778,7 @@ items:
     Assert-True ($verifyResult.ExitCode -eq 1) "invalid safe update was accepted"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "failed safe update did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "failed safe update did not restore second remote subscription"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "clash-patch-safe-update.json"))) "completed rollback left a reusable stale safe-update manifest"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed rollback left a reusable stale safe-update manifest"
 
     $missingTargetSnapshot = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
@@ -1698,7 +1808,7 @@ items:
     ) "missing-target rollback changed another remote subscription"
     Assert-True (-not (
         Test-Path -LiteralPath (
-            Join-Path $safeUpdateCase "clash-patch-safe-update.json"
+            Join-Path $safeUpdateCase "claude-easy-safe-update.json"
         )
     )) "missing-target rollback retained a stale safe-update manifest"
 
@@ -1724,7 +1834,7 @@ rules:
     Assert-True ($noMainVerify.ExitCode -eq 1) "safe update accepted subscriptions that the installed global script cannot patch"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "main-group validation failure did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "main-group validation failure did not restore second remote subscription"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "clash-patch-safe-update.json"))) "completed main-group rollback left a stale safe-update manifest"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed main-group rollback left a stale safe-update manifest"
 
     $successSnapshot = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles")
     Assert-True ($successSnapshot.ExitCode -eq 0) "successful safe update snapshot failed; $(Get-TestOutputDiagnostic $successSnapshot.Output)"
@@ -1759,14 +1869,14 @@ rules: ["MATCH,AI"]
     Assert-True ($successVerify.ExitCode -eq 0) "valid safe update was rejected; $(Get-TestOutputDiagnostic $successVerify.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeUpdated) "valid safe update incorrectly restored first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeUpdated) "valid safe update incorrectly restored second remote subscription"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "clash-patch-safe-update.json"))) "accepted safe update left a stale manifest"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "accepted safe update left a stale manifest"
 
     if ($onWindows) {
         Invoke-DeferredProbe "safe-update rollback manifest strong-kill recovery" {
             $rollbackCrashPackageParent = Join-Path $sandbox "safe-update-rollback-crash-package"
             New-Item -ItemType Directory -Path $rollbackCrashPackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $rollbackCrashPackageParent -Recurse
-            $rollbackCrashPackage = Join-Path $rollbackCrashPackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $rollbackCrashPackageParent -Recurse
+            $rollbackCrashPackage = Join-Path $rollbackCrashPackageParent "claude-easy"
             $rollbackCrashInstaller = Join-Path (
                 Join-Path $rollbackCrashPackage "scripts"
             ) "install_windows.ps1"
@@ -1780,8 +1890,8 @@ rules: ["MATCH,AI"]
             $rollbackCrashLineEnd = $rollbackCrashInstallerText.IndexOf("`n", $rollbackCrashOffset)
             Assert-True ($rollbackCrashLineEnd -gt $rollbackCrashOffset) "safe-update rollback call was not one complete line"
             $rollbackCrashHook = @'
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY)) {
-            [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY, "ready")
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY)) {
+            [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY, "ready")
             Start-Sleep -Seconds 30
         }
 '@
@@ -1848,7 +1958,7 @@ rules:
             )
 
             $rollbackCrashReady = Join-Path $sandbox "safe-update-rollback-crash.ready"
-            $env:CLASH_PATCH_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY = $rollbackCrashReady
+            $env:CLAUDE_EASY_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY = $rollbackCrashReady
             $rollbackCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
                 "-NoLogo", "-NoProfile", "-File", $rollbackCrashInstaller,
                 "-AppHome", $rollbackCrashHome,
@@ -1868,7 +1978,7 @@ rules:
                 Stop-Process -Id $rollbackCrashChild.Id -Force
                 $rollbackCrashChild.WaitForExit()
             } finally {
-                $env:CLASH_PATCH_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY = $null
+                $env:CLAUDE_EASY_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY = $null
                 if (-not $rollbackCrashChild.HasExited) {
                     Stop-Process -Id $rollbackCrashChild.Id -Force
                 }
@@ -1889,7 +1999,7 @@ rules:
             ) "a failed and rolled-back update was reported as verified after process death"
             Assert-True (-not (
                 Test-Path -LiteralPath (
-                    Join-Path $rollbackCrashHome "clash-patch-safe-update.json"
+                    Join-Path $rollbackCrashHome "claude-easy-safe-update.json"
                 )
             )) "completed rollback retained a reusable safe-update manifest"
             Assert-True (
@@ -1903,18 +2013,18 @@ rules:
         Assert-True ($concurrentVerifySnapshot.ExitCode -eq 0) "concurrent verification snapshot failed; $(Get-TestOutputDiagnostic $concurrentVerifySnapshot.Output)"
         [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeUpdated)
         [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeUpdated)
-        $env:CLASH_PATCH_MUTATE_TARGET = Join-Path $safeUpdateProfiles "R-first.yaml"
+        $env:CLAUDE_EASY_MUTATE_TARGET = Join-Path $safeUpdateProfiles "R-first.yaml"
         try {
             $concurrentVerify = Invoke-TestPowerShell $installer @(
                 "-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-MihomoPath", $mutatingCore
             )
         } finally {
-            $env:CLASH_PATCH_MUTATE_TARGET = $null
+            $env:CLAUDE_EASY_MUTATE_TARGET = $null
         }
         Assert-True ($concurrentVerify.ExitCode -eq 1) "safe update accepted bytes that replaced the file during Mihomo validation"
         Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw).Contains("friend_concurrent: true")) "safe update overwrote a concurrent refresh"
-        Assert-True (Test-Path -LiteralPath (Join-Path $safeUpdateCase "clash-patch-safe-update.json") -PathType Leaf) "concurrent validation failure discarded its recovery manifest"
-        Remove-Item -LiteralPath (Join-Path $safeUpdateCase "clash-patch-safe-update.json") -Force
+        Assert-True (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json") -PathType Leaf) "concurrent validation failure discarded its recovery manifest"
+        Remove-Item -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json") -Force
     }
 
     Invoke-DeferredProbe "strict safe-update manifest schema" {
@@ -1931,7 +2041,7 @@ rules:
         Assert-True ($schemaSnapshot.ExitCode -eq 0) "safe-update schema fixture snapshot failed"
         $schemaUpdatedText = "mode: global`nproxy-groups: []`n"
         [System.IO.File]::WriteAllText($schemaSafeUpdateTarget, $schemaUpdatedText)
-        $schemaManifestPath = Join-Path $schemaSafeUpdateCase "clash-patch-safe-update.json"
+        $schemaManifestPath = Join-Path $schemaSafeUpdateCase "claude-easy-safe-update.json"
         $schemaManifest = Get-Content -LiteralPath $schemaManifestPath -Raw | ConvertFrom-Json
         $schemaManifest.Version = "1"
         $schemaManifest | Add-Member -NotePropertyName Extra -NotePropertyValue $true
@@ -1979,7 +2089,7 @@ rules:
             "-MihomoPath", $fakeCore,
             "-Json"
         )
-        $utf8ManifestPath = Join-Path $utf8SafeUpdateCase "clash-patch-safe-update.json"
+        $utf8ManifestPath = Join-Path $utf8SafeUpdateCase "claude-easy-safe-update.json"
         Assert-True (
             $utf8Verify.ExitCode -eq 1 -and
             (Get-Content -LiteralPath $utf8SafeUpdateTarget -Raw) -eq $utf8OriginalText -and
@@ -2111,7 +2221,7 @@ rules:
     if ($onWindows) {
         Invoke-DeferredProbe "public restore same-byte identity replacement" {
             $identityRestoreCase = Join-Path $sandbox "public-restore-identity-case"
-            $identityRestoreBackupRoot = Join-Path $identityRestoreCase "clash-patch-backups"
+            $identityRestoreBackupRoot = Join-Path $identityRestoreCase "claude-easy-backups"
             $identityRestoreTarget = Join-Path $identityRestoreCase "config.yaml"
             New-Item -ItemType Directory -Path $identityRestoreCase -Force | Out-Null
             $identityRestoreBackupText = "mode: rule`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
@@ -2120,7 +2230,7 @@ rules:
             $identityRestoreBackup = Backup-Versioned $identityRestoreTarget $identityRestoreBackupRoot "prewrite"
             [System.IO.File]::WriteAllText($identityRestoreTarget, $identityRestoreCurrentText)
             $identityRestoreExpectedHash = Get-FileSha256 $identityRestoreTarget
-            $env:CLASH_PATCH_MUTATE_TARGET = $identityRestoreTarget
+            $env:CLAUDE_EASY_MUTATE_TARGET = $identityRestoreTarget
             try {
                 $identityRestoreResult = Invoke-TestPowerShell $installer @(
                     "-AppHome", $identityRestoreCase,
@@ -2130,7 +2240,7 @@ rules:
                     "-Json"
                 )
             } finally {
-                $env:CLASH_PATCH_MUTATE_TARGET = $null
+                $env:CLAUDE_EASY_MUTATE_TARGET = $null
             }
             $identityRestorePreserved = (Get-Content -LiteralPath $identityRestoreTarget -Raw) -eq $identityRestoreCurrentText
             Assert-True (
@@ -2141,8 +2251,8 @@ rules:
     }
 
     $internalRestoreCase = Join-Path $sandbox "internal-state-restore-case"
-    $internalRestoreBackupRoot = Join-Path $internalRestoreCase "clash-patch-backups"
-    $internalUsagePath = Join-Path $internalRestoreCase "clash-patch-usage-profile.json"
+    $internalRestoreBackupRoot = Join-Path $internalRestoreCase "claude-easy-backups"
+    $internalUsagePath = Join-Path $internalRestoreCase "claude-easy-usage-profile.json"
     New-Item -ItemType Directory -Path $internalRestoreCase -Force | Out-Null
     [System.IO.File]::WriteAllText($internalUsagePath, '{"Version":1,"Profile":3}')
     $internalUsageBackup = Backup-Versioned $internalUsagePath $internalRestoreBackupRoot "prewrite"
@@ -2174,9 +2284,9 @@ rules:
     Assert-True (-not (($arrayChanges -join " ").Contains("Secret"))) "Windows array comparison exposed a configuration value"
     $routeGroups = [pscustomobject]@{
         "Proxy" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
-        "🤖 AI · Clash Patch" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
+        "🤖 AI · ClaudeEasy" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
     }
-    Assert-True ((Find-Group $routeGroups @("AI") "" "AI 分组") -eq "🤖 AI · Clash Patch") "Windows route verifier did not recognize its managed AI group"
+    Assert-True ((Find-Group $routeGroups @("AI") "" "AI 分组") -eq "🤖 AI · ClaudeEasy") "Windows route verifier did not recognize its managed AI group"
     $routeChains = [pscustomobject]@{
         Main = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
         AI = [pscustomobject]@{ type = "Selector"; now = "Japan" }
@@ -2304,7 +2414,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
             while ($candidateFiles.Count -eq 0 -and
                 -not $candidateChild.HasExited -and [DateTime]::UtcNow -lt $candidateDeadline) {
                 Start-Sleep -Milliseconds 25
-                $candidateFiles = @(Get-ChildItem -LiteralPath $candidateDirectory -Filter ".clash-patch-validate-*.yaml" -File)
+                $candidateFiles = @(Get-ChildItem -LiteralPath $candidateDirectory -Filter ".claude-easy-validate-*.yaml" -File)
             }
             $candidateAppeared = $candidateFiles.Count -eq 1
             $candidateAclIsPrivate = $candidateAppeared -and
@@ -2316,7 +2426,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
             $candidateCleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
             do {
                 Start-Sleep -Milliseconds 100
-                $candidateFiles = @(Get-ChildItem -LiteralPath $candidateDirectory -Filter ".clash-patch-validate-*.yaml" -File)
+                $candidateFiles = @(Get-ChildItem -LiteralPath $candidateDirectory -Filter ".claude-easy-validate-*.yaml" -File)
             } while ($candidateFiles.Count -gt 0 -and [DateTime]::UtcNow -lt $candidateCleanupDeadline)
             $candidateLeftBehind = $candidateFiles.Count -gt 0
             foreach ($candidateFile in $candidateFiles) {
@@ -2351,8 +2461,8 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
         Invoke-DeferredProbe "backup publication survives caller death" {
             $backupCrashPackageParent = Join-Path $sandbox "backup-crash-package"
             New-Item -ItemType Directory -Path $backupCrashPackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $backupCrashPackageParent -Recurse
-            $backupCrashPackage = Join-Path $backupCrashPackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $backupCrashPackageParent -Recurse
+            $backupCrashPackage = Join-Path $backupCrashPackageParent "claude-easy"
             $backupCrashInstaller = Join-Path (Join-Path $backupCrashPackage "scripts") "install_windows.ps1"
             $backupCrashTransaction = Join-Path (Join-Path (Join-Path $backupCrashPackage "scripts") "windows/install_windows") "transaction.ps1"
             $backupCrashTransactionText = [System.IO.File]::ReadAllText($backupCrashTransaction)
@@ -2364,7 +2474,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
         $backupStream.Write($partial, 0, $partial.Length)
         $backupStream.SetLength($partial.Length)
         $backupStream.Flush($true)
-        [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_BACKUP_CRASH_READY, "ready")
+        [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_BACKUP_CRASH_READY, "ready")
         Start-Sleep -Seconds 30
 '@
             $backupCrashTransactionText = $backupCrashTransactionText.Insert(
@@ -2379,7 +2489,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
 
             $backupCrashHome = Join-Path $sandbox "backup-crash-home"
             $backupCrashProfiles = Join-Path $backupCrashHome "profiles"
-            $backupCrashRoot = Join-Path $backupCrashHome "clash-patch-backups"
+            $backupCrashRoot = Join-Path $backupCrashHome "claude-easy-backups"
             $backupCrashReady = Join-Path $sandbox "backup-crash.ready"
             New-Item -ItemType Directory -Path $backupCrashProfiles -Force | Out-Null
             [System.IO.File]::WriteAllText(
@@ -2392,7 +2502,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
                 (Join-Path $backupCrashHome "profiles.yaml"),
                 "items:`n- uid: R-backup-crash`n  type: remote`n  option:`n    allow_auto_update: true`n"
             )
-            $env:CLASH_PATCH_TEST_BACKUP_CRASH_READY = $backupCrashReady
+            $env:CLAUDE_EASY_TEST_BACKUP_CRASH_READY = $backupCrashReady
             $backupCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
                 "-NoLogo", "-NoProfile", "-File", $backupCrashInstaller,
                 "-AppHome", $backupCrashHome,
@@ -2409,14 +2519,14 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
                 Stop-Process -Id $backupCrashChild.Id -Force
                 $backupCrashChild.WaitForExit()
             } finally {
-                $env:CLASH_PATCH_TEST_BACKUP_CRASH_READY = $null
+                $env:CLAUDE_EASY_TEST_BACKUP_CRASH_READY = $null
                 if (-not $backupCrashChild.HasExited) { Stop-Process -Id $backupCrashChild.Id -Force }
             }
             $publishedBackups = @(
                 Get-ChildItem -LiteralPath $backupCrashRoot -File -Filter "*.backup" -ErrorAction SilentlyContinue
             )
             Assert-True ($publishedBackups.Count -eq 0) "caller death published a partial formal backup"
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $backupCrashHome ".clash-patch-transaction.json"))) "partial backup unexpectedly created a file transaction journal"
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $backupCrashHome ".claude-easy-transaction.json"))) "partial backup unexpectedly created a file transaction journal"
             $backupCrashList = Invoke-TestPowerShell $backupCrashInstaller @(
                 "-AppHome", $backupCrashHome,
                 "-ListBackups",
@@ -2563,7 +2673,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
             ) "preparation recovery changed a nonempty external target"
             Assert-True (
                 Test-Path -LiteralPath (
-                    Join-Path $preparationRecoveryDir ".clash-patch-transaction-preparation.json"
+                    Join-Path $preparationRecoveryDir ".claude-easy-transaction-preparation.json"
                 ) -PathType Leaf
             ) "failed preparation recovery discarded its retry record"
 
@@ -2574,7 +2684,7 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
             )) "preparation recovery retained an empty transaction target"
             Assert-True (-not (
                 Test-Path -LiteralPath (
-                    Join-Path $preparationRecoveryDir ".clash-patch-transaction-preparation.json"
+                    Join-Path $preparationRecoveryDir ".claude-easy-transaction-preparation.json"
                 )
             )) "successful preparation recovery retained its record"
         } finally {
@@ -2775,7 +2885,7 @@ try {
         $crashWriteChild.WaitForExit()
         Assert-True ((Get-Content -LiteralPath $crashWriteFirstPath -Raw) -eq "first-new") "crash-write fixture did not leave a partial transaction"
         Assert-True ((Get-Content -LiteralPath $crashWriteSecondPath -Raw) -eq "second-original") "crash-write fixture unexpectedly completed the transaction"
-        $crashWriteJournalPath = Join-Path $crashWriteHome ".clash-patch-transaction.json"
+        $crashWriteJournalPath = Join-Path $crashWriteHome ".claude-easy-transaction.json"
         $crashWriteJournalIsPrivate = Test-PrivateWindowsFileAcl $crashWriteJournalPath
         Invoke-DeferredProbe "private transaction journal ACL" {
             Assert-True $crashWriteJournalIsPrivate "transaction journal inherited access for unrelated accounts"
@@ -2784,7 +2894,7 @@ try {
         Exit-AppHomeMutationLock $crashWriteRecoveryLock
         Assert-True ((Get-Content -LiteralPath $crashWriteFirstPath -Raw) -eq "first-original") "next operation did not recover a write interrupted by process death"
         Assert-True ((Get-Content -LiteralPath $crashWriteSecondPath -Raw) -eq "second-original") "write recovery changed an untouched transaction target"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $crashWriteHome ".clash-patch-transaction.json"))) "write recovery left a stale transaction journal"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $crashWriteHome ".claude-easy-transaction.json"))) "write recovery left a stale transaction journal"
 
         Invoke-DeferredProbe "interrupted transaction same-byte identity replacement" {
             $identityCrashHome = Join-Path $sandbox "identity-crash-write-home"
@@ -2906,12 +3016,12 @@ try {
         Exit-AppHomeMutationLock $crashDeleteRecoveryLock
         Assert-True ((Get-Content -LiteralPath $crashDeleteFirstPath -Raw) -eq "first-original") "next operation did not recover a deletion interrupted by process death"
         Assert-True ((Get-Content -LiteralPath $crashDeleteSecondPath -Raw) -eq "second-original") "delete recovery changed an untouched transaction target"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $crashDeleteHome ".clash-patch-transaction.json"))) "delete recovery left a stale transaction journal"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $crashDeleteHome ".claude-easy-transaction.json"))) "delete recovery left a stale transaction journal"
 
         $publicCrashPackageParent = Join-Path $sandbox "public-crash-package"
         New-Item -ItemType Directory -Path $publicCrashPackageParent -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $publicCrashPackageParent -Recurse
-        $publicCrashPackage = Join-Path $publicCrashPackageParent "clash-patch"
+        Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $publicCrashPackageParent -Recurse
+        $publicCrashPackage = Join-Path $publicCrashPackageParent "claude-easy"
         $publicCrashInstaller = Join-Path (Join-Path $publicCrashPackage "scripts") "install_windows.ps1"
         $publicCrashUninstaller = Join-Path (Join-Path $publicCrashPackage "scripts") "uninstall_windows.ps1"
         $publicCrashTransaction = Join-Path (Join-Path (Join-Path $publicCrashPackage "scripts") "windows/install_windows") "transaction.ps1"
@@ -2926,9 +3036,9 @@ try {
         $publicCrashFlushEnd = $publicCrashFlushOffset + $publicCrashFlushNeedle.Length
         $publicCrashHook = @'
 
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_PUBLIC_CRASH_READY) -and
-            -not (Test-Path -LiteralPath $env:CLASH_PATCH_TEST_PUBLIC_CRASH_READY)) {
-            [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_PUBLIC_CRASH_READY, "ready")
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_PUBLIC_CRASH_READY) -and
+            -not (Test-Path -LiteralPath $env:CLAUDE_EASY_TEST_PUBLIC_CRASH_READY)) {
+            [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_PUBLIC_CRASH_READY, "ready")
             Start-Sleep -Seconds 30
         }
 '@
@@ -2952,7 +3062,7 @@ try {
         [System.IO.File]::WriteAllText((Join-Path $publicCrashHome "config.yaml"), $publicCrashConfig)
         [System.IO.File]::WriteAllText((Join-Path $publicCrashHome "verge.yaml"), $publicCrashVerge)
         [System.IO.File]::WriteAllText((Join-Path $publicCrashHome "profiles.yaml"), $publicCrashProfilesIndex)
-        $env:CLASH_PATCH_TEST_PUBLIC_CRASH_READY = $publicCrashReady
+        $env:CLAUDE_EASY_TEST_PUBLIC_CRASH_READY = $publicCrashReady
         $publicCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
             "-NoLogo", "-NoProfile", "-File", $publicCrashInstaller,
             "-AppHome", $publicCrashHome,
@@ -2969,10 +3079,10 @@ try {
             Stop-Process -Id $publicCrashChild.Id -Force
             $publicCrashChild.WaitForExit()
         } finally {
-            $env:CLASH_PATCH_TEST_PUBLIC_CRASH_READY = $null
+            $env:CLAUDE_EASY_TEST_PUBLIC_CRASH_READY = $null
             if (-not $publicCrashChild.HasExited) { Stop-Process -Id $publicCrashChild.Id -Force }
         }
-        Assert-True (Test-Path -LiteralPath (Join-Path $publicCrashHome ".clash-patch-transaction.json") -PathType Leaf) "public installer crash did not leave a recoverable transaction journal"
+        Assert-True (Test-Path -LiteralPath (Join-Path $publicCrashHome ".claude-easy-transaction.json") -PathType Leaf) "public installer crash did not leave a recoverable transaction journal"
         $publicRecoveryResult = Invoke-TestPowerShell $publicCrashUninstaller @(
             "-AppHome", $publicCrashHome,
             "-Json"
@@ -2983,7 +3093,7 @@ try {
         Assert-True ((Get-Content -LiteralPath (Join-Path $publicCrashHome "verge.yaml") -Raw) -ceq $publicCrashVerge) "public-entry recovery changed original verge.yaml"
         Assert-True ((Get-Content -LiteralPath (Join-Path $publicCrashHome "profiles.yaml") -Raw) -ceq $publicCrashProfilesIndex) "public-entry recovery changed original profiles.yaml"
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicCrashProfiles "Script.js"))) "public-entry recovery retained a partially installed Script.js"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicCrashHome ".clash-patch-transaction.json"))) "public uninstaller left the recovered transaction journal"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicCrashHome ".claude-easy-transaction.json"))) "public uninstaller left the recovered transaction journal"
 
         $publicUninstallCrashHome = Join-Path $sandbox "public-uninstaller-crash-home"
         $publicUninstallCrashProfiles = Join-Path $publicUninstallCrashHome "profiles"
@@ -3005,7 +3115,7 @@ try {
             "verge.yaml",
             "profiles.yaml",
             "profiles\Script.js",
-            "clash-patch-usage-profile.json"
+            "claude-easy-usage-profile.json"
         ) | ForEach-Object { Join-Path $publicUninstallCrashHome $_ }
         $publicUninstallSnapshots = @{}
         foreach ($publicUninstallTarget in $publicUninstallTargets) {
@@ -3018,7 +3128,7 @@ try {
         $publicUninstallFunctionOffset = $publicUninstallTransactionText.IndexOf(
             "function Set-VerifiedDeleteDisposition("
         )
-        $publicUninstallDeleteNeedle = '    [ClashPatch.VerifiedDeleteNative]::SetDeleteDisposition($Stream.SafeFileHandle, $DeleteFile)'
+        $publicUninstallDeleteNeedle = '    [ClaudeEasy.VerifiedDeleteNative]::SetDeleteDisposition($Stream.SafeFileHandle, $DeleteFile)'
         $publicUninstallDeleteOffset = $publicUninstallTransactionText.IndexOf(
             $publicUninstallDeleteNeedle,
             $publicUninstallFunctionOffset
@@ -3028,9 +3138,9 @@ try {
         $publicUninstallHook = @'
 
     if ($DeleteFile -and
-        -not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_UNINSTALL_CRASH_READY) -and
-        -not (Test-Path -LiteralPath $env:CLASH_PATCH_TEST_UNINSTALL_CRASH_READY)) {
-        [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_UNINSTALL_CRASH_READY, "ready")
+        -not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY) -and
+        -not (Test-Path -LiteralPath $env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY)) {
+        [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY, "ready")
         Start-Sleep -Seconds 30
     }
 '@
@@ -3052,8 +3162,8 @@ try {
             $publicUninstallRecoveryOffset + $publicUninstallRecoveryNeedle.Length
         $publicUninstallRecoveryHook = @'
 
-                if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_RECOVERY_CRASH_READY)) {
-                    [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_RECOVERY_CRASH_READY, "ready")
+                if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY)) {
+                    [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY, "ready")
                     Start-Sleep -Seconds 30
                 }
 '@
@@ -3066,7 +3176,7 @@ try {
             $publicUninstallTransactionText,
             (New-Object System.Text.UTF8Encoding($true))
         )
-        $env:CLASH_PATCH_TEST_UNINSTALL_CRASH_READY = $publicUninstallCrashReady
+        $env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY = $publicUninstallCrashReady
         $publicUninstallCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
             "-NoLogo", "-NoProfile", "-File", $publicCrashUninstaller,
             "-AppHome", $publicUninstallCrashHome
@@ -3082,13 +3192,13 @@ try {
             Stop-Process -Id $publicUninstallCrashChild.Id -Force
             $publicUninstallCrashChild.WaitForExit()
         } finally {
-            $env:CLASH_PATCH_TEST_UNINSTALL_CRASH_READY = $null
+            $env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY = $null
             if (-not $publicUninstallCrashChild.HasExited) {
                 Stop-Process -Id $publicUninstallCrashChild.Id -Force
             }
         }
-        Assert-True (Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".clash-patch-transaction.json") -PathType Leaf) "public uninstaller crash did not leave a recoverable transaction journal"
-        $env:CLASH_PATCH_TEST_RECOVERY_CRASH_READY = $publicUninstallRecoveryCrashReady
+        Assert-True (Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json") -PathType Leaf) "public uninstaller crash did not leave a recoverable transaction journal"
+        $env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY = $publicUninstallRecoveryCrashReady
         $publicUninstallRecoveryCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
             "-NoLogo", "-NoProfile", "-File", $publicCrashInstaller,
             "-AppHome", $publicUninstallCrashHome,
@@ -3108,13 +3218,13 @@ try {
             Stop-Process -Id $publicUninstallRecoveryCrashChild.Id -Force
             $publicUninstallRecoveryCrashChild.WaitForExit()
         } finally {
-            $env:CLASH_PATCH_TEST_RECOVERY_CRASH_READY = $null
+            $env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY = $null
             if (-not $publicUninstallRecoveryCrashChild.HasExited) {
                 Stop-Process -Id $publicUninstallRecoveryCrashChild.Id -Force
             }
         }
         Assert-True (
-            Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".clash-patch-transaction.json") -PathType Leaf
+            Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json") -PathType Leaf
         ) "second recovery interruption removed the transaction journal"
         $publicUninstallRecovery = Invoke-TestPowerShell $publicCrashInstaller @(
             "-AppHome", $publicUninstallCrashHome,
@@ -3130,7 +3240,7 @@ try {
                     $publicUninstallSnapshots[$publicUninstallTarget]
             ) "public installer did not restore an interrupted uninstall target"
         }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".clash-patch-transaction.json"))) "public installer left the recovered uninstall journal"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json"))) "public installer left the recovered uninstall journal"
         $publicUninstallCompletion = Invoke-TestPowerShell $publicCrashUninstaller @(
             "-AppHome", $publicUninstallCrashHome,
             "-Json"
@@ -3140,8 +3250,8 @@ try {
         Invoke-DeferredProbe "public restore strong-kill atomicity" {
             $publicRestorePackageParent = Join-Path $sandbox "public-restore-crash-package"
             New-Item -ItemType Directory -Path $publicRestorePackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $publicRestorePackageParent -Recurse
-            $publicRestorePackage = Join-Path $publicRestorePackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $publicRestorePackageParent -Recurse
+            $publicRestorePackage = Join-Path $publicRestorePackageParent "claude-easy"
             $publicRestoreInstaller = Join-Path (Join-Path $publicRestorePackage "scripts") "install_windows.ps1"
             $publicRestoreTransaction = Join-Path (Join-Path (Join-Path $publicRestorePackage "scripts") "windows/install_windows") "transaction.ps1"
             $publicRestoreTransactionText = [System.IO.File]::ReadAllText($publicRestoreTransaction)
@@ -3153,10 +3263,10 @@ try {
             )
             Assert-True ($publicRestoreFunctionOffset -ge 0 -and $publicRestoreWriteOffset -ge 0) "public restore crash fixture could not find the stream write boundary"
             $publicRestoreHook = @'
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_RESTORE_CRASH_READY)) {
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_RESTORE_CRASH_READY)) {
             $Stream.Write($Replacement, 0, $Replacement.Length)
             $Stream.Flush($true)
-            [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_RESTORE_CRASH_READY, "ready")
+            [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_RESTORE_CRASH_READY, "ready")
             Start-Sleep -Seconds 30
         }
 '@
@@ -3175,7 +3285,7 @@ try {
 
             $publicRestoreHome = Join-Path $sandbox "public-restore-crash-home"
             $publicRestoreTarget = Join-Path $publicRestoreHome "config.yaml"
-            $publicRestoreBackupRoot = Join-Path $publicRestoreHome "clash-patch-backups"
+            $publicRestoreBackupRoot = Join-Path $publicRestoreHome "claude-easy-backups"
             $publicRestoreReady = Join-Path $sandbox "public-restore-crash.ready"
             $publicRestoreBackupBytes = [System.Text.Encoding]::UTF8.GetBytes(
                 "mode: rule`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
@@ -3196,7 +3306,7 @@ try {
             }
             [System.IO.File]::WriteAllBytes($publicRestoreTarget, $publicRestoreCurrentBytes)
             $publicRestoreExpectedHash = Get-FileSha256 $publicRestoreTarget
-            $env:CLASH_PATCH_TEST_RESTORE_CRASH_READY = $publicRestoreReady
+            $env:CLAUDE_EASY_TEST_RESTORE_CRASH_READY = $publicRestoreReady
             $publicRestoreChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
                 "-NoLogo", "-NoProfile", "-File", $publicRestoreInstaller,
                 "-AppHome", $publicRestoreHome,
@@ -3214,10 +3324,10 @@ try {
                 Stop-Process -Id $publicRestoreChild.Id -Force
                 $publicRestoreChild.WaitForExit()
             } finally {
-                $env:CLASH_PATCH_TEST_RESTORE_CRASH_READY = $null
+                $env:CLAUDE_EASY_TEST_RESTORE_CRASH_READY = $null
                 if (-not $publicRestoreChild.HasExited) { Stop-Process -Id $publicRestoreChild.Id -Force }
             }
-            $publicRestoreJournal = Join-Path $publicRestoreHome ".clash-patch-transaction.json"
+            $publicRestoreJournal = Join-Path $publicRestoreHome ".claude-easy-transaction.json"
             Assert-True (Test-Path -LiteralPath $publicRestoreJournal -PathType Leaf) "interrupted public restore did not leave a recovery journal"
             $publicRestoreInterruptedBytes = [System.IO.File]::ReadAllBytes($publicRestoreTarget)
             $publicRestoreRunningClientPath = Join-Path $publicRestoreHome "clash-verge.exe"
@@ -3271,8 +3381,8 @@ try {
         Invoke-DeferredProbe "public new-target pre-journal strong-kill recovery" {
             $publicPreJournalPackageParent = Join-Path $sandbox "public-pre-journal-crash-package"
             New-Item -ItemType Directory -Path $publicPreJournalPackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $publicPreJournalPackageParent -Recurse
-            $publicPreJournalPackage = Join-Path $publicPreJournalPackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $publicPreJournalPackageParent -Recurse
+            $publicPreJournalPackage = Join-Path $publicPreJournalPackageParent "claude-easy"
             $publicPreJournalInstaller = Join-Path (Join-Path $publicPreJournalPackage "scripts") "install_windows.ps1"
             $publicPreJournalTransaction = Join-Path (
                 Join-Path (Join-Path $publicPreJournalPackage "scripts") "windows/install_windows"
@@ -3290,8 +3400,8 @@ try {
                 $publicPreJournalFunctionOffset -ge 0 -and $publicPreJournalOffset -ge 0
             ) "public pre-journal crash fixture could not find the transaction journal boundary"
             $publicPreJournalHook = @'
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_PREJOURNAL_CRASH_READY)) {
-            [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_PREJOURNAL_CRASH_READY, "ready")
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_PREJOURNAL_CRASH_READY)) {
+            [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_PREJOURNAL_CRASH_READY, "ready")
             Start-Sleep -Seconds 30
         }
 '@
@@ -3313,7 +3423,7 @@ try {
                 (Join-Path $publicPreJournalHome "profiles.yaml"),
                 "items:`n- uid: R-pre-journal`n  type: remote`n  option:`n    allow_auto_update: true`n"
             )
-            $env:CLASH_PATCH_TEST_PREJOURNAL_CRASH_READY = $publicPreJournalReady
+            $env:CLAUDE_EASY_TEST_PREJOURNAL_CRASH_READY = $publicPreJournalReady
             $publicPreJournalChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
                 "-NoLogo", "-NoProfile", "-File", $publicPreJournalInstaller,
                 "-AppHome", $publicPreJournalHome,
@@ -3333,15 +3443,15 @@ try {
                 Stop-Process -Id $publicPreJournalChild.Id -Force
                 $publicPreJournalChild.WaitForExit()
             } finally {
-                $env:CLASH_PATCH_TEST_PREJOURNAL_CRASH_READY = $null
+                $env:CLAUDE_EASY_TEST_PREJOURNAL_CRASH_READY = $null
                 if (-not $publicPreJournalChild.HasExited) {
                     Stop-Process -Id $publicPreJournalChild.Id -Force
                 }
             }
-            $publicPreJournalUsage = Join-Path $publicPreJournalHome "clash-patch-usage-profile.json"
+            $publicPreJournalUsage = Join-Path $publicPreJournalHome "claude-easy-usage-profile.json"
             $publicPreJournalConfig = Join-Path $publicPreJournalHome "config.yaml"
             $publicPreJournalVerge = Join-Path $publicPreJournalHome "verge.yaml"
-            $publicPreJournalPreparation = Join-Path $publicPreJournalHome ".clash-patch-transaction-preparation.json"
+            $publicPreJournalPreparation = Join-Path $publicPreJournalHome ".claude-easy-transaction-preparation.json"
             Assert-True (
                 (Test-Path -LiteralPath $publicPreJournalUsage -PathType Leaf) -and
                 (Get-Item -LiteralPath $publicPreJournalUsage).Length -eq 0
@@ -3353,7 +3463,7 @@ try {
                 (Get-Item -LiteralPath $publicPreJournalVerge).Length -eq 0
             ) "public pre-journal crash fixture did not leave empty current-config targets"
             Assert-True (-not (
-                Test-Path -LiteralPath (Join-Path $publicPreJournalHome ".clash-patch-transaction.json")
+                Test-Path -LiteralPath (Join-Path $publicPreJournalHome ".claude-easy-transaction.json")
             )) "public pre-journal crash unexpectedly published the main transaction journal"
             Assert-True (
                 Test-Path -LiteralPath $publicPreJournalPreparation -PathType Leaf
@@ -3418,8 +3528,8 @@ try {
         Invoke-DeferredProbe "interrupted recovery rechecks a newly started client" {
             $recoveryRacePackageParent = Join-Path $sandbox "recovery-client-race-package"
             New-Item -ItemType Directory -Path $recoveryRacePackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $recoveryRacePackageParent -Recurse
-            $recoveryRacePackage = Join-Path $recoveryRacePackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $recoveryRacePackageParent -Recurse
+            $recoveryRacePackage = Join-Path $recoveryRacePackageParent "claude-easy"
             $recoveryRaceInstaller = Join-Path (
                 Join-Path $recoveryRacePackage "scripts"
             ) "install_windows.ps1"
@@ -3466,18 +3576,18 @@ try {
                 $recoveryRaceJournalLineBreak -ge 0
             ) "recovery client race fixture could not find both recovery commit boundaries"
             $recoveryRaceHelper = @'
-function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
-    if ($env:CLASH_PATCH_TEST_RECOVERY_RACE_MODE -cne $ExpectedMode) { return }
-    if ([string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_RECOVERY_RACE_EXECUTABLE) -or
-        [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_RECOVERY_RACE_PID)) {
+function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
+    if ($env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE -cne $ExpectedMode) { return }
+    if ([string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE) -or
+        [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID)) {
         throw "recovery client race fixture is incomplete"
     }
     $injected = Start-Process `
-        -FilePath $env:CLASH_PATCH_TEST_RECOVERY_RACE_EXECUTABLE `
+        -FilePath $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE `
         -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
     [void]$injected.Handle
     [System.IO.File]::WriteAllText(
-        $env:CLASH_PATCH_TEST_RECOVERY_RACE_PID,
+        $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID,
         [string]$injected.Id
     )
     $seen = $false
@@ -3499,13 +3609,13 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             )
             $recoveryRacePreparationOffset += $recoveryRaceHelper.Length
             $recoveryRaceJournalOffset += $recoveryRaceHelper.Length
-            $recoveryRacePreparationHook = '    Start-ClashPatchRecoveryRaceClient "preparation"' + [Environment]::NewLine
+            $recoveryRacePreparationHook = '    Start-ClaudeEasyRecoveryRaceClient "preparation"' + [Environment]::NewLine
             $recoveryRaceText = $recoveryRaceText.Insert(
                 $recoveryRacePreparationOffset,
                 $recoveryRacePreparationHook
             )
             $recoveryRaceJournalOffset += $recoveryRacePreparationHook.Length
-            $recoveryRaceJournalHook = '    Start-ClashPatchRecoveryRaceClient "journal"' + [Environment]::NewLine
+            $recoveryRaceJournalHook = '    Start-ClaudeEasyRecoveryRaceClient "journal"' + [Environment]::NewLine
             $recoveryRaceText = $recoveryRaceText.Insert(
                 $recoveryRaceJournalOffset,
                 $recoveryRaceJournalHook
@@ -3563,7 +3673,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 $journalRaceMissingTarget
             ) "recovery race missing target").Identity
             [System.IO.File]::Delete($journalRaceMissingTarget)
-            $journalRacePath = Join-Path $journalRaceHome ".clash-patch-transaction.json"
+            $journalRacePath = Join-Path $journalRaceHome ".claude-easy-transaction.json"
             $journalRaceRecord = [ordered]@{
                 Version = 1
                 Actions = @(
@@ -3594,9 +3704,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             )
             $journalRaceRecordBytes = [System.IO.File]::ReadAllBytes($journalRacePath)
             try {
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_MODE = "journal"
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_EXECUTABLE = $recoveryRaceClient
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_PID = $journalRacePid
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = "journal"
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $recoveryRaceClient
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $journalRacePid
                 $journalRaceResult = Invoke-TestPowerShell $recoveryRaceInstaller @(
                     "-AppHome", $journalRaceHome,
                     "-ShowUsageProfile",
@@ -3622,9 +3732,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 ) "newly started client allowed interrupted journal recovery to consume its record"
             } finally {
                 & $stopRecoveryRaceClient $journalRacePid
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_MODE = $null
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_EXECUTABLE = $null
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_PID = $null
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = $null
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $null
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $null
             }
 
             $preparationRaceHome = Join-Path $sandbox "recovery-preparation-client-race-home"
@@ -3636,7 +3746,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             [System.IO.File]::WriteAllBytes($preparationRaceVerge, [byte[]]@())
             $preparationRacePath = Join-Path (
                 $preparationRaceHome
-            ) ".clash-patch-transaction-preparation.json"
+            ) ".claude-easy-transaction-preparation.json"
             $preparationRaceRecord = [ordered]@{
                 Version = 1
                 Paths = @("config.yaml", "verge.yaml")
@@ -3650,9 +3760,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 $preparationRacePath
             )
             try {
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_MODE = "preparation"
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_EXECUTABLE = $recoveryRaceClient
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_PID = $preparationRacePid
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = "preparation"
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $recoveryRaceClient
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $preparationRacePid
                 $preparationRaceResult = Invoke-TestPowerShell $recoveryRaceInstaller @(
                     "-AppHome", $preparationRaceHome,
                     "-ShowUsageProfile",
@@ -3676,17 +3786,17 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 ) "newly started client allowed preparation recovery to consume its record"
             } finally {
                 & $stopRecoveryRaceClient $preparationRacePid
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_MODE = $null
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_EXECUTABLE = $null
-                $env:CLASH_PATCH_TEST_RECOVERY_RACE_PID = $null
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = $null
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $null
+                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $null
             }
         }
 
         Invoke-DeferredProbe "public new-target journal handoff strong-kill recovery" {
             $publicHandoffPackageParent = Join-Path $sandbox "public-journal-handoff-crash-package"
             New-Item -ItemType Directory -Path $publicHandoffPackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $publicHandoffPackageParent -Recurse
-            $publicHandoffPackage = Join-Path $publicHandoffPackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $publicHandoffPackageParent -Recurse
+            $publicHandoffPackage = Join-Path $publicHandoffPackageParent "claude-easy"
             $publicHandoffInstaller = Join-Path (
                 Join-Path $publicHandoffPackage "scripts"
             ) "install_windows.ps1"
@@ -3710,8 +3820,8 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             $publicHandoffLineEnd = $publicHandoffTransactionText.IndexOf("`n", $publicHandoffOffset)
             Assert-True ($publicHandoffLineEnd -gt $publicHandoffOffset) "transaction journal call was not one complete line"
             $publicHandoffHook = @'
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_JOURNAL_HANDOFF_CRASH_READY)) {
-            [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_JOURNAL_HANDOFF_CRASH_READY, "ready")
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_JOURNAL_HANDOFF_CRASH_READY)) {
+            [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_JOURNAL_HANDOFF_CRASH_READY, "ready")
             Start-Sleep -Seconds 30
         }
 '@
@@ -3741,7 +3851,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 (Join-Path $publicHandoffHome "profiles.yaml"),
                 "items:`n- uid: R-journal-handoff`n  type: remote`n  option:`n    allow_auto_update: true`n"
             )
-            $env:CLASH_PATCH_TEST_JOURNAL_HANDOFF_CRASH_READY = $publicHandoffReady
+            $env:CLAUDE_EASY_TEST_JOURNAL_HANDOFF_CRASH_READY = $publicHandoffReady
             $publicHandoffChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
                 "-NoLogo", "-NoProfile", "-File", $publicHandoffInstaller,
                 "-AppHome", $publicHandoffHome,
@@ -3761,17 +3871,17 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 Stop-Process -Id $publicHandoffChild.Id -Force
                 $publicHandoffChild.WaitForExit()
             } finally {
-                $env:CLASH_PATCH_TEST_JOURNAL_HANDOFF_CRASH_READY = $null
+                $env:CLAUDE_EASY_TEST_JOURNAL_HANDOFF_CRASH_READY = $null
                 if (-not $publicHandoffChild.HasExited) {
                     Stop-Process -Id $publicHandoffChild.Id -Force
                 }
             }
 
-            $publicHandoffUsage = Join-Path $publicHandoffHome "clash-patch-usage-profile.json"
-            $publicHandoffJournal = Join-Path $publicHandoffHome ".clash-patch-transaction.json"
+            $publicHandoffUsage = Join-Path $publicHandoffHome "claude-easy-usage-profile.json"
+            $publicHandoffJournal = Join-Path $publicHandoffHome ".claude-easy-transaction.json"
             $publicHandoffPreparation = Join-Path (
                 $publicHandoffHome
-            ) ".clash-patch-transaction-preparation.json"
+            ) ".claude-easy-transaction-preparation.json"
             Assert-True (
                 (Test-Path -LiteralPath $publicHandoffUsage -PathType Leaf) -and
                 (Get-Item -LiteralPath $publicHandoffUsage).Length -eq 0
@@ -4109,7 +4219,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         [System.IO.File]::WriteAllText((Join-Path $validationFailureCase "config.yaml"), $validationConfig)
         [System.IO.File]::WriteAllText((Join-Path $validationFailureCase "verge.yaml"), $validationVerge)
         [System.IO.File]::WriteAllText((Join-Path $validationFailureCase "profiles.yaml"), $validationProfiles)
-        [System.IO.File]::WriteAllText((Join-Path $validationFailureCase "clash-patch-usage-profile.json"), $validationUsage)
+        [System.IO.File]::WriteAllText((Join-Path $validationFailureCase "claude-easy-usage-profile.json"), $validationUsage)
 
         $validationFailure = Invoke-TestPowerShell $installer @(
             "-AppHome", $validationFailureCase, "-UsageProfile", "3", "-MihomoPath", $rejectingCore
@@ -4119,8 +4229,8 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         Assert-True ((Get-Content -LiteralPath (Join-Path $validationFailureCase "config.yaml") -Raw) -eq $validationConfig) "failed Mihomo validation changed config.yaml"
         Assert-True ((Get-Content -LiteralPath (Join-Path $validationFailureCase "verge.yaml") -Raw) -eq $validationVerge) "failed Mihomo validation changed verge.yaml"
         Assert-True ((Get-Content -LiteralPath (Join-Path $validationFailureCase "profiles.yaml") -Raw) -eq $validationProfiles) "failed Mihomo validation changed profiles.yaml"
-        Assert-True ((Get-Content -LiteralPath (Join-Path $validationFailureCase "clash-patch-usage-profile.json") -Raw) -eq $validationUsage) "failed Mihomo validation changed the usage profile"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $validationFailureCase "clash-patch-auto-update-state.json"))) "failed Mihomo validation created auto-update ownership"
+        Assert-True ((Get-Content -LiteralPath (Join-Path $validationFailureCase "claude-easy-usage-profile.json") -Raw) -eq $validationUsage) "failed Mihomo validation changed the usage profile"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $validationFailureCase "claude-easy-auto-update-state.json"))) "failed Mihomo validation created auto-update ownership"
         Assert-True (-not (Test-Path -LiteralPath (Join-Path (Join-Path $validationFailureCase "profiles") "Script.js"))) "failed Mihomo validation created Script.js"
 
         $concurrentInstallCase = Join-Path $sandbox "concurrent-install-case"
@@ -4128,17 +4238,17 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         [System.IO.File]::WriteAllText((Join-Path $concurrentInstallCase "profiles.yaml"), "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n")
         [System.IO.File]::WriteAllText((Join-Path $concurrentInstallCase "config.yaml"), "ipv6: true`ntun: null`n")
         [System.IO.File]::WriteAllText((Join-Path $concurrentInstallCase "verge.yaml"), "enable_tun_mode: false`n")
-        $env:CLASH_PATCH_MUTATE_TARGET = Join-Path $concurrentInstallCase "config.yaml"
+        $env:CLAUDE_EASY_MUTATE_TARGET = Join-Path $concurrentInstallCase "config.yaml"
         try {
             $concurrentInstall = Invoke-TestPowerShell $installer @(
                 "-AppHome", $concurrentInstallCase, "-UsageProfile", "3", "-MihomoPath", $mutatingCore
             )
         } finally {
-            $env:CLASH_PATCH_MUTATE_TARGET = $null
+            $env:CLAUDE_EASY_MUTATE_TARGET = $null
         }
         Assert-True ($concurrentInstall.ExitCode -eq 1) "installer overwrote a config change made while the candidate was being validated"
         Assert-True ((Get-Content -LiteralPath (Join-Path $concurrentInstallCase "config.yaml") -Raw).Contains("friend_concurrent: true")) "installer did not preserve concurrent config content"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $concurrentInstallCase "clash-patch-auto-update-state.json"))) "rejected concurrent install created auto-update ownership"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $concurrentInstallCase "claude-easy-auto-update-state.json"))) "rejected concurrent install created auto-update ownership"
     }
 
     $nullCase = Join-Path $sandbox "null-case"
@@ -4153,21 +4263,21 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
     Assert-True ($nullOutput.Contains("dns-hijack:`n") -or $nullOutput.Contains("dns-hijack:`r`n")) "dns-hijack block missing"
     $nullProfilesIndex = Get-Content -LiteralPath (Join-Path $nullCase "profiles.yaml") -Raw
     Assert-True ($nullProfilesIndex -match '(?m)^\s+allow_auto_update:\s+false\s*$') "profile 3 did not disable subscription auto-update"
-    $nullAutoUpdateStatePath = Join-Path $nullCase "clash-patch-auto-update-state.json"
+    $nullAutoUpdateStatePath = Join-Path $nullCase "claude-easy-auto-update-state.json"
     Assert-True (Test-Path -LiteralPath $nullAutoUpdateStatePath -PathType Leaf) "profile 3 did not save auto-update ownership"
     $nullAutoUpdateStateBeforeReinstall = [System.IO.File]::ReadAllBytes($nullAutoUpdateStatePath)
-    $profilesBackups = @(Get-ChildItem -LiteralPath (Join-Path $nullCase "clash-patch-backups") -File | Where-Object { $_.Name -like "*--profiles.yaml.backup" })
+    $profilesBackups = @(Get-ChildItem -LiteralPath (Join-Path $nullCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--profiles.yaml.backup" })
     Assert-True ($profilesBackups.Count -ge 1) "profiles.yaml was changed without a dated backup"
     $nullCaseJson = Invoke-TestPowerShell $installer @("-AppHome", $nullCase, "-MihomoPath", $fakeCore, "-Json")
     Assert-JsonResult $nullCaseJson "install" 0 | Out-Null
     Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($nullAutoUpdateStatePath))) -eq ([Convert]::ToBase64String($nullAutoUpdateStateBeforeReinstall))) "reinstall replaced the original auto-update ownership with the already-disabled state"
     Invoke-Uninstaller $nullCase
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nullCase "clash-patch-usage-profile.json"))) "successful safe uninstall retained the profile 3 gate"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nullCase "claude-easy-usage-profile.json"))) "successful safe uninstall retained the profile 3 gate"
     Assert-True (-not (Test-Path -LiteralPath $nullAutoUpdateStatePath)) "successful safe uninstall retained auto-update ownership state"
     Assert-True ((Get-Content -LiteralPath (Join-Path $nullCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+true\s*$') "safe uninstall did not restore remote subscription auto-update"
     $postUninstallLight = Invoke-TestPowerShell $installer @("-AppHome", $nullCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore)
     Assert-True ($postUninstallLight.ExitCode -eq 0) "safe uninstall did not permit a documented profile 3 to profile 1 downgrade; $(Get-TestOutputDiagnostic $postUninstallLight.Output)"
-    $postUninstallProfile = Get-Content -LiteralPath (Join-Path $nullCase "clash-patch-usage-profile.json") -Raw | ConvertFrom-Json
+    $postUninstallProfile = Get-Content -LiteralPath (Join-Path $nullCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$postUninstallProfile.Profile -eq 1) "post-uninstall downgrade did not save profile 1"
     if ($onWindows) {
         $mihomoArguments = Get-Content -LiteralPath (Join-Path $sandbox "mihomo-arguments.log") -Raw
@@ -4193,9 +4303,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             (Join-Path (Join-Path $createdSettingsCase "profiles") "Script.js"),
             (Join-Path $createdSettingsCase "config.yaml"),
             (Join-Path $createdSettingsCase "verge.yaml"),
-            (Join-Path $createdSettingsCase "clash-patch-install-state.json"),
-            (Join-Path $createdSettingsCase "clash-patch-auto-update-state.json"),
-            (Join-Path $createdSettingsCase "clash-patch-usage-profile.json")
+            (Join-Path $createdSettingsCase "claude-easy-install-state.json"),
+            (Join-Path $createdSettingsCase "claude-easy-auto-update-state.json"),
+            (Join-Path $createdSettingsCase "claude-easy-usage-profile.json")
         )) {
             Assert-True (-not (Test-Path -LiteralPath $removedPath)) "safe uninstall retained a file created by the installer: $removedPath"
         }
@@ -4205,9 +4315,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         ) "safe uninstall did not restore auto-update when every application settings file was installer-created"
 
         foreach ($stateFileName in @(
-            "clash-patch-install-state.json",
-            "clash-patch-auto-update-state.json",
-            "clash-patch-usage-profile.json"
+            "claude-easy-install-state.json",
+            "claude-easy-auto-update-state.json",
+            "claude-easy-usage-profile.json"
         )) {
             $nonFileStateCase = Join-Path $sandbox ("non-file-state-" + $stateFileName.Replace(".", "-"))
             New-Item -ItemType Directory -Path $nonFileStateCase -Force | Out-Null
@@ -4241,7 +4351,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         [System.IO.File]::WriteAllText((Join-Path $invalidUsageCase "config.yaml"), "ipv6: true`ntun: null`n")
         [System.IO.File]::WriteAllText((Join-Path $invalidUsageCase "verge.yaml"), "enable_tun_mode: false`n")
         Invoke-Installer $invalidUsageCase
-        $invalidUsageStatePath = Join-Path $invalidUsageCase "clash-patch-usage-profile.json"
+        $invalidUsageStatePath = Join-Path $invalidUsageCase "claude-easy-usage-profile.json"
         foreach ($invalidUsageState in @(
             "{",
             '{"Version":2,"Profile":3}',
@@ -4272,7 +4382,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         $conflictProfilesPath = Join-Path $uninstallConflictCase "profiles.yaml"
         $conflictConfigPath = Join-Path $uninstallConflictCase "config.yaml"
         $conflictVergePath = Join-Path $uninstallConflictCase "verge.yaml"
-        $conflictAutoUpdateStatePath = Join-Path $uninstallConflictCase "clash-patch-auto-update-state.json"
+        $conflictAutoUpdateStatePath = Join-Path $uninstallConflictCase "claude-easy-auto-update-state.json"
         $conflictScriptBefore = [System.IO.File]::ReadAllBytes($conflictScriptPath)
         $conflictProfilesBefore = [System.IO.File]::ReadAllBytes($conflictProfilesPath)
         $conflictConfigBefore = [System.IO.File]::ReadAllBytes($conflictConfigPath)
@@ -4289,8 +4399,8 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($conflictConfigPath))) -eq ([Convert]::ToBase64String($conflictConfigBefore))) "conflicting uninstall restored config.yaml before checking every target"
         Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($conflictVergePath))) -eq ([Convert]::ToBase64String($conflictVergeBefore))) "conflicting uninstall changed the user-edited verge.yaml"
         Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($conflictAutoUpdateStatePath))) -eq ([Convert]::ToBase64String($conflictAutoUpdateStateBefore))) "conflicting uninstall removed auto-update recovery state"
-        Assert-True (Test-Path -LiteralPath (Join-Path $uninstallConflictCase "clash-patch-install-state.json") -PathType Leaf) "conflicting uninstall removed its recovery state"
-        Assert-True (Test-Path -LiteralPath (Join-Path $uninstallConflictCase "clash-patch-usage-profile.json") -PathType Leaf) "conflicting uninstall removed the profile 3 gate"
+        Assert-True (Test-Path -LiteralPath (Join-Path $uninstallConflictCase "claude-easy-install-state.json") -PathType Leaf) "conflicting uninstall removed its recovery state"
+        Assert-True (Test-Path -LiteralPath (Join-Path $uninstallConflictCase "claude-easy-usage-profile.json") -PathType Leaf) "conflicting uninstall removed the profile 3 gate"
 
         $invalidOwnershipCase = Join-Path $sandbox "invalid-auto-update-ownership-case"
         New-Item -ItemType Directory -Path $invalidOwnershipCase -Force | Out-Null
@@ -4298,7 +4408,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         [System.IO.File]::WriteAllText((Join-Path $invalidOwnershipCase "config.yaml"), "ipv6: true`ntun: null`n")
         [System.IO.File]::WriteAllText((Join-Path $invalidOwnershipCase "verge.yaml"), "enable_tun_mode: false`n")
         Invoke-Installer $invalidOwnershipCase
-        $invalidOwnershipStatePath = Join-Path $invalidOwnershipCase "clash-patch-auto-update-state.json"
+        $invalidOwnershipStatePath = Join-Path $invalidOwnershipCase "claude-easy-auto-update-state.json"
         [System.IO.File]::WriteAllText(
             $invalidOwnershipStatePath,
             '{"Version":1,"Profiles":[{"Uid":"R-test","OriginalState":"true","OriginalOptionBase64":"***"}]}'
@@ -4308,8 +4418,8 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             (Join-Path $invalidOwnershipCase "profiles.yaml"),
             (Join-Path $invalidOwnershipCase "config.yaml"),
             (Join-Path $invalidOwnershipCase "verge.yaml"),
-            (Join-Path $invalidOwnershipCase "clash-patch-install-state.json"),
-            (Join-Path $invalidOwnershipCase "clash-patch-usage-profile.json"),
+            (Join-Path $invalidOwnershipCase "claude-easy-install-state.json"),
+            (Join-Path $invalidOwnershipCase "claude-easy-usage-profile.json"),
             $invalidOwnershipStatePath
         )
         $invalidOwnershipBefore = @{}
@@ -4347,14 +4457,14 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+false\s*$') "running client did not disable remote auto-update"
             Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "config.yaml") -Raw) -eq $runningConfig) "running client changed config.yaml"
             Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "verge.yaml") -Raw) -eq $runningVerge) "running client changed verge.yaml"
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "clash-patch-install-state.json"))) "running client created an offline install state"
-            Assert-True (Test-Path -LiteralPath (Join-Path $runningCase "clash-patch-auto-update-state.json") -PathType Leaf) "running client install did not save auto-update ownership"
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-install-state.json"))) "running client created an offline install state"
+            Assert-True (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-auto-update-state.json") -PathType Leaf) "running client install did not save auto-update ownership"
         } finally {
             if (-not $runningClient.HasExited) { Stop-Process -Id $runningClient.Id -Force }
         }
         Invoke-Uninstaller $runningCase
         Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+true\s*$') "running-client install could not later restore auto-update"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "clash-patch-auto-update-state.json"))) "running-client uninstall retained auto-update ownership"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-auto-update-state.json"))) "running-client uninstall retained auto-update ownership"
 
         $deferredUninstallCase = Join-Path $sandbox "deferred-running-uninstall-case"
         New-Item -ItemType Directory -Path $deferredUninstallCase -Force | Out-Null
@@ -4369,9 +4479,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             (Join-Path $deferredUninstallCase "profiles.yaml"),
             (Join-Path $deferredUninstallCase "config.yaml"),
             (Join-Path $deferredUninstallCase "verge.yaml"),
-            (Join-Path $deferredUninstallCase "clash-patch-install-state.json"),
-            (Join-Path $deferredUninstallCase "clash-patch-auto-update-state.json"),
-            (Join-Path $deferredUninstallCase "clash-patch-usage-profile.json")
+            (Join-Path $deferredUninstallCase "claude-easy-install-state.json"),
+            (Join-Path $deferredUninstallCase "claude-easy-auto-update-state.json"),
+            (Join-Path $deferredUninstallCase "claude-easy-usage-profile.json")
         )
         $deferredProtectedBefore = @{}
         foreach ($protectedPath in $deferredProtectedPaths) {
@@ -4396,13 +4506,13 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
         Invoke-Uninstaller $deferredUninstallCase
         Assert-True ((Get-Content -LiteralPath (Join-Path $deferredUninstallCase "config.yaml") -Raw) -eq $deferredConfigOriginal) "second safe uninstall did not restore deferred config.yaml"
         Assert-True ((Get-Content -LiteralPath (Join-Path $deferredUninstallCase "verge.yaml") -Raw) -eq $deferredVergeOriginal) "second safe uninstall did not restore deferred verge.yaml"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $deferredUninstallCase "clash-patch-usage-profile.json"))) "second safe uninstall retained the profile 3 gate"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $deferredUninstallCase "claude-easy-usage-profile.json"))) "second safe uninstall retained the profile 3 gate"
 
         Invoke-DeferredProbe "stopped-client transactions recheck after locked target verification" {
             $clientStartPackageParent = Join-Path $sandbox "client-start-uninstall-package"
             New-Item -ItemType Directory -Path $clientStartPackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "clash-patch") -Destination $clientStartPackageParent -Recurse
-            $clientStartPackage = Join-Path $clientStartPackageParent "clash-patch"
+            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $clientStartPackageParent -Recurse
+            $clientStartPackage = Join-Path $clientStartPackageParent "claude-easy"
             $clientStartUninstaller = Join-Path (
                 Join-Path $clientStartPackage "scripts"
             ) "uninstall_windows.ps1"
@@ -4422,8 +4532,8 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 $clientStartWriteTryOffset -ge 0
             ) "client-start fixture could not find the locked-stream write boundary"
             $clientStartWriteSpyHook = @'
-    if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_CLIENT_START_WRITE_SPY)) {
-        [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_CLIENT_START_WRITE_SPY, "write")
+    if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_CLIENT_START_WRITE_SPY)) {
+        [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_CLIENT_START_WRITE_SPY, "write")
     }
 '@
             $clientStartTransactionText = $clientStartTransactionText.Insert(
@@ -4445,26 +4555,26 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                     $clientStartGuardOffset
             ) "client-start fixture could not find one locked-target precommit boundary"
             $clientStartHook = @'
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_CLIENT_START_READY) -and
-            -not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_CLIENT_START_RELEASE)) {
-            [System.IO.File]::WriteAllText($env:CLASH_PATCH_TEST_CLIENT_START_READY, "ready")
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_CLIENT_START_READY) -and
+            -not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_CLIENT_START_RELEASE)) {
+            [System.IO.File]::WriteAllText($env:CLAUDE_EASY_TEST_CLIENT_START_READY, "ready")
             $clientStartReleaseDeadline = [DateTime]::UtcNow.AddSeconds(10)
-            while (-not (Test-Path -LiteralPath $env:CLASH_PATCH_TEST_CLIENT_START_RELEASE -PathType Leaf) -and
+            while (-not (Test-Path -LiteralPath $env:CLAUDE_EASY_TEST_CLIENT_START_RELEASE -PathType Leaf) -and
                 [DateTime]::UtcNow -lt $clientStartReleaseDeadline) {
                 Start-Sleep -Milliseconds 25
             }
-            if (-not (Test-Path -LiteralPath $env:CLASH_PATCH_TEST_CLIENT_START_RELEASE -PathType Leaf)) {
+            if (-not (Test-Path -LiteralPath $env:CLAUDE_EASY_TEST_CLIENT_START_RELEASE -PathType Leaf)) {
                 throw "client-start fixture timed out waiting for release"
             }
         }
-        if (-not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_CLIENT_START_EXECUTABLE) -and
-            -not [string]::IsNullOrWhiteSpace($env:CLASH_PATCH_TEST_CLIENT_START_PID)) {
+        if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_CLIENT_START_EXECUTABLE) -and
+            -not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_CLIENT_START_PID)) {
             $clientStartInjected = Start-Process `
-                -FilePath $env:CLASH_PATCH_TEST_CLIENT_START_EXECUTABLE `
+                -FilePath $env:CLAUDE_EASY_TEST_CLIENT_START_EXECUTABLE `
                 -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
             [void]$clientStartInjected.Handle
             [System.IO.File]::WriteAllText(
-                $env:CLASH_PATCH_TEST_CLIENT_START_PID,
+                $env:CLAUDE_EASY_TEST_CLIENT_START_PID,
                 [string]$clientStartInjected.Id
             )
             $clientStartInjectedSeen = $false
@@ -4515,9 +4625,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 (Join-Path $clientStartHome "profiles.yaml"),
                 (Join-Path $clientStartHome "config.yaml"),
                 (Join-Path $clientStartHome "verge.yaml"),
-                (Join-Path $clientStartHome "clash-patch-install-state.json"),
-                (Join-Path $clientStartHome "clash-patch-auto-update-state.json"),
-                (Join-Path $clientStartHome "clash-patch-usage-profile.json")
+                (Join-Path $clientStartHome "claude-easy-install-state.json"),
+                (Join-Path $clientStartHome "claude-easy-auto-update-state.json"),
+                (Join-Path $clientStartHome "claude-easy-usage-profile.json")
             )
             $clientStartProtectedBefore = @{}
             foreach ($protectedPath in $clientStartProtectedPaths) {
@@ -4534,9 +4644,9 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             $clientStartStdout = Join-Path $sandbox "client-start-uninstall.stdout"
             $clientStartStderr = Join-Path $sandbox "client-start-uninstall.stderr"
             $clientStartWriteSpy = Join-Path $sandbox "client-start-uninstall.write-spy"
-            $env:CLASH_PATCH_TEST_CLIENT_START_READY = $clientStartReady
-            $env:CLASH_PATCH_TEST_CLIENT_START_RELEASE = $clientStartRelease
-            $env:CLASH_PATCH_TEST_CLIENT_START_WRITE_SPY = $clientStartWriteSpy
+            $env:CLAUDE_EASY_TEST_CLIENT_START_READY = $clientStartReady
+            $env:CLAUDE_EASY_TEST_CLIENT_START_RELEASE = $clientStartRelease
+            $env:CLAUDE_EASY_TEST_CLIENT_START_WRITE_SPY = $clientStartWriteSpy
             $clientStartChild = $null
             $clientStartProcess = $null
             try {
@@ -4599,18 +4709,18 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 }
                 Assert-True (-not (
                     Test-Path -LiteralPath (
-                        Join-Path $clientStartHome ".clash-patch-transaction.json"
+                        Join-Path $clientStartHome ".claude-easy-transaction.json"
                     )
                 )) "client-start abort retained a transaction journal"
                 Assert-True (-not (
                     Test-Path -LiteralPath (
-                        Join-Path $clientStartHome ".clash-patch-transaction-preparation.json"
+                        Join-Path $clientStartHome ".claude-easy-transaction-preparation.json"
                     )
                 )) "client-start abort retained a transaction preparation record"
             } finally {
-                $env:CLASH_PATCH_TEST_CLIENT_START_READY = $null
-                $env:CLASH_PATCH_TEST_CLIENT_START_RELEASE = $null
-                $env:CLASH_PATCH_TEST_CLIENT_START_WRITE_SPY = $null
+                $env:CLAUDE_EASY_TEST_CLIENT_START_READY = $null
+                $env:CLAUDE_EASY_TEST_CLIENT_START_RELEASE = $null
+                $env:CLAUDE_EASY_TEST_CLIENT_START_WRITE_SPY = $null
                 if (-not (Test-Path -LiteralPath $clientStartRelease -PathType Leaf)) {
                     [System.IO.File]::WriteAllText($clientStartRelease, "release")
                 }
@@ -4634,7 +4744,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             ) "retry after client-start abort did not restore verge.yaml"
             Assert-True (-not (
                 Test-Path -LiteralPath (
-                    Join-Path $clientStartHome "clash-patch-install-state.json"
+                    Join-Path $clientStartHome "claude-easy-install-state.json"
                 )
             )) "retry after client-start abort retained install recovery state"
 
@@ -4646,15 +4756,15 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                     [string]$WriteSpyPath
                 )
                 $pidPath = Join-Path $sandbox ("client-start-" + $Name + ".pid")
-                $env:CLASH_PATCH_TEST_CLIENT_START_EXECUTABLE = $runningClientPath
-                $env:CLASH_PATCH_TEST_CLIENT_START_PID = $pidPath
-                $env:CLASH_PATCH_TEST_CLIENT_START_WRITE_SPY = $WriteSpyPath
+                $env:CLAUDE_EASY_TEST_CLIENT_START_EXECUTABLE = $runningClientPath
+                $env:CLAUDE_EASY_TEST_CLIENT_START_PID = $pidPath
+                $env:CLAUDE_EASY_TEST_CLIENT_START_WRITE_SPY = $WriteSpyPath
                 try {
                     return (Invoke-TestPowerShell $ScriptPath $Arguments)
                 } finally {
-                    $env:CLASH_PATCH_TEST_CLIENT_START_EXECUTABLE = $null
-                    $env:CLASH_PATCH_TEST_CLIENT_START_PID = $null
-                    $env:CLASH_PATCH_TEST_CLIENT_START_WRITE_SPY = $null
+                    $env:CLAUDE_EASY_TEST_CLIENT_START_EXECUTABLE = $null
+                    $env:CLAUDE_EASY_TEST_CLIENT_START_PID = $null
+                    $env:CLAUDE_EASY_TEST_CLIENT_START_WRITE_SPY = $null
                     if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
                         $startedPid = [int]([System.IO.File]::ReadAllText($pidPath))
                         $startedProcess = Get-Process -Id $startedPid -ErrorAction SilentlyContinue
@@ -4713,11 +4823,11 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             ) "client-start install changed a protected target"
             foreach ($unexpectedInstallPath in @(
                 (Join-Path $clientStartInstallProfiles "Script.js"),
-                (Join-Path $clientStartInstallHome "clash-patch-install-state.json"),
-                (Join-Path $clientStartInstallHome "clash-patch-auto-update-state.json"),
-                (Join-Path $clientStartInstallHome "clash-patch-usage-profile.json"),
-                (Join-Path $clientStartInstallHome ".clash-patch-transaction.json"),
-                (Join-Path $clientStartInstallHome ".clash-patch-transaction-preparation.json")
+                (Join-Path $clientStartInstallHome "claude-easy-install-state.json"),
+                (Join-Path $clientStartInstallHome "claude-easy-auto-update-state.json"),
+                (Join-Path $clientStartInstallHome "claude-easy-usage-profile.json"),
+                (Join-Path $clientStartInstallHome ".claude-easy-transaction.json"),
+                (Join-Path $clientStartInstallHome ".claude-easy-transaction-preparation.json")
             )) {
                 Assert-True (-not (
                     Test-Path -LiteralPath $unexpectedInstallPath
@@ -4738,7 +4848,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
             $clientStartRestoreTarget = Join-Path $clientStartRestoreHome "config.yaml"
             $clientStartRestoreBackupRoot = Join-Path (
                 $clientStartRestoreHome
-            ) "clash-patch-backups"
+            ) "claude-easy-backups"
             New-Item -ItemType Directory -Path $clientStartRestoreHome -Force | Out-Null
             $clientStartRestoreBackupText = "mode: rule`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
             $clientStartRestoreCurrentText = "mode: global`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
@@ -4783,8 +4893,8 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
                 Test-Path -LiteralPath $clientStartRestoreWriteSpy -PathType Leaf
             )) "client-start restore wrote after the locked precommit check"
             foreach ($unexpectedRestorePath in @(
-                (Join-Path $clientStartRestoreHome ".clash-patch-transaction.json"),
-                (Join-Path $clientStartRestoreHome ".clash-patch-transaction-preparation.json")
+                (Join-Path $clientStartRestoreHome ".claude-easy-transaction.json"),
+                (Join-Path $clientStartRestoreHome ".claude-easy-transaction-preparation.json")
             )) {
                 Assert-True (-not (
                     Test-Path -LiteralPath $unexpectedRestorePath
@@ -4812,7 +4922,7 @@ function Start-ClashPatchRecoveryRaceClient([string]$ExpectedMode) {
     [System.IO.File]::WriteAllText((Join-Path $blockCase "config.yaml"), $blockInput)
     [System.IO.File]::WriteAllText((Join-Path $blockCase "verge.yaml"), "enable_dns_settings: true`n")
     Invoke-Installer $blockCase
-    $blockAutoUpdateStatePath = Join-Path $blockCase "clash-patch-auto-update-state.json"
+    $blockAutoUpdateStatePath = Join-Path $blockCase "claude-easy-auto-update-state.json"
     $blockAutoUpdateStateBeforeReinstall = [System.IO.File]::ReadAllBytes($blockAutoUpdateStatePath)
     Invoke-Installer $blockCase
     Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($blockAutoUpdateStatePath))) -eq ([Convert]::ToBase64String($blockAutoUpdateStateBeforeReinstall))) "second install forgot the pre-patch auto-update state"
@@ -4870,8 +4980,8 @@ const result = context.main({
   rules: ["MATCH,Main"]
 });
 if (!result || result.friend !== true) throw new Error("previous main did not run");
-if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((name) => name.indexOf("clash-patch-cn-domain") === 0)) {
-  throw new Error("Clash Patch transform did not run");
+if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((name) => name.indexOf("claude-easy-cn-domain") === 0)) {
+  throw new Error("ClaudeEasy transform did not run");
 }
 '@
         [System.IO.File]::WriteAllText($generatedScriptHarness, $generatedScriptHarnessSource, (New-Object System.Text.UTF8Encoding($false)))
@@ -4897,7 +5007,7 @@ if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((na
     [System.IO.File]::WriteAllText((Join-Path $asyncCase "verge.yaml"), $asyncVerge)
     $asyncScriptPath = Join-Path $asyncProfiles "Script.js"
     [System.IO.File]::WriteAllText($asyncScriptPath, $asyncScript)
-    $asyncUsageStatePath = Join-Path $asyncCase "clash-patch-usage-profile.json"
+    $asyncUsageStatePath = Join-Path $asyncCase "claude-easy-usage-profile.json"
     $asyncUsageState = '{"Version":1,"Profile":1}' + "`r`n"
     [System.IO.File]::WriteAllText($asyncUsageStatePath, $asyncUsageState)
     $asyncResult = Invoke-TestPowerShell $installer @("-AppHome", $asyncCase, "-UsageProfile", "3", "-MihomoPath", $fakeCore)
@@ -4933,7 +5043,7 @@ friend payload
     Invoke-Uninstaller $templateMarkerCase
     Assert-True ((Get-Content -LiteralPath $templateScriptPath -Raw).Contains("friend payload")) "uninstaller discarded marker text inside a template literal"
 
-    Assert-InstallerRejectsScript "reserved-symbol-case" "const clashPatchTransform = 1;`nfunction main(config) { return config; }`n" "保留标识符"
+    Assert-InstallerRejectsScript "reserved-symbol-case" "const claudeEasyTransform = 1;`nfunction main(config) { return config; }`n" "保留标识符"
     Assert-InstallerRejectsScript "recursive-main-case" "function main(config) { return config.retry ? main(config) : config; }`n" "递归"
     Assert-InstallerRejectsScript "reassigned-main-case" "function main(config) { return config; }`nmain = function(config) { config.override = true; return config; };`n" "重新定义 main"
 
@@ -4944,7 +5054,7 @@ friend payload
     $invalidStateVerge = "enable_tun_mode: false`n"
     [System.IO.File]::WriteAllText((Join-Path $invalidStateCase "config.yaml"), $invalidStateConfig)
     [System.IO.File]::WriteAllText((Join-Path $invalidStateCase "verge.yaml"), $invalidStateVerge)
-    [System.IO.File]::WriteAllText((Join-Path $invalidStateCase "clash-patch-install-state.json"), '{"Version":1}')
+    [System.IO.File]::WriteAllText((Join-Path $invalidStateCase "claude-easy-install-state.json"), '{"Version":1}')
     $invalidStateResult = Invoke-TestPowerShell $installer @("-AppHome", $invalidStateCase, "-MihomoPath", $fakeCore)
     Assert-True ($invalidStateResult.ExitCode -eq 1) "installer accepted incomplete state"
     Assert-True ($invalidStateResult.Output.Contains("安装状态文件无效")) "incomplete state rejection was unclear"
@@ -4966,7 +5076,7 @@ friend payload
     }
     Write-Host "Windows installer behavioral cases passed"
 } finally {
-    $env:CLASH_PATCH_USAGE_PROFILE = $previousUsageProfile
+    $env:CLAUDE_EASY_USAGE_PROFILE = $previousUsageProfile
     if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }
 }
 

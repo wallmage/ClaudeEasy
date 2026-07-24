@@ -8,45 +8,45 @@ require "yaml"
 require_relative "support/macos_runtime_fixture"
 
 ROOT = File.expand_path("..", __dir__)
-SKILL = File.join(ROOT, "clash-patch")
+SKILL = File.join(ROOT, "claude-easy")
 
 class SkillContractTest < Minitest::Test
   include MacosRuntimeFixture
 
   REQUIRED_PUBLIC_FILES = %w[
     README.md
-    clash-patch/SKILL.md
-    clash-patch/agents/openai.yaml
-    clash-patch/references/patch-policy.md
-    clash-patch/references/policy.json
-    clash-patch/references/result-contract.json
-    clash-patch/scripts/install_macos.sh
-    clash-patch/scripts/install_windows.ps1
-    clash-patch/scripts/install_windows.cmd
-    clash-patch/scripts/uninstall_macos.sh
-    clash-patch/scripts/uninstall_windows.ps1
-    clash-patch/scripts/uninstall_windows.cmd
-    clash-patch/scripts/macos/operation_lock.rb
-    clash-patch/scripts/macos/patch_profiles.rb
-    clash-patch/scripts/macos/patch_profiles/transform.rb
-    clash-patch/scripts/macos/patch_profiles/backups.rb
-    clash-patch/scripts/macos/patch_profiles/mihomo.rb
-    clash-patch/scripts/macos/patch_profiles/profile_writer.rb
-    clash-patch/scripts/macos/patch_profiles/subscriptions.rb
-    clash-patch/scripts/macos/patch_profiles/runtime.rb
-    clash-patch/scripts/macos/patch_profiles/cli.rb
-    clash-patch/scripts/macos/result_contract.rb
-    clash-patch/scripts/macos/verify_routes.rb
-    clash-patch/scripts/windows/verify_routes.ps1
-    clash-patch/scripts/windows/clash_verge_global.js
-    clash-patch/scripts/windows/result_contract.ps1
-    clash-patch/scripts/windows/install_windows/common.ps1
-    clash-patch/scripts/windows/install_windows/yaml.ps1
-    clash-patch/scripts/windows/install_windows/profiles.ps1
-    clash-patch/scripts/windows/install_windows/mihomo.ps1
-    clash-patch/scripts/windows/install_windows/transaction.ps1
-    clash-patch/scripts/windows/install_windows/script_js.ps1
-    clash-patch/scripts/windows/install_windows/safe_update.ps1
+    claude-easy/SKILL.md
+    claude-easy/agents/openai.yaml
+    claude-easy/references/patch-policy.md
+    claude-easy/references/policy.json
+    claude-easy/references/result-contract.json
+    claude-easy/scripts/install_macos.sh
+    claude-easy/scripts/install_windows.ps1
+    claude-easy/scripts/install_windows.cmd
+    claude-easy/scripts/uninstall_macos.sh
+    claude-easy/scripts/uninstall_windows.ps1
+    claude-easy/scripts/uninstall_windows.cmd
+    claude-easy/scripts/macos/operation_lock.rb
+    claude-easy/scripts/macos/patch_profiles.rb
+    claude-easy/scripts/macos/patch_profiles/transform.rb
+    claude-easy/scripts/macos/patch_profiles/backups.rb
+    claude-easy/scripts/macos/patch_profiles/mihomo.rb
+    claude-easy/scripts/macos/patch_profiles/profile_writer.rb
+    claude-easy/scripts/macos/patch_profiles/subscriptions.rb
+    claude-easy/scripts/macos/patch_profiles/runtime.rb
+    claude-easy/scripts/macos/patch_profiles/cli.rb
+    claude-easy/scripts/macos/result_contract.rb
+    claude-easy/scripts/macos/verify_routes.rb
+    claude-easy/scripts/windows/verify_routes.ps1
+    claude-easy/scripts/windows/clash_verge_global.js
+    claude-easy/scripts/windows/result_contract.ps1
+    claude-easy/scripts/windows/install_windows/common.ps1
+    claude-easy/scripts/windows/install_windows/yaml.ps1
+    claude-easy/scripts/windows/install_windows/profiles.ps1
+    claude-easy/scripts/windows/install_windows/mihomo.ps1
+    claude-easy/scripts/windows/install_windows/transaction.ps1
+    claude-easy/scripts/windows/install_windows/script_js.ps1
+    claude-easy/scripts/windows/install_windows/safe_update.ps1
     .github/workflows/test.yml
     tests/fixtures/main_group_cases.json
     tests/baseline.md
@@ -60,7 +60,7 @@ class SkillContractTest < Minitest::Test
     tests/test_skill_contract.rb
     tests/test_windows_installer.ps1
     tests/test_windows_patcher.js
-    docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md
+    docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md
     LICENSE
   ].freeze
 
@@ -83,10 +83,10 @@ class SkillContractTest < Minitest::Test
 
   def test_release_archive_is_self_contained_and_runs_from_a_unicode_space_path
     release_files = REQUIRED_PUBLIC_FILES.select do |path|
-      path == "README.md" || path == "LICENSE" || path.start_with?("clash-patch/")
+      path == "README.md" || path == "LICENSE" || path.start_with?("claude-easy/")
     end
-    Dir.mktmpdir("clash-patch-release-") do |directory|
-      package_name = "Clash Patch 发布包"
+    Dir.mktmpdir("claude-easy-release-") do |directory|
+      package_name = "ClaudeEasy 发布包"
       staging = File.join(directory, "staging")
       package_root = File.join(staging, package_name)
       release_files.each do |relative|
@@ -95,7 +95,7 @@ class SkillContractTest < Minitest::Test
         FileUtils.cp(File.join(ROOT, relative), destination, preserve: true)
       end
 
-      archive = File.join(directory, "clash-patch-release.tar")
+      archive = File.join(directory, "claude-easy-release.tar")
       _output, _error, status = Open3.capture3(
         "tar", "-cf", archive, "-C", staging, package_name
       )
@@ -112,10 +112,10 @@ class SkillContractTest < Minitest::Test
       _output, _error, status = Open3.capture3("tar", "-xf", archive, "-C", extracted)
       assert status.success?, "release archive extraction failed"
       unpacked = File.join(extracted, package_name)
-      install_macos = File.join(unpacked, "clash-patch/scripts/install_macos.sh")
-      uninstall_macos = File.join(unpacked, "clash-patch/scripts/uninstall_macos.sh")
-      patcher = File.join(unpacked, "clash-patch/scripts/macos/patch_profiles.rb")
-      windows_engine = File.join(unpacked, "clash-patch/scripts/windows/clash_verge_global.js")
+      install_macos = File.join(unpacked, "claude-easy/scripts/install_macos.sh")
+      uninstall_macos = File.join(unpacked, "claude-easy/scripts/uninstall_macos.sh")
+      patcher = File.join(unpacked, "claude-easy/scripts/macos/patch_profiles.rb")
+      windows_engine = File.join(unpacked, "claude-easy/scripts/windows/clash_verge_global.js")
       assert File.executable?(install_macos)
       assert File.executable?(uninstall_macos)
 
@@ -171,9 +171,9 @@ class SkillContractTest < Minitest::Test
         release_env = {
           "HOME" => release_home,
           "RUBYOPT" => "-r#{preferences_fixture}",
-          "CLASH_PATCH_PROFILE_DIR" => profile_directory,
-          "CLASH_PATCH_USAGE_STATE_PATH" => File.join(release_home, "usage-profile.plist"),
-          "CLASH_PATCH_USAGE_PROFILE" => nil
+          "CLAUDE_EASY_PROFILE_DIR" => profile_directory,
+          "CLAUDE_EASY_USAGE_STATE_PATH" => File.join(release_home, "usage-profile.plist"),
+          "CLAUDE_EASY_USAGE_PROFILE" => nil
         }
         controller_server, controller_thread, controller_socket_path, controller_requests =
           start_release_controller(release_home)
@@ -181,16 +181,16 @@ class SkillContractTest < Minitest::Test
           start_release_connectivity_server(release_home)
         begin
           probe = <<~RUBY
-            context = ClashPatch.capture_runtime_profile_context([ARGV.fetch(0)])
+            context = ClaudeEasy.capture_runtime_profile_context([ARGV.fetch(0)])
             puts JSON.generate(
-              selected: ClashPatch.selected_profile_name,
+              selected: ClaudeEasy.selected_profile_name,
               context: context,
-              socket: ClashPatch.controller_socket
+              socket: ClaudeEasy.controller_socket
             )
             exit(
               context && context[:selected] == "friend" &&
               context[:active_path] == File.realpath(File.join(ARGV.fetch(0), "friend.yaml")) &&
-              ClashPatch.controller_socket ? 0 : 1
+              ClaudeEasy.controller_socket ? 0 : 1
             )
           RUBY
           probe_output, probe_error, probe_status = Open3.capture3(
@@ -217,9 +217,9 @@ class SkillContractTest < Minitest::Test
         assert_equal status.exitstatus, result.fetch("exit_code")
         assert_equal "install", result.fetch("command")
         assert result.fetch("ok")
-        assert File.file?(release_env.fetch("CLASH_PATCH_USAGE_STATE_PATH"))
+        assert File.file?(release_env.fetch("CLAUDE_EASY_USAGE_STATE_PATH"))
         patched_profile = YAML.safe_load(File.read(File.join(profile_directory, "friend.yaml")))
-        assert patched_profile.fetch("rule-providers").key?("clash-patch-cn-domain")
+        assert patched_profile.fetch("rule-providers").key?("claude-easy-cn-domain")
       end
     end
   end
@@ -229,7 +229,7 @@ class SkillContractTest < Minitest::Test
     ignore_lines = ignore.lines.map(&:strip)
 
     assert_includes ignore_lines, "docs/*"
-    assert_includes ignore_lines, "!docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"
+    assert_includes ignore_lines, "!docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"
     refute_includes ignore.lines.map(&:strip), "tests/baseline.md"
     refute_includes ignore.lines.map(&:strip), "tests/"
     assert_includes ignore.lines.map(&:strip), "dist/"
@@ -251,11 +251,98 @@ class SkillContractTest < Minitest::Test
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
 
     assert_includes readme, "本文档面向用户"
-    assert_includes readme, "给代理执行的流程规定在 `clash-patch/SKILL.md`"
-    assert_includes readme, "产品规则和全部状态文案以 `clash-patch/references/patch-policy.md` 为准"
+    assert_includes readme, "给代理执行的流程规定在 `claude-easy/SKILL.md`"
+    assert_includes readme, "产品规则和全部状态文案以 `claude-easy/references/patch-policy.md` 为准"
     assert_includes skill, "开始前完整阅读 [references/patch-policy.md](references/patch-policy.md)"
     assert_includes skill, "详细产品规则和全部状态以该文件为准"
-    assert_includes policy, "# Clash 补丁策略"
+    assert_includes policy, "# ClaudeEasy 策略"
+  end
+
+  def test_canonical_brand_spelling_is_single_word
+    spaced_brand = ["Claude", "Easy"].join(" ")
+    product_files = [
+      File.join(ROOT, "README.md"),
+      File.join(ROOT, "AGENTS.md"),
+      File.join(SKILL, "SKILL.md"),
+      File.join(SKILL, "agents/openai.yaml"),
+      File.join(SKILL, "references/patch-policy.md"),
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    ] + Dir.glob(File.join(SKILL, "scripts/**/*.{rb,js,ps1,sh,cmd}"))
+
+    offenders = product_files.select do |path|
+      source = File.read(path)
+      source.include?(spaced_brand) || source.upcase.include?("CLAUDE EASY")
+    end
+    assert_empty offenders, "product brand must be spelled ClaudeEasy: #{offenders.join(', ')}"
+
+    assert_equal "# ClaudeEasy", File.foreach(File.join(ROOT, "README.md")).first.chomp
+    readme = File.read(File.join(ROOT, "README.md"))
+    assert_includes readme, "https://github.com/wallmage/ClaudeEasy.git"
+    assert_includes readme, "与 Anthropic 没有隶属或官方合作关系"
+    assert_includes File.read(File.join(SKILL, "SKILL.md")), "# ClaudeEasy 配置与诊断"
+    metadata = YAML.safe_load(File.read(File.join(SKILL, "agents/openai.yaml")))
+    assert_equal "ClaudeEasy 配置与诊断", metadata.dig("interface", "display_name")
+  end
+
+  def test_old_brand_tokens_are_limited_to_upgrade_compatibility
+    product_files = [
+      File.join(ROOT, "README.md"),
+      File.join(SKILL, "SKILL.md"),
+      File.join(SKILL, "references/patch-policy.md")
+    ] + Dir.glob(File.join(SKILL, "scripts/**/*.{rb,js,ps1,sh,cmd}"))
+    old_token = /(?:ClashPatch|Clash Patch|clash-patch|clashPatch|CLASH PATCH|CLASH_PATCH)/
+    compatibility_token = /
+      旧版|旧补丁|遗留|迁移|兼容|legacy|Legacy|LEGACY|
+      \.clash-patch|clash-patch-(?:usage|install|auto|safe|backups|cn-domain)|
+      bak\|backup\|clash-patch|CLASH\ PATCH\ (?:BEGIN|END|POLICY)|
+      clashPatch[A-Za-z0-9_$]*|CLASH_PATCH_[A-Za-z0-9_$]*
+    /x
+    offenders = []
+    product_files.each do |path|
+      File.foreach(path).with_index(1) do |line, number|
+        next unless line.match?(old_token)
+        next if line.match?(compatibility_token)
+
+        offenders << "#{path}:#{number}:#{line.strip}"
+      end
+    end
+
+    assert_empty offenders, "old brand escaped upgrade compatibility:\n#{offenders.join("\n")}"
+  end
+
+  def test_windows_legacy_state_is_migrated_only_after_both_compatibility_locks
+    transaction = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
+    ).force_encoding("UTF-8")
+    installer = File.binread(
+      File.join(SKILL, "scripts/install_windows.ps1")
+    ).force_encoding("UTF-8")
+    uninstaller = File.binread(
+      File.join(SKILL, "scripts/uninstall_windows.ps1")
+    ).force_encoding("UTF-8")
+    windows_tests = File.binread(
+      File.join(ROOT, "tests/test_windows_installer.ps1")
+    ).force_encoding("UTF-8")
+
+    refute_match(/^\s*Rename-ClaudeEasyLegacyState\s+\$AppHome\s*$/m, installer)
+    refute_match(/^\s*Rename-ClaudeEasyLegacyState\s+\$AppHome\s*$/m, uninstaller)
+
+    enter_lock = transaction[
+      /function Enter-AppHomeMutationLock\b.*?(?=^function Exit-AppHomeMutationLock\b)/m
+    ]
+    refute_nil enter_lock
+    legacy_lock = enter_lock.index('".clash-patch.lock"')
+    current_lock = enter_lock.index('".claude-easy.lock"')
+    migration = enter_lock.index("Rename-ClaudeEasyLegacyState")
+    refute_nil legacy_lock
+    refute_nil current_lock
+    refute_nil migration
+    assert_operator legacy_lock, :<, current_lock
+    assert_operator current_lock, :<, migration
+    assert_includes windows_tests, "legacy-state-migration-case"
+    assert_includes windows_tests, "legacy-state-conflict-case"
+    assert_includes windows_tests, "legacy-lock-compatibility-case"
+    assert_includes windows_tests, "legacy_state_conflict"
   end
 
   def test_skill_exposes_patch_and_diagnostics_as_separate_modules
@@ -275,7 +362,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     mac_installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
     windows_installer = windows_installer_source
 
@@ -297,11 +384,11 @@ class SkillContractTest < Minitest::Test
     refute_includes design, "语音输入 `cloud`"
     assert_includes policy, "只应用满足已选用途所需的最少改动"
 
-    assert_includes mac_installer, "CLASH_PATCH_USAGE_PROFILE"
+    assert_includes mac_installer, "CLAUDE_EASY_USAGE_PROFILE"
     assert_includes mac_installer, "usage-profile.plist"
     assert_includes mac_installer, "--profile"
-    assert_includes windows_installer, "CLASH_PATCH_USAGE_PROFILE"
-    assert_includes windows_installer, "clash-patch-usage-profile.json"
+    assert_includes windows_installer, "CLAUDE_EASY_USAGE_PROFILE"
+    assert_includes windows_installer, "claude-easy-usage-profile.json"
     assert_includes windows_installer, "UsageProfile"
   end
 
@@ -355,7 +442,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy_doc = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
     mac_patcher = mac_patcher_source
     windows_patcher = File.read(File.join(SKILL, "scripts/windows/clash_verge_global.js"))
@@ -372,8 +459,8 @@ class SkillContractTest < Minitest::Test
     assert_includes provider.fetch("url"), "/geosite/cn.mrs"
     assert_includes mac_patcher, "patch_common_cn"
     assert_includes mac_patcher, '"rule-set:#{provider_name}"'
-    assert_includes windows_patcher, "clashPatchCommonCn"
-    assert_includes windows_patcher, "CLASH_PATCH_USAGE_PROFILE"
+    assert_includes windows_patcher, "claudeEasyCommonCn"
+    assert_includes windows_patcher, "CLAUDE_EASY_USAGE_PROFILE"
   end
 
   def test_known_diagnostics_cover_domestic_misrouting_and_adguard_certificate_failures
@@ -395,7 +482,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [readme, skill, policy, design].each do |document|
       assert_includes document, "禁止按应用调整 AdGuard 过滤范围"
@@ -415,7 +502,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [readme, skill, policy, design].each do |document|
       assert_includes document, "Fake-IP 被重新分配"
@@ -439,7 +526,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     metadata = YAML.safe_load(File.read(File.join(SKILL, "agents/openai.yaml")))
 
     [readme, skill, policy, design].each do |document|
@@ -480,7 +567,7 @@ class SkillContractTest < Minitest::Test
   def test_long_read_only_investigations_can_use_safe_parallel_subagents
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [skill, policy, design].each do |document|
       assert_includes document, "Sub Agent"
@@ -497,7 +584,7 @@ class SkillContractTest < Minitest::Test
   def test_computer_use_rules_cover_windows_without_overstating_availability
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [skill, policy, design].each do |document|
       assert_includes document, "Windows Computer Use"
@@ -570,7 +657,7 @@ class SkillContractTest < Minitest::Test
   def test_diagnostics_resolves_overlapping_network_interceptors_by_responsibility
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [skill, policy, design].each do |document|
       assert_includes document, "重叠接管"
@@ -589,7 +676,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [readme, skill, policy, design].each do |document|
       assert_includes document, "AdGuard for Mac"
@@ -615,7 +702,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     mac_patcher = mac_patcher_source
     mac_installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
     windows_installer = windows_installer_source
@@ -642,7 +729,7 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, "ListBackups"
     assert_includes windows_installer, "CompareBackup"
     assert_includes windows_installer, "RestoreBackup"
-    assert_includes windows_installer, "clash-patch-backups"
+    assert_includes windows_installer, "claude-easy-backups"
     assert_includes windows_installer, "yyyy-MM-dd_HH-mm-ss"
     assert_includes windows_installer, "ChangedFields"
     assert_includes skill, "先列出备份"
@@ -656,7 +743,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
     patcher = mac_patcher_source
 
@@ -686,7 +773,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     ]
 
     documents.each do |document|
@@ -726,7 +813,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [readme, skill, policy, design].each do |document|
       assert_includes document, "解决原始问题是 Diagnostics 的结束目标"
@@ -814,7 +901,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_diagnostics_does_not_bake_in_the_reference_incident
-    public_source = Dir.glob(File.join(ROOT, "{README.md,clash-patch/**/*}"), File::FNM_EXTGLOB)
+    public_source = Dir.glob(File.join(ROOT, "{README.md,claude-easy/**/*}"), File::FNM_EXTGLOB)
                        .select { |path| File.file?(path) }
                        .map { |path| File.binread(path).force_encoding("UTF-8").scrub }
                        .join("\n")
@@ -850,7 +937,7 @@ class SkillContractTest < Minitest::Test
     refute_nil frontmatter
     metadata = YAML.safe_load(frontmatter[1])
     assert_equal %w[description name], metadata.keys.sort
-    assert_equal "clash-patch", metadata["name"]
+    assert_equal "claude-easy", metadata["name"]
     assert_match(/\AUse when\b/, metadata["description"])
   end
 
@@ -859,7 +946,7 @@ class SkillContractTest < Minitest::Test
 
     metadata = YAML.safe_load(File.read(File.join(SKILL, "agents/openai.yaml")))
     prompt = metadata.dig("interface", "default_prompt")
-    assert_includes prompt, "$clash-patch"
+    assert_includes prompt, "$claude-easy"
     assert_includes prompt, "当前存储位置"
     assert_includes prompt, "绝对不要退出、停止或重启 Clash 客户端"
     assert_match(/[\p{Han}]/, prompt)
@@ -926,8 +1013,8 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不得替用户选择台湾、日本或任何家宽节点"
     refute_includes ruby_patcher, "def ensure_safe_group"
     refute_includes ruby_patcher, "def home_candidate"
-    refute_includes windows_patcher, "function clashPatchEnsureSafeGroup"
-    refute_includes windows_patcher, "function clashPatchHomeCandidate"
+    refute_includes windows_patcher, "function claudeEasyEnsureSafeGroup"
+    refute_includes windows_patcher, "function claudeEasyHomeCandidate"
   end
 
   def test_agents_requires_requirement_docs_to_change_with_behavior
@@ -938,7 +1025,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_public_tree_contains_no_personal_provider_or_machine_data
-    files = Dir.glob(File.join(ROOT, "{README.md,clash-patch/**/*}"), File::FNM_EXTGLOB).select { |path| File.file?(path) }
+    files = Dir.glob(File.join(ROOT, "{README.md,claude-easy/**/*}"), File::FNM_EXTGLOB).select { |path| File.file?(path) }
     source = files.map { |path| File.binread(path).force_encoding("UTF-8").scrub }.join("\n")
     refute_match(%r{/Users/[^/\s]+}, source)
     refute_match(%r{https?://[^\s]+(?:token|subscribe|subscription)[^\s]*=}i, source)
@@ -970,7 +1057,7 @@ class SkillContractTest < Minitest::Test
       "https://1.12.12.12/dns-query#DIRECT"
     ], policy.fetch("direct_resolvers")
 
-    public_source = Dir.glob(File.join(ROOT, "{README.md,clash-patch/**/*}"), File::FNM_EXTGLOB)
+    public_source = Dir.glob(File.join(ROOT, "{README.md,claude-easy/**/*}"), File::FNM_EXTGLOB)
                        .select { |path| File.file?(path) }
                        .map { |path| File.binread(path).force_encoding("UTF-8").scrub }
                        .join("\n")
@@ -1010,7 +1097,7 @@ class SkillContractTest < Minitest::Test
       File.join(ROOT, "README.md"),
       File.join(SKILL, "SKILL.md"),
       File.join(SKILL, "references/patch-policy.md"),
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
     ]
 
     files.each do |path|
@@ -1024,7 +1111,7 @@ class SkillContractTest < Minitest::Test
   def test_shared_browser_policy_scopes_dns_but_not_webrtc_by_domain
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [skill, policy, design].each do |source|
       %w[AI\ 分组 STUN 标签页 TCP DNS].each { |term| assert_includes source, term }
@@ -1038,7 +1125,7 @@ class SkillContractTest < Minitest::Test
       File.join(ROOT, "README.md"),
       File.join(SKILL, "SKILL.md"),
       File.join(SKILL, "references/patch-policy.md"),
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
     ]
 
     files.each do |path|
@@ -1085,18 +1172,50 @@ class SkillContractTest < Minitest::Test
     assert_includes helper, "LOCK_TIMEOUT_SECONDS = 5"
     assert_includes helper, "handle.close_on_exec = false"
     [installer, uninstaller].each do |source|
-      assert_includes source, 'OPERATION_LOCK_PATH="$BACKUP_DIR/.clash-patch-wrapper.lock"'
-      assert_includes source, "CLASH_PATCH_INTERNAL_OPERATION_LOCK_HELD"
+      assert_includes source, 'OPERATION_LOCK_PATH="$BACKUP_DIR/.claude-easy-wrapper.lock"'
+      assert_includes source, "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD"
       assert_includes source, '"$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"'
       assert_includes source, "operation_in_progress"
     end
-    recovery = installer.index("\nrecover_interrupted_uninstall\n")
-    profile_read = installer.index('if [ -z "$USAGE_PROFILE" ]')
-    refute_nil recovery
-    refute_nil profile_read
-    assert_operator recovery, :<, profile_read
+    assert_includes installer,
+                    "if [ \"$PENDING_UNINSTALL_RECOVERY\" -eq 0 ]; then\n" \
+                    "  resolve_usage_profile"
+    assert_includes installer,
+                    "if [ \"$PENDING_UNINSTALL_RECOVERY\" -eq 1 ]; then\n" \
+                    "  # 未完成卸载优先于新安装的客户端和 Mihomo 检查"
+    pending_recovery = installer.index(
+      "migrate_legacy_state_under_lock\n" \
+      "  recover_interrupted_uninstall\n" \
+      "  resolve_usage_profile"
+    )
+    client_preflight = installer.index('if [ ! -d "/Applications/ClashX Meta.app" ]')
+    refute_nil pending_recovery
+    refute_nil client_preflight
+    assert_operator pending_recovery, :<, client_preflight
     assert_includes installer, 'recovery_json=$(/bin/sh "$UNINSTALLER_SOURCE" --json'
     assert_includes installer, "uninstall_recovery_failed"
+    [installer, uninstaller].each do |source|
+      preflight = source.match(/^ *preflight_legacy_state_under_lock$/)&.begin(0)
+      migration = source.match(/^ *migrate_legacy_state_under_lock$/)&.begin(0)
+      refute_nil preflight
+      refute_nil migration
+      assert_operator preflight, :<, migration
+    end
+    installer_cleanup = installer.match(/^ *remove_legacy_agent \\$/)&.begin(0)
+    installer_migration = installer.match(/^ *migrate_legacy_state_under_lock$/)&.begin(0)
+    uninstaller_cleanup = uninstaller.match(/^ *remove_owned_agent \\$/)&.begin(0)
+    uninstaller_migration = uninstaller.match(/^ *migrate_legacy_state_under_lock$/)&.begin(0)
+    assert_operator installer_cleanup, :<, installer_migration
+    assert_operator uninstaller_cleanup, :<, uninstaller_migration
+    wrappers = File.read(File.join(ROOT, "tests/test_macos_wrappers.rb"))
+    assert_includes wrappers,
+                    "test_installer_keeps_legacy_state_when_a_profile_has_not_been_selected"
+    assert_includes wrappers,
+                    "test_installer_keeps_legacy_state_when_read_only_environment_checks_fail"
+    assert_includes wrappers,
+                    "test_mutating_wrappers_preflight_legacy_internal_conflicts_before_directory_move"
+    assert_includes wrappers,
+                    "test_installer_recovers_pending_legacy_uninstall_before_mihomo_preflight"
   end
 
   def test_macos_profile_operation_signal_handoff_preserves_committed_state
@@ -1149,7 +1268,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1241,7 +1360,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1272,7 +1391,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     ]
     documents.each do |document|
       assert_includes document, "macOS 安全卸载"
@@ -1336,7 +1455,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1394,7 +1513,7 @@ class SkillContractTest < Minitest::Test
     refute_nil journal_end
     journal_body = transaction[journal_start...journal_end]
     journal_identity = journal_body.index(
-      "[ClashPatch.VerifiedDeleteNative]::GetIdentity($handle)"
+      "[ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle)"
     )
     journal_condition = journal_body.index(
       "Test-InterruptedRecoveryCommitCondition $PreCommitCondition"
@@ -1421,7 +1540,7 @@ class SkillContractTest < Minitest::Test
     refute_nil preparation_end
     preparation_body = transaction[preparation_start...preparation_end]
     preparation_identity = preparation_body.index(
-      "[ClashPatch.VerifiedDeleteNative]::GetIdentity($handle)"
+      "[ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle)"
     )
     preparation_condition = preparation_body.index(
       "Test-InterruptedRecoveryCommitCondition $preCommitCondition"
@@ -1458,7 +1577,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1490,7 +1609,7 @@ class SkillContractTest < Minitest::Test
     refute_nil transaction_end
     transaction_body = transaction[transaction_start...transaction_end]
     identity_check = transaction_body.index(
-      "[ClashPatch.VerifiedDeleteNative]::GetIdentity($handle)"
+      "[ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle)"
     )
     precommit_check = transaction_body.index(
       "$preCommitResults = @(& $PreCommitCondition)"
@@ -1523,7 +1642,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1569,7 +1688,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1612,7 +1731,7 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(SKILL, "SKILL.md")),
       File.read(File.join(SKILL, "references/patch-policy.md")),
       File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md")
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
@@ -1664,8 +1783,8 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_install, "S-1-5-18"
     assert_includes windows_install, "S-1-5-32-544"
     assert_includes windows_uninstall, "InstalledSha256"
-    assert_includes windows_install, "clash-patch-auto-update-state.json"
-    assert_includes windows_uninstall, "clash-patch-auto-update-state.json"
+    assert_includes windows_install, "claude-easy-auto-update-state.json"
+    assert_includes windows_uninstall, "claude-easy-auto-update-state.json"
     assert_includes windows_uninstall, "Invoke-VerifiedWriteDeleteTransaction"
     assert_includes windows_tests, "auto-update restore did not reconstruct the original absent/null/tilde/empty-map shapes"
     assert_includes windows_tests, "running offline uninstall changed a protected target"
@@ -1676,7 +1795,7 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-clash-patch-skill-design.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     baseline = File.read(File.join(ROOT, "tests/baseline.md"))
 
     [readme, policy, design].each do |source|
@@ -1764,13 +1883,13 @@ class SkillContractTest < Minitest::Test
     assert_includes workflow, "github.com/MetaCubeX/mihomo/releases/download/"
     assert_includes workflow, "shasum -a 256 --check"
     assert_includes workflow, "--connect-timeout 15 --max-time 300"
-    assert_equal 2, workflow.scan(/CLASH_PATCH_REQUIRE_REAL_MIHOMO: "1"/).length
-    assert_includes workflow, 'CLASH_PATCH_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby'
-    assert_includes workflow, 'CLASH_PATCH_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby'
+    assert_equal 2, workflow.scan(/CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"/).length
+    assert_includes workflow, 'CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby'
+    assert_includes workflow, 'CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby'
     assert_equal 2, workflow.scan(/ruby tests\/run_macos_mihomo_validation\.rb/).length
     macos_tests = File.read(File.join(ROOT, "tests/test_macos_patcher.rb"))
-    assert_includes macos_tests, 'ENV["CLASH_PATCH_REQUIRE_REAL_MIHOMO"] == "1"'
-    assert_includes macos_tests, 'ENV["CLASH_PATCH_TEST_MIHOMO"]'
+    assert_includes macos_tests, 'ENV["CLAUDE_EASY_REQUIRE_REAL_MIHOMO"] == "1"'
+    assert_includes macos_tests, 'ENV["CLAUDE_EASY_TEST_MIHOMO"]'
     assert_includes workflow, "--test-coverage-lines=100"
     assert_includes workflow, "--test-coverage-functions=100"
     assert_includes workflow, "--test-coverage-branches=80"
@@ -1841,7 +1960,7 @@ class SkillContractTest < Minitest::Test
     job = workflow[/^  windows-mihomo:\n(?:(?!^  \S).*\n)*/]
 
     refute_nil job
-    assert_includes job, '$receipt = Join-Path $env:RUNNER_TEMP "clash-patch-windows-mihomo.json"'
+    assert_includes job, '$receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-mihomo.json"'
     assert_includes job, 'Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue'
     assert_includes job, '$nonce = [Guid]::NewGuid().ToString("N")'
     assert_includes job, '-CompletionReceiptPath $receipt'
@@ -1906,8 +2025,8 @@ class SkillContractTest < Minitest::Test
                     "ruby tests/test_macos_patcher.rb --name test_generated_profile_passes_installed_mihomo_validation"
     assert_includes runner, 'counts == [1, counts&.fetch(1, 0), 0, 0, 0]'
     assert_includes runner, "counts&.fetch(1, 0).positive?"
-    assert_includes runner, '"CLASH_PATCH_MIHOMO_RECEIPT_PATH"'
-    assert_includes runner, '"CLASH_PATCH_MIHOMO_RECEIPT_NONCE"'
+    assert_includes runner, '"CLAUDE_EASY_MIHOMO_RECEIPT_PATH"'
+    assert_includes runner, '"CLAUDE_EASY_MIHOMO_RECEIPT_NONCE"'
     assert_includes runner, '"profiles_completed" => [1, 2, 3]'
     assert_includes runner, '"validations" => expected_validations'
     assert_includes runner, '"core_sha256" => expected_core_sha256'
@@ -2051,14 +2170,14 @@ class SkillContractTest < Minitest::Test
       trailing-space
     ].sort
     expected_public_kill_markers = %w[
-      CLASH_PATCH_TEST_BACKUP_CRASH_READY
-      CLASH_PATCH_TEST_JOURNAL_HANDOFF_CRASH_READY
-      CLASH_PATCH_TEST_PREJOURNAL_CRASH_READY
-      CLASH_PATCH_TEST_PUBLIC_CRASH_READY
-      CLASH_PATCH_TEST_RECOVERY_CRASH_READY
-      CLASH_PATCH_TEST_RESTORE_CRASH_READY
-      CLASH_PATCH_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY
-      CLASH_PATCH_TEST_UNINSTALL_CRASH_READY
+      CLAUDE_EASY_TEST_BACKUP_CRASH_READY
+      CLAUDE_EASY_TEST_JOURNAL_HANDOFF_CRASH_READY
+      CLAUDE_EASY_TEST_PREJOURNAL_CRASH_READY
+      CLAUDE_EASY_TEST_PUBLIC_CRASH_READY
+      CLAUDE_EASY_TEST_RECOVERY_CRASH_READY
+      CLAUDE_EASY_TEST_RESTORE_CRASH_READY
+      CLAUDE_EASY_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY
+      CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY
     ].sort
 
     assert_equal expected_macos,
@@ -2074,15 +2193,15 @@ class SkillContractTest < Minitest::Test
     assert_equal expected_transaction_journal_cases,
                  journal_matrix.scan(/Name = "([^"]+)"/).flatten.sort
     assert_equal expected_public_kill_markers,
-                 windows_source.scan(/\$env:(CLASH_PATCH_TEST_[A-Z_]+CRASH_READY)/).flatten.uniq.sort
+                 windows_source.scan(/\$env:(CLAUDE_EASY_TEST_[A-Z_]+CRASH_READY)/).flatten.uniq.sort
     armed_public_kill_markers = windows_source.scan(
-      /\$env:(CLASH_PATCH_TEST_[A-Z_]+CRASH_READY)\s*=\s*\$([A-Za-z][A-Za-z0-9]*)/
+      /\$env:(CLAUDE_EASY_TEST_[A-Z_]+CRASH_READY)\s*=\s*\$([A-Za-z][A-Za-z0-9]*)/
     ).reject { |_, value| value == "null" }.map(&:first).uniq.sort
     assert_equal expected_public_kill_markers, armed_public_kill_markers
     assert_includes windows_source, '"real Mihomo core #{0} profile {1}: {2}"'
     assert_equal 1, workflow.scan("ruby tests/run_macos_production_probes.rb").length
-    assert_includes runner_source, 'ENV.fetch("CLASH_PATCH_CURRENT_RUBY", RbConfig.ruby)'
-    assert_includes runner_source, 'ENV.fetch("CLASH_PATCH_SYSTEM_RUBY", "/usr/bin/ruby")'
+    assert_includes runner_source, 'ENV.fetch("CLAUDE_EASY_CURRENT_RUBY", RbConfig.ruby)'
+    assert_includes runner_source, 'ENV.fetch("CLAUDE_EASY_SYSTEM_RUBY", "/usr/bin/ruby")'
   end
 
   def test_windows_interrupted_new_file_recovery_requires_managed_bytes
@@ -2141,7 +2260,7 @@ class SkillContractTest < Minitest::Test
     backup = source[/function Backup-Versioned\b.*?(?=^function |\z)/m]
 
     refute_nil backup
-    assert_includes backup, '".clash-patch-backup-"'
+    assert_includes backup, '".claude-easy-backup-"'
     assert_includes backup, '$backupStream.Flush($true)'
     assert_includes backup, 'Protect-BackupAcl $temporary'
     assert_includes backup, '[System.IO.File]::Move($temporary, $destination)'
@@ -2171,19 +2290,19 @@ class SkillContractTest < Minitest::Test
     runner = File.join(ROOT, "tests/run_macos_production_probes.rb")
     assert File.file?(runner), "macOS production probes need one behaviorally testable CI runner"
 
-    Dir.mktmpdir("clash-patch-probe-runner-") do |directory|
+    Dir.mktmpdir("claude-easy-probe-runner-") do |directory|
       current_ruby = File.join(directory, "current-ruby")
       system_ruby = File.join(directory, "system-ruby")
       counter = File.join(directory, "counter")
       log = File.join(directory, "calls")
       fake_ruby_source = <<~RUBY
         #!#{RbConfig.ruby}
-        statuses = ENV.fetch("CLASH_PATCH_FAKE_PROBE_STATUSES").split(",").map(&:to_i)
-        counter_path = ENV.fetch("CLASH_PATCH_FAKE_PROBE_COUNTER")
+        statuses = ENV.fetch("CLAUDE_EASY_FAKE_PROBE_STATUSES").split(",").map(&:to_i)
+        counter_path = ENV.fetch("CLAUDE_EASY_FAKE_PROBE_COUNTER")
         call_index = File.file?(counter_path) ? File.read(counter_path).to_i : 0
         File.write(counter_path, (call_index + 1).to_s)
-        File.open(ENV.fetch("CLASH_PATCH_FAKE_PROBE_LOG"), "a") do |file|
-          file.puts(([File.basename($PROGRAM_NAME), ENV["CLASH_PATCH_RUN_PRODUCTION_PROBES"]] + ARGV).join("|"))
+        File.open(ENV.fetch("CLAUDE_EASY_FAKE_PROBE_LOG"), "a") do |file|
+          file.puts(([File.basename($PROGRAM_NAME), ENV["CLAUDE_EASY_RUN_PRODUCTION_PROBES"]] + ARGV).join("|"))
         end
         exit statuses.fetch(call_index, 99)
       RUBY
@@ -2204,11 +2323,11 @@ class SkillContractTest < Minitest::Test
         FileUtils.rm_f([counter, log])
         _output, _error, status = Open3.capture3(
           {
-            "CLASH_PATCH_CURRENT_RUBY" => current_ruby,
-            "CLASH_PATCH_SYSTEM_RUBY" => system_ruby,
-            "CLASH_PATCH_FAKE_PROBE_STATUSES" => statuses.join(","),
-            "CLASH_PATCH_FAKE_PROBE_COUNTER" => counter,
-            "CLASH_PATCH_FAKE_PROBE_LOG" => log
+            "CLAUDE_EASY_CURRENT_RUBY" => current_ruby,
+            "CLAUDE_EASY_SYSTEM_RUBY" => system_ruby,
+            "CLAUDE_EASY_FAKE_PROBE_STATUSES" => statuses.join(","),
+            "CLAUDE_EASY_FAKE_PROBE_COUNTER" => counter,
+            "CLAUDE_EASY_FAKE_PROBE_LOG" => log
           },
           RbConfig.ruby, runner, chdir: ROOT
         )
@@ -2221,11 +2340,11 @@ class SkillContractTest < Minitest::Test
       FileUtils.rm_f([counter, log])
       _output, _error, status = Open3.capture3(
         {
-          "CLASH_PATCH_CURRENT_RUBY" => current_ruby,
-          "CLASH_PATCH_SYSTEM_RUBY" => system_ruby,
-          "CLASH_PATCH_FAKE_PROBE_STATUSES" => "0,0,0,0",
-          "CLASH_PATCH_FAKE_PROBE_COUNTER" => counter,
-          "CLASH_PATCH_FAKE_PROBE_LOG" => log
+          "CLAUDE_EASY_CURRENT_RUBY" => current_ruby,
+          "CLAUDE_EASY_SYSTEM_RUBY" => system_ruby,
+          "CLAUDE_EASY_FAKE_PROBE_STATUSES" => "0,0,0,0",
+          "CLAUDE_EASY_FAKE_PROBE_COUNTER" => counter,
+          "CLAUDE_EASY_FAKE_PROBE_LOG" => log
         },
         RbConfig.ruby, runner, chdir: ROOT
       )
@@ -2256,7 +2375,7 @@ class SkillContractTest < Minitest::Test
 
   def test_all_public_commands_expose_the_versioned_result_contract
     contract = JSON.parse(File.read(File.join(SKILL, "references/result-contract.json")))
-    assert_equal "clash-patch.result", contract.fetch("schema")
+    assert_equal "claude-easy.result", contract.fetch("schema")
     assert_equal 1, contract.fetch("version")
     assert_equal %w[
       schema version command platform client operation ok status code exit_code summary_zh
@@ -2283,12 +2402,12 @@ class SkillContractTest < Minitest::Test
 
     ruby_contract = File.read(File.join(SKILL, "scripts/macos/result_contract.rb"))
     powershell_contract = File.read(File.join(SKILL, "scripts/windows/result_contract.ps1"))
-    assert_includes ruby_contract, 'SCHEMA = "clash-patch.result"'
+    assert_includes ruby_contract, 'SCHEMA = "claude-easy.result"'
     assert_includes ruby_contract, "VERSION = 1"
     assert_includes ruby_contract, "COMMANDS = %w[install uninstall patch verify_routes]"
-    assert_includes powershell_contract, '$script:ClashPatchResultSchema = "clash-patch.result"'
-    assert_includes powershell_contract, '$script:ClashPatchResultVersion = 1'
-    assert_includes powershell_contract, '$script:ClashPatchResultCommands = @("install", "uninstall", "patch", "verify_routes")'
+    assert_includes powershell_contract, '$script:ClaudeEasyResultSchema = "claude-easy.result"'
+    assert_includes powershell_contract, '$script:ClaudeEasyResultVersion = 1'
+    assert_includes powershell_contract, '$script:ClaudeEasyResultCommands = @("install", "uninstall", "patch", "verify_routes")'
   end
 
   def test_production_coverage_cannot_be_inflated_with_ignore_markers
@@ -2315,7 +2434,7 @@ class SkillContractTest < Minitest::Test
     assert_operator mac.index("plutil -extract Label"), :<, mac.index("launchctl bootout")
     assert_operator mac.index("ProgramArguments.0"), :<, mac.index("launchctl bootout")
     assert_operator mac.index("ProgramArguments.1"), :<, mac.index("launchctl bootout")
-    assert_includes windows, "CLASH PATCH BEGIN"
+    assert_includes windows, "CLASH PATCH POLICY BEGIN"
     refute_match(/Remove-Item[^\n]+backups/i, windows)
     refute_match(%r{/bin/rm[^\n]+backups}i, mac)
   end

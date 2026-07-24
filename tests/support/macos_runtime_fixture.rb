@@ -6,33 +6,33 @@ require "yaml"
 
 module MacosRuntimeFixture
   def write_release_preferences_fixture(directory, selected: "friend")
-    path = File.join(directory, "clash_patch_preferences_fixture.rb")
+    path = File.join(directory, "claude_easy_preferences_fixture.rb")
     File.write(path, <<~RUBY)
       require "json"
       require "open3"
 
-      ClashPatchFixtureStatus = Struct.new(:success?)
+      ClaudeEasyFixtureStatus = Struct.new(:success?)
       module Open3
         class << self
-          alias clash_patch_fixture_capture3 capture3
+          alias claude_easy_fixture_capture3 capture3
 
           def capture3(*arguments, **options)
             if arguments[0] == "/usr/bin/defaults" &&
                arguments[1] == "export" &&
                arguments[2] == "com.metacubex.ClashX.meta"
               plist = "<plist><dict><key>selectConfigName</key><string>#{selected}</string></dict></plist>"
-              return [plist, "", ClashPatchFixtureStatus.new(true)]
+              return [plist, "", ClaudeEasyFixtureStatus.new(true)]
             end
             if arguments[0] == "/usr/bin/plutil" &&
                arguments[1] == "-convert" &&
                options[:stdin_data].to_s.include?("selectConfigName")
               return [
                 JSON.generate("selectConfigName" => "#{selected}"), "",
-                ClashPatchFixtureStatus.new(true)
+                ClaudeEasyFixtureStatus.new(true)
               ]
             end
 
-            clash_patch_fixture_capture3(*arguments, **options)
+            claude_easy_fixture_capture3(*arguments, **options)
           end
         end
       end
@@ -42,7 +42,7 @@ module MacosRuntimeFixture
 
   def start_release_controller(home)
     socket_path = File.join(
-      "/tmp", "clash-patch-#{Process.pid}-#{rand(1_000_000)}.sock"
+      "/tmp", "claude-easy-#{Process.pid}-#{rand(1_000_000)}.sock"
     )
     server = UNIXServer.new(socket_path)
     cache = File.join(
