@@ -15,6 +15,7 @@ module ClaudeEasy
   CN_PROVIDER_SUFFIX = /(?:-[2-9]|-[1-9][0-9]+)?/.freeze
 
   class InvalidConfigError < StandardError; end
+  class ConcurrentProfileChangeError < StandardError; end
 
   TUN_POLICY = {
     "enable" => true,

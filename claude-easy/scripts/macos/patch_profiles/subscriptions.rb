@@ -8,81 +8,148 @@ module ClaudeEasy
     File.join(File.expand_path(backup_root), AUTO_UPDATE_OWNERSHIP_BASENAME)
   end
 
-  def auto_update_ownership_state(backup_root)
+  def auto_update_ownership_record(backup_root)
     path = auto_update_ownership_path(backup_root)
     return nil unless File.exist?(path) || File.symlink?(path)
     raise InvalidConfigError, "订阅自动更新所有权状态无效" if File.symlink?(path) || !File.file?(path)
 
     snapshot = regular_file_snapshot_once(path, "订阅自动更新所有权状态")
-    state = JSON.parse(snapshot.fetch(:bytes).dup.force_encoding(Encoding::UTF_8))
-    legacy = state.is_a?(Hash) && state.keys.sort == %w[Domain InstalledState Key OriginalState Version] &&
-             state["Version"] == 1 && state["OriginalState"] == "enabled" &&
-             state["InstalledState"] == "disabled"
-    current = state.is_a?(Hash) && state.keys.sort == %w[Domain Key OriginalValue Phase Version] &&
-              state["Version"] == 2 && state["OriginalValue"].is_a?(String) &&
-              %w[prepared installed].include?(state["Phase"])
-    valid = (legacy || current) &&
-            AUTO_UPDATE_DOMAINS.include?(state["Domain"]) &&
-            state["Key"] == "kAutoUpdateEnable"
-    raise InvalidConfigError, "订阅自动更新所有权状态无效" unless valid
+    bytes = snapshot.fetch(:bytes)
+    text = bytes.dup.force_encoding(Encoding::UTF_8)
+    raise InvalidConfigError, "订阅自动更新所有权状态无效" unless text.valid_encoding?
 
-    state = state.merge("OriginalValue" => "true", "Phase" => "installed") if legacy
+    valid_bytes = if bytes.end_with?("\n")
+                    bytes
+                  else
+                    newline = bytes.rindex("\n")
+                    prefix = newline ? bytes.byteslice(0, newline + 1) : "".b
+                    if prefix.empty?
+                      parsed = JSON.parse(text)
+                      prefix = bytes if [1, 2].include?(parsed["Version"])
+                    end
+                    prefix
+                  end
+    raise InvalidConfigError, "订阅自动更新所有权状态无效" if valid_bytes.empty?
+
+    state = nil
+    valid_bytes.each_line do |line|
+      record = JSON.parse(line)
+      legacy = record.is_a?(Hash) &&
+               record.keys.sort == %w[Domain InstalledState Key OriginalState Version] &&
+               record["Version"] == 1 && record["OriginalState"] == "enabled" &&
+               record["InstalledState"] == "disabled"
+      current = record.is_a?(Hash) &&
+                record.keys.sort == %w[Domain Key OriginalValue Phase Version] &&
+                [2, 3].include?(record["Version"]) && record["OriginalValue"].is_a?(String) &&
+                subscription_auto_update_state(record["OriginalValue"]) == :enabled &&
+                (record["Version"] == 2 ? %w[prepared installed] : %w[prepared installed released]).include?(record["Phase"])
+      valid = (legacy || current) &&
+              AUTO_UPDATE_DOMAINS.include?(record["Domain"]) &&
+              record["Key"] == "kAutoUpdateEnable"
+      raise InvalidConfigError, "订阅自动更新所有权状态无效" unless valid
+
+      state = if legacy
+                {
+                  "Version" => 1, "Domain" => record.fetch("Domain"),
+                  "Key" => record.fetch("Key"), "OriginalValue" => "true",
+                  "Phase" => "installed"
+                }
+              else
+                record
+              end
+    end
+    raise InvalidConfigError, "订阅自动更新所有权状态无效" unless state
+
     state.merge(
-      "Path" => path, "Bytes" => snapshot.fetch(:bytes),
+      "Path" => path, "Bytes" => bytes, "ValidBytes" => valid_bytes,
       "Identity" => snapshot.fetch(:identity)
     )
   rescue JSON::ParserError, EncodingError
     raise InvalidConfigError, "订阅自动更新所有权状态无效"
   end
 
+  def auto_update_ownership_state(backup_root)
+    state = auto_update_ownership_record(backup_root)
+    state unless state && state.fetch("Phase") == "released"
+  end
+
+  def append_auto_update_ownership_event(state, event)
+    path = state.fetch("Path")
+    write_path = File.realpath(path)
+    event_bytes = (JSON.generate(event) + "\n").b
+    File.open(write_path, "r+b") do |source|
+      lock_exclusive_with_timeout(source)
+      source.rewind
+      return false unless locked_source_current?(source, path, write_path) &&
+                          [source.stat.dev, source.stat.ino] == state.fetch("Identity") &&
+                          source.read.b == state.fetch("Bytes")
+
+      valid_bytes = state.fetch("ValidBytes")
+      source.rewind
+      source.truncate(valid_bytes.bytesize)
+      source.seek(0, IO::SEEK_END)
+      separator = valid_bytes.end_with?("\n") ? "".b : "\n".b
+      written = source.write(separator + event_bytes)
+      raise IOError, "订阅自动更新所有权状态写入不完整" unless
+        written == separator.bytesize + event_bytes.bytesize
+
+      source.flush
+      source.fsync
+      locked_source_current?(source, path, write_path)
+    end
+  end
+
   def write_auto_update_ownership_state(backup_root, domain, original_value, phase, existing: nil)
     root = secure_backup_root!(backup_root)
     state = {
-      "Version" => 2,
+      "Version" => 3,
       "Domain" => domain,
       "Key" => "kAutoUpdateEnable",
       "OriginalValue" => original_value,
       "Phase" => phase
     }
+    raise InvalidConfigError, "订阅自动更新所有权状态无效" unless
+      AUTO_UPDATE_DOMAINS.include?(domain) && %w[prepared installed].include?(phase)
+
     path = auto_update_ownership_path(root)
-    bytes = (JSON.generate(state) + "\n").b
+    if existing.nil? && (File.exist?(path) || File.symlink?(path))
+      existing = auto_update_ownership_record(root)
+      raise IOError, "订阅自动更新所有权状态已经存在" unless
+        existing && existing.fetch("Phase") == "released"
+    end
     if existing
-      changed = atomic_compare_and_swap_bytes(
-        path, existing.fetch("Bytes"), bytes,
-        expected_identity: existing.fetch("Identity"), expected_path: File.realpath(path)
-      )
+      changed = append_auto_update_ownership_event(existing, state)
       raise IOError, "订阅自动更新所有权状态同时发生变化" unless changed
     else
-      File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |file|
-        file.write(bytes)
+      bytes = (JSON.generate(state) + "\n").b
+      Tempfile.create([".claude-easy-auto-update-state-", ".tmp"], root) do |file|
+        file.binmode
+        written = file.write(bytes)
+        raise IOError, "订阅自动更新所有权状态写入不完整" unless written == bytes.bytesize
+
         file.flush
         file.fsync
+        file.chmod(0o600)
+        file.close
+        ClaudeEasyDarwinFilesystem.rename_exclusive(file.path, path)
+        fsync_parent_directory(path)
       end
     end
-    FileUtils.chmod(0o600, path)
     auto_update_ownership_state(root)
   end
 
   def delete_auto_update_ownership_state(state)
-    path = state.fetch("Path")
-    write_path = File.realpath(path)
-    Tempfile.create([".claude-easy-state-delete-", ".tmp"], File.dirname(write_path)) do |temporary|
-      temporary.binmode
-      temporary.flush
-      temporary.fsync
-      atomic_swap_paths(temporary.path, write_path)
-      deleted = File.binread(temporary.path) == state.fetch("Bytes") &&
-                begin
-                  stat = File.stat(temporary.path)
-                  [stat.dev, stat.ino] == state.fetch("Identity")
-                end
-      unless deleted
-        atomic_swap_paths(temporary.path, write_path)
-        raise IOError, "订阅自动更新所有权状态同时发生变化"
-      end
-      File.unlink(write_path)
-      true
-    end
+    event = {
+      "Version" => 3,
+      "Domain" => state.fetch("Domain"),
+      "Key" => "kAutoUpdateEnable",
+      "OriginalValue" => state.fetch("OriginalValue"),
+      "Phase" => "released"
+    }
+    changed = append_auto_update_ownership_event(state, event)
+    raise IOError, "订阅自动更新所有权状态同时发生变化" unless changed
+
+    true
   end
 
   def defaults_export_domain(runner: Open3.method(:capture3))
@@ -123,85 +190,93 @@ module ClaudeEasy
     plist_raw_value(exported.fetch(:plist), key, runner: runner)
   end
 
-  def disable_subscription_auto_update(backup_root:, runner: Open3.method(:capture3))
+  def disable_subscription_auto_update(backup_root:, runner: Open3.method(:capture3), operation_lock: nil)
+    owns_operation_lock = operation_lock.nil?
+    operation_lock ||= profile_operation_lock(backup_root)
     ownership = auto_update_ownership_state(backup_root)
+    created_backup = nil
     if ownership
       owned_export = defaults_export_named_domain(ownership.fetch("Domain"), runner: runner)
-      owned_value = owned_export &&
-                    plist_raw_value(owned_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-      if ownership.fetch("Phase") == "installed" &&
-         subscription_auto_update_state(owned_value) == :disabled
-        return { status: :already_disabled, domain: ownership.fetch("Domain") }
+      raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless owned_export
+
+      domain = ownership.fetch("Domain")
+      original = ownership.fetch("OriginalValue")
+      current = plist_raw_value(owned_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+      current_state = subscription_auto_update_state(current)
+      raise InvalidConfigError, "无法确认 ClashX Meta 订阅自动更新状态" if current_state == :unknown
+
+      if ownership.fetch("Phase") == "installed" && current_state == :disabled
+        return {
+          status: :already_disabled_owned, domain: ownership.fetch("Domain"),
+          ownership: ownership.fetch("Path")
+        }
       end
-      restore_owned_subscription_auto_update(backup_root: backup_root, runner: runner)
+
+      if current_state == :disabled
+        ownership = write_auto_update_ownership_state(
+          backup_root, domain, original, "installed", existing: ownership
+        )
+        return {
+          status: :disabled, domain: domain, ownership: ownership.fetch("Path")
+        }
+      end
+
+      if ownership.fetch("Phase") != "prepared"
+        ownership = write_auto_update_ownership_state(
+          backup_root, domain, original, "prepared", existing: ownership
+        )
+      end
+    else
+      exported = defaults_export_domain(runner: runner)
+      raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
+
+      domain = exported.fetch(:domain)
+      original = plist_raw_value(exported.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+      state = subscription_auto_update_state(original)
+      return { status: :already_disabled, domain: domain } if state == :disabled
+      raise InvalidConfigError, "无法确认 ClashX Meta 订阅自动更新状态" unless state == :enabled
+
+      backup = {
+        "Version" => 1,
+        "Domain" => domain,
+        "Key" => "kAutoUpdateEnable",
+        "Value" => original,
+        "RecordedAt" => Time.now.iso8601
+      }
+      backup_path = File.join(backup_root, "clashx-meta-kAutoUpdateEnable.json")
+      created_backup = create_versioned_backup(
+        backup_path, backup_root, content: JSON.generate(backup) + "\n", reason: "preference"
+      )
+      ownership = write_auto_update_ownership_state(backup_root, domain, original, "prepared")
+      current = original
     end
-    exported = defaults_export_domain(runner: runner)
-    raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
 
-    domain = exported.fetch(:domain)
-    original = plist_raw_value(exported.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-    state = subscription_auto_update_state(original)
-    return { status: :already_disabled, domain: domain } if state == :disabled
-    raise InvalidConfigError, "无法确认 ClashX Meta 订阅自动更新状态" unless state == :enabled
-
-    backup = {
-      "Version" => 1,
-      "Domain" => domain,
-      "Key" => "kAutoUpdateEnable",
-      "Value" => original,
-      "RecordedAt" => Time.now.iso8601
-    }
-    backup_path = File.join(backup_root, "clashx-meta-kAutoUpdateEnable.json")
-    created_backup = create_versioned_backup(
-      backup_path, backup_root, content: JSON.generate(backup) + "\n", reason: "preference"
-    )
-
-    ownership = write_auto_update_ownership_state(backup_root, domain, original, "prepared")
     before_write = defaults_export_named_domain(domain, runner: runner)
-    before_value = before_write && plist_raw_value(before_write.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-    unless before_value == original
-      delete_auto_update_ownership_state(ownership)
+    before_value = before_write &&
+                   plist_raw_value(before_write.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+    unless before_value == current && subscription_auto_update_state(before_value) == :enabled
       raise InvalidConfigError, "订阅自动更新设置在修改前发生变化"
     end
 
     _output, error, write_status = runner.call(
       "/usr/bin/defaults", "write", domain, "kAutoUpdateEnable", "-bool", "false"
     )
-    unless write_status.success?
-      begin
-        enable_subscription_auto_update(domain: domain, runner: runner)
-      rescue InvalidConfigError, SystemCallError, IOError => restore_error
-        raise IOError, "无法关闭订阅自动更新，且恢复原值失败：#{restore_error.message}"
-      end
-      raise IOError, "无法关闭 ClashX Meta 订阅自动更新：#{error.to_s.strip}"
-    end
+    raise IOError, "无法关闭 ClashX Meta 订阅自动更新：#{error.to_s.strip}" unless
+      write_status.success?
 
     verified_export = defaults_export_named_domain(domain, runner: runner)
     verified_value = verified_export &&
                      plist_raw_value(verified_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-    unless subscription_auto_update_state(verified_value) == :disabled
-      begin
-        enable_subscription_auto_update(domain: domain, runner: runner)
-      rescue InvalidConfigError, SystemCallError, IOError => restore_error
-        raise IOError, "订阅自动更新设置回读失败，且恢复原值失败：#{restore_error.message}"
-      end
-      raise IOError, "ClashX Meta 订阅自动更新设置回读失败，已经恢复原值"
-    end
+    raise IOError, "ClashX Meta 订阅自动更新设置回读失败" unless
+      subscription_auto_update_state(verified_value) == :disabled
 
-    begin
-      ownership = write_auto_update_ownership_state(
-        backup_root, domain, original, "installed", existing: auto_update_ownership_state(backup_root)
-      )
-    rescue StandardError => state_error
-      begin
-        enable_subscription_auto_update(domain: domain, runner: runner)
-      rescue InvalidConfigError, SystemCallError, IOError => restore_error
-        raise IOError, "无法记录订阅自动更新所有权，且恢复原值失败：#{restore_error.message}"
-      end
-      raise IOError, "无法记录订阅自动更新所有权，已经恢复原值：#{state_error.message}"
-    end
+    ownership = write_auto_update_ownership_state(
+      backup_root, domain, original, "installed", existing: auto_update_ownership_state(backup_root)
+    )
 
     { status: :disabled, domain: domain, backup: created_backup, ownership: ownership.fetch("Path") }
+  ensure
+    operation_lock&.close if owns_operation_lock
   end
 
   def enable_subscription_auto_update(domain: nil, runner: Open3.method(:capture3))
@@ -227,7 +302,9 @@ module ClaudeEasy
     { status: :enabled, domain: domain }
   end
 
-  def restore_owned_subscription_auto_update(backup_root:, runner: Open3.method(:capture3))
+  def restore_owned_subscription_auto_update(backup_root:, runner: Open3.method(:capture3), operation_lock: nil)
+    owns_operation_lock = operation_lock.nil?
+    operation_lock ||= profile_operation_lock(backup_root)
     ownership = auto_update_ownership_state(backup_root)
     return { status: :not_owned } unless ownership
 
@@ -255,6 +332,8 @@ module ClaudeEasy
 
     delete_auto_update_ownership_state(ownership)
     { status: result, domain: ownership.fetch("Domain") }
+  ensure
+    operation_lock&.close if owns_operation_lock
   end
 
   def selected_profile_name(runner: Open3.method(:capture3))
@@ -431,17 +510,9 @@ module ClaudeEasy
     current = File.binread(write_path)
     return false if expected_bytes && current != expected_bytes
 
-    atomic_compare_and_swap_bytes(
+    transactional_compare_and_write_bytes(
       path, current, bytes, expected_identity: expected_identity, expected_path: expected_path
     )
-  end
-
-  def write_locked_profile(handle, bytes)
-    handle.rewind
-    handle.write(bytes)
-    handle.truncate(bytes.bytesize)
-    handle.flush
-    handle.fsync
   end
 
   def locked_profile_current?(handle, path)
@@ -470,17 +541,6 @@ module ClaudeEasy
     false
   end
 
-  def safe_update_item_candidate_or_unknown?(item)
-    return false unless item[:candidate_identity]
-    return true unless File.realpath(item.fetch(:path)) == item.fetch(:write_path)
-
-    stat = File.stat(item.fetch(:write_path))
-    [stat.dev, stat.ino] == item.fetch(:candidate_identity) &&
-      File.binread(item.fetch(:write_path)) == item.fetch(:candidate)
-  rescue StandardError
-    true
-  end
-
   def rollback_safe_update_items(items)
     failures = []
     items.each do |item|
@@ -502,22 +562,10 @@ module ClaudeEasy
 
   def finish_safe_update_rollback(items, transaction, backup_root, roots, keep_transaction: false)
     failures = rollback_safe_update_items(items)
-    return failures unless failures.empty?
-
-    candidate_remains = items.any? { |item| safe_update_item_candidate_or_unknown?(item) }
-    if items.none? { |item| item[:committed_identity] } && !candidate_remains
-      remove_profile_transaction(transaction) unless keep_transaction
-      return []
-    end
-    all_restored = items.all? { |item| safe_update_item_restored?(item) }
-    if all_restored
-      remove_profile_transaction(transaction) unless keep_transaction
-    else
-      recover_profile_transaction(backup_root, roots: roots, keep_transaction: keep_transaction)
-    end
+    recover_profile_transaction(backup_root, roots: roots, keep_transaction: keep_transaction)
     []
   rescue StandardError
-    [""]
+    failures.nil? || failures.empty? ? [""] : failures
   end
 
   def default_safe_update_activation(items, usage_profile, selected_name = selected_profile_name,
@@ -545,6 +593,8 @@ module ClaudeEasy
 
     requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     selections = runtime_selections(requester)
+    return false unless selections
+    selections = runtime_selections_for_profile(selections, active.fetch(:path))
     return false unless selections
 
     expected_tun = usage_profile >= 2 ? :enabled : :ignore
@@ -638,21 +688,32 @@ module ClaudeEasy
     if identities.uniq.length != identities.length
       return { status: :aborted, failed_profile: "", reason: :duplicate_target }
     end
-    transaction = prepare_profile_transaction(items, backup_root)
+    begin
+      transaction = prepare_profile_transaction(items, backup_root, roots: roots)
+    rescue ConcurrentProfileChangeError
+      return { status: :aborted, failed_profile: "", reason: :concurrent_change }
+    end
 
     handles = []
-    temporary_files = []
     concurrent_change = false
     begin
       items.sort_by { |item| File.expand_path(item.fetch(:path)) }.each do |item|
         write_path = File.realpath(item.fetch(:path))
-        handle = File.open(write_path, "rb")
+        target = transaction.fetch(:targets).fetch(File.expand_path(item.fetch(:path)))
+        unless write_path == target.fetch(:write_path)
+          concurrent_change = true
+          raise IOError, "subscription path changed during safe update"
+        end
+        handle = File.open(write_path, "r+b")
         lock_exclusive_with_timeout(handle)
         item[:write_path] = write_path
+        item[:transaction_identity] = target.fetch(:identity)
         handles << [item, handle]
       end
       unless handles.all? do |item, handle|
+               opened = handle.stat
                locked_profile_current?(handle, item.fetch(:path)) &&
+                 [opened.dev, opened.ino] == item.fetch(:transaction_identity) &&
                  handle.rewind && handle.read == item.fetch(:original)
              end
         remove_profile_transaction(transaction)
@@ -663,44 +724,30 @@ module ClaudeEasy
         create_versioned_backup(item.fetch(:path), backup_root, content: item.fetch(:original), reason: "pre-update")
       end
       handles.each do |item, handle|
-        unless locked_profile_current?(handle, item.fetch(:path))
-          concurrent_change = true
-          raise IOError, "subscription path changed during safe update"
-        end
-        temporary = Tempfile.new([".claude-easy-update-swap-", ".tmp"], File.dirname(item.fetch(:write_path)))
-        temporary.binmode
-        write_locked_profile(temporary, item.fetch(:candidate))
-        candidate = temporary.stat
-        item[:candidate_identity] = [candidate.dev, candidate.ino]
-        temporary_files << temporary
-        item[:temporary] = temporary
-      end
-      handles.each do |item, handle|
+        opened = handle.stat
         unless locked_profile_current?(handle, item.fetch(:path)) &&
+               [opened.dev, opened.ino] == item.fetch(:transaction_identity) &&
                handle.rewind && handle.read == item.fetch(:original)
           concurrent_change = true
           raise IOError, "subscription path changed during safe update"
         end
         original_identity = [handle.stat.dev, handle.stat.ino]
-        atomic_swap_paths(item.fetch(:temporary).path, item.fetch(:write_path))
-        unless same_file_identity?(handle.stat, item.fetch(:temporary).path) &&
-               File.binread(item.fetch(:temporary).path) == item.fetch(:original) &&
-               File.realpath(item.fetch(:path)) == item.fetch(:write_path) &&
-               File.binread(item.fetch(:write_path)) == item.fetch(:candidate)
-          if File.exist?(item.fetch(:temporary).path) &&
-             same_file_identity?(handle.stat, item.fetch(:temporary).path) &&
-             File.binread(item.fetch(:write_path)) == item.fetch(:candidate)
-            atomic_swap_paths(item.fetch(:temporary).path, item.fetch(:write_path))
-          end
+        written = transactional_replace_locked(
+          handle, item.fetch(:path), item.fetch(:write_path),
+          item.fetch(:original), item.fetch(:candidate)
+        )
+        unless written
           concurrent_change = true
           raise IOError, "subscription path changed during safe update"
         end
-        committed = File.stat(item.fetch(:write_path))
+        committed = handle.stat
         item[:committed_identity] = [committed.dev, committed.ino]
         item[:original_identity] = original_identity
       end
     rescue StandardError
       reason = concurrent_change ? :concurrent_change : :write_failed
+      handles.each { |_item, handle| handle.close rescue nil }
+      handles.clear
       failures = finish_safe_update_rollback(items, transaction, backup_root, roots)
       unless failures.empty?
         return {
@@ -710,7 +757,6 @@ module ClaudeEasy
       return { status: :aborted, failed_profile: "", reason: reason }
     ensure
       handles.each { |_item, handle| handle.close rescue nil }
-      temporary_files.each { |temporary| temporary.close! rescue nil }
     end
 
     unless items.all? { |item| safe_update_item_committed?(item) }

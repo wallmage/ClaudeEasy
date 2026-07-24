@@ -109,6 +109,14 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def prepend_operation_lock_fault(script, source)
+    operation_lock = File.join(File.dirname(script), "macos", "operation_lock.rb")
+    original = File.binread(operation_lock)
+    anchor = "#!/usr/bin/ruby\n"
+    assert_equal 1, original.scan(anchor).length
+    File.binwrite(operation_lock, original.sub(anchor, anchor + source))
+  end
+
   def assert_json_result(stdout, status, command:)
     result = JSON.parse(stdout)
     assert_equal REQUIRED_RESULT_FIELDS.sort, result.keys.sort
@@ -140,6 +148,170 @@ class MacosWrapperTest < Minitest::Test
 
       assert_equal 76, status.exitstatus
       refute File.exist?(File.join(outside, "backups"))
+    end
+  end
+
+  def test_wrappers_reject_a_forged_inherited_lock_before_any_mutation
+    with_supported_mihomo_installer do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, stderr, status, state = run_script(
+            installer, "--profile", "1", "--json", home: home,
+            extra_env: {
+              "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD" => "1",
+              "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_FD" => nil,
+              "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_IDENTITY" => nil
+            }
+          )
+
+          refute status.success?, "#{stdout}\n#{stderr}"
+          assert_equal "operation_lock_failed", JSON.parse(stdout).fetch("code")
+          refute File.exist?(state)
+        end
+      end
+    end
+
+    with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
+      Dir.mktmpdir do |home|
+        install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
+        FileUtils.mkdir_p(install_dir)
+        installed = File.join(install_dir, "patch_profiles.rb")
+        File.binwrite(installed, "keep")
+        stdout, stderr, status = Open3.capture3(
+          {
+            "HOME" => home,
+            "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
+            "CLAUDE_EASY_USAGE_PROFILE" => nil,
+            "CLAUDE_EASY_PROFILE_DIR" => nil,
+            "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD" => "1",
+            "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_FD" => nil,
+            "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_IDENTITY" => nil
+          },
+          "/bin/sh", uninstaller, "--json"
+        )
+
+        refute status.success?, "#{stdout}\n#{stderr}"
+        assert_equal "operation_lock_failed", JSON.parse(stdout).fetch("code")
+        assert_equal "keep", File.binread(installed)
+      end
+    end
+  end
+
+  def test_installer_restores_the_previous_profile_when_profile_publication_cannot_sync
+    with_supported_mihomo_installer do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
+          system("/usr/bin/plutil", "-create", "xml1", state)
+          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+          File.chmod(0o600, state)
+          marker = File.join(home, "profile-sync-failed")
+          prepend_operation_lock_fault(installer, <<~'RUBY')
+            if ARGV[0] == "--sync-file" &&
+               ARGV[1].to_s.end_with?("/usage-profile.plist") &&
+               !File.exist?(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"))
+              File.binwrite(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"), "failed")
+              exit 76
+            end
+          RUBY
+
+          stdout, stderr, status, = run_script(
+            installer, "--profile", "2", "--json", home: home,
+            extra_env: { "CLAUDE_EASY_TEST_SYNC_FAILURE" => marker }
+          )
+
+          refute status.success?, "#{stdout}\n#{stderr}"
+          assert File.file?(marker)
+          saved = Open3.capture2(
+            "/usr/bin/plutil", "-extract", "Profile", "raw", state
+          ).first.strip
+          assert_equal "1", saved
+        end
+      end
+    end
+  end
+
+  def test_uninstaller_never_deletes_install_files_before_ready_is_durable
+    with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
+      Dir.mktmpdir do |home|
+        install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
+        FileUtils.mkdir_p(File.join(install_dir, "backups"))
+        originals = {
+          File.join(install_dir, "patch_profiles.rb") => "patcher",
+          File.join(install_dir, "policy.json") => "policy",
+          usage_state_path(home) => "usage"
+        }
+        originals.each { |path, bytes| File.binwrite(path, bytes) }
+        marker = File.join(home, "ready-sync-failed")
+        prepend_operation_lock_fault(uninstaller, <<~'RUBY')
+          if ARGV[0] == "--sync-file" &&
+             ARGV[1].to_s.end_with?("/READY") &&
+             !File.exist?(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"))
+            File.binwrite(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"), "failed")
+            exit 76
+          end
+        RUBY
+
+        stdout, stderr, status = Open3.capture3(
+          {
+            "HOME" => home,
+            "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
+            "CLAUDE_EASY_USAGE_PROFILE" => nil,
+            "CLAUDE_EASY_PROFILE_DIR" => nil,
+            "CLAUDE_EASY_TEST_SYNC_FAILURE" => marker
+          },
+          "/bin/sh", uninstaller, "--json"
+        )
+
+        refute status.success?, "#{stdout}\n#{stderr}"
+        assert File.file?(marker)
+        originals.each { |path, bytes| assert_equal bytes, File.binread(path) }
+        refute File.exist?(File.join(install_dir, ".claude-easy-uninstall-staging"))
+      end
+    end
+  end
+
+  def test_uninstaller_restores_every_file_when_the_delete_directory_cannot_sync
+    with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
+      Dir.mktmpdir do |home|
+        install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
+        FileUtils.mkdir_p(File.join(install_dir, "backups"))
+        originals = {
+          File.join(install_dir, "patch_profiles.rb") => "patcher",
+          File.join(install_dir, "policy.json") => "policy",
+          usage_state_path(home) => "usage",
+          File.join(install_dir, "patch.log") => "log"
+        }
+        originals.each { |path, bytes| File.binwrite(path, bytes) }
+        marker = File.join(home, "delete-directory-sync-failed")
+        prepend_operation_lock_fault(uninstaller, <<~'RUBY')
+          if ARGV[0] == "--sync-directory" &&
+             ARGV[1].to_s == ENV.fetch("CLAUDE_EASY_TEST_INSTALL_DIR") &&
+             !File.exist?(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"))
+            File.binwrite(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"), "failed")
+            exit 76
+          end
+        RUBY
+
+        stdout, stderr, status = Open3.capture3(
+          {
+            "HOME" => home,
+            "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
+            "CLAUDE_EASY_USAGE_PROFILE" => nil,
+            "CLAUDE_EASY_PROFILE_DIR" => nil,
+            "CLAUDE_EASY_TEST_INSTALL_DIR" => install_dir,
+            "CLAUDE_EASY_TEST_SYNC_FAILURE" => marker
+          },
+          "/bin/sh", uninstaller, "--json"
+        )
+
+        refute status.success?, "#{stdout}\n#{stderr}"
+        assert File.file?(marker)
+        originals.each { |path, bytes| assert_equal bytes, File.binread(path) }
+        refute File.exist?(File.join(install_dir, ".claude-easy-uninstall-staging"))
+      end
     end
   end
 
@@ -207,6 +379,10 @@ class MacosWrapperTest < Minitest::Test
       backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
       ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
       preference = File.join(ENV.fetch("HOME"), "auto-update-state")
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--restore-owned-subscription-auto-update")
         File.write(preference, "enabled")
         File.delete(ownership)
@@ -405,6 +581,10 @@ class MacosWrapperTest < Minitest::Test
       backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
       ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
       preference = File.join(ENV.fetch("HOME"), "auto-update-state")
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--print-core-status")
         puts "supported"
         exit 0
@@ -532,6 +712,10 @@ class MacosWrapperTest < Minitest::Test
       runtime = File.join(ENV.fetch("HOME"), "runtime-profile")
       original = File.join(ENV.fetch("HOME"), "original-profile")
 
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--print-core-status")
         puts "supported"
         exit 0
@@ -695,6 +879,10 @@ class MacosWrapperTest < Minitest::Test
     patcher = <<~'RUBY'
       backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
       ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--restore-owned-subscription-auto-update")
         exit 1
       end
@@ -723,6 +911,7 @@ class MacosWrapperTest < Minitest::Test
         old_restore = '  /bin/cp -p "$slot" "$destination"' + "\n"
         atomic_restore =
           "  if /bin/ln \"$slot\" \"$destination\"; then\n" \
+          "    durable_sync_directory \"$destination_directory\"\n" \
           "    return 0\n" \
           "  fi\n"
         direct_copy_restore = false
@@ -1498,6 +1687,290 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_profile_three_transition_restores_auto_update_when_disable_exits_after_changing_it
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      calls = File.join(home, "patcher-calls.log")
+      File.open(calls, "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "disabled")
+        File.write(File.join(home, "auto-update-owned"), "prepared")
+        exit 1
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "enabled")
+        File.delete(File.join(home, "auto-update-owned"))
+        puts "restored"
+        exit 0
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
+          system("/usr/bin/plutil", "-create", "xml1", state)
+          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+
+          _stdout, _stderr, status = run_script(installer, "--profile", "3", home: home)
+
+          assert_equal 9, status.exitstatus
+          assert_equal "enabled", File.read(File.join(home, "auto-update"))
+          refute File.exist?(File.join(home, "auto-update-owned"))
+          saved, error, read_status = Open3.capture3(
+            "/usr/bin/plutil", "-extract", "Profile", "raw", state
+          )
+          assert read_status.success?, error
+          assert_equal "1", saved.strip
+          assert_includes File.read(File.join(home, "patcher-calls.log")),
+                          "--restore-owned-subscription-auto-update"
+        end
+      end
+    end
+  end
+
+  def test_profile_three_transition_reports_partial_when_disable_and_restore_both_fail
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "disabled")
+        File.write(File.join(home, "auto-update-owned"), "prepared")
+        exit 1
+      end
+      exit 1 if ARGV.include?("--restore-owned-subscription-auto-update")
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, stderr, status = run_script(
+            installer, "--profile", "3", "--json", home: home
+          )
+
+          assert_equal 9, status.exitstatus
+          assert_empty stderr
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal "partial", result.fetch("status")
+          assert_equal "auto_update_restore_failed", result.fetch("code")
+          assert_equal "disabled", File.read(File.join(home, "auto-update"))
+          assert File.exist?(File.join(home, "auto-update-owned"))
+          saved, error, read_status = Open3.capture3(
+            "/usr/bin/plutil", "-extract", "Profile", "raw", usage_state_path(home)
+          )
+          assert read_status.success?, error
+          assert_equal "3", saved.strip
+        end
+      end
+    end
+  end
+
+  def test_profile_three_transition_defers_a_signal_until_disable_can_be_recovered
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "disabled")
+        File.write(File.join(home, "auto-update-owned"), "prepared")
+        puts "disabled"
+        STDOUT.flush
+        Process.kill("TERM", Process.ppid)
+        sleep 0.05
+        exit 0
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "enabled")
+        File.delete(File.join(home, "auto-update-owned"))
+        puts "restored"
+        exit 0
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
+          system("/usr/bin/plutil", "-create", "xml1", state)
+          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+
+          _stdout, _stderr, status = run_script(installer, "--profile", "3", home: home)
+
+          assert_equal 143, status.exitstatus
+          assert_equal "enabled", File.read(File.join(home, "auto-update"))
+          refute File.exist?(File.join(home, "auto-update-owned"))
+          saved, error, read_status = Open3.capture3(
+            "/usr/bin/plutil", "-extract", "Profile", "raw", state
+          )
+          assert read_status.success?, error
+          assert_equal "1", saved.strip
+          assert_includes File.read(File.join(home, "patcher-calls.log")),
+                          "--restore-owned-subscription-auto-update"
+        end
+      end
+    end
+  end
+
+  def test_saved_profile_three_keeps_recovery_state_when_disable_retry_fails
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "disabled")
+        File.write(File.join(home, "auto-update-owned"), "prepared")
+        exit 1
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "enabled")
+        File.delete(File.join(home, "auto-update-owned"))
+        puts "restored"
+        exit 0
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
+          system("/usr/bin/plutil", "-create", "xml1", state)
+          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
+
+          _stdout, _stderr, status = run_script(installer, home: home)
+
+          assert_equal 9, status.exitstatus
+          assert_equal "disabled", File.read(File.join(home, "auto-update"))
+          assert File.exist?(File.join(home, "auto-update-owned"))
+          calls = File.read(File.join(home, "patcher-calls.log"))
+          refute_includes calls, "--restore-owned-subscription-auto-update"
+        end
+      end
+    end
+  end
+
+  def test_light_profile_reconciles_owned_auto_update_state_before_profile_work
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      calls = File.join(home, "patcher-calls.log")
+      File.open(calls, "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.delete(File.join(home, "Library", "Application Support", "ClaudeEasy",
+                              "backups", "clashx-meta-kAutoUpdateEnable.state.json"))
+        File.write(File.join(home, "auto-update"), "enabled")
+        puts "restored"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      File.write(File.join(home, "profile-work-ran"), "yes")
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      [[], ["--safe-update"]].each do |arguments|
+        Dir.mktmpdir do |home|
+          with_supported_app(home) do
+            state = usage_state_path(home)
+            ownership = File.join(
+              home, "Library", "Application Support", "ClaudeEasy", "backups",
+              "clashx-meta-kAutoUpdateEnable.state.json"
+            )
+            FileUtils.mkdir_p(File.dirname(state))
+            FileUtils.mkdir_p(File.dirname(ownership))
+            system("/usr/bin/plutil", "-create", "xml1", state)
+            system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+            system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+            File.write(ownership, "owned")
+            File.write(File.join(home, "auto-update"), "disabled")
+
+            _stdout, _stderr, status = run_script(installer, *arguments, home: home)
+
+            assert status.success?
+            assert_equal "enabled", File.read(File.join(home, "auto-update"))
+            refute File.exist?(ownership)
+            assert File.exist?(File.join(home, "profile-work-ran"))
+            calls = File.readlines(File.join(home, "patcher-calls.log")).map(&:strip)
+            restore_index = calls.index { |call| call.include?("--restore-owned-subscription-auto-update") }
+            snapshot_index = calls.index { |call| call.include?("--snapshot-initial") }
+            refute_nil restore_index
+            refute_nil snapshot_index
+            assert_operator restore_index, :<, snapshot_index
+          end
+        end
+      end
+    end
+  end
+
+  def test_light_profile_stops_before_profile_work_when_auto_update_recovery_fails
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 1 if ARGV.include?("--restore-owned-subscription-auto-update")
+      File.write(File.join(home, "profile-work-ran"), "unexpected")
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      [[], ["--safe-update"]].each do |arguments|
+        Dir.mktmpdir do |home|
+          with_supported_app(home) do
+            state = usage_state_path(home)
+            ownership = File.join(
+              home, "Library", "Application Support", "ClaudeEasy", "backups",
+              "clashx-meta-kAutoUpdateEnable.state.json"
+            )
+            FileUtils.mkdir_p(File.dirname(state))
+            FileUtils.mkdir_p(File.dirname(ownership))
+            system("/usr/bin/plutil", "-create", "xml1", state)
+            system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+            system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+            File.write(ownership, "owned")
+
+            stdout, stderr, status = run_script(
+              installer, *arguments, "--json", home: home
+            )
+
+            assert_equal 1, status.exitstatus
+            assert_empty stderr
+            result = assert_json_result(stdout, status, command: "install")
+            assert_equal "partial", result.fetch("status")
+            assert_equal "auto_update_recovery_pending", result.fetch("code")
+            refute File.exist?(File.join(home, "profile-work-ran"))
+            assert File.exist?(ownership)
+          end
+        end
+      end
+    end
+  end
+
   def test_failed_profile_three_reinstall_preserves_preexisting_auto_update_ownership
     patcher = <<~RUBY
       File.open(File.join(ENV.fetch("HOME"), "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
@@ -1713,10 +2186,15 @@ class MacosWrapperTest < Minitest::Test
 
   def test_uninstaller_restores_owned_subscription_auto_update_before_removing_profile_state
     patcher = <<~RUBY
+      backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
+      ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--restore-owned-subscription-auto-update")
         File.write(File.join(ENV.fetch("HOME"), "restore-auto-update-arguments"), ARGV.join("\\n"))
-        backup_dir = ARGV.fetch(ARGV.index("--backup-dir") + 1)
-        File.delete(File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json"))
+        File.delete(ownership)
         puts "restored"
         exit 0
       end
@@ -1743,8 +2221,55 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_uninstaller_treats_an_existing_released_ownership_log_as_not_owned
+    patcher = <<~'RUBY'
+      require "json"
+      backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
+      ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json")
+      calls = File.join(ENV.fetch("HOME"), "auto-update-calls")
+      File.open(calls, "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-auto-update-ownership-state")
+        state = JSON.parse(File.read(ownership))
+        puts(state.fetch("Phase") == "released" ? "not_owned" : "owned")
+        exit 0
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update") ||
+         ARGV.include?("--disable-subscription-auto-update")
+        exit 91
+      end
+      exit 1
+    RUBY
+    with_uninstaller_package(patcher_source: patcher) do |uninstaller|
+      Dir.mktmpdir do |home|
+        backup_dir = File.join(home, "Library", "Application Support", "ClaudeEasy", "backups")
+        FileUtils.mkdir_p(backup_dir)
+        ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json")
+        File.write(ownership, JSON.generate("Version" => 3, "Phase" => "released") + "\n")
+        usage_state = usage_state_path(home)
+        FileUtils.mkdir_p(File.dirname(usage_state))
+        File.write(usage_state, "owned")
+
+        stdout, stderr, status = run_script(uninstaller, "--json", home: home)
+
+        assert status.success?, "#{stdout}\n#{stderr}"
+        calls = File.read(File.join(home, "auto-update-calls"))
+        assert_includes calls, "--print-auto-update-ownership-state"
+        refute_includes calls, "--restore-owned-subscription-auto-update"
+        refute_includes calls, "--disable-subscription-auto-update"
+        refute File.exist?(usage_state)
+        assert File.file?(ownership)
+      end
+    end
+  end
+
   def test_uninstaller_keeps_profile_and_ownership_state_when_auto_update_restore_fails
     patcher = <<~RUBY
+      backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
+      ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--restore-owned-subscription-auto-update")
         warn "restore failed"
         exit 1

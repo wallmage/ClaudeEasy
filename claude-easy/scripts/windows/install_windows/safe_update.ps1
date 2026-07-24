@@ -42,15 +42,64 @@ function Get-ClaudeEasyManagedScriptBlock([string]$ScriptText, [int]$UsageProfil
     return $managed
 }
 
+function Get-ClaudeEasyManagedScriptEnvelope([string]$ScriptText, [int]$UsageProfile) {
+    $managed = Get-ClaudeEasyManagedScriptBlock $ScriptText $UsageProfile
+    $analysis = Get-JavaScriptAnalysis $ScriptText
+    $beginMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "begin" })
+    $endMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "end" })
+    $originalBeginMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "original-begin" })
+    $originalEndMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "original-end" })
+    if ($originalBeginMarkers.Count -eq 0 -and $originalEndMarkers.Count -eq 0) {
+        return $managed
+    }
+    if ($beginMarkers.Count -ne 1 -or $endMarkers.Count -ne 1 -or
+        $originalBeginMarkers.Count -ne 1 -or $originalEndMarkers.Count -ne 1 -or
+        $originalBeginMarkers[0].Start -lt $beginMarkers[0].Start -or
+        $originalEndMarkers[0].Start -lt $originalBeginMarkers[0].End -or
+        $originalEndMarkers[0].End -gt $endMarkers[0].End) {
+        throw "已安装的全局扩展脚本缺少唯一完整的原脚本边界。"
+    }
+    $prefix = $ScriptText.Substring(
+        $beginMarkers[0].Start,
+        $originalBeginMarkers[0].End - $beginMarkers[0].Start
+    )
+    $suffix = $ScriptText.Substring(
+        $originalEndMarkers[0].Start,
+        $endMarkers[0].End - $originalEndMarkers[0].Start
+    )
+    return $prefix + "`r`n// CLAUDEEASY ORIGINAL CONTENT`r`n" + $suffix
+}
+
+function Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive([string]$ScriptText) {
+    $analysis = Get-JavaScriptAnalysis $ScriptText
+    $beginMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "begin" })
+    $endMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "end" })
+    if ($beginMarkers.Count -ne 1 -or $endMarkers.Count -ne 1 -or
+        $endMarkers[0].Start -lt $beginMarkers[0].Start) {
+        throw "已安装的全局扩展脚本缺少唯一完整的 ClaudeEasy 区块。"
+    }
+    $outsidePrefix = $ScriptText.Substring(0, $beginMarkers[0].Start)
+    $outsideSuffix = $ScriptText.Substring($endMarkers[0].End)
+    $outsidePrefixAnalysis = Get-JavaScriptAnalysis $outsidePrefix
+    $outsideSuffixAnalysis = Get-JavaScriptAnalysis $outsideSuffix
+    if ($outsidePrefixAnalysis.HasLiteral -or
+        $outsideSuffixAnalysis.HasLiteral -or
+        -not [string]::IsNullOrWhiteSpace([string]$outsidePrefixAnalysis.Code) -or
+        -not [string]::IsNullOrWhiteSpace([string]$outsideSuffixAnalysis.Code)) {
+        throw "已安装的全局扩展脚本在 ClaudeEasy 区块外包含可执行代码。"
+    }
+}
+
 function Assert-ClaudeEasyManagedScriptCurrent(
     [string]$ScriptText,
     [int]$UsageProfile,
     [string]$EnginePath,
     [string]$TargetPath
 ) {
-    $managed = Get-ClaudeEasyManagedScriptBlock $ScriptText $UsageProfile
+    $managed = Get-ClaudeEasyManagedScriptEnvelope $ScriptText $UsageProfile
+    Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive $ScriptText
     $expectedScript = Build-GlobalScript $EnginePath $TargetPath $UsageProfile $ScriptText
-    $expectedManaged = Get-ClaudeEasyManagedScriptBlock $expectedScript $UsageProfile
+    $expectedManaged = Get-ClaudeEasyManagedScriptEnvelope $expectedScript $UsageProfile
     if ($managed -cne $expectedManaged) {
         throw "已安装的全局扩展脚本与当前安装包不一致。"
     }

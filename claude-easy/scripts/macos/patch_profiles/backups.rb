@@ -23,12 +23,64 @@ module ClaudeEasy
     Digest::SHA256.hexdigest(File.expand_path(path))[0, 16]
   end
 
+  def fsync_directory(path)
+    expanded = File.expand_path(path)
+    flags = File::RDONLY
+    flags |= File::NOFOLLOW if File.const_defined?(:NOFOLLOW)
+    File.open(expanded, flags) do |handle|
+      opened = handle.stat
+      current = File.lstat(expanded)
+      raise IOError, "备份目录在发布时发生变化" unless
+        opened.directory? && current.directory? && !current.symlink? &&
+        [opened.dev, opened.ino] == [current.dev, current.ino]
+
+      handle.fsync
+    end
+    true
+  end
+
+  def ensure_durable_private_directory(path)
+    target = File.expand_path(path)
+    missing = []
+    cursor = target
+    loop do
+      begin
+        current = File.lstat(cursor)
+        raise InvalidConfigError, "备份位置不是安全目录" unless
+          current.directory? && !current.symlink?
+        break
+      rescue Errno::ENOENT
+        missing << cursor
+        parent = File.dirname(cursor)
+        raise InvalidConfigError, "备份位置不是安全目录" if parent == cursor
+
+        cursor = parent
+      end
+    end
+
+    existing_parent = File.dirname(cursor)
+    fsync_directory(existing_parent) unless existing_parent == cursor
+    missing.reverse_each do |directory|
+      begin
+        Dir.mkdir(directory, 0o700)
+      rescue Errno::EEXIST
+        current = File.lstat(directory)
+        raise InvalidConfigError, "备份位置不是安全目录" unless
+          current.directory? && !current.symlink?
+      end
+      FileUtils.chmod(0o700, directory)
+      fsync_directory(directory)
+      fsync_directory(File.dirname(directory))
+    end
+    target
+  end
+
   def secure_backup_root!(backup_root)
     root = File.expand_path(backup_root)
     raise InvalidConfigError, "备份目录不能是符号链接" if File.symlink?(root)
     raise InvalidConfigError, "备份位置不是目录" if File.exist?(root) && !File.directory?(root)
 
-    FileUtils.mkdir_p(root, mode: 0o700)
+    ensure_durable_private_directory(root)
     FileUtils.chmod(0o700, root)
     Dir.children(root).each do |name|
       path = File.join(root, name)
@@ -79,6 +131,7 @@ module ClaudeEasy
     raise IOError, "无法创建唯一的版本化备份" unless destination
 
     FileUtils.chmod(0o600, destination)
+    fsync_directory(root)
     destination
   rescue StandardError
     FileUtils.rm_f(destination) if destination && File.exist?(destination)
@@ -242,27 +295,42 @@ module ClaudeEasy
     current_bytes = current_snapshot.fetch(:bytes)
     return { status: :restore_conflict, path: target } unless Digest::SHA256.hexdigest(current_bytes).casecmp(expected_current_sha256).zero?
     if current_bytes == backup_bytes
-      transaction = prepare_profile_transaction(
-        [{ path: target, original: current_bytes, candidate: backup_bytes }], backup_root
-      )
+      begin
+        transaction = prepare_profile_transaction(
+          [{ path: target, original: current_bytes, candidate: backup_bytes }],
+          backup_root, roots: directories
+        )
+      rescue ConcurrentProfileChangeError
+        return { status: :restore_conflict, path: target }
+      end
+      transaction_target = transaction.fetch(:targets).fetch(File.expand_path(target))
       result = {
         status: :no_change, path: target, rollback_bytes: current_bytes,
-        patched_digest: Digest::SHA256.hexdigest(backup_bytes), restored_backup: backup_id
+        patched_digest: Digest::SHA256.hexdigest(backup_bytes),
+        patched_identity: transaction_target.fetch(:identity),
+        patched_path: transaction_target.fetch(:write_path),
+        restored_backup: backup_id
       }
       result = activation.call(result) if activation
       return finish_backup_restore_transaction(transaction, result)
     end
 
     create_versioned_backup(target, backup_root, content: current_bytes, reason: "pre-restore")
-    transaction = prepare_profile_transaction(
-      [{ path: target, original: current_bytes, candidate: backup_bytes }], backup_root
-    )
-    replaced = atomic_compare_and_swap_bytes(
+    begin
+      transaction = prepare_profile_transaction(
+        [{ path: target, original: current_bytes, candidate: backup_bytes }],
+        backup_root, roots: directories
+      )
+    rescue ConcurrentProfileChangeError
+      return { status: :restore_conflict, path: target }
+    end
+    transaction_target = transaction.fetch(:targets).fetch(File.expand_path(target))
+    replaced = transactional_compare_and_write_bytes(
       target, current_bytes, backup_bytes,
       expected_identity: current_snapshot.fetch(:identity), expected_path: write_path
     )
     unless replaced
-      remove_profile_transaction(transaction)
+      recover_profile_transaction(backup_root, roots: directories)
       return { status: :restore_conflict, path: target }
     end
     result = {
@@ -270,6 +338,8 @@ module ClaudeEasy
       path: target,
       rollback_bytes: current_bytes,
       patched_digest: Digest::SHA256.hexdigest(backup_bytes),
+      patched_identity: transaction_target.fetch(:identity),
+      patched_path: transaction_target.fetch(:write_path),
       restored_backup: backup_id
     }
     result = activation.call(result) if activation

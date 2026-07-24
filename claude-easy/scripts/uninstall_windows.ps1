@@ -255,6 +255,8 @@ try {
         $analysis = Get-JavaScriptAnalysis $current
         $beginMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "begin" })
         $endMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "end" })
+        $originalBeginMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "original-begin" })
+        $originalEndMarkers = @($analysis.Markers | Where-Object { $_.Kind -eq "original-end" })
         if ($beginMarkers.Count -gt 0 -or $endMarkers.Count -gt 0) {
             if ($beginMarkers.Count -ne 1 -or $endMarkers.Count -ne 1 -or $endMarkers[0].Start -lt $beginMarkers[0].Start) {
                 throw "Script.js 标记不完整或重复，原文件未修改。"
@@ -264,12 +266,29 @@ try {
                 throw "Script.js 中的同名标记不是本工具创建的，原文件未修改。"
             }
 
-            $prefix = $current.Substring(0, $beginMarkers[0].Start).TrimEnd()
-            $suffix = $current.Substring($endMarkers[0].End).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($prefix)) {
-                $prefix = (Rename-JavaScriptMain $prefix "claudeEasyPreviousMain" "main").TrimEnd()
+            $outsidePrefix = $current.Substring(0, $beginMarkers[0].Start).Trim()
+            $outsideSuffix = $current.Substring($endMarkers[0].End).Trim()
+            $previous = ""
+            if ($originalBeginMarkers.Count -gt 0 -or $originalEndMarkers.Count -gt 0) {
+                if ($originalBeginMarkers.Count -ne 1 -or $originalEndMarkers.Count -ne 1 -or
+                    $originalEndMarkers[0].Start -lt $originalBeginMarkers[0].End -or
+                    $originalBeginMarkers[0].Start -lt $beginMarkers[0].Start -or
+                    $originalEndMarkers[0].End -gt $endMarkers[0].End) {
+                    throw "Script.js 原脚本标记不完整、重复或越界，原文件未修改。"
+                }
+                $previous = $current.Substring(
+                    $originalBeginMarkers[0].End,
+                    $originalEndMarkers[0].Start - $originalBeginMarkers[0].End
+                ).Trim()
+            } else {
+                $previous = $outsidePrefix
+                $outsidePrefix = ""
             }
-            $remaining = @($prefix, $suffix) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            if (-not [string]::IsNullOrWhiteSpace($previous)) {
+                $previous = (Rename-JavaScriptMain $previous "claudeEasyPreviousMain" "main").Trim()
+            }
+            $remaining = @($outsidePrefix, $previous, $outsideSuffix) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
             $scriptBytes = if ($remaining.Count -eq 0) {
                 [byte[]]@()
             } else {

@@ -65,6 +65,18 @@ say() {
   /usr/bin/printf '%s\n' "[ClaudeEasy] $1"
 }
 
+durable_ensure_private_directory() {
+  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --ensure-private-directory "$1"
+}
+
+durable_sync_directory() {
+  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --sync-directory "$1"
+}
+
+durable_sync_file() {
+  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --sync-file "$1"
+}
+
 usage() {
   [ "$JSON_OUTPUT" -eq 0 ] || return 0
   /usr/bin/printf '%s\n' "用法：uninstall_macos.sh [--json]"
@@ -90,8 +102,7 @@ parse_arguments() {
 
 parse_arguments "$@"
 
-if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ] &&
-   [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" != "1" ]; then
+if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
   if [ "$(uname -s)" != "Darwin" ]; then
     say "当前系统不是 macOS。"
     finish 2 unsupported unsupported_platform "当前系统不是 macOS。"
@@ -109,22 +120,29 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ] &&
     say "安装包不完整：缺少操作锁程序。"
     finish 6 failed incomplete_package "安装包不完整。"
   fi
-  set +e
-  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"
-  operation_lock_status=$?
-  set -e
-  case "$operation_lock_status" in
-    75)
-      finish 1 failed operation_in_progress "另一个 ClaudeEasy 操作正在进行，请稍后重试。"
-      ;;
-    76)
+  if [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" = "1" ]; then
+    if ! /usr/bin/ruby "$OPERATION_LOCK_SOURCE" \
+        --verify-held-lock "$OPERATION_LOCK_PATH"; then
       finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。"
-      ;;
-    *)
-      trap - EXIT HUP INT TERM
-      exit "$operation_lock_status"
-      ;;
-  esac
+    fi
+  else
+    set +e
+    /usr/bin/ruby "$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"
+    operation_lock_status=$?
+    set -e
+    case "$operation_lock_status" in
+      75)
+        finish 1 failed operation_in_progress "另一个 ClaudeEasy 操作正在进行，请稍后重试。"
+        ;;
+      76)
+        finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。"
+        ;;
+      *)
+        trap - EXIT HUP INT TERM
+        exit "$operation_lock_status"
+        ;;
+    esac
+  fi
 fi
 
 restore_uncommitted_uninstall() {
@@ -133,24 +151,32 @@ restore_uncommitted_uninstall() {
     finish 1 failed uninstall_state_unsafe "卸载恢复目录不安全；未继续删除。"
   if [ -f "$UNINSTALL_STAGING/COMMITTED" ]; then
     /bin/rm -rf "$UNINSTALL_STAGING"
+    durable_sync_directory "$INSTALL_DIR"
     return 0
   fi
   if [ ! -f "$UNINSTALL_STAGING/READY" ]; then
     /bin/rm -rf "$UNINSTALL_STAGING"
+    durable_sync_directory "$INSTALL_DIR"
     return 0
   fi
   if [ -f "$UNINSTALL_STAGING/AUTO_UPDATE_WAS_OWNED" ]; then
     [ -f "$PATCHER_SOURCE" ] ||
       finish 6 failed incomplete_package "安装包不完整，无法恢复未完成的安全卸载。"
     if ! disable_result=$(/usr/bin/ruby "$PATCHER_SOURCE" \
-      --backup-dir "$BACKUP_DIR" --disable-subscription-auto-update 2>/dev/null); then
+      --backup-dir "$BACKUP_DIR" --usage-profile 3 \
+      --internal-uninstall-recovery-state "$UNINSTALL_STAGING/usage" \
+      --disable-subscription-auto-update 2>/dev/null); then
       finish 1 failed auto_update_rollback_failed "无法恢复未完成安全卸载的订阅自动更新状态。"
     fi
     case "$disable_result" in
       disabled|already_disabled) ;;
       *) finish 1 failed auto_update_rollback_failed "订阅自动更新回退结果异常。" ;;
     esac
-    [ -f "$AUTO_UPDATE_OWNERSHIP_PATH" ] && [ ! -L "$AUTO_UPDATE_OWNERSHIP_PATH" ] ||
+    if ! restored_ownership=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+      --backup-dir "$BACKUP_DIR" --print-auto-update-ownership-state 2>/dev/null); then
+      finish 1 failed auto_update_rollback_failed "无法核对订阅自动更新所有权。"
+    fi
+    [ "$restored_ownership" = "owned" ] ||
       finish 1 failed auto_update_rollback_failed "订阅自动更新所有权未能恢复。"
   fi
   restore_slot "$UNINSTALL_STAGING/patcher" "$INSTALL_DIR/patch_profiles.rb"
@@ -160,6 +186,7 @@ restore_uncommitted_uninstall() {
   restore_slot "$UNINSTALL_STAGING/log" "$INSTALL_DIR/patch.log"
   restore_slot "$UNINSTALL_STAGING/error-log" "$INSTALL_DIR/patch-error.log"
   /bin/rm -rf "$UNINSTALL_STAGING"
+  durable_sync_directory "$INSTALL_DIR"
 }
 
 recover_pending_profile_transaction() {
@@ -196,19 +223,23 @@ recover_pending_profile_transaction() {
 restore_slot() {
   slot=$1
   destination=$2
+  destination_directory=$(/usr/bin/dirname "$destination")
   [ -f "$slot" ] || return 0
   if [ -e "$destination" ] || [ -L "$destination" ]; then
     /usr/bin/cmp -s "$slot" "$destination" ||
       finish 1 failed uninstall_restore_conflict "卸载中断后检测到新文件；未覆盖。"
+    durable_sync_directory "$destination_directory"
     return 0
   fi
-  /bin/mkdir -p "$(/usr/bin/dirname "$destination")"
+  durable_ensure_private_directory "$destination_directory"
   if /bin/ln "$slot" "$destination"; then
+    durable_sync_directory "$destination_directory"
     return 0
   fi
   if [ -e "$destination" ] || [ -L "$destination" ]; then
     /usr/bin/cmp -s "$slot" "$destination" ||
       finish 1 failed uninstall_restore_conflict "卸载中断后检测到新文件；未覆盖。"
+    durable_sync_directory "$destination_directory"
     return 0
   fi
   finish 1 failed uninstall_restore_failed "卸载文件无法原子恢复；保留恢复目录以便重试。"
@@ -219,13 +250,16 @@ stage_slot() {
   slot=$2
   if [ ! -e "$source" ] && [ ! -L "$source" ]; then
     /usr/bin/printf '%s\n' absent >"$UNINSTALL_STAGING/$slot.meta"
+    durable_sync_file "$UNINSTALL_STAGING/$slot.meta"
     return 0
   fi
   [ -f "$source" ] && [ ! -L "$source" ] ||
     finish 1 failed uninstall_target_unsafe "卸载目标不是安全的普通文件；未删除。"
   source_identity=$(/usr/bin/stat -f '%d:%i' "$source")
   /usr/bin/printf 'present:%s\n' "$source_identity" >"$UNINSTALL_STAGING/$slot.meta"
+  durable_sync_file "$UNINSTALL_STAGING/$slot.meta"
   /bin/cp -p "$source" "$UNINSTALL_STAGING/$slot"
+  durable_sync_file "$UNINSTALL_STAGING/$slot"
 }
 
 verify_staged_slot() {
@@ -251,20 +285,21 @@ delete_staged_install_files() {
   if [ -e "$UNINSTALL_STAGING" ] || [ -L "$UNINSTALL_STAGING" ]; then
     finish 1 failed uninstall_state_conflict "卸载恢复目录已存在；未继续删除。"
   fi
-  /bin/mkdir -p "$UNINSTALL_STAGING"
-  /bin/chmod 700 "$UNINSTALL_STAGING"
+  durable_ensure_private_directory "$UNINSTALL_STAGING"
   stage_slot "$INSTALL_DIR/patch_profiles.rb" patcher
   stage_slot "$INSTALL_DIR/policy.json" policy
   stage_slot "$STATE_PATH" state
   stage_slot "$USAGE_STATE_PATH" usage
   stage_slot "$INSTALL_DIR/patch.log" log
   stage_slot "$INSTALL_DIR/patch-error.log" error-log
-  if [ -e "$AUTO_UPDATE_OWNERSHIP_PATH" ] || [ -L "$AUTO_UPDATE_OWNERSHIP_PATH" ]; then
+  if [ "$AUTO_UPDATE_OWNED" -eq 1 ]; then
     [ -f "$AUTO_UPDATE_OWNERSHIP_PATH" ] && [ ! -L "$AUTO_UPDATE_OWNERSHIP_PATH" ] ||
       finish 1 failed auto_update_state_unsafe "订阅自动更新所有权状态不安全；未继续卸载。"
     /usr/bin/touch "$UNINSTALL_STAGING/AUTO_UPDATE_WAS_OWNED"
+    durable_sync_file "$UNINSTALL_STAGING/AUTO_UPDATE_WAS_OWNED"
   fi
   /usr/bin/touch "$UNINSTALL_STAGING/READY"
+  durable_sync_file "$UNINSTALL_STAGING/READY"
 
   if ! verify_staged_slot "$INSTALL_DIR/patch_profiles.rb" patcher ||
      ! verify_staged_slot "$INSTALL_DIR/policy.json" policy ||
@@ -273,6 +308,7 @@ delete_staged_install_files() {
      ! verify_staged_slot "$INSTALL_DIR/patch.log" log ||
      ! verify_staged_slot "$INSTALL_DIR/patch-error.log" error-log; then
     /bin/rm -rf "$UNINSTALL_STAGING"
+    durable_sync_directory "$INSTALL_DIR"
     finish 1 failed uninstall_state_conflict "卸载目标在暂存后被替换；未删除新文件。"
   fi
 
@@ -295,11 +331,14 @@ delete_staged_install_files() {
       finish 1 failed uninstall_delete_failed "安装文件未能整批删除，已恢复其余文件。"
     fi
   done
+  durable_sync_directory "$INSTALL_DIR"
 }
 
 commit_staged_install_files() {
   /usr/bin/touch "$UNINSTALL_STAGING/COMMITTED"
+  durable_sync_file "$UNINSTALL_STAGING/COMMITTED"
   /bin/rm -rf "$UNINSTALL_STAGING"
+  durable_sync_directory "$INSTALL_DIR"
 }
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -318,11 +357,20 @@ restore_uncommitted_uninstall
 
 AUTO_UPDATE_OWNED=0
 if [ -e "$AUTO_UPDATE_OWNERSHIP_PATH" ] || [ -L "$AUTO_UPDATE_OWNERSHIP_PATH" ]; then
-  if [ ! -f "$PATCHER_SOURCE" ]; then
+  if [ ! -f "$PATCHER_SOURCE" ] || [ -L "$PATCHER_SOURCE" ]; then
     say "安装包不完整，无法安全恢复订阅自动更新；未删除用途档位。"
     finish 6 failed incomplete_package "安装包不完整，无法安全恢复订阅自动更新。"
   fi
-  AUTO_UPDATE_OWNED=1
+  if ! ownership_status=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+    --backup-dir "$BACKUP_DIR" --print-auto-update-ownership-state 2>/dev/null); then
+    say "无法读取订阅自动更新所有权；未删除用途档位。"
+    finish 1 failed auto_update_state_unsafe "无法读取订阅自动更新所有权。"
+  fi
+  case "$ownership_status" in
+    owned) AUTO_UPDATE_OWNED=1 ;;
+    not_owned) ;;
+    *) finish 1 failed auto_update_state_unsafe "订阅自动更新所有权结果异常。" ;;
+  esac
 fi
 
 delete_staged_install_files
@@ -337,7 +385,9 @@ if [ "$AUTO_UPDATE_OWNED" -eq 1 ]; then
   fi
   case "$auto_update_restore" in
     restored|already_restored)
-      if [ -e "$AUTO_UPDATE_OWNERSHIP_PATH" ] || [ -L "$AUTO_UPDATE_OWNERSHIP_PATH" ]; then
+      if ! ownership_status=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+        --backup-dir "$BACKUP_DIR" --print-auto-update-ownership-state 2>/dev/null) ||
+         [ "$ownership_status" != "not_owned" ]; then
         restore_uncommitted_uninstall
         say "订阅自动更新虽已处理，但所有权状态未能清除；未删除用途档位。"
         finish 1 partial auto_update_state_cleanup_failed "订阅自动更新已处理，但所有权状态未能清除。"

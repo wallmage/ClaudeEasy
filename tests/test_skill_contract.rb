@@ -583,14 +583,23 @@ class SkillContractTest < Minitest::Test
       assert_includes source, "Claude"
       assert_includes source, "/connections"
       assert_includes source, "/proxies"
+      assert_includes source, "/providers/proxies"
+      assert_includes source, "providerChains"
       assert_includes source, "DIRECT"
     end
     assert_includes policy, "verify_routes.ps1"
     assert_includes mac_verifier, "NON_PROXY_TERMINALS"
     assert_includes mac_verifier, "non_proxy_terminal?"
-    assert_includes windows_verifier, '$Chains -contains "DIRECT"'
+    assert_includes windows_verifier, '$nonProxyNames = @("DIRECT"'
+    assert_includes windows_verifier, '$nonProxyTypes = @("Direct"'
     assert_includes windows_verifier, "function Test-RouteChains"
-    assert_includes windows_verifier, 'type -eq "Selector"'
+    assert_includes windows_verifier, "function Test-SafeLiveChain"
+    assert_includes windows_verifier, "function Get-LiveChainProxy"
+    assert_includes windows_verifier, "function Test-SupportedRouteGroupType"
+    %w[Selector URLTest Fallback LoadBalance Relay].each do |group_type|
+      assert_includes windows_verifier, %("#{group_type}")
+    end
+    assert_includes windows_verifier, "Test-SupportedRouteGroupType ([string]$property.Value.type)"
   end
 
   def test_windows_route_verifier_uses_live_match_rule_for_main_group
@@ -600,6 +609,39 @@ class SkillContractTest < Minitest::Test
     assert_includes source, 'Invoke-ControllerJson "/rules"'
     assert_includes source, '$rule.proxy'
     assert_includes source, '$main = Get-LiveMainGroup $proxies'
+  end
+
+  def test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata
+    source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+    documents = [
+      File.read(File.join(ROOT, "README.md")),
+      File.read(File.join(SKILL, "SKILL.md")),
+      File.read(File.join(SKILL, "references/patch-policy.md")),
+      File.read(
+        File.join(
+          ROOT,
+          "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"
+        )
+      ),
+      File.read(File.join(ROOT, "tests/baseline.md"))
+    ]
+
+    assert_includes source, '[switch]$SecretStdin'
+    assert_includes source, "function Read-ControllerSecretFromStandardInput"
+    assert_includes source, '[Console]::In.ReadToEnd()'
+    assert_includes source, '不能通过 -Secret 传入非空控制器密钥'
+    assert_includes source, "function Get-ValidatedControllerBaseUri"
+    assert_includes source, 'Test-StrictIpv4LoopbackHost $rawHost'
+    assert_includes source, 'if (-not $rawHostIsLoopback)'
+    assert_includes source, '$request.AllowAutoRedirect = $false'
+    assert_includes source, '$request.Proxy = $null'
+    assert_includes source, '$script:ClaudeEasyControllerSecret'
+    refute_includes source, '"Bearer $Secret"'
+    documents.each do |document|
+      assert_includes document, "-SecretStdin"
+      assert_includes document, "本机回环"
+      assert_includes document, "非空 `-Secret`"
+    end
   end
 
   def test_diagnostics_separates_clues_from_conclusions
@@ -731,6 +773,7 @@ class SkillContractTest < Minitest::Test
     assert_includes installer, "--safe-update"
     assert_includes patcher, "--safe-update-all"
     assert_includes patcher, "--print-subscription-auto-update-state"
+    assert_includes patcher, "--print-auto-update-ownership-state"
     assert_includes patcher, "--disable-subscription-auto-update"
     assert_includes installer, "--disable-subscription-auto-update"
     assert_includes windows_installer_source, "allow_auto_update"
@@ -900,7 +943,7 @@ class SkillContractTest < Minitest::Test
 
     refute_includes policy, "TUN：已开启"
     assert_includes policy, "配置中的 TUN：已写入；运行状态：已自动刷新并验证"
-    assert_includes skill, "检查 TUN、DNS、外网连通性和原有代理组选择"
+    assert_includes skill, "检查 TUN、DNS、外网连通性和目标配置仍保留的代理组选择"
   end
 
   def test_skill_frontmatter_contains_only_name_and_description
@@ -1170,15 +1213,16 @@ class SkillContractTest < Minitest::Test
     assert_includes installer, "preserve_profile_operation_state()"
     assert_includes installer, "record_profile_operation_signal 143"
     assert_includes installer, "commit_profile_selection"
-    assert_includes installer, "AUTO_UPDATE_CHANGED=0"
+    assert_includes installer, "AUTO_UPDATE_RECOVERY_REQUIRED=0"
+    assert_includes installer, "AUTO_UPDATE_RECOVERY_PENDING=0"
     assert_includes installer, "PROFILE_OPERATION_COMMITTED=1"
     assert_includes installer, "operation_committed_interrupted"
     assert_includes installer, "PROFILE_OPERATION_RECOVERY_INTENT=1"
     assert_includes installer, "operation_interrupted_recovery_intent"
     assert_includes installer,
                     "trap ':' HUP INT TERM\n" \
-                    "  set +e\n" \
-                    '  /usr/bin/ruby "$OPERATION_LOCK_SOURCE"'
+                    "    set +e\n" \
+                    '    /usr/bin/ruby "$OPERATION_LOCK_SOURCE"'
     assert_includes installer, "--wrapper-commit-receipt"
     assert_includes installer, "PROFILE_OPERATION_RECEIPT_COMMITTED=1"
     assert_includes installer, "operation_committed_result_failed"
@@ -1693,9 +1737,11 @@ class SkillContractTest < Minitest::Test
     assert_operator mac_install.index('id -u'), :<, profile_stage
     assert_operator mac_install.index('core_status='), :<, profile_stage
     assert_operator mac_install.index('--snapshot-initial'), :<, profile_stage
-    assert_operator profile_stage, :<, mac_install.index('--disable-subscription-auto-update')
+    auto_update_disable = mac_install.index("run_subscription_auto_update_disable", profile_stage)
+    refute_nil auto_update_disable
+    assert_operator profile_stage, :<, auto_update_disable
     assert_includes mac_install, "rollback_profile_selection"
-    assert_operator mac_install.index('core_status='), :<, mac_install.index('--disable-subscription-auto-update')
+    assert_operator mac_install.index('core_status='), :<, auto_update_disable
     refute_includes mac_install, "launchctl bootstrap"
     refute_includes mac_install, "launchctl bootout"
     refute_includes mac_install, "WatchPaths"
@@ -2049,7 +2095,7 @@ class SkillContractTest < Minitest::Test
     expected_macos = %w[
       test_production_probe_mihomo_does_not_survive_a_killed_validator
       test_production_probe_next_run_recovers_batch_killed_after_first_commit
-      test_production_probe_next_safe_update_recovers_batch_killed_after_first_swap
+      test_production_probe_next_safe_update_recovers_batch_killed_after_first_descriptor_commit
       test_production_probe_next_safe_update_recovers_runtime_killed_after_reload
       test_production_probe_normal_batch_rejects_duplicate_file_aliases
       test_production_probe_normal_batch_restores_a_commit_when_bookkeeping_raises
@@ -2161,7 +2207,7 @@ class SkillContractTest < Minitest::Test
     assert_includes plan, "$isInterruptedOriginal"
     assert_includes plan, "$snapshot.Bytes.Length -le $action.Original.Length"
     assert_includes plan,
-                    '-not ($action.Action -eq "delete" -and $isInterruptedOriginal)'
+                    '($action.Action -ne "delete" -or $currentHash -ne $originalHash)'
     assert_match(/\$action\.Action -eq "write".*\$action\.Existed.*\$isInterruptedOriginal/m, plan)
     assert_includes plan, '@{ Operation = "write"; Action = $action; Snapshot = $snapshot }'
   end
@@ -2172,7 +2218,7 @@ class SkillContractTest < Minitest::Test
     ).force_encoding("UTF-8")
 
     assert_includes source, "function Assert-JavaScriptDoesNotBindMain"
-    assert_includes source, 'Assert-JavaScriptDoesNotBindMain $suffix'
+    assert_equal 2, source.scan('Assert-JavaScriptCanCompose $restored').length
     assert_includes source, '(?:function|class|var|let|const)'
     assert_includes source, '(?<![A-Za-z0-9_$.])main\s*='
   end
@@ -2183,6 +2229,88 @@ class SkillContractTest < Minitest::Test
     ).force_encoding("UTF-8")
 
     assert_includes source, 'Assert-JavaScriptDoesNotBindMain $withoutDeclaration'
+  end
+
+  def test_windows_existing_script_rejects_dynamic_global_escape_before_writing
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
+    ).force_encoding("UTF-8")
+
+    assert_includes source, "function Assert-JavaScriptDoesNotUseDynamicCode"
+    assert_includes source, 'Assert-JavaScriptDoesNotUseDynamicCode $Text'
+    assert_includes source, '\b(?:eval|Function)\b'
+    assert_includes source, '\.\s*constructor\b'
+    assert_includes source, "$stringLiterals = @()"
+    assert_includes source, "StringLiterals = @($stringLiterals)"
+    assert_includes source, '$constructorLiteral = @($analysis.StringLiterals | Where-Object {'
+    assert_includes source, '$_.Substring(1, $_.Length - 2) -ceq "constructor"'
+    assert_includes source, '$constructorLiteral)'
+    assert_includes source, "$templateExpressionDepths = @()"
+    assert_includes source, '$templateExpressionDepths += 1'
+    assert_includes source, '$state = "template"'
+  end
+
+  def test_windows_safe_update_compares_managed_envelope_not_user_script_body
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    ).force_encoding("UTF-8")
+
+    assert_includes source, "function Get-ClaudeEasyManagedScriptEnvelope"
+    assert_includes source, '"`r`n// CLAUDEEASY ORIGINAL CONTENT`r`n"'
+    assert_includes source, "Get-ClaudeEasyManagedScriptEnvelope $ScriptText $UsageProfile"
+    assert_includes source, "Get-ClaudeEasyManagedScriptEnvelope $expectedScript $UsageProfile"
+  end
+
+  def test_windows_managed_script_preserves_top_level_semantics_then_seals_entry
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
+    ).force_encoding("UTF-8")
+    uninstaller = File.binread(
+      File.join(SKILL, "scripts/uninstall_windows.ps1")
+    ).force_encoding("UTF-8")
+
+    assert_includes source, '$parts += "let claudeEasyInstallManagedMain = (function ("'
+    %w[Object Reflect Array Boolean Error Function JSON RegExp].each do |intrinsic|
+      assert_includes source, %($parts += "  this.#{intrinsic},)
+    end
+    assert_includes source, '$parts += "  this.String"'
+    assert_includes source, '$parts += "const claudeEasySubjectSnapshots = [];"'
+    assert_includes source, '$parts += "const claudeEasyGlobalSnapshots = [];"'
+    assert_includes source, '$parts += "function claudeEasyRestoreIntrinsics() {"'
+    assert_includes source, '$parts += "let claudeEasyPreviousMain = null;"'
+    assert_includes source, '$parts += "const claudeEasyManagedMain = main;"'
+    assert_includes source, '$parts += "return function (previousMain) {"'
+    assert_includes source, '$parts += "  claudeEasyRestoreIntrinsics();"'
+    assert_includes source, '$parts += "      } finally {"'
+    assert_includes source, '$parts += "        claudeEasyRestoreIntrinsics();"'
+    assert_includes source, '$parts += "        return claudeEasyApplyFunction(previousMain, undefined, [config, profileName]);"'
+    assert_includes source, %q!$parts += '  claudeEasyDefineProperty(claudeEasyRealGlobal, "main", {'!
+    assert_includes source, '$parts += "    get: function () { return claudeEasyManagedMain; },"'
+    assert_includes source, '$parts += "    set: function () {},"'
+    assert_includes source, '$parts += "    configurable: false"'
+    assert_includes source, 'if (-not [string]::IsNullOrWhiteSpace($previous)) { $parts += $previous.Trim() }'
+    assert_includes source,
+                    %q!$parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === "function" ? claudeEasyPreviousMain : null);'!
+    assert_includes source, '$parts += "claudeEasyInstallManagedMain = null;"'
+    refute_includes source, "loadPrevious"
+    refute_includes source, "new Proxy"
+
+    setup_index = source.index('$parts += "let claudeEasyInstallManagedMain = (function ("')
+    original_begin_index = source.index("$parts += $originalBegin")
+    original_end_index = source.index("$parts += $originalEnd")
+    finalizer_index = source.index(
+      %q!$parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === "function" ? claudeEasyPreviousMain : null);'!
+    )
+    null_index = source.index('$parts += "claudeEasyInstallManagedMain = null;"')
+    assert_operator setup_index, :<, original_begin_index
+    assert_operator original_begin_index, :<, original_end_index
+    assert_operator original_end_index, :<, finalizer_index
+    assert_operator finalizer_index, :<, null_index
+
+    assert_includes source, '// CLAUDEEASY ORIGINAL BEGIN'
+    assert_includes source, '// CLAUDEEASY ORIGINAL END'
+    assert_includes uninstaller, '$_.Kind -eq "original-begin"'
+    assert_includes uninstaller, '$_.Kind -eq "original-end"'
   end
 
   def test_windows_backups_are_published_only_after_complete_private_write

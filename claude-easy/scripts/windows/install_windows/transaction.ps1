@@ -406,6 +406,8 @@ function Initialize-VerifiedFileNative {
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 
 namespace ClaudeEasy
@@ -420,6 +422,7 @@ namespace ClaudeEasy
         private const uint OpenAlways = 4;
         private const uint FileShareRead = 0x00000001;
         private const uint FileShareWrite = 0x00000002;
+        private const uint WriteThrough = 0x80000000;
         private const uint OpenReparsePoint = 0x00200000;
         private const uint BackupSemantics = 0x02000000;
         private const uint FileAttributeReparsePoint = 0x00000400;
@@ -430,6 +433,14 @@ namespace ClaudeEasy
         private struct FileDispositionInformation
         {
             public byte DeleteFile;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SecurityAttributes
+        {
+            public int Length;
+            public IntPtr SecurityDescriptor;
+            public int InheritHandle;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -550,6 +561,71 @@ namespace ClaudeEasy
                 throw new Win32Exception(error, "无法获取配置目录操作锁。");
             }
             return handle;
+        }
+
+        public static SafeFileHandle CreatePrivateFile(string path)
+        {
+            FileSecurity security = new FileSecurity();
+            security.SetAccessRuleProtection(true, false);
+            SecurityIdentifier[] identities = new SecurityIdentifier[]
+            {
+                WindowsIdentity.GetCurrent().User,
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)
+            };
+            foreach (SecurityIdentifier identity in identities)
+            {
+                security.AddAccessRule(new FileSystemAccessRule(
+                    identity,
+                    FileSystemRights.FullControl,
+                    AccessControlType.Allow
+                ));
+            }
+            byte[] descriptor = security.GetSecurityDescriptorBinaryForm();
+            IntPtr descriptorPointer = IntPtr.Zero;
+            IntPtr attributesPointer = IntPtr.Zero;
+            try
+            {
+                descriptorPointer = Marshal.AllocHGlobal(descriptor.Length);
+                Marshal.Copy(descriptor, 0, descriptorPointer, descriptor.Length);
+                SecurityAttributes attributes = new SecurityAttributes();
+                attributes.Length = Marshal.SizeOf(typeof(SecurityAttributes));
+                attributes.SecurityDescriptor = descriptorPointer;
+                attributes.InheritHandle = 0;
+                attributesPointer = Marshal.AllocHGlobal(attributes.Length);
+                Marshal.StructureToPtr(attributes, attributesPointer, false);
+
+                SafeFileHandle handle = CreateFile(
+                    path,
+                    GenericRead | GenericWrite | DeleteAccess,
+                    0,
+                    attributesPointer,
+                    CreateNew,
+                    WriteThrough | OpenReparsePoint,
+                    IntPtr.Zero
+                );
+                if (handle.IsInvalid)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    handle.Dispose();
+                    throw new Win32Exception(
+                        error,
+                        "无法创建私有的事务恢复临时文件。"
+                    );
+                }
+                return handle;
+            }
+            finally
+            {
+                if (attributesPointer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(attributesPointer);
+                }
+                if (descriptorPointer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(descriptorPointer);
+                }
+            }
         }
 
         public static bool IsReparsePoint(SafeFileHandle handle)
@@ -1076,7 +1152,7 @@ function Get-InterruptedTransactionRecoveryPlan([object[]]$Actions) {
             }
         }
         if ($snapshot.Exists -and $snapshot.Identity -cne $action.Identity -and
-            -not ($action.Action -eq "delete" -and $isInterruptedOriginal)) {
+            ($action.Action -ne "delete" -or $currentHash -ne $originalHash)) {
             throw "中断事务目标已被同内容的其他文件替换：$($action.Path)"
         }
         if ($action.Action -eq "write" -and $action.Existed) {
@@ -1110,6 +1186,115 @@ function Get-InterruptedTransactionRecoveryPlan([object[]]$Actions) {
     return $plan
 }
 
+function New-InterruptedRecoveryTemporaryFile(
+    [string]$TargetPath,
+    [byte[]]$Bytes
+) {
+    $directory = Split-Path -Parent $TargetPath
+    $temporary = Join-Path $directory (
+        ".claude-easy-recovery-" + [Guid]::NewGuid().ToString("N") + ".tmp"
+    )
+    $stream = $null
+    $handle = $null
+    $completedBytes = $null
+    $failure = $null
+    try {
+        $handle = [ClaudeEasy.VerifiedDeleteNative]::CreatePrivateFile($temporary)
+        $stream = New-Object System.IO.FileStream(
+            $handle,
+            [System.IO.FileAccess]::ReadWrite
+        )
+        $handle = $null
+        if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint(
+                $stream.SafeFileHandle
+            ) -or
+            [ClaudeEasy.VerifiedDeleteNative]::GetLinkCount(
+                $stream.SafeFileHandle
+            ) -ne 1) {
+            throw "中断事务恢复临时文件不能是链接：$temporary"
+        }
+        $stream.Write($Bytes, 0, $Bytes.Length)
+        $stream.SetLength($Bytes.Length)
+        $stream.Flush($true)
+        $completedBytes = Get-StreamBytes $stream
+        if ((Get-BytesSha256 $completedBytes) -ne (Get-BytesSha256 $Bytes)) {
+            throw "中断事务恢复临时文件内容不正确：$temporary"
+        }
+    } catch {
+        $failure = $_
+        if ($null -ne $stream) {
+            try {
+                Set-VerifiedDeleteDisposition $stream $true
+            } catch {
+                throw "中断事务恢复临时文件写入失败，且清理失败：$($_.Exception.Message)"
+            }
+        }
+    } finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        } elseif ($null -ne $handle) {
+            $handle.Dispose()
+        }
+    }
+    if ($null -ne $failure) { throw $failure }
+    return [pscustomobject]@{
+        Path = $temporary
+        Bytes = $completedBytes
+    }
+}
+
+function Remove-InterruptedRecoveryTemporaryFile([object]$Temporary) {
+    if ($null -eq $Temporary -or
+        [string]::IsNullOrWhiteSpace([string]$Temporary.Path)) {
+        return
+    }
+    $snapshot = Get-OptionalFileSnapshot (
+        [string]$Temporary.Path
+    ) "中断事务恢复临时文件"
+    if (-not $snapshot.Exists) { return }
+    if ((Get-BytesSha256 $snapshot.Bytes) -ne
+        (Get-BytesSha256 ([byte[]]$Temporary.Bytes))) {
+        throw "中断事务恢复临时文件在清理前发生变化：$($Temporary.Path)"
+    }
+    $directoryHandles = @(
+        Open-VerifiedDirectoryChain (Split-Path -Parent ([string]$Temporary.Path))
+    )
+    $handle = $null
+    $stream = $null
+    try {
+        $handle = [ClaudeEasy.VerifiedDeleteNative]::Open(
+            [string]$Temporary.Path,
+            $false,
+            $false
+        )
+        $stream = New-Object System.IO.FileStream($handle, [System.IO.FileAccess]::Read)
+        $handle = $null
+        if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint(
+                $stream.SafeFileHandle
+            ) -or
+            [ClaudeEasy.VerifiedDeleteNative]::GetLinkCount(
+                $stream.SafeFileHandle
+            ) -ne 1 -or
+            [ClaudeEasy.VerifiedDeleteNative]::GetIdentity(
+                $stream.SafeFileHandle
+            ) -cne $snapshot.Identity -or
+            (Get-BytesSha256 (Get-StreamBytes $stream)) -ne
+                (Get-BytesSha256 ([byte[]]$Temporary.Bytes))) {
+            throw "中断事务恢复临时文件在清理前再次发生变化：$($Temporary.Path)"
+        }
+        Set-VerifiedDeleteDisposition $stream $true
+    } finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        } elseif ($null -ne $handle) {
+            $handle.Dispose()
+        }
+        for ($index = $directoryHandles.Count - 1; $index -ge 0; $index--) {
+            $directoryHandles[$index].Dispose()
+        }
+    }
+}
+
 function Invoke-InterruptedTransactionRecovery(
     [object[]]$Plan,
     [scriptblock]$PreCommitCondition = $null
@@ -1119,7 +1304,6 @@ function Invoke-InterruptedTransactionRecovery(
     $directoryHandles = @()
     $operationFailure = $null
     $preCommitRejected = $false
-    $mutationStarted = $false
     $cleanupFailures = @()
     foreach ($item in @($Plan | Sort-Object { $_.Action.Path })) {
         $handle = $null
@@ -1132,11 +1316,21 @@ function Invoke-InterruptedTransactionRecovery(
             if ($create -and (Test-Path -LiteralPath $item.Action.Path)) {
                 throw "中断事务待重建目标在恢复前出现：$($item.Action.Path)"
             }
-            $writable = $item.Operation -in @("create", "write")
+            if ($create) {
+                $opened += [pscustomobject]@{
+                    Item = $item
+                    Stream = $null
+                    Current = $null
+                    Temporary = $null
+                    Published = $false
+                }
+                continue
+            }
+            $writable = $item.Operation -eq "write"
             $handle = [ClaudeEasy.VerifiedDeleteNative]::Open(
                 $item.Action.Path,
                 $writable,
-                $create
+                $false
             )
             $access = if ($writable) {
                 [System.IO.FileAccess]::ReadWrite
@@ -1149,13 +1343,8 @@ function Invoke-InterruptedTransactionRecovery(
                 throw "中断事务目标不能是链接：$($item.Action.Path)"
             }
             $current = Get-StreamBytes $stream
-            if ($create) {
-                if ($current.Length -ne 0) {
-                    throw "中断事务待重建目标不是空文件：$($item.Action.Path)"
-                }
-            } elseif (
-                [ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle) -cne
-                    $item.Snapshot.Identity -or
+            if ([ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle) -cne
+                $item.Snapshot.Identity -or
                 (Get-BytesSha256 $current) -ne
                     (Get-BytesSha256 $item.Snapshot.Bytes)
             ) {
@@ -1165,17 +1354,11 @@ function Invoke-InterruptedTransactionRecovery(
                 Item = $item
                 Stream = $stream
                 Current = $current
-                Created = $create
+                Temporary = $null
+                Published = $false
             }
         } catch {
             $caughtFailure = $_
-            if ($create -and $null -ne $stream) {
-                try {
-                    Set-VerifiedDeleteDisposition $stream $true
-                } catch {
-                    $cleanupFailures += "$($item.Action.Path)：删除无效恢复占位文件失败。"
-                }
-            }
             if ($null -ne $stream) { $stream.Dispose() } elseif ($null -ne $handle) { $handle.Dispose() }
             $operationFailure = $caughtFailure
             break
@@ -1188,16 +1371,22 @@ function Invoke-InterruptedTransactionRecovery(
             )
             if (-not $preCommitRejected) {
                 foreach ($entry in @($opened | Where-Object {
-                    $_.Item.Operation -in @("create", "write")
+                    $_.Item.Operation -eq "create"
                 })) {
-                    $mutationStarted = $true
+                    $entry.Temporary = New-InterruptedRecoveryTemporaryFile `
+                        $entry.Item.Action.Path `
+                        $entry.Item.Action.Original
+                }
+                foreach ($entry in @($opened | Where-Object {
+                    $_.Item.Operation -eq "write"
+                })) {
                     Write-LockedStreamBytes `
                         $entry.Stream `
                         $entry.Item.Action.Original `
                         $entry.Current
                 }
                 foreach ($entry in @($opened | Where-Object {
-                    $_.Item.Operation -in @("create", "write")
+                    $_.Item.Operation -eq "write"
                 })) {
                     if ((Get-BytesSha256 (Get-StreamBytes $entry.Stream)) -ne
                         (Get-BytesSha256 $entry.Item.Action.Original)) {
@@ -1205,9 +1394,28 @@ function Invoke-InterruptedTransactionRecovery(
                     }
                 }
                 foreach ($entry in @($opened | Where-Object {
+                    $_.Item.Operation -eq "create"
+                })) {
+                    if (Test-Path -LiteralPath $entry.Item.Action.Path) {
+                        throw "中断事务待重建目标在发布前出现：$($entry.Item.Action.Path)"
+                    }
+                    [System.IO.File]::Move(
+                        $entry.Temporary.Path,
+                        $entry.Item.Action.Path
+                    )
+                    $entry.Published = $true
+                    $published = Get-OptionalFileSnapshot (
+                        $entry.Item.Action.Path
+                    ) "中断事务恢复结果"
+                    if (-not $published.Exists -or
+                        (Get-BytesSha256 $published.Bytes) -ne
+                            (Get-BytesSha256 $entry.Item.Action.Original)) {
+                        throw "中断事务重建目标发布后的内容不正确：$($entry.Item.Action.Path)"
+                    }
+                }
+                foreach ($entry in @($opened | Where-Object {
                     $_.Item.Operation -eq "delete"
                 })) {
-                    $mutationStarted = $true
                     Set-VerifiedDeleteDisposition $entry.Stream $true
                 }
             }
@@ -1215,17 +1423,17 @@ function Invoke-InterruptedTransactionRecovery(
             $operationFailure = $_
         }
     }
-    if (($preCommitRejected -or
-        ($null -ne $operationFailure -and -not $mutationStarted))) {
-        foreach ($entry in @($opened | Where-Object { $_.Created })) {
-            try {
-                Set-VerifiedDeleteDisposition $entry.Stream $true
-            } catch {
-                $cleanupFailures += "$($entry.Item.Action.Path)：删除恢复占位文件失败。"
-            }
+    foreach ($entry in @($opened | Where-Object {
+        $null -ne $_.Temporary -and -not $_.Published
+    })) {
+        try {
+            Remove-InterruptedRecoveryTemporaryFile $entry.Temporary
+        } catch {
+            $cleanupFailures += "$($entry.Item.Action.Path)：删除恢复临时文件失败。"
         }
     }
     for ($index = $opened.Count - 1; $index -ge 0; $index--) {
+        if ($null -eq $opened[$index].Stream) { continue }
         try {
             $opened[$index].Stream.Dispose()
         } catch {

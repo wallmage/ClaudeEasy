@@ -4,6 +4,134 @@ module ClaudeEasy
   WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT = 75
   class WrapperCommitReceiptError < StandardError; end
 
+  def usage_profile_state_path
+    File.expand_path("~/Library/Application Support/ClaudeEasy/usage-profile.plist")
+  end
+
+  def saved_usage_profile(path: usage_profile_state_path, runner: Open3.method(:capture3))
+    expanded = File.expand_path(path)
+    return nil unless File.exist?(expanded) || File.symlink?(expanded)
+
+    directory = File.dirname(expanded)
+    stat = File.lstat(expanded)
+    directory_stat = File.lstat(directory)
+    raise InvalidConfigError, "用途档位状态无效" unless
+      stat.file? && !stat.symlink? && stat.nlink == 1 && (stat.mode & 0o077).zero? &&
+      directory_stat.directory? && !directory_stat.symlink?
+
+    bytes = read_regular_file_once(expanded, "用途档位状态")
+    read_field = lambda do |field|
+      output, _error, status = runner.call(
+        "/usr/bin/plutil", "-extract", field, "raw", "-o", "-", "-", stdin_data: bytes
+      )
+      raise InvalidConfigError, "用途档位状态无效" unless status.success?
+
+      output.to_s.strip
+    end
+    version = read_field.call("Version")
+    profile = read_field.call("Profile")
+    raise InvalidConfigError, "用途档位状态无效" unless
+      version == "1" && %w[1 2 3].include?(profile)
+
+    profile.to_i
+  rescue SystemCallError, IOError
+    raise InvalidConfigError, "用途档位状态无效"
+  end
+
+  def usage_profile_rejection(expected)
+    saved = saved_usage_profile
+    return ["usage_profile_unset", "尚未保存用途档位，未执行任何修改。"] unless saved
+    return nil if saved == expected
+
+    ["usage_profile_mismatch", "命令指定的用途档位与已保存档位不一致，未执行任何修改。"]
+  rescue InvalidConfigError
+    ["usage_profile_invalid", "已保存的用途档位状态无效，未执行任何修改。"]
+  end
+
+  def reject_unapproved_usage_profile(options, operation:, expected:)
+    rejection = usage_profile_rejection(expected)
+    return nil unless rejection
+
+    code, summary = rejection
+    if options[:json]
+      emit_cli_result(
+        operation: operation, exit_code: 10, status: "invalid_request",
+        code: code, summary_zh: summary, profile: expected
+      )
+    else
+      warn summary
+      10
+    end
+  end
+
+  def internal_wrapper_operation?(backup_root)
+    fixed_backup_root = File.join(File.dirname(usage_profile_state_path), "backups")
+    return false unless File.expand_path(backup_root) == fixed_backup_root
+
+    lock_path = File.join(fixed_backup_root, ".claude-easy-wrapper.lock")
+    ClaudeEasyOperationLock.inherited_lock_held?(lock_path)
+  end
+
+  def valid_uninstall_recovery_profile?(path)
+    expected = File.join(
+      File.dirname(usage_profile_state_path),
+      ".claude-easy-uninstall-staging", "usage"
+    )
+    expanded = File.expand_path(path.to_s)
+    return false unless expanded == expected
+
+    staging = File.dirname(expanded)
+    %w[READY AUTO_UPDATE_WAS_OWNED].all? do |name|
+      marker = File.join(staging, name)
+      stat = File.lstat(marker)
+      stat.file? && !stat.symlink? && stat.nlink == 1
+    end && saved_usage_profile(path: expanded) == 3
+  rescue InvalidConfigError, SystemCallError, IOError
+    false
+  end
+
+  def public_cli_entrypoint?
+    File.expand_path($PROGRAM_NAME) == File.expand_path("../patch_profiles.rb", __dir__)
+  end
+
+  def cli_requires_outer_lock?(options)
+    return false if options[:disable_subscription_auto_update] ||
+                    options[:enable_subscription_auto_update] ||
+                    options[:restore_owned_subscription_auto_update] ||
+                    options[:list_backups] || options[:compare_backup]
+    return true if options[:snapshot_initial] || options[:recover_profile_transaction] ||
+                   options[:restore_backup] || options[:safe_update_all]
+
+    !options[:dry_run]
+  end
+
+  def enter_outer_wrapper_lock(arguments, options)
+    return nil unless public_cli_entrypoint? && cli_requires_outer_lock?(options)
+
+    backup_root = File.join(File.dirname(usage_profile_state_path), "backups")
+    lock_path = File.join(backup_root, ".claude-easy-wrapper.lock")
+    if ENV["CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD"] == "1"
+      return nil if internal_wrapper_operation?(backup_root)
+
+      status = ClaudeEasyOperationLock::FAILED_EXIT
+    else
+      status = ClaudeEasyOperationLock.run([
+        lock_path, RbConfig.ruby, File.expand_path("../patch_profiles.rb", __dir__), *arguments
+      ])
+    end
+    code = status == ClaudeEasyOperationLock::BUSY_EXIT ?
+      "operation_in_progress" : "operation_lock_failed"
+    summary = status == ClaudeEasyOperationLock::BUSY_EXIT ?
+      "另一个 ClaudeEasy 操作正在进行，请稍后重试。" : "无法建立 ClaudeEasy 操作锁；未执行任何修改。"
+    return emit_cli_result(
+      operation: "operation_lock", exit_code: status, status: "failed",
+      code: code, summary_zh: summary
+    ) if options[:json]
+
+    warn summary
+    status
+  end
+
   def chinese_status(result)
     name = safe_label(File.basename(result[:path].to_s))
     case result[:status]
@@ -140,6 +268,7 @@ module ClaudeEasy
   end
 
   def cli(argv = ARGV)
+    original_arguments = argv.dup
     json_mode = argv.include?("--json")
     options = {
       profile_dirs: [],
@@ -150,6 +279,7 @@ module ClaudeEasy
       print_tun_state: false,
       print_core_status: false,
       print_subscription_auto_update_state: false,
+      print_auto_update_ownership_state: false,
       disable_subscription_auto_update: false,
       enable_subscription_auto_update: false,
       restore_owned_subscription_auto_update: false,
@@ -161,6 +291,7 @@ module ClaudeEasy
       safe_update_all: false,
       recover_profile_transaction: false,
       usage_profile: nil,
+      uninstall_recovery_state: nil,
       wrapper_commit_receipt: nil,
       wrapper_commit_nonce: nil,
       json: json_mode,
@@ -176,6 +307,7 @@ module ClaudeEasy
       opts.on("--print-tun-state", "输出当前运行内核的 TUN 状态") { options[:print_tun_state] = true }
       opts.on("--print-core-status", "检查 Mihomo 内核是否满足最低版本") { options[:print_core_status] = true }
       opts.on("--print-subscription-auto-update-state", "输出订阅自动更新状态") { options[:print_subscription_auto_update_state] = true }
+      opts.on("--print-auto-update-ownership-state", "输出订阅自动更新所有权状态") { options[:print_auto_update_ownership_state] = true }
       opts.on("--disable-subscription-auto-update", "关闭订阅自动更新并回读确认") { options[:disable_subscription_auto_update] = true }
       opts.on("--enable-subscription-auto-update", "恢复订阅自动更新并回读确认") { options[:enable_subscription_auto_update] = true }
       opts.on("--restore-owned-subscription-auto-update", "只恢复本工具关闭的订阅自动更新") { options[:restore_owned_subscription_auto_update] = true }
@@ -187,6 +319,9 @@ module ClaudeEasy
       opts.on("--safe-update-all", "安全更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
       opts.on("--recover-profile-transaction", "恢复未完成的配置事务及当前运行配置") { options[:recover_profile_transaction] = true }
       opts.on("--usage-profile N", Integer, "补丁与安全更新采用的用途档位") { |value| options[:usage_profile] = value }
+      opts.on("--internal-uninstall-recovery-state PATH") do |value|
+        options[:uninstall_recovery_state] = File.expand_path(value)
+      end
       opts.on("--wrapper-commit-receipt PATH") { |value| options[:wrapper_commit_receipt] = File.expand_path(value) }
       opts.on("--wrapper-commit-nonce VALUE") { |value| options[:wrapper_commit_nonce] = value }
       opts.on("--json", "输出 JSON v1 结果") { options[:json] = true }
@@ -238,15 +373,72 @@ module ClaudeEasy
       return 0
     end
 
+    if options[:print_auto_update_ownership_state]
+      begin
+        state = auto_update_ownership_state(options[:backup_root]) ? :owned : :not_owned
+        return emit_cli_result(
+          operation: "auto_update_ownership_state", exit_code: 0, status: "ok",
+          code: state.to_s, summary_zh: "已读取订阅自动更新所有权状态。",
+          checks: [{ "name" => "auto_update_ownership", "status" => state.to_s }]
+        ) if options[:json]
+        puts state
+        return 0
+      rescue InvalidConfigError, SystemCallError, IOError => error
+        return emit_cli_result(
+          operation: "auto_update_ownership_state", exit_code: 1, status: "failed",
+          code: "auto_update_state_invalid", summary_zh: "无法读取订阅自动更新所有权状态。"
+        ) if options[:json]
+        warn error.message
+        return 1
+      end
+    end
+
+    lock_status = enter_outer_wrapper_lock(original_arguments, options)
+    return lock_status if lock_status
+
     if options[:disable_subscription_auto_update]
+      unless internal_wrapper_operation?(options[:backup_root])
+        return emit_cli_result(
+          operation: "disable_subscription_auto_update", exit_code: 64,
+          status: "invalid_request", code: "internal_operation_required",
+          summary_zh: "订阅自动更新只能由安装或恢复流程修改。"
+        ) if options[:json]
+        warn "订阅自动更新只能由安装或恢复流程修改。"
+        return 64
+      end
+      unless [1, 2, 3].include?(options[:usage_profile])
+        return emit_cli_result(
+          operation: "disable_subscription_auto_update", exit_code: 64,
+          status: "invalid_request", code: "usage_profile_required",
+          summary_zh: "关闭订阅自动更新必须显式指定用途档位 3。"
+        ) if options[:json]
+        warn "关闭订阅自动更新必须显式指定用途档位 3。"
+        return 64
+      end
+      if options[:uninstall_recovery_state]
+        unless valid_uninstall_recovery_profile?(options[:uninstall_recovery_state])
+          return emit_cli_result(
+            operation: "disable_subscription_auto_update", exit_code: 10,
+            status: "invalid_request", code: "uninstall_recovery_state_invalid",
+            summary_zh: "安全卸载恢复凭据无效，未修改订阅自动更新。"
+          ) if options[:json]
+          warn "安全卸载恢复凭据无效，未修改订阅自动更新。"
+          return 10
+        end
+      elsif (rejected = reject_unapproved_usage_profile(
+        options, operation: "disable_subscription_auto_update", expected: 3
+      ))
+        return rejected
+      end
       begin
         result = disable_subscription_auto_update(backup_root: options[:backup_root])
+        unchanged = [:already_disabled, :already_disabled_owned].include?(result.fetch(:status))
         return emit_cli_result(
           operation: "disable_subscription_auto_update", exit_code: 0,
-          status: result.fetch(:status) == :already_disabled ? "no_change" : "ok",
+          status: unchanged ? "no_change" : "ok",
           code: result.fetch(:status).to_s,
-          summary_zh: result.fetch(:status) == :already_disabled ? "订阅自动更新已经关闭。" : "已关闭订阅自动更新。",
-          changes: result.fetch(:status) == :already_disabled ? [] : ["subscription_auto_update"]
+          summary_zh: unchanged ? "订阅自动更新已经关闭。" : "已关闭订阅自动更新。",
+          changes: unchanged ? [] : ["subscription_auto_update"]
         ) if options[:json]
         puts result.fetch(:status)
         return 0
@@ -261,28 +453,25 @@ module ClaudeEasy
     end
 
     if options[:enable_subscription_auto_update]
-      begin
-        result = enable_subscription_auto_update
-        return emit_cli_result(
-          operation: "enable_subscription_auto_update", exit_code: 0,
-          status: result.fetch(:status) == :already_enabled ? "no_change" : "ok",
-          code: result.fetch(:status).to_s,
-          summary_zh: result.fetch(:status) == :already_enabled ? "订阅自动更新已经开启。" : "已恢复订阅自动更新。",
-          changes: result.fetch(:status) == :already_enabled ? [] : ["subscription_auto_update"]
-        ) if options[:json]
-        puts result.fetch(:status)
-        return 0
-      rescue InvalidConfigError, SystemCallError, IOError => error
-        return emit_cli_result(
-          operation: "enable_subscription_auto_update", exit_code: 1, status: "failed",
-          code: "auto_update_restore_failed", summary_zh: "无法恢复订阅自动更新。"
-        ) if options[:json]
-        warn error.message
-        return 1
-      end
+      return emit_cli_result(
+        operation: "enable_subscription_auto_update", exit_code: 64,
+        status: "invalid_request", code: "internal_operation_required",
+        summary_zh: "订阅自动更新只能按本工具的所有权记录恢复。"
+      ) if options[:json]
+      warn "订阅自动更新只能按本工具的所有权记录恢复。"
+      return 64
     end
 
     if options[:restore_owned_subscription_auto_update]
+      unless internal_wrapper_operation?(options[:backup_root])
+        return emit_cli_result(
+          operation: "restore_owned_subscription_auto_update", exit_code: 64,
+          status: "invalid_request", code: "internal_operation_required",
+          summary_zh: "订阅自动更新只能由安装、卸载或恢复流程修改。"
+        ) if options[:json]
+        warn "订阅自动更新只能由安装、卸载或恢复流程修改。"
+        return 64
+      end
       begin
         result = restore_owned_subscription_auto_update(backup_root: options[:backup_root])
         changed = result.fetch(:status) == :restored
@@ -457,6 +646,11 @@ module ClaudeEasy
         warn "安全更新必须指定用途档位 1、2 或 3。"
         return 64
       end
+      if (rejected = reject_unapproved_usage_profile(
+        options, operation: "safe_update", expected: options[:usage_profile]
+      ))
+        return rejected
+      end
       policy = JSON.parse(File.read(options[:policy], encoding: "UTF-8"))
       targets = remote_subscription_targets(directories)
       result = safe_update_all(
@@ -501,6 +695,23 @@ module ClaudeEasy
       return 1
     end
 
+    unless [1, 2, 3].include?(options[:usage_profile])
+      return emit_cli_result(
+        operation: options[:dry_run] ? "preview_profiles" : "patch_profiles",
+        exit_code: 64, status: "invalid_request", code: "usage_profile_required",
+        summary_zh: "处理配置必须显式指定用途档位。"
+      ) if options[:json]
+      warn "处理配置必须显式指定用途档位。"
+      return 64
+    end
+    unless options[:dry_run]
+      if (rejected = reject_unapproved_usage_profile(
+        options, operation: "patch_profiles", expected: options[:usage_profile]
+      ))
+        return rejected
+      end
+    end
+
     results = run(
       directories: directories,
       policy_path: options[:policy],
@@ -508,7 +719,7 @@ module ClaudeEasy
       backup_root: options[:backup_root],
       validator: options[:dry_run] ? nil : method(:validate_with_mihomo),
       auto_reload: options[:auto_reload] && !options[:dry_run],
-      usage_profile: options[:usage_profile] || 3,
+      usage_profile: options[:usage_profile],
       guard_storage: guard_storage, expected_storage: expected_storage
     )
     if results.empty?

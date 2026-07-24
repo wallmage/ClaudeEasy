@@ -1104,6 +1104,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Test-InterruptedRecoveryCommitCondition', 'Repair-InterruptedFilePreparation',
       'Write-FileTransactionJournal', 'Remove-FileTransactionJournal',
       'Get-ValidatedFileTransactionJournal', 'Get-InterruptedTransactionRecoveryPlan',
+      'New-InterruptedRecoveryTemporaryFile', 'Remove-InterruptedRecoveryTemporaryFile',
       'Invoke-InterruptedTransactionRecovery', 'Assert-InterruptedTransactionRecovered',
       'Repair-InterruptedFileTransaction', 'Invoke-VerifiedPathTransaction',
       'Invoke-VerifiedFileTransaction', 'Invoke-VerifiedWriteDeleteTransaction',
@@ -1129,10 +1130,14 @@ test('Windows installer is split into side-effect-free modules with stable funct
     ],
     'script_js.ps1': [
       'Get-JavaScriptAnalysis', 'Rename-JavaScriptMain', 'Assert-JavaScriptReservedIdentifiers',
-      'Assert-JavaScriptDoesNotBindMain', 'Assert-JavaScriptCanCompose', 'Build-GlobalScript'
+      'Assert-JavaScriptDoesNotUseDynamicCode',
+      'Assert-JavaScriptDoesNotBindMain', 'Assert-JavaScriptDoesNotReferenceMain',
+      'Assert-JavaScriptCanCompose', 'Build-GlobalScript'
     ],
     'safe_update.ps1': [
-      'Get-BackupTarget', 'Get-ClaudeEasyManagedScriptBlock', 'Assert-ClaudeEasyManagedScriptCurrent',
+      'Get-BackupTarget', 'Get-ClaudeEasyManagedScriptBlock', 'Get-ClaudeEasyManagedScriptEnvelope',
+      'Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive',
+      'Assert-ClaudeEasyManagedScriptCurrent',
       'Test-ClaudeEasyFlowSequenceHasItem', 'Assert-ClaudeEasyProxyGroupCollection', 'Test-RestoreCandidate',
       'Get-SafeUpdateRecoveryItems', 'Get-SafeUpdateVerificationTargets', 'Restore-SafeUpdateFiles'
     ]

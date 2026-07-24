@@ -21,7 +21,9 @@ SHOW_PROFILE=0
 SAFE_UPDATE=0
 JSON_OUTPUT=0
 OPERATION="install"
-AUTO_UPDATE_CHANGED=0
+AUTO_UPDATE_RECOVERY_REQUIRED=0
+AUTO_UPDATE_RECOVERY_PENDING=0
+AUTO_UPDATE_OPERATION_SIGNAL=0
 PENDING_TEMPORARY=""
 PREVIOUS_PROFILE=""
 PROFILE_STATE_CHANGED=0
@@ -38,6 +40,19 @@ PROFILE_OPERATION_RESULT_FAILED=0
 PROFILE_OPERATION_RESULT_UNKNOWN=0
 OPERATION_LOCK_REQUIRED=1
 
+restore_auto_update_if_required() {
+  [ "$AUTO_UPDATE_RECOVERY_REQUIRED" -eq 1 ] || return 0
+  restore_result=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+    --backup-dir "$BACKUP_DIR" --restore-owned-subscription-auto-update 2>&1) || return 1
+  case "$restore_result" in
+    restored|already_restored|not_owned)
+      AUTO_UPDATE_RECOVERY_REQUIRED=0
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 unexpected_exit() {
   unexpected_status=$1
   trap - EXIT HUP INT TERM
@@ -47,13 +62,13 @@ unexpected_exit() {
   [ -z "$PROFILE_OPERATION_RECEIPT_PATH" ] ||
     /bin/rm -f "$PROFILE_OPERATION_RECEIPT_PATH"
   profile_restore_failed=0
-  if [ "$PROFILE_STATE_CHANGED" -eq 1 ]; then
+  auto_update_restore_failed=0
+  restore_auto_update_if_required >/dev/null 2>&1 || auto_update_restore_failed=1
+  if [ "$auto_update_restore_failed" -eq 1 ]; then
+    AUTO_UPDATE_RECOVERY_PENDING=1
+    commit_profile_selection
+  elif [ "$PROFILE_STATE_CHANGED" -eq 1 ]; then
     rollback_profile_selection || profile_restore_failed=1
-  fi
-  if [ "$AUTO_UPDATE_CHANGED" -eq 1 ]; then
-    AUTO_UPDATE_CHANGED=0
-    /usr/bin/ruby "$PATCHER_SOURCE" \
-      --backup-dir "$BACKUP_DIR" --restore-owned-subscription-auto-update >/dev/null 2>&1
   fi
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if [ -x /usr/bin/ruby ] && [ -f "$RESULT_CONTRACT_SOURCE" ]; then
@@ -67,6 +82,21 @@ unexpected_exit() {
           --command install --operation "$OPERATION" --ok false --status partial \
           --code operation_interrupted_recovery_intent --exit-code "$unexpected_status" \
           --summary "最终处理被中断；保存档位和自动更新关闭状态已经保留，下次运行将按该档位继续。"
+      elif [ "$profile_restore_failed" -eq 1 ] && [ "$auto_update_restore_failed" -eq 1 ]; then
+        /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
+          --command install --operation "$OPERATION" --ok false --status partial \
+          --code state_restore_failed --exit-code "$unexpected_status" \
+          --summary "安装流程意外中止，且旧用途档位与订阅自动更新均未能完整恢复。"
+      elif [ "$auto_update_restore_failed" -eq 1 ]; then
+        /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
+          --command install --operation "$OPERATION" --ok false --status partial \
+          --code auto_update_restore_failed --exit-code "$unexpected_status" \
+          --summary "安装流程意外中止；已保留档位 3，但订阅自动更新仍需重试恢复。"
+      elif [ "$AUTO_UPDATE_RECOVERY_PENDING" -eq 1 ]; then
+        /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
+          --command install --operation "$OPERATION" --ok false --status partial \
+          --code auto_update_recovery_pending --exit-code "$unexpected_status" \
+          --summary "订阅自动更新尚未达到档位 3 的完整状态；已保留恢复记录，请按档位 3 重试。"
       elif [ "$profile_restore_failed" -eq 1 ]; then
         /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$OPERATION" --ok false --status partial \
@@ -82,6 +112,12 @@ unexpected_exit() {
       /usr/bin/printf '%s\n' "[ClaudeEasy] 配置已经提交；返回成功结果前收到中断，保存档位和自动更新状态保持不变。"
     elif [ "$PROFILE_OPERATION_RECOVERY_INTENT" -eq 1 ]; then
       /usr/bin/printf '%s\n' "[ClaudeEasy] 最终处理被中断；保存档位和自动更新关闭状态已经保留，下次运行将按该档位继续。"
+    elif [ "$profile_restore_failed" -eq 1 ] && [ "$auto_update_restore_failed" -eq 1 ]; then
+      /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止，且旧用途档位与订阅自动更新均未能完整恢复。"
+    elif [ "$auto_update_restore_failed" -eq 1 ]; then
+      /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止；已保留档位 3，但订阅自动更新仍需重试恢复。"
+    elif [ "$AUTO_UPDATE_RECOVERY_PENDING" -eq 1 ]; then
+      /usr/bin/printf '%s\n' "[ClaudeEasy] 订阅自动更新尚未达到档位 3 的完整状态；已保留恢复记录，请按档位 3 重试。"
     elif [ "$profile_restore_failed" -eq 1 ]; then
       /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止，且旧用途档位未能恢复。"
     else
@@ -111,25 +147,26 @@ finish() {
   finish_summary=$4
   finish_operation=${5:-$OPERATION}
   finish_profile=${6:-$USAGE_PROFILE}
-  if [ "$finish_exit" -ne 0 ] && [ "$PROFILE_STATE_CHANGED" -eq 1 ]; then
-    if ! rollback_profile_selection; then
+  if [ "$finish_exit" -ne 0 ]; then
+    auto_update_restore_failed=0
+    restore_auto_update_if_required || auto_update_restore_failed=1
+    if [ "$auto_update_restore_failed" -eq 1 ]; then
+      AUTO_UPDATE_RECOVERY_PENDING=1
+      commit_profile_selection
+    elif [ "$PROFILE_STATE_CHANGED" -eq 1 ] && ! rollback_profile_selection; then
       finish_status=partial
       finish_code=profile_restore_failed
       finish_summary="操作失败，且旧用途档位未能恢复。"
     fi
-  fi
-  if [ "$finish_exit" -ne 0 ] && [ "$AUTO_UPDATE_CHANGED" -eq 1 ]; then
-    AUTO_UPDATE_CHANGED=0
-    restore_result=$(/usr/bin/ruby "$PATCHER_SOURCE" \
-      --backup-dir "$BACKUP_DIR" --restore-owned-subscription-auto-update 2>&1 || true)
-    case "$restore_result" in
-      restored|already_restored) ;;
-      *)
-        finish_status=partial
-        finish_code=auto_update_restore_failed
-        finish_summary="操作失败，且订阅自动更新未能恢复。"
-        ;;
-    esac
+    if [ "$auto_update_restore_failed" -eq 1 ]; then
+      finish_status=partial
+      finish_code=auto_update_restore_failed
+      finish_summary="操作失败；已保留档位 3，但订阅自动更新仍需重试恢复。"
+    elif [ "$AUTO_UPDATE_RECOVERY_PENDING" -eq 1 ]; then
+      finish_status=partial
+      finish_code=auto_update_recovery_pending
+      finish_summary="订阅自动更新尚未达到档位 3 的完整状态；已保留恢复记录，请按档位 3 重试。"
+    fi
   fi
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if [ -x /usr/bin/ruby ] && [ -f "$RESULT_CONTRACT_SOURCE" ]; then
@@ -154,6 +191,74 @@ finish() {
 say() {
   [ "$JSON_OUTPUT" -eq 0 ] || return 0
   /usr/bin/printf '%s\n' "[ClaudeEasy] $1"
+}
+
+durable_ensure_private_directory() {
+  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --ensure-private-directory "$1"
+}
+
+durable_sync_directory() {
+  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --sync-directory "$1"
+}
+
+durable_sync_file() {
+  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --sync-file "$1"
+}
+
+record_auto_update_signal() {
+  received_signal_status=$1
+  [ "$AUTO_UPDATE_OPERATION_SIGNAL" -ne 0 ] ||
+    AUTO_UPDATE_OPERATION_SIGNAL=$received_signal_status
+}
+
+run_subscription_auto_update_disable() {
+  auto_update_output_path=$(
+    /usr/bin/mktemp "$BACKUP_DIR/.auto-update-result.XXXXXX"
+  ) || return 1
+  PENDING_TEMPORARY=$auto_update_output_path
+  if ! /bin/chmod 600 "$auto_update_output_path"; then
+    /bin/rm -f "$auto_update_output_path"
+    PENDING_TEMPORARY=""
+    return 1
+  fi
+  AUTO_UPDATE_OPERATION_SIGNAL=0
+  trap 'record_auto_update_signal 129' HUP
+  trap 'record_auto_update_signal 130' INT
+  trap 'record_auto_update_signal 143' TERM
+  set +e
+  /usr/bin/ruby "$PATCHER_SOURCE" \
+    --backup-dir "$BACKUP_DIR" --usage-profile "$USAGE_PROFILE" \
+    --disable-subscription-auto-update >"$auto_update_output_path" 2>&1
+  auto_update_status=$?
+  set -e
+  auto_update_result=$(/bin/cat "$auto_update_output_path" 2>/dev/null || true)
+  /bin/rm -f "$auto_update_output_path"
+  PENDING_TEMPORARY=""
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [ "$AUTO_UPDATE_OPERATION_SIGNAL" -ne 0 ]; then
+    exit "$AUTO_UPDATE_OPERATION_SIGNAL"
+  fi
+  return "$auto_update_status"
+}
+
+reconcile_auto_update_for_light_profile() {
+  [ "$USAGE_PROFILE" != "3" ] || return 0
+  if [ ! -e "$AUTO_UPDATE_OWNERSHIP_PATH" ] && [ ! -L "$AUTO_UPDATE_OWNERSHIP_PATH" ]; then
+    return 0
+  fi
+  reconciliation_result=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+    --backup-dir "$BACKUP_DIR" --restore-owned-subscription-auto-update 2>&1) ||
+    finish 1 partial auto_update_recovery_pending \
+      "检测到未完成的订阅自动更新恢复；恢复失败，未处理任何订阅文件。" install
+  case "$reconciliation_result" in
+    restored|already_restored|not_owned) ;;
+    *)
+      finish 1 partial auto_update_recovery_pending \
+        "订阅自动更新恢复结果无法确认；未处理任何订阅文件。" install
+      ;;
+  esac
 }
 
 finish_json_child_failure() {
@@ -253,8 +358,7 @@ write_profile() {
   profile_to_write=$1
   profile_state_is_safe || return 1
   state_dir=$(/usr/bin/dirname "$USAGE_STATE_PATH")
-  /bin/mkdir -p "$state_dir"
-  /bin/chmod 700 "$state_dir"
+  durable_ensure_private_directory "$state_dir"
   temporary=$(/usr/bin/mktemp "$state_dir/.usage-profile.XXXXXX")
   PENDING_TEMPORARY=$temporary
   trap '/bin/rm -f "$temporary"; exit 1' HUP INT TERM
@@ -263,7 +367,9 @@ write_profile() {
   /usr/bin/plutil -insert Profile -integer "$profile_to_write" "$temporary"
   /bin/chmod 600 "$temporary"
   /bin/mv -f "$temporary" "$USAGE_STATE_PATH"
+  PROFILE_STATE_CHANGED=1
   PENDING_TEMPORARY=""
+  durable_sync_file "$USAGE_STATE_PATH"
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -283,6 +389,7 @@ rollback_profile_selection() {
     write_profile "$PREVIOUS_PROFILE" || return 1
   else
     /bin/rm -f "$USAGE_STATE_PATH" || return 1
+    durable_sync_directory "$(/usr/bin/dirname "$USAGE_STATE_PATH")" || return 1
   fi
   PROFILE_STATE_CHANGED=0
 }
@@ -290,7 +397,6 @@ rollback_profile_selection() {
 stage_profile_selection() {
   [ "$PROFILE_SOURCE" != "saved" ] || return 0
   save_profile
-  PROFILE_STATE_CHANGED=1
 }
 
 commit_profile_selection() {
@@ -301,7 +407,8 @@ commit_profile_selection() {
 
 preserve_profile_operation_state() {
   commit_profile_selection
-  AUTO_UPDATE_CHANGED=0
+  AUTO_UPDATE_RECOVERY_REQUIRED=0
+  AUTO_UPDATE_RECOVERY_PENDING=0
 }
 
 finish_profile_operation_signal() {
@@ -542,8 +649,7 @@ if [ -n "$USAGE_PROFILE" ]; then
   esac
 fi
 
-if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ] &&
-   [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" != "1" ]; then
+if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
   if [ "$(uname -s)" != "Darwin" ]; then
     say "当前系统不是 macOS。Windows 请使用 Clash Verge Rev 的 Windows 安装程序。"
     finish 2 unsupported unsupported_platform "当前系统不是 macOS。" install
@@ -561,26 +667,33 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ] &&
     say "安装包不完整：缺少操作锁程序。"
     finish 6 failed incomplete_package "安装包不完整。" install
   fi
-  trap ':' HUP INT TERM
-  set +e
-  /usr/bin/ruby "$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"
-  operation_lock_status=$?
-  set -e
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  case "$operation_lock_status" in
-    75)
-      finish 1 failed operation_in_progress "另一个 ClaudeEasy 操作正在进行，请稍后重试。" "$OPERATION"
-      ;;
-    76)
+  if [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" = "1" ]; then
+    if ! /usr/bin/ruby "$OPERATION_LOCK_SOURCE" \
+        --verify-held-lock "$OPERATION_LOCK_PATH"; then
       finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。" "$OPERATION"
-      ;;
-    *)
-      trap - EXIT HUP INT TERM
-      exit "$operation_lock_status"
-      ;;
-  esac
+    fi
+  else
+    trap ':' HUP INT TERM
+    set +e
+    /usr/bin/ruby "$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"
+    operation_lock_status=$?
+    set -e
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    case "$operation_lock_status" in
+      75)
+        finish 1 failed operation_in_progress "另一个 ClaudeEasy 操作正在进行，请稍后重试。" "$OPERATION"
+        ;;
+      76)
+        finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。" "$OPERATION"
+        ;;
+      *)
+        trap - EXIT HUP INT TERM
+        exit "$operation_lock_status"
+        ;;
+    esac
+  fi
 fi
 
 recover_interrupted_uninstall
@@ -637,6 +750,8 @@ fi
 /bin/mkdir -p "$BACKUP_DIR"
 /bin/chmod 700 "$INSTALL_DIR" "$BACKUP_DIR"
 
+reconcile_auto_update_for_light_profile
+
 if [ -n "$CUSTOM_PROFILE_DIR" ]; then
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if ! child_json=$(/usr/bin/ruby "$PATCHER_SOURCE" --profile-dir "$CUSTOM_PROFILE_DIR" --backup-dir "$BACKUP_DIR" --snapshot-initial --json 2>/dev/null); then
@@ -660,14 +775,27 @@ fi
 stage_profile_selection
 
 if [ "$USAGE_PROFILE" -eq 3 ]; then
-  if ! auto_update_result=$(/usr/bin/ruby "$PATCHER_SOURCE" --backup-dir "$BACKUP_DIR" --disable-subscription-auto-update 2>&1); then
-    say "无法自动关闭 ClashX Meta 的订阅自动更新；本次未修改任何订阅。"
-    finish 9 failed auto_update_failed "无法自动关闭订阅自动更新；未修改任何订阅。" install
+  if [ "$PREVIOUS_PROFILE" != "3" ]; then
+    AUTO_UPDATE_RECOVERY_REQUIRED=1
+  fi
+  if ! run_subscription_auto_update_disable; then
+    if [ "$PREVIOUS_PROFILE" = "3" ]; then
+      AUTO_UPDATE_RECOVERY_PENDING=1
+    fi
+    say "无法完成 ClashX Meta 的订阅自动更新设置；未继续处理订阅文件，请按档位 3 重试。"
+    finish 9 failed auto_update_failed "无法完成订阅自动更新设置；未继续处理订阅文件。" install
   fi
   case "$auto_update_result" in
-    disabled) AUTO_UPDATE_CHANGED=1; say "已自动关闭订阅更新，并保存修改前状态。" ;;
-    already_disabled) say "订阅自动更新已经关闭。" ;;
-    *) say "订阅自动更新回读结果异常；本次未修改任何订阅。"; finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未修改任何订阅。" install ;;
+    disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;
+    already_disabled) AUTO_UPDATE_RECOVERY_REQUIRED=0; say "订阅自动更新已经关闭。" ;;
+    already_disabled_owned) say "订阅自动更新已经由 ClaudeEasy 关闭。" ;;
+    *)
+      if [ "$PREVIOUS_PROFILE" = "3" ]; then
+        AUTO_UPDATE_RECOVERY_PENDING=1
+      fi
+      say "订阅自动更新回读结果异常；未继续处理订阅文件，请按档位 3 重试。"
+      finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未继续处理订阅文件。" install
+      ;;
   esac
 fi
 

@@ -1,6 +1,7 @@
 ﻿param(
     [string]$ControllerUrl = "http://127.0.0.1:9097",
     [string]$Secret = "",
+    [switch]$SecretStdin,
     [string]$MainGroup = "",
     [string]$AiGroup = "",
     [int]$ObservationSeconds = 15,
@@ -19,16 +20,148 @@ if (-not (Test-Path -LiteralPath $resultContractPath -PathType Leaf)) {
 }
 . $resultContractPath
 $script:ClaudeEasyChecks = New-Object System.Collections.ArrayList
+$script:ClaudeEasyControllerBaseUrl = ""
+$script:ClaudeEasyControllerSecret = ""
+
+function Read-ControllerSecretFromStandardInput {
+    if (-not [string]::IsNullOrEmpty($Secret)) {
+        throw "不能通过 -Secret 传入非空控制器密钥；请改用 -SecretStdin。"
+    }
+    if (-not $SecretStdin) { return "" }
+    $value = [Console]::In.ReadToEnd()
+    if ($value.EndsWith("`r`n", [StringComparison]::Ordinal)) {
+        $value = $value.Substring(0, $value.Length - 2)
+    } elseif ($value.EndsWith("`n", [StringComparison]::Ordinal)) {
+        $value = $value.Substring(0, $value.Length - 1)
+    }
+    if ($value.Contains("`r") -or $value.Contains("`n")) {
+        throw "标准输入中的控制器密钥必须是单行文本。"
+    }
+    return $value
+}
+
+function Test-StrictIpv4LoopbackHost([string]$HostName) {
+    $parts = @($HostName.Split("."))
+    if ($parts.Count -ne 4 -or $parts[0] -cne "127") { return $false }
+    foreach ($part in $parts) {
+        if ($part -notmatch '^(?:0|[1-9][0-9]{0,2})$' -or
+            [int]$part -gt 255) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-ValidatedControllerBaseUri([string]$Value) {
+    $parsed = $null
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains("\") -or
+        -not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$parsed)) {
+        throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"
+    }
+    $authorityMatch = [regex]::Match(
+        $Value,
+        '^(?i:https?)://(?<authority>[^/?#]+)'
+    )
+    if (-not $authorityMatch.Success) {
+        throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"
+    }
+    $rawAuthority = $authorityMatch.Groups["authority"].Value
+    $rawHost = ""
+    if ($rawAuthority.StartsWith("[", [StringComparison]::Ordinal)) {
+        $closingBracket = $rawAuthority.IndexOf("]")
+        if ($closingBracket -lt 0) {
+            throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"
+        }
+        $rawHost = $rawAuthority.Substring(0, $closingBracket + 1)
+        $rawPort = $rawAuthority.Substring($closingBracket + 1)
+        if (-not [string]::IsNullOrEmpty($rawPort) -and
+            $rawPort -notmatch '^:[0-9]+$') {
+            throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"
+        }
+    } else {
+        $rawParts = @($rawAuthority.Split(":"))
+        if ($rawParts.Count -gt 2 -or
+            ($rawParts.Count -eq 2 -and $rawParts[1] -notmatch '^[0-9]+$')) {
+            throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"
+        }
+        $rawHost = $rawParts[0]
+    }
+    $rawHostIsLoopback = [string]::Equals(
+        $rawHost,
+        "localhost",
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or $rawHost -ceq "[::1]" -or
+        (Test-StrictIpv4LoopbackHost $rawHost)
+    if (-not $rawHostIsLoopback) {
+        throw "控制器地址必须使用本机回环地址。"
+    }
+    if ($parsed.Scheme -notin @("http", "https") -or
+        -not [string]::IsNullOrEmpty($parsed.UserInfo) -or
+        -not [string]::IsNullOrEmpty($parsed.Query) -or
+        -not [string]::IsNullOrEmpty($parsed.Fragment)) {
+        throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址，且不能包含凭据、查询或片段。"
+    }
+    $hostName = [string]$parsed.DnsSafeHost
+    $isLoopback = [string]::Equals(
+        $hostName,
+        "localhost",
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or $hostName -ceq "::1" -or $hostName -ceq "[::1]" -or
+        (Test-StrictIpv4LoopbackHost $hostName)
+    if (-not $isLoopback) {
+        throw "控制器地址必须使用本机回环地址。"
+    }
+    return $parsed.GetLeftPart([UriPartial]::Path).TrimEnd("/")
+}
 
 function Invoke-ControllerJson([string]$Endpoint) {
-    $headers = @{}
-    if (-not [string]::IsNullOrWhiteSpace($Secret)) {
-        $headers["Authorization"] = "Bearer $Secret"
+    $uri = $script:ClaudeEasyControllerBaseUrl + $Endpoint
+    $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($uri)
+    $request.Method = "GET"
+    $request.AllowAutoRedirect = $false
+    $request.Proxy = $null
+    $request.Timeout = 5000
+    $request.ReadWriteTimeout = 5000
+    $request.KeepAlive = $false
+    if (-not [string]::IsNullOrEmpty($script:ClaudeEasyControllerSecret)) {
+        $request.Headers[[System.Net.HttpRequestHeader]::Authorization] =
+            "Bearer " + $script:ClaudeEasyControllerSecret
     }
-    $uri = $ControllerUrl.TrimEnd("/") + $Endpoint
-    $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers $headers -Method Get -TimeoutSec 5
-    if ([int]$response.StatusCode -ne 200) { throw "本地控制器请求失败。" }
-    return ($response.Content | ConvertFrom-Json)
+    $response = $null
+    $reader = $null
+    try {
+        $response = [System.Net.HttpWebResponse]$request.GetResponse()
+        if ($response.StatusCode -ne [System.Net.HttpStatusCode]::OK) {
+            throw "unexpected controller status"
+        }
+        $reader = New-Object System.IO.StreamReader(
+            $response.GetResponseStream(),
+            [System.Text.Encoding]::UTF8,
+            $true
+        )
+        $content = $reader.ReadToEnd()
+        return ($content | ConvertFrom-Json)
+    } catch {
+        $errorResponse = $_.Exception.Response
+        if ($null -ne $errorResponse) {
+            try { $errorResponse.Dispose() } catch { }
+        }
+        throw "本地控制器请求失败。"
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        if ($null -ne $response) { $response.Dispose() }
+    }
+}
+
+function Get-SafeVerificationFailureMessage([string]$Message) {
+    $safe = $Message
+    if (-not [string]::IsNullOrEmpty($script:ClaudeEasyControllerSecret)) {
+        $safe = $safe.Replace(
+            $script:ClaudeEasyControllerSecret,
+            "[已隐藏]"
+        )
+    }
+    return $safe
 }
 
 function Get-Policy {
@@ -57,6 +190,53 @@ function Find-Group([object]$Proxies, [object[]]$Candidates, [string]$Requested,
     throw "无法自动识别$Label；未进行分流验证。"
 }
 
+function Test-SupportedRouteGroupType([string]$GroupType) {
+    return $GroupType -in @("Selector", "URLTest", "Fallback", "LoadBalance", "Relay")
+}
+
+function Get-LiveChainProxy(
+    [object]$Proxies,
+    [object]$Providers,
+    [string]$Name,
+    [string]$ProviderName
+) {
+    if (-not [string]::IsNullOrWhiteSpace($ProviderName)) {
+        if ($null -eq $Providers) { return $null }
+        $providerProperty = $Providers.PSObject.Properties[$ProviderName]
+        if ($null -eq $providerProperty) { return $null }
+        foreach ($proxy in @($providerProperty.Value.proxies)) {
+            if ($null -ne $proxy -and [string]$proxy.name -eq $Name) { return $proxy }
+        }
+        return $null
+    }
+    $property = $Proxies.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Test-SafeLiveChain(
+    [object]$Proxies,
+    [object]$Providers,
+    [string[]]$Chains,
+    [string[]]$ProviderChains
+) {
+    if ($Chains.Count -eq 0) { return $false }
+    $nonProxyNames = @("DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "DNS")
+    $nonProxyTypes = @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")
+    for ($index = 0; $index -lt $Chains.Count; $index++) {
+        $name = [string]$Chains[$index]
+        if ([string]::IsNullOrWhiteSpace($name) -or $name -in $nonProxyNames) { return $false }
+        $providerName = ""
+        if ($index -lt $ProviderChains.Count) { $providerName = [string]$ProviderChains[$index] }
+        $proxy = Get-LiveChainProxy $Proxies $Providers $name $providerName
+        if ($null -eq $proxy) { return $false }
+        $type = [string]$proxy.type
+        if ([string]::IsNullOrWhiteSpace($type) -or $type -in $nonProxyTypes) { return $false }
+        if ($index -eq 0 -and (Test-SupportedRouteGroupType $type)) { return $false }
+    }
+    return $true
+}
+
 function Get-LiveMainGroup([object]$Proxies) {
     $rules = @((Invoke-ControllerJson "/rules").rules)
     for ($index = $rules.Count - 1; $index -ge 0; $index--) {
@@ -65,8 +245,8 @@ function Get-LiveMainGroup([object]$Proxies) {
         $name = [string]$rule.proxy
         if ([string]::IsNullOrWhiteSpace($name)) { throw "当前 MATCH 规则没有代理目标。" }
         $property = $Proxies.PSObject.Properties[$name]
-        if ($null -eq $property -or [string]$property.Value.type -ne "Selector") {
-            throw "当前 MATCH 规则没有指向可选主代理组。"
+        if ($null -eq $property -or -not (Test-SupportedRouteGroupType ([string]$property.Value.type))) {
+            throw "当前 MATCH 规则没有指向受支持的主代理组。"
         }
         return $name
     }
@@ -117,29 +297,28 @@ function Test-RouteChains(
     [string]$ExpectedGroup,
     [string]$ExpectedSelection,
     [string]$AiGroup,
-    [bool]$AllowExplicitProxyGroup
+    [bool]$AllowExplicitProxyGroup,
+    [object]$Providers = $null,
+    [string[]]$ProviderChains = @()
 ) {
-    if ($Chains -contains "DIRECT" -or $ExpectedSelection -eq "DIRECT") { return $false }
-    $nonProxyTermini = @("REJECT", "REJECT-DROP", "PASS", "COMPATIBLE")
-    if (@($Chains | Where-Object { $_ -in $nonProxyTermini }).Count -gt 0 -or
-        $ExpectedSelection -in $nonProxyTermini) {
+    if (-not (Test-SafeLiveChain $Proxies $Providers $Chains $ProviderChains)) { return $false }
+    $expectedProperty = $Proxies.PSObject.Properties[$ExpectedGroup]
+    if ($null -eq $expectedProperty -or
+        -not (Test-SupportedRouteGroupType ([string]$expectedProperty.Value.type))) {
         return $false
     }
     if (-not $AllowExplicitProxyGroup) {
-        return ($Chains -contains $ExpectedGroup) -and ($Chains -contains $ExpectedSelection)
+        return $Chains -contains $ExpectedGroup
     }
     if ($Chains -contains $AiGroup) { return $false }
-    if (($Chains -contains $ExpectedGroup) -and ($Chains -contains $ExpectedSelection)) { return $true }
-    foreach ($name in $Chains) {
+    if ($Chains -contains $ExpectedGroup) { return $true }
+    for ($index = 0; $index -lt $Chains.Count; $index++) {
+        $name = [string]$Chains[$index]
         if ($name -notmatch '(?i)google') { continue }
-        $property = $Proxies.PSObject.Properties[$name]
-        if ($null -eq $property) { continue }
-        $selection = [string]$property.Value.now
-        if (-not [string]::IsNullOrWhiteSpace($selection) -and
-            $selection -notin $nonProxyTermini -and
-            $Chains -contains $selection) {
-            return $true
-        }
+        $providerName = ""
+        if ($index -lt $ProviderChains.Count) { $providerName = [string]$ProviderChains[$index] }
+        $proxy = Get-LiveChainProxy $Proxies $Providers $name $providerName
+        if ($null -ne $proxy -and (Test-SupportedRouteGroupType ([string]$proxy.type))) { return $true }
     }
     return $false
 }
@@ -152,7 +331,8 @@ function Observe-Route(
     [string]$ExpectedSelection,
     [object]$Proxies,
     [string]$AiGroup,
-    [bool]$AllowExplicitProxyGroup
+    [bool]$AllowExplicitProxyGroup,
+    [object]$Providers = $null
 ) {
     $known = Get-ConnectionIds
     $traffic = Start-TestTraffic $Url
@@ -172,7 +352,8 @@ function Observe-Route(
                 if (-not [int]::TryParse([string]$connection.metadata.sourcePort, [ref]$connectionSourcePort)) { continue }
                 if ($connectionSourcePort -ne $sourcePort) { continue }
                 $chains = @($connection.chains | ForEach-Object { [string]$_ })
-                $passed = Test-RouteChains $Proxies $chains $ExpectedGroup $ExpectedSelection $AiGroup $AllowExplicitProxyGroup
+                $providerChains = @($connection.providerChains | ForEach-Object { [string]$_ })
+                $passed = Test-RouteChains $Proxies $chains $ExpectedGroup $ExpectedSelection $AiGroup $AllowExplicitProxyGroup $Providers $providerChains
                 [void]$script:ClaudeEasyChecks.Add([ordered]@{ name = $Label.ToLowerInvariant(); ok = $passed; status = $(if ($passed) { "passed" } else { "failed" }) })
                 if (-not $Json) { Write-Host ("{0}：{1}" -f $Label, $(if ($passed) { "通过" } else { "失败" })) }
                 return $passed
@@ -190,11 +371,18 @@ function Observe-Route(
 }
 
 try {
+    $script:ClaudeEasyControllerSecret =
+        Read-ControllerSecretFromStandardInput
+    $script:ClaudeEasyControllerBaseUrl =
+        Get-ValidatedControllerBaseUri $ControllerUrl
     if ($ObservationSeconds -lt 1 -or $ObservationSeconds -gt 60) { throw "观察时间必须为 1 到 60 秒。" }
     $policy = Get-Policy
     $proxyResponse = Invoke-ControllerJson "/proxies"
     $proxies = $proxyResponse.proxies
     if ($null -eq $proxies) { throw "本地控制器没有返回代理组。" }
+    $providerResponse = Invoke-ControllerJson "/providers/proxies"
+    $providers = $providerResponse.providers
+    if ($null -eq $providers) { throw "本地控制器没有返回代理提供器。" }
 
     if ([string]::IsNullOrWhiteSpace($MainGroup)) {
         $main = Get-LiveMainGroup $proxies
@@ -204,7 +392,11 @@ try {
     $ai = Find-Group $proxies @($policy.ai_group_names) $AiGroup "AI 分组"
     $mainSelection = [string]$proxies.PSObject.Properties[$main].Value.now
     $aiSelection = [string]$proxies.PSObject.Properties[$ai].Value.now
-    if ([string]::IsNullOrWhiteSpace($mainSelection) -or $mainSelection -eq "DIRECT") { throw "主代理组当前没有选择有效代理节点。" }
+    $mainType = [string]$proxies.PSObject.Properties[$main].Value.type
+    if (([string]::IsNullOrWhiteSpace($mainSelection) -and $mainType -ne "LoadBalance") -or
+        $mainSelection -eq "DIRECT") {
+        throw "主代理组当前没有选择有效代理节点。"
+    }
     if ([string]::IsNullOrWhiteSpace($aiSelection) -or $aiSelection -eq "DIRECT") { throw "AI 分组当前没有选择有效代理节点。" }
 
     if (-not $Json) {
@@ -212,10 +404,10 @@ try {
         Write-Output "AI 分组：已识别；当前选择已隐藏"
     }
     $checks = @(
-        (Observe-Route "Google" "https://www.google.com/search?q=clash-route-verification" '(?i)(^|\.)google\.com$' $main $mainSelection $proxies $ai $true),
-        (Observe-Route "OpenAI" "https://openai.com/" '(?i)(^|\.)openai\.com$' $ai $aiSelection $proxies $ai $false),
-        (Observe-Route "Anthropic" "https://www.anthropic.com/" '(?i)(^|\.)anthropic\.com$' $ai $aiSelection $proxies $ai $false),
-        (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $proxies $ai $false)
+        (Observe-Route "Google" "https://www.google.com/search?q=clash-route-verification" '(?i)(^|\.)google\.com$' $main $mainSelection $proxies $ai $true $providers),
+        (Observe-Route "OpenAI" "https://openai.com/" '(?i)(^|\.)openai\.com$' $ai $aiSelection $proxies $ai $false $providers),
+        (Observe-Route "Anthropic" "https://www.anthropic.com/" '(?i)(^|\.)anthropic\.com$' $ai $aiSelection $proxies $ai $false $providers),
+        (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $proxies $ai $false $providers)
     )
     if (@($checks | Where-Object { -not $_ }).Count -gt 0) {
         if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_check_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Checks @($script:ClaudeEasyChecks)) }
@@ -224,10 +416,11 @@ try {
     if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $true -Status "ok" -Code "routes_verified" -ExitCode 0 -SummaryZh "Windows 分流验证通过。" -Checks @($script:ClaudeEasyChecks)) }
     exit 0
 } catch {
+    $failureMessage = Get-SafeVerificationFailureMessage $_.Exception.Message
     if ($Json) {
-        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $_.Exception.Message) -Checks @($script:ClaudeEasyChecks))
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $failureMessage) -Checks @($script:ClaudeEasyChecks))
     } else {
-        [Console]::Error.WriteLine("[ClaudeEasy] Windows 分流验证失败：$($_.Exception.Message)")
+        [Console]::Error.WriteLine("[ClaudeEasy] Windows 分流验证失败：$failureMessage")
     }
     exit 1
 }

@@ -268,8 +268,11 @@ $routeAst = [System.Management.Automation.Language.Parser]::ParseFile($routeVeri
 if ($routeParseErrors.Count -gt 0) { throw ($routeParseErrors | Out-String) }
 $routeAst.FindAll({
     param($node)
-    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-        $node.Name -in @("Find-Group", "Test-RouteChains")
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @(
+            "Find-Group", "Test-SupportedRouteGroupType",
+            "Get-LiveChainProxy", "Test-SafeLiveChain", "Test-RouteChains"
+        )
 }, $true) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
 $uninstallTokens = $null
 $uninstallParseErrors = $null
@@ -431,6 +434,72 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
     } finally {
         $ErrorActionPreference = $previousPreference
     }
+}
+
+function ConvertTo-TestProcessArgument([string]$Value) {
+    if ($null -eq $Value) { return '""' }
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function New-TestPowerShellProcess(
+    [string]$ScriptPath,
+    [string[]]$ScriptArguments
+) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $PowerShellPath
+    $arguments = @("-NoLogo", "-NoProfile", "-File", $ScriptPath) +
+        @($ScriptArguments)
+    $start.Arguments = (@(
+        $arguments | ForEach-Object {
+            ConvertTo-TestProcessArgument ([string]$_)
+        }
+    ) -join " ")
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    return $process
+}
+
+function Invoke-TestPowerShellWithStandardInput(
+    [string]$ScriptPath,
+    [string[]]$ScriptArguments,
+    [string]$StandardInput
+) {
+    $process = New-TestPowerShellProcess $ScriptPath $ScriptArguments
+    try {
+        if (-not $process.Start()) { throw "PowerShell test process did not start" }
+        $process.StandardInput.Write($StandardInput)
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill() } catch { }
+            throw "PowerShell test process timed out"
+        }
+        $output = $process.StandardOutput.ReadToEnd() +
+            $process.StandardError.ReadToEnd()
+        return [pscustomobject]@{
+            Output = $output
+            ExitCode = $process.ExitCode
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Get-WindowsProcessCommandLine([int]$ProcessId) {
+    $cimCommand = Get-Command Get-CimInstance -ErrorAction SilentlyContinue
+    if ($null -ne $cimCommand) {
+        $record = Get-CimInstance -ClassName Win32_Process `
+            -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    } else {
+        $record = Get-WmiObject -Class Win32_Process `
+            -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $record) { return "" }
+    return [string]$record.CommandLine
 }
 
 function Invoke-Installer([string]$AppHome) {
@@ -1109,21 +1178,64 @@ try {
     $jsonUninstallResult = Assert-JsonResult $jsonUninstall "uninstall" 0
     Assert-True ($jsonUninstallResult.status -eq "no_change") "empty uninstall was not no_change"
 
-    $jsonRouteFailure = Invoke-TestPowerShell $routeVerifier @("-ObservationSeconds", "0", "-Secret", "fixture-secret", "-Json")
+    $rejectedRouteSecretCanary =
+        "route-argument-canary-" + [Guid]::NewGuid().ToString("N")
+    $jsonRouteFailure = Invoke-TestPowerShell $routeVerifier @(
+        "-ObservationSeconds", "1",
+        "-Secret", $rejectedRouteSecretCanary,
+        "-Json"
+    )
     $jsonRouteFailureResult = Assert-JsonResult $jsonRouteFailure "verify_routes" 1
     Assert-True ($jsonRouteFailureResult.code -eq "verification_failed") "route verifier did not structure its parameter failure"
+    Assert-True (
+        -not $jsonRouteFailure.Output.Contains($rejectedRouteSecretCanary)
+    ) "route verifier echoed a rejected command-line secret"
 
     $routeHarnessPath = Join-Path $sandbox "verify-route-observer.ps1"
     $routeFunctionSources = $routeAst.FindAll({
         param($node)
-        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -in @("Test-RouteChains", "Observe-Route")
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -in @(
+                "Test-StrictIpv4LoopbackHost",
+                "Get-ValidatedControllerBaseUri",
+                "Test-SupportedRouteGroupType", "Get-LiveMainGroup",
+                "Get-LiveChainProxy", "Test-SafeLiveChain", "Test-RouteChains", "Observe-Route"
+            )
     }, $true) | ForEach-Object { $_.Extent.Text }
     $routeHarnessMocks = @'
 $ErrorActionPreference = "Stop"
 $ObservationSeconds = 1
 $Json = $true
 $script:ClaudeEasyChecks = New-Object System.Collections.ArrayList
+foreach ($acceptedControllerUrl in @(
+    "http://127.0.0.1:9097",
+    "https://127.255.1.2/",
+    "http://[::1]:9097",
+    "https://LOCALHOST:9443/base"
+)) {
+    [void](Get-ValidatedControllerBaseUri $acceptedControllerUrl)
+}
+foreach ($rejectedControllerUrl in @(
+    "ftp://127.0.0.1/",
+    "http://example.com/",
+    "http://127.0.0.1.example.com/",
+    "http://0177.0.0.1/",
+    "http://2130706433/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://friend@127.0.0.1/",
+    "http://127.0.0.1/?token=value",
+    "http://127.0.0.1/#fragment"
+)) {
+    $controllerUrlRejected = $false
+    try {
+        [void](Get-ValidatedControllerBaseUri $rejectedControllerUrl)
+    } catch {
+        $controllerUrlRejected = $true
+    }
+    if (-not $controllerUrlRejected) {
+        throw "controller URL escaped the loopback-only validator"
+    }
+}
 function Get-ConnectionIds { return @{} }
 function Start-TestTraffic([string]$Url) {
     $process = [pscustomobject]@{ HasExited = $true }
@@ -1132,6 +1244,12 @@ function Start-TestTraffic([string]$Url) {
 }
 function Start-Sleep { }
 function Invoke-ControllerJson([string]$Endpoint) {
+    if ($Endpoint -eq "/rules") {
+        return [pscustomobject]@{
+            rules = @([pscustomobject]@{ type = "Match"; proxy = "Main" })
+        }
+    }
+    if ($Endpoint -ne "/connections") { throw "unexpected controller endpoint: $Endpoint" }
     return [pscustomobject]@{
         connections = @(
             [pscustomobject]@{
@@ -1147,10 +1265,30 @@ function Invoke-ControllerJson([string]$Endpoint) {
         )
     }
 }
-$proxies = [pscustomobject]@{
-    Main = [pscustomobject]@{ type = "Selector"; now = "Fixture Node" }
+foreach ($groupType in @("Selector", "URLTest", "Fallback", "LoadBalance", "Relay")) {
+    $mainProxies = [pscustomobject]@{
+        Main = [pscustomobject]@{ type = $groupType; now = "Fixture Node" }
+    }
+    if ((Get-LiveMainGroup $mainProxies) -ne "Main") {
+        throw "Get-LiveMainGroup rejected supported group type: $groupType"
+    }
 }
-$passed = Observe-Route "Google" "https://www.google.com/" "google" "Main" "Fixture Node" $proxies "AI" $true
+$unsupportedRejected = $false
+try {
+    [void](Get-LiveMainGroup ([pscustomobject]@{
+        Main = [pscustomobject]@{ type = "Direct"; now = "" }
+    }))
+} catch {
+    $unsupportedRejected = $true
+}
+if (-not $unsupportedRejected) {
+    throw "Get-LiveMainGroup accepted a non-group MATCH target."
+}
+$proxies = [pscustomobject]@{
+    Main = [pscustomobject]@{ type = "LoadBalance" }
+    "Fixture Node" = [pscustomobject]@{ type = "Shadowsocks" }
+}
+$passed = Observe-Route "Google" "https://www.google.com/" "google" "Main" "" $proxies "AI" $true
 if (-not $passed) { throw "Observe-Route rejected a matching routed connection." }
 '@
     $routeHarness = (@($routeFunctionSources) + $routeHarnessMocks) -join "`r`n"
@@ -1159,21 +1297,221 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
     Assert-True ($routeObservation.ExitCode -eq 0) "Observe-Route crashed on a matching connection; $(Get-TestOutputDiagnostic $routeObservation.Output)"
 
     if ($onWindows) {
+        $routeSecretCanary =
+            "route-stdin-canary-" + [Guid]::NewGuid().ToString("N")
+        $routeSecretHasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $routeSecretCanaryHash = (
+                $routeSecretHasher.ComputeHash(
+                    [System.Text.Encoding]::UTF8.GetBytes($routeSecretCanary)
+                ) | ForEach-Object { $_.ToString("x2") }
+            ) -join ""
+        } finally {
+            $routeSecretHasher.Dispose()
+        }
+        $redirectProbe = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback,
+            0
+        )
+        $redirectProbe.Start()
+        $routeRedirectPort =
+            ([System.Net.IPEndPoint]$redirectProbe.LocalEndpoint).Port
+        $redirectProbe.Stop()
+        $sinkProbe = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback,
+            0
+        )
+        $sinkProbe.Start()
+        $routeRedirectSinkPort =
+            ([System.Net.IPEndPoint]$sinkProbe.LocalEndpoint).Port
+        $sinkProbe.Stop()
+        $routeRedirectReady = Join-Path $sandbox "route-redirect-ready"
+        $routeRedirectSinkReady =
+            Join-Path $sandbox "route-redirect-sink-ready"
+        $routeRedirectAuthorized =
+            Join-Path $sandbox "route-redirect-authorized"
+        $routeRedirectSinkHit = Join-Path $sandbox "route-redirect-sink-hit"
+        $routeRedirectJob = Start-Job -ArgumentList @(
+            $routeRedirectPort,
+            $routeRedirectSinkPort,
+            $routeRedirectReady,
+            $routeRedirectAuthorized,
+            $routeSecretCanary
+        ) -ScriptBlock {
+            param(
+                [int]$Port,
+                [int]$SinkPort,
+                [string]$ReadyPath,
+                [string]$AuthorizedPath,
+                [string]$ExpectedSecret
+            )
+            $listener = [System.Net.Sockets.TcpListener]::new(
+                [System.Net.IPAddress]::Loopback,
+                $Port
+            )
+            $listener.Start()
+            [System.IO.File]::WriteAllText($ReadyPath, "ready")
+            try {
+                $client = $listener.AcceptTcpClient()
+                try {
+                    $stream = $client.GetStream()
+                    $reader = [System.IO.StreamReader]::new(
+                        $stream,
+                        [System.Text.Encoding]::ASCII,
+                        $false,
+                        1024,
+                        $true
+                    )
+                    [void]$reader.ReadLine()
+                    $authorization = ""
+                    while ($true) {
+                        $line = $reader.ReadLine()
+                        if ([string]::IsNullOrEmpty($line)) { break }
+                        $separator = $line.IndexOf(":")
+                        if ($separator -gt 0 -and
+                            $line.Substring(0, $separator).Trim() -eq
+                                "Authorization") {
+                            $authorization =
+                                $line.Substring($separator + 1).Trim()
+                        }
+                    }
+                    if ($authorization -eq ("Bearer " + $ExpectedSecret)) {
+                        [System.IO.File]::WriteAllText(
+                            $AuthorizedPath,
+                            "authorized"
+                        )
+                    }
+                    $response = (
+                        "HTTP/1.1 302 Found`r`n" +
+                        "Location: http://127.0.0.1:$SinkPort/leak`r`n" +
+                        "Content-Length: 0`r`n" +
+                        "Connection: close`r`n`r`n"
+                    )
+                    $bytes = [System.Text.Encoding]::ASCII.GetBytes($response)
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    $stream.Flush()
+                    $reader.Dispose()
+                } finally {
+                    $client.Dispose()
+                }
+            } finally {
+                $listener.Stop()
+            }
+        }
+        $routeRedirectSinkJob = Start-Job -ArgumentList @(
+            $routeRedirectSinkPort,
+            $routeRedirectSinkReady,
+            $routeRedirectSinkHit
+        ) -ScriptBlock {
+            param(
+                [int]$Port,
+                [string]$ReadyPath,
+                [string]$HitPath
+            )
+            $listener = [System.Net.Sockets.TcpListener]::new(
+                [System.Net.IPAddress]::Loopback,
+                $Port
+            )
+            $listener.Start()
+            [System.IO.File]::WriteAllText($ReadyPath, "ready")
+            try {
+                $deadline = [DateTime]::UtcNow.AddSeconds(3)
+                while (-not $listener.Pending() -and
+                    [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 25
+                }
+                if ($listener.Pending()) {
+                    $client = $listener.AcceptTcpClient()
+                    try {
+                        [System.IO.File]::WriteAllText($HitPath, "hit")
+                    } finally {
+                        $client.Dispose()
+                    }
+                }
+            } finally {
+                $listener.Stop()
+            }
+        }
+        try {
+            $redirectReadyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while ((-not (Test-Path -LiteralPath $routeRedirectReady) -or
+                -not (Test-Path -LiteralPath $routeRedirectSinkReady)) -and
+                [DateTime]::UtcNow -lt $redirectReadyDeadline) {
+                Start-Sleep -Milliseconds 25
+            }
+            Assert-True (
+                (Test-Path -LiteralPath $routeRedirectReady) -and
+                (Test-Path -LiteralPath $routeRedirectSinkReady)
+            ) "route redirect fixture did not start"
+            $routeRedirectResult = Invoke-TestPowerShellWithStandardInput `
+                $routeVerifier `
+                @(
+                    "-ControllerUrl",
+                    "http://127.0.0.1:$routeRedirectPort",
+                    "-SecretStdin",
+                    "-ObservationSeconds",
+                    "1",
+                    "-Json"
+                ) `
+                $routeSecretCanary
+            Assert-JsonResult $routeRedirectResult "verify_routes" 1 |
+                Out-Null
+            Assert-True (
+                -not $routeRedirectResult.Output.Contains($routeSecretCanary)
+            ) "route verifier exposed its secret after a redirect response"
+            Wait-Job $routeRedirectJob -Timeout 5 | Out-Null
+            Wait-Job $routeRedirectSinkJob -Timeout 5 | Out-Null
+            Assert-True (
+                Test-Path -LiteralPath $routeRedirectAuthorized
+            ) "route redirect fixture did not receive the stdin secret"
+            Assert-True (
+                -not (Test-Path -LiteralPath $routeRedirectSinkHit)
+            ) "route verifier followed a controller redirect with its credentials"
+            $routeRedirectOutput =
+                (Receive-Job $routeRedirectJob -Keep | Out-String) +
+                (Receive-Job $routeRedirectSinkJob -Keep | Out-String)
+            Assert-True (
+                -not $routeRedirectOutput.Contains($routeSecretCanary)
+            ) "route redirect fixture logged the controller secret"
+        } finally {
+            foreach ($routeJob in @(
+                $routeRedirectJob,
+                $routeRedirectSinkJob
+            )) {
+                if ($null -eq $routeJob) { continue }
+                Stop-Job $routeJob -ErrorAction SilentlyContinue
+                Remove-Job $routeJob -Force -ErrorAction SilentlyContinue
+            }
+        }
         $controllerReadyPath = Join-Path $sandbox "route-controller-ready"
         $fakeCurlArgsPath = Join-Path $sandbox "fake-curl-args.txt"
         $fakeCurlPidsPath = Join-Path $sandbox "fake-curl-pids.txt"
+        $fakeCurlEnvironmentHashPrefix =
+            Join-Path $sandbox "fake-curl-environment-hashes"
         $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
         $portProbe.Start()
         $routeControllerPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
         $portProbe.Stop()
-        $routeControllerJob = Start-Job -ArgumentList @($routeControllerPort, $controllerReadyPath, $fakeCurlArgsPath) -ScriptBlock {
-            param([int]$Port, [string]$ReadyPath, [string]$CurlArgsPath)
+        $routeControllerJob = Start-Job -ArgumentList @(
+            $routeControllerPort,
+            $controllerReadyPath,
+            $fakeCurlArgsPath,
+            $fakeCurlPidsPath,
+            $routeSecretCanary
+        ) -ScriptBlock {
+            param(
+                [int]$Port,
+                [string]$ReadyPath,
+                [string]$CurlArgsPath,
+                [string]$CurlPidsPath,
+                [string]$ExpectedSecret
+            )
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
             $listener.Start()
             [System.IO.File]::WriteAllText($ReadyPath, "ready")
             $connectionRequest = 0
             try {
-                for ($requestNumber = 0; $requestNumber -lt 10; $requestNumber++) {
+                for ($requestNumber = 0; $requestNumber -lt 11; $requestNumber++) {
                     $client = $listener.AcceptTcpClient()
                     try {
                         $stream = $client.GetStream()
@@ -1190,14 +1528,15 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                         }
                         $path = $requestLine.Split(" ")[1]
                         $status = "200 OK"
-                        if ($headers["Authorization"] -ne "Bearer fixture-secret") {
+                        if ($headers["Authorization"] -ne
+                            ("Bearer " + $ExpectedSecret)) {
                             $status = "401 Unauthorized"
                             $body = '{"error":"unauthorized"}'
                         } elseif ($path -eq "/proxies") {
                             $body = @{
                                 proxies = @{
-                                    Main = @{ type = "Selector"; now = "Main Node" }
-                                    AI = @{ type = "Selector"; now = "AI Node" }
+                                    Main = @{ type = "LoadBalance" }
+                                    AI = @{ type = "Selector"; now = "Provider AI" }
                                 }
                             } | ConvertTo-Json -Depth 6 -Compress
                         } elseif ($path -eq "/rules") {
@@ -1207,15 +1546,46 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                                     @{ type = "Match"; payload = ""; proxy = "Main" }
                                 )
                             } | ConvertTo-Json -Depth 6 -Compress
+                        } elseif ($path -eq "/providers/proxies") {
+                            $body = @{
+                                providers = @{
+                                    remote = @{
+                                        proxies = @(
+                                            @{ name = "Provider Main"; type = "Shadowsocks" },
+                                            @{ name = "Provider AI"; type = "Vmess" }
+                                        )
+                                    }
+                                }
+                            } | ConvertTo-Json -Depth 6 -Compress
                         } elseif ($path -eq "/connections") {
                             $connectionRequest += 1
                             if (($connectionRequest % 2) -eq 1) {
                                 $connections = @()
                             } else {
+                                if ($connectionRequest -eq 2) {
+                                    Start-Sleep -Seconds 2
+                                }
                                 $routeIndex = [int]($connectionRequest / 2) - 1
                                 $hosts = @("www.google.com", "openai.com", "www.anthropic.com", "claude.ai")
                                 $groups = @("Main", "AI", "AI", "AI")
-                                $nodes = @("Main Node", "AI Node", "AI Node", "AI Node")
+                                $nodes = @("Provider Main", "Provider AI", "Provider AI", "Provider AI")
+                                $curlReadyDeadline =
+                                    [DateTime]::UtcNow.AddSeconds(5)
+                                do {
+                                    $curlPidCount = @(
+                                        Get-Content -LiteralPath $CurlPidsPath `
+                                            -ErrorAction SilentlyContinue |
+                                            Where-Object { $_ -match '^\d+$' }
+                                    ).Count
+                                    if ($curlPidCount -le $routeIndex) {
+                                        Start-Sleep -Milliseconds 25
+                                    }
+                                } while ($curlPidCount -le $routeIndex -and
+                                    [DateTime]::UtcNow -lt
+                                        $curlReadyDeadline)
+                                if ($curlPidCount -le $routeIndex) {
+                                    throw "fake curl did not finish its metadata capture"
+                                }
                                 $curlArguments = Get-Content -LiteralPath $CurlArgsPath -Raw
                                 if ($curlArguments -notmatch '--local-port\s+(\d+)') {
                                     throw "fake curl did not receive a source port"
@@ -1225,6 +1595,7 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                                     id = "route-$routeIndex"
                                     metadata = @{ host = $hosts[$routeIndex]; network = "tcp"; sourcePort = $sourcePort }
                                     chains = @($nodes[$routeIndex], $groups[$routeIndex])
+                                    providerChains = @("remote", "")
                                 })
                             }
                             $body = @{ connections = $connections } | ConvertTo-Json -Depth 6 -Compress
@@ -1252,24 +1623,64 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
         $fakeCurlPath = Join-Path $fakeCurlDirectory "curl.exe"
         $fakeCurlSource = @'
 using System;
+using System.Collections;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 public static class FakeCurl {
+    private static string Hash(string value) {
+        using (SHA256 sha = SHA256.Create()) {
+            byte[] digest = sha.ComputeHash(Encoding.UTF8.GetBytes(value));
+            StringBuilder output = new StringBuilder();
+            foreach (byte item in digest) output.Append(item.ToString("x2"));
+            return output.ToString();
+        }
+    }
+
     public static int Main(string[] args) {
+        int processId = Process.GetCurrentProcess().Id;
         File.WriteAllText(
             Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_ARGS_PATH"),
             String.Join(" ", args)
         );
+        string hashPrefix = Environment.GetEnvironmentVariable(
+            "CLAUDE_EASY_TEST_CURL_ENV_HASH_PREFIX"
+        );
+        int windowLength = __CANARY_LENGTH__;
+        using (StreamWriter writer = new StreamWriter(
+            hashPrefix + "." + processId.ToString(),
+            false,
+            new UTF8Encoding(false)
+        )) {
+            foreach (DictionaryEntry item in Environment.GetEnvironmentVariables()) {
+                foreach (string value in new string[] {
+                    Convert.ToString(item.Key),
+                    Convert.ToString(item.Value)
+                }) {
+                    if (value == null || value.Length < windowLength) continue;
+                    for (int index = 0;
+                        index + windowLength <= value.Length;
+                        index += 1) {
+                        writer.WriteLine(Hash(value.Substring(index, windowLength)));
+                    }
+                }
+            }
+        }
         File.AppendAllText(
             Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_PIDS_PATH"),
-            Process.GetCurrentProcess().Id.ToString() + Environment.NewLine
+            processId.ToString() + Environment.NewLine
         );
         Thread.Sleep(10000);
         return 0;
     }
 }
 '@
+        $fakeCurlSource = $fakeCurlSource.Replace(
+            "__CANARY_LENGTH__",
+            [string]$routeSecretCanary.Length
+        )
         $fakeCurlSourcePath = Join-Path $fakeCurlDirectory "FakeCurl.cs"
         [System.IO.File]::WriteAllText(
             $fakeCurlSourcePath,
@@ -1293,7 +1704,10 @@ public static class FakeCurl {
         $previousPath = $env:PATH
         $previousCurlArgsPath = $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH
         $previousCurlPidsPath = $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH
+        $previousCurlEnvironmentHashPrefix =
+            $env:CLAUDE_EASY_TEST_CURL_ENV_HASH_PREFIX
         $fakeCurlPids = @()
+        $routeSuccessProcess = $null
         try {
             $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
             while (-not (Test-Path -LiteralPath $controllerReadyPath) -and [DateTime]::UtcNow -lt $readyDeadline) {
@@ -1303,12 +1717,59 @@ public static class FakeCurl {
             $env:PATH = $fakeCurlDirectory + [System.IO.Path]::PathSeparator + $previousPath
             $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $fakeCurlArgsPath
             $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH = $fakeCurlPidsPath
-            $routeSuccess = Invoke-TestPowerShell $routeVerifier @(
+            $env:CLAUDE_EASY_TEST_CURL_ENV_HASH_PREFIX =
+                $fakeCurlEnvironmentHashPrefix
+            $routeSuccessProcess = New-TestPowerShellProcess $routeVerifier @(
                 "-ControllerUrl", "http://127.0.0.1:$routeControllerPort",
-                "-Secret", "fixture-secret",
-                "-ObservationSeconds", "2",
+                "-SecretStdin",
+                "-ObservationSeconds", "5",
                 "-Json"
             )
+            Assert-True ($routeSuccessProcess.Start()) "route verifier did not start"
+            $routeSuccessProcess.StandardInput.Write($routeSecretCanary)
+            $routeSuccessProcess.StandardInput.Close()
+            $routeVerifierCommandLine =
+                Get-WindowsProcessCommandLine $routeSuccessProcess.Id
+            Assert-True (
+                -not [string]::IsNullOrWhiteSpace($routeVerifierCommandLine) -and
+                -not $routeVerifierCommandLine.Contains($routeSecretCanary)
+            ) "route verifier exposed its controller secret in the process command line"
+            $curlStartDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while (-not (Test-Path -LiteralPath $fakeCurlPidsPath -PathType Leaf) -and
+                -not $routeSuccessProcess.HasExited -and
+                [DateTime]::UtcNow -lt $curlStartDeadline) {
+                Start-Sleep -Milliseconds 25
+            }
+            Assert-True (
+                Test-Path -LiteralPath $fakeCurlPidsPath -PathType Leaf
+            ) "route verifier did not start the long-running curl fixture"
+            $firstFakeCurlPid = [int](
+                Get-Content -LiteralPath $fakeCurlPidsPath |
+                    Where-Object { $_ -match '^\d+$' } |
+                    Select-Object -First 1
+            )
+            $fakeCurlCommandLine =
+                Get-WindowsProcessCommandLine $firstFakeCurlPid
+            Assert-True (
+                -not [string]::IsNullOrWhiteSpace($fakeCurlCommandLine) -and
+                -not $fakeCurlCommandLine.Contains($routeSecretCanary)
+            ) "route verifier copied its controller secret into a child command line"
+            Assert-True (
+                -not $routeSuccessProcess.HasExited
+            ) "route verifier ended before long-running metadata could be inspected"
+            Assert-True (
+                $routeSuccessProcess.WaitForExit(30000)
+            ) "route verifier success fixture timed out"
+            $routeSuccessOutput =
+                $routeSuccessProcess.StandardOutput.ReadToEnd() +
+                $routeSuccessProcess.StandardError.ReadToEnd()
+            $routeSuccess = [pscustomobject]@{
+                Output = $routeSuccessOutput
+                ExitCode = $routeSuccessProcess.ExitCode
+            }
+            Assert-True (
+                -not $routeSuccessOutput.Contains($routeSecretCanary)
+            ) "route verifier exposed its controller secret in output"
             $routeSuccessResult = Assert-JsonResult $routeSuccess "verify_routes" 0
             Assert-True ($routeSuccessResult.code -eq "routes_verified") "route verifier success code mismatch"
             Assert-True (@($routeSuccessResult.checks).Count -eq 4) "route verifier did not report all four route checks"
@@ -1320,6 +1781,29 @@ public static class FakeCurl {
                     ForEach-Object { [int]$_ }
             )
             Assert-True ($fakeCurlPids.Count -eq 4) "route verifier did not create one isolated curl process per route"
+            Assert-True (
+                -not (Get-Content -LiteralPath $fakeCurlArgsPath -Raw).Contains(
+                    $routeSecretCanary
+                )
+            ) "route verifier copied its controller secret into a child argument log"
+            $fakeCurlEnvironmentHashFiles = @(
+                Get-ChildItem -LiteralPath $sandbox `
+                    -Filter "fake-curl-environment-hashes.*" -File
+            )
+            Assert-True (
+                $fakeCurlEnvironmentHashFiles.Count -eq 4
+            ) "route verifier did not capture each child environment safely"
+            Assert-True (
+                @($fakeCurlEnvironmentHashFiles | Where-Object {
+                    @(Get-Content -LiteralPath $_.FullName) -contains
+                        $routeSecretCanaryHash
+                }).Count -eq 0
+            ) "route verifier copied its controller secret into a child environment"
+            $routeControllerOutput =
+                Receive-Job $routeControllerJob -Keep | Out-String
+            Assert-True (
+                -not $routeControllerOutput.Contains($routeSecretCanary)
+            ) "route controller fixture logged the controller secret"
             $curlExitDeadline = [DateTime]::UtcNow.AddSeconds(5)
             do {
                 $survivingCurlPids = @(
@@ -1333,6 +1817,14 @@ public static class FakeCurl {
             $env:PATH = $previousPath
             $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $previousCurlArgsPath
             $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH = $previousCurlPidsPath
+            $env:CLAUDE_EASY_TEST_CURL_ENV_HASH_PREFIX =
+                $previousCurlEnvironmentHashPrefix
+            if ($null -ne $routeSuccessProcess) {
+                if (-not $routeSuccessProcess.HasExited) {
+                    try { $routeSuccessProcess.Kill() } catch { }
+                }
+                $routeSuccessProcess.Dispose()
+            }
             foreach ($fakeCurlPid in $fakeCurlPids) {
                 $fakeCurlProcess = Get-Process -Id $fakeCurlPid -ErrorAction SilentlyContinue
                 if ($null -ne $fakeCurlProcess) {
@@ -2180,13 +2672,58 @@ rules:
     $routeChains = [pscustomobject]@{
         Main = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
         AI = [pscustomobject]@{ type = "Selector"; now = "Japan" }
+        Taiwan = [pscustomobject]@{ type = "Shadowsocks" }
+        Japan = [pscustomobject]@{ type = "Shadowsocks" }
+        Singapore = [pscustomobject]@{ type = "Shadowsocks" }
         Google = [pscustomobject]@{ type = "Selector"; now = "Singapore" }
         Gaming = [pscustomobject]@{ type = "Selector"; now = "GameNode" }
+        Balanced = [pscustomobject]@{ type = "LoadBalance" }
+        "Balance Node" = [pscustomobject]@{ type = "Shadowsocks" }
+        Auto = [pscustomobject]@{ type = "URLTest"; now = "Node A" }
+        Fallback = [pscustomobject]@{ type = "Fallback"; now = "Node A" }
+        "Node A" = [pscustomobject]@{ type = "Shadowsocks" }
+        "Node B" = [pscustomobject]@{ type = "Vmess" }
+        Local = [pscustomobject]@{ type = "Direct" }
     }
     Assert-True (Test-RouteChains $routeChains @("Singapore", "Google") "Main" "Taiwan" "AI" $true) "Windows route verifier rejected a user Google proxy group"
     Assert-True (-not (Test-RouteChains $routeChains @("GameNode", "Gaming") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted an unrelated selector for Google traffic"
     Assert-True (-not (Test-RouteChains $routeChains @("Japan", "AI", "Google") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted the AI group for ordinary Google traffic"
     Assert-True (Test-RouteChains $routeChains @("Japan", "AI") "AI" "Japan" "AI" $false) "Windows route verifier rejected the required AI group"
+    Assert-True (Test-RouteChains $routeChains @("Balance Node", "Balanced") "Balanced" "" "AI" $true) "Windows route verifier rejected a load-balance group without now"
+    Assert-True (-not (Test-RouteChains $routeChains @("Balanced") "Balanced" "" "AI" $true)) "Windows route verifier accepted a load-balance chain without a concrete node"
+    Assert-True (-not (Test-RouteChains $routeChains @("Balance Node", "Main") "Main" "" "AI" $true)) "Windows route verifier accepted a selector without now"
+    Assert-True (Test-RouteChains $routeChains @("Node B", "Auto") "Auto" "Node A" "AI" $true) "Windows route verifier rejected the observed URLTest leaf"
+    Assert-True (Test-RouteChains $routeChains @("Node B", "Fallback") "Fallback" "Node A" "AI" $true) "Windows route verifier rejected the observed Fallback leaf"
+    foreach ($nonProxyType in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")) {
+        $routeChains.Local.type = $nonProxyType
+        Assert-True (
+            -not (Test-RouteChains $routeChains @("Local", "Main") "Main" "Local" "AI" $true)
+        ) "Windows route verifier accepted a custom $nonProxyType main leaf"
+        Assert-True (
+            -not (Test-RouteChains $routeChains @("Local", "AI") "AI" "Local" "AI" $false)
+        ) "Windows route verifier accepted a custom $nonProxyType AI leaf"
+    }
+    $routeChains.Local.type = "Direct"
+    $routeProviders = [pscustomobject]@{
+        remote = [pscustomobject]@{
+            proxies = @(
+                [pscustomobject]@{ name = "Provider Node"; type = "Shadowsocks" },
+                [pscustomobject]@{ name = "Provider Direct"; type = "Direct" }
+            )
+        }
+    }
+    Assert-True (
+        Test-RouteChains $routeChains @("Provider Node", "Balanced") "Balanced" "" "AI" $true $routeProviders @("remote", "")
+    ) "Windows route verifier rejected a provider-backed load-balance leaf"
+    Assert-True (-not (
+        Test-RouteChains $routeChains @("Provider Direct", "Balanced") "Balanced" "" "AI" $true $routeProviders @("remote", "")
+    )) "Windows route verifier accepted a provider Direct leaf"
+    Assert-True (-not (
+        Test-RouteChains $routeChains @("Unknown", "Balanced") "Balanced" "" "AI" $true $routeProviders @("remote", "")
+    )) "Windows route verifier accepted an unknown provider leaf"
+    Assert-True (-not (
+        Test-RouteChains $routeChains @("Provider Node", "Balanced") "Balanced" "" "AI" $true $routeProviders @("missing", "")
+    )) "Windows route verifier accepted an unknown provider"
     Invoke-DeferredProbe "non-proxy route termini" {
         $acceptedNonProxyTermini = @(
             foreach ($terminus in @("REJECT", "REJECT-DROP", "PASS", "COMPATIBLE")) {
@@ -2902,11 +3439,64 @@ try {
         $crashDeleteChild.WaitForExit()
         Assert-True (-not (Test-Path -LiteralPath $crashDeleteFirstPath)) "crash-delete fixture did not leave a partial transaction"
         Assert-True (Test-Path -LiteralPath $crashDeleteSecondPath -PathType Leaf) "crash-delete fixture unexpectedly completed the transaction"
+        $crashDeleteJournalPath = Join-Path $crashDeleteHome ".claude-easy-transaction.json"
+        $crashDeleteJournalBytes = [System.IO.File]::ReadAllBytes($crashDeleteJournalPath)
+        $crashDeleteOriginalBytes = [System.Text.Encoding]::UTF8.GetBytes("first-original")
+        $deleteReplacementCases = @(
+            [pscustomobject]@{ Name = "empty"; Bytes = [byte[]]@() },
+            [pscustomobject]@{
+                Name = "prefix"
+                Bytes = [System.Text.Encoding]::UTF8.GetBytes("first-")
+            },
+            [pscustomobject]@{
+                Name = "other"
+                Bytes = [System.Text.Encoding]::UTF8.GetBytes("friend-replacement")
+            }
+        )
+        foreach ($deleteReplacementCase in $deleteReplacementCases) {
+            [System.IO.File]::WriteAllBytes(
+                $crashDeleteFirstPath,
+                [byte[]]$deleteReplacementCase.Bytes
+            )
+            $deleteReplacementBefore = Get-OptionalFileSnapshot (
+                $crashDeleteFirstPath
+            ) "delete replacement before recovery"
+            $deleteReplacementRejected = $false
+            try {
+                $deleteReplacementLock = Enter-AppHomeMutationLock $crashDeleteHome
+                Exit-AppHomeMutationLock $deleteReplacementLock
+            } catch {
+                $deleteReplacementRejected = $true
+            }
+            $deleteReplacementAfter = Get-OptionalFileSnapshot (
+                $crashDeleteFirstPath
+            ) "delete replacement after recovery"
+            Assert-True (
+                $deleteReplacementRejected -and
+                $deleteReplacementAfter.Identity -ceq $deleteReplacementBefore.Identity -and
+                (Get-BytesSha256 $deleteReplacementAfter.Bytes) -eq
+                    (Get-BytesSha256 $deleteReplacementBefore.Bytes) -and
+                [Convert]::ToBase64String(
+                    [System.IO.File]::ReadAllBytes($crashDeleteJournalPath)
+                ) -ceq [Convert]::ToBase64String($crashDeleteJournalBytes)
+            ) "delete recovery changed or accepted a different-identity $($deleteReplacementCase.Name) replacement"
+            [System.IO.File]::Delete($crashDeleteFirstPath)
+        }
+        [System.IO.File]::WriteAllBytes($crashDeleteFirstPath, $crashDeleteOriginalBytes)
+        $sameBytesReplacementBefore = Get-OptionalFileSnapshot (
+            $crashDeleteFirstPath
+        ) "same-byte delete replacement before recovery"
         $crashDeleteRecoveryLock = Enter-AppHomeMutationLock $crashDeleteHome
         Exit-AppHomeMutationLock $crashDeleteRecoveryLock
+        $sameBytesReplacementAfter = Get-OptionalFileSnapshot (
+            $crashDeleteFirstPath
+        ) "same-byte delete replacement after recovery"
         Assert-True ((Get-Content -LiteralPath $crashDeleteFirstPath -Raw) -eq "first-original") "next operation did not recover a deletion interrupted by process death"
+        Assert-True (
+            $sameBytesReplacementAfter.Identity -ceq $sameBytesReplacementBefore.Identity
+        ) "delete recovery rewrote a complete same-byte replacement with a different identity"
         Assert-True ((Get-Content -LiteralPath $crashDeleteSecondPath -Raw) -eq "second-original") "delete recovery changed an untouched transaction target"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $crashDeleteHome ".claude-easy-transaction.json"))) "delete recovery left a stale transaction journal"
+        Assert-True (-not (Test-Path -LiteralPath $crashDeleteJournalPath)) "delete recovery left a stale transaction journal"
 
         $publicCrashPackageParent = Join-Path $sandbox "public-crash-package"
         New-Item -ItemType Directory -Path $publicCrashPackageParent -Force | Out-Null
@@ -3038,16 +3628,20 @@ try {
             $publicUninstallDeleteEnd,
             $publicUninstallHook
         )
+        $publicUninstallRecoveryFunctionOffset = $publicUninstallTransactionText.IndexOf(
+            "function New-InterruptedRecoveryTemporaryFile("
+        )
         $publicUninstallRecoveryNeedle = @'
-                    Write-LockedStreamBytes `
-                        $entry.Stream `
-                        $entry.Item.Action.Original `
-                        $entry.Current
+        $stream.Write($Bytes, 0, $Bytes.Length)
 '@
         $publicUninstallRecoveryOffset = $publicUninstallTransactionText.IndexOf(
-            $publicUninstallRecoveryNeedle
+            $publicUninstallRecoveryNeedle,
+            $publicUninstallRecoveryFunctionOffset
         )
-        Assert-True ($publicUninstallRecoveryOffset -ge 0) "public uninstall crash fixture could not find the recovery create boundary"
+        Assert-True (
+            $publicUninstallRecoveryFunctionOffset -ge 0 -and
+            $publicUninstallRecoveryOffset -ge 0
+        ) "public uninstall crash fixture could not find the private recovery write boundary"
         $publicUninstallRecoveryEnd =
             $publicUninstallRecoveryOffset + $publicUninstallRecoveryNeedle.Length
         $publicUninstallRecoveryHook = @'
@@ -3088,6 +3682,14 @@ try {
             }
         }
         Assert-True (Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json") -PathType Leaf) "public uninstaller crash did not leave a recoverable transaction journal"
+        $publicUninstallMissingBeforeRecovery = @(
+            $publicUninstallTargets | Where-Object {
+                -not (Test-Path -LiteralPath $_ -PathType Leaf)
+            }
+        )
+        Assert-True (
+            $publicUninstallMissingBeforeRecovery.Count -gt 0
+        ) "public uninstall crash fixture did not leave a missing target"
         $env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY = $publicUninstallRecoveryCrashReady
         $publicUninstallRecoveryCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
             "-NoLogo", "-NoProfile", "-File", $publicCrashInstaller,
@@ -3116,6 +3718,21 @@ try {
         Assert-True (
             Test-Path -LiteralPath (Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json") -PathType Leaf
         ) "second recovery interruption removed the transaction journal"
+        $interruptedRecoveryTemporaryFiles = @(
+            Get-ChildItem -LiteralPath $publicUninstallCrashHome `
+                -Filter ".claude-easy-recovery-*.tmp" -File -Recurse
+        )
+        Assert-True (
+            $interruptedRecoveryTemporaryFiles.Count -gt 0 -and
+            @($interruptedRecoveryTemporaryFiles | Where-Object {
+                -not (Test-PrivateWindowsFileAcl $_.FullName)
+            }).Count -eq 0
+        ) "interrupted recovery did not keep its temporary bytes private"
+        foreach ($publicUninstallStillMissing in $publicUninstallMissingBeforeRecovery) {
+            Assert-True (-not (
+                Test-Path -LiteralPath $publicUninstallStillMissing
+            )) "interrupted recovery exposed an empty or partial target instead of a private temporary file"
+        }
         $publicUninstallRecovery = Invoke-TestPowerShell $publicCrashInstaller @(
             "-AppHome", $publicUninstallCrashHome,
             "-ShowUsageProfile",
@@ -4829,19 +5446,126 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
     $composeVergeOriginal = "enable_tun_mode: false`nenable_dns_settings: true`n"
     [System.IO.File]::WriteAllText((Join-Path $composeCase "config.yaml"), $composeConfigOriginal)
     [System.IO.File]::WriteAllText((Join-Path $composeCase "verge.yaml"), $composeVergeOriginal)
-    $originalScript = "function main(config) { config.friend = true; return config; }`n"
+    $originalScript = @'
+"use strict";
+var friendGlobal = 40;
+function helper() {
+  return 41;
+}
+var friendTopLevelThis = this === globalThis;
+function main(config) {
+  config.friend = globalThis.friendGlobal + 1;
+  config.helper = globalThis.helper();
+  config.friendTopLevelThis = friendTopLevelThis;
+  config.friendCallThis = this === globalThis;
+  globalThis.main = function(value) { value.bypassed = true; return value; };
+  globalThis["claude" + "EasyTransform"] = function(value) { value.bypassed = true; return value; };
+  return config;
+}
+Object.defineProperty(globalThis, "main", {
+  value: function(value) { value.bypassed = true; return value; },
+  writable: true,
+  configurable: true
+});
+'@
     [System.IO.File]::WriteAllText((Join-Path $composeProfiles "Script.js"), $originalScript)
     Invoke-Installer $composeCase
     $composedPath = Join-Path $composeProfiles "Script.js"
-    $composedWithSuffix = (Get-Content -LiteralPath $composedPath -Raw) + "const friendAfterPatch = true;`r`n"
+    $enginePath = Join-Path (Join-Path $root "claude-easy/scripts/windows") "clash_verge_global.js"
+    $canonicalComposedBytes = [System.IO.File]::ReadAllBytes($composedPath)
+    $commentWrappedComposed = "// friend prefix comment`r`n" +
+        (Get-Content -LiteralPath $composedPath -Raw) +
+        "/* friend suffix comment */`r`n"
+    [System.IO.File]::WriteAllText($composedPath, $commentWrappedComposed)
+    Assert-ClaudeEasyManagedScriptCurrent (
+        Get-Content -LiteralPath $composedPath -Raw
+    ) 3 $enginePath $composedPath
+    [System.IO.File]::WriteAllBytes($composedPath, $canonicalComposedBytes)
+
+    $directivePrefix = '"use strict"' + "`r`n"
+    [System.IO.File]::WriteAllText(
+        $composedPath,
+        $directivePrefix + (Get-Content -LiteralPath $composedPath -Raw)
+    )
+    $directivePrefixRejected = $false
+    try {
+        Assert-ClaudeEasyManagedScriptCurrent (
+            Get-Content -LiteralPath $composedPath -Raw
+        ) 3 $enginePath $composedPath
+    } catch {
+        $directivePrefixRejected = $true
+    }
+    Assert-True $directivePrefixRejected "safe-update script check accepted a string directive outside the managed block"
+    [System.IO.File]::WriteAllBytes($composedPath, $canonicalComposedBytes)
+
+    $templateSuffix = "`r`n" + '`friend template literal`'
+    [System.IO.File]::WriteAllText(
+        $composedPath,
+        (Get-Content -LiteralPath $composedPath -Raw) + $templateSuffix
+    )
+    $templateSuffixRejected = $false
+    try {
+        Assert-ClaudeEasyManagedScriptCurrent (
+            Get-Content -LiteralPath $composedPath -Raw
+        ) 3 $enginePath $composedPath
+    } catch {
+        $templateSuffixRejected = $true
+    }
+    Assert-True $templateSuffixRejected "safe-update script check accepted a template literal outside the managed block"
+    [System.IO.File]::WriteAllBytes($composedPath, $canonicalComposedBytes)
+
+    $prefixPollution = "Object.prototype.friendOutsideManagedBlock = true;`r`n"
+    [System.IO.File]::WriteAllText(
+        $composedPath,
+        $prefixPollution + (Get-Content -LiteralPath $composedPath -Raw)
+    )
+    $prefixPollutionRejected = $false
+    try {
+        Assert-ClaudeEasyManagedScriptCurrent (
+            Get-Content -LiteralPath $composedPath -Raw
+        ) 3 $enginePath $composedPath
+    } catch {
+        $prefixPollutionRejected = $true
+    }
+    Assert-True $prefixPollutionRejected "safe-update script check accepted executable prefix code outside the managed block"
+    Invoke-Installer $composeCase
+    $migratedPrefixScript = Get-Content -LiteralPath $composedPath -Raw
+    Assert-True (
+        $migratedPrefixScript.Contains($prefixPollution.Trim()) -and
+        $migratedPrefixScript.TrimStart().StartsWith("// CLAUDEEASY BEGIN")
+    ) "reinstall did not migrate executable prefix code into the preserved original-script block"
+    Assert-ClaudeEasyManagedScriptCurrent $migratedPrefixScript 3 $enginePath $composedPath
+
+    $composedWithSuffix = $migratedPrefixScript + "const friendAfterPatch = true;`r`n"
     [System.IO.File]::WriteAllText($composedPath, $composedWithSuffix)
+    $suffixCodeRejected = $false
+    try {
+        Assert-ClaudeEasyManagedScriptCurrent (
+            Get-Content -LiteralPath $composedPath -Raw
+        ) 3 $enginePath $composedPath
+    } catch {
+        $suffixCodeRejected = $true
+    }
+    Assert-True $suffixCodeRejected "safe-update script check accepted executable suffix code outside the managed block"
     Invoke-Installer $composeCase
     Assert-True ((Get-Content -LiteralPath $composedPath -Raw).Contains("const friendAfterPatch = true;")) "reinstall discarded code after the managed block"
+    Assert-ClaudeEasyManagedScriptCurrent (
+        Get-Content -LiteralPath $composedPath -Raw
+    ) 3 $enginePath $composedPath
     $safeComposedBytes = [System.IO.File]::ReadAllBytes($composedPath)
     [System.IO.File]::AppendAllText(
         $composedPath,
         "function main(config) { config.suffixMain = true; return config; }`r`n"
     )
+    $suffixMainCurrentRejected = $false
+    try {
+        Assert-ClaudeEasyManagedScriptCurrent (
+            Get-Content -LiteralPath $composedPath -Raw
+        ) 3 $enginePath $composedPath
+    } catch {
+        $suffixMainCurrentRejected = $true
+    }
+    Assert-True $suffixMainCurrentRejected "safe-update script check accepted a main binding after the managed block"
     $reboundBytes = [System.IO.File]::ReadAllBytes($composedPath)
     $reboundResult = Invoke-TestPowerShell $installer @(
         "-AppHome", $composeCase,
@@ -4862,16 +5586,34 @@ const vm = require("node:vm");
 const generatedPath = process.argv[2];
 const context = {};
 vm.createContext(context);
-vm.runInContext(fs.readFileSync(generatedPath, "utf8"), context, { filename: generatedPath });
-const result = context.main({
-  proxies: [{ name: "Node", type: "ss", server: "proxy.invalid", password: "fixture-secret" }],
-  "proxy-groups": [{ name: "Main", type: "select", proxies: ["Node"] }],
-  dns: { enable: true, nameserver: ["223.5.5.5"], "nameserver-policy": {} },
-  rules: ["MATCH,Main"]
-});
-if (!result || result.friend !== true) throw new Error("previous main did not run");
-if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((name) => name.indexOf("claude-easy-cn-domain") === 0)) {
-  throw new Error("ClaudeEasy transform did not run");
+function fixture() {
+  return {
+    proxies: [{ name: "Node", type: "ss", server: "proxy.invalid", password: "fixture-secret" }],
+    "proxy-groups": [{ name: "Main", type: "select", proxies: ["Node"] }],
+    dns: { enable: true, nameserver: ["223.5.5.5"], "nameserver-policy": {} },
+    rules: ["MATCH,Main"]
+  };
+}
+context.__claudeEasyFixture = fixture;
+const script = fs.readFileSync(generatedPath, "utf8");
+vm.runInContext(
+  "try {\n" + script + "\n" +
+    "this.__claudeEasyResults = [];\n" +
+    "for (let attempt = 0; attempt < 2; attempt += 1) this.__claudeEasyResults.push(JSON.stringify(main(this.__claudeEasyFixture()) || ''));\n" +
+  "} catch (error) { throw error; }",
+  context,
+  { filename: generatedPath }
+);
+for (const serialized of context.__claudeEasyResults) {
+  const result = JSON.parse(serialized);
+  if (!result || result.friend !== 41) throw new Error("previous global writes were not forwarded");
+  if (result.helper !== 41) throw new Error("previous top-level function was not installed on globalThis");
+  if (result.friendTopLevelThis !== true) throw new Error("previous top-level this was not the Script global");
+  if (result.friendCallThis !== true) throw new Error("previous main call did not keep Script this semantics");
+  if (result.bypassed === true) throw new Error("previous script replaced a managed binding");
+  if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((name) => name.indexOf("claude-easy-cn-domain") === 0)) {
+    throw new Error("ClaudeEasy transform did not run");
+  }
 }
 '@
         [System.IO.File]::WriteAllText($generatedScriptHarness, $generatedScriptHarnessSource, (New-Object System.Text.UTF8Encoding($false)))
@@ -4885,6 +5627,122 @@ if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((na
     Assert-True ($restoredScript.Contains("const friendAfterPatch = true;")) "uninstaller discarded code after the managed block"
     Assert-True ((Get-Content -LiteralPath (Join-Path $composeCase "config.yaml") -Raw) -eq $composeConfigOriginal) "uninstaller did not restore config.yaml"
     Assert-True ((Get-Content -LiteralPath (Join-Path $composeCase "verge.yaml") -Raw) -eq $composeVergeOriginal) "uninstaller did not restore verge.yaml"
+
+    $lexicalCase = Join-Path $sandbox "lexical-global-case"
+    $lexicalProfiles = Join-Path $lexicalCase "profiles"
+    New-Item -ItemType Directory -Path $lexicalProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $lexicalCase "profiles.yaml"), "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n")
+    [System.IO.File]::WriteAllText((Join-Path $lexicalCase "config.yaml"), "ipv6: true`ntun: null`n")
+    [System.IO.File]::WriteAllText((Join-Path $lexicalCase "verge.yaml"), "enable_tun_mode: false`n")
+    $lexicalScript = @'
+const globalThis = { name: "globalThis" };
+let window = { name: "window" };
+class self {}
+const global = { name: "global" };
+function main(config) {
+  config.lexicalGlobals = [globalThis.name, window.name, self.name, global.name].join(",");
+  config.templateValue = `${globalThis.name}:${config.templateInput}`;
+  return config;
+}
+'@
+    $lexicalScriptPath = Join-Path $lexicalProfiles "Script.js"
+    [System.IO.File]::WriteAllText($lexicalScriptPath, $lexicalScript)
+    Invoke-Installer $lexicalCase
+    if ($onWindows) {
+        $lexicalHarness = Join-Path $sandbox "run-lexical-script.js"
+        $lexicalHarnessSource = @'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const context = {};
+vm.createContext(context);
+context.__claudeEasyFixture = {
+  templateInput: "friend",
+  proxies: [{ name: "Node", type: "ss", server: "proxy.invalid", password: "fixture-secret" }],
+  "proxy-groups": [{ name: "Main", type: "select", proxies: ["Node"] }],
+  dns: { enable: true, nameserver: ["223.5.5.5"], "nameserver-policy": {} },
+  rules: ["MATCH,Main"]
+};
+const script = fs.readFileSync(process.argv[2], "utf8");
+vm.runInContext(
+  "try {\n" + script + "\n;this.__claudeEasyResult = JSON.stringify(main(this.__claudeEasyFixture) || '');\n" +
+  "} catch (error) { throw error; }",
+  context
+);
+const result = JSON.parse(context.__claudeEasyResult);
+if (!result || result.lexicalGlobals !== "globalThis,window,self,global") {
+  throw new Error("top-level lexical global declarations did not survive composition");
+}
+if (result.templateValue !== "globalThis:friend") {
+  throw new Error("template string interpolation did not survive composition");
+}
+'@
+        [System.IO.File]::WriteAllText($lexicalHarness, $lexicalHarnessSource, (New-Object System.Text.UTF8Encoding($false)))
+        $lexicalOutput = & $node.Source $lexicalHarness $lexicalScriptPath 2>&1 | Out-String
+        Assert-True ($LASTEXITCODE -eq 0) "generated lexical Script.js failed; $(Get-TestOutputDiagnostic $lexicalOutput)"
+    }
+    Invoke-Uninstaller $lexicalCase
+    Assert-True (
+        (Get-Content -LiteralPath $lexicalScriptPath -Raw).Contains($lexicalScript.Trim())
+    ) "uninstaller did not restore lexical global declarations"
+
+    $intrinsicCase = Join-Path $sandbox "intrinsic-pollution-case"
+    $intrinsicProfiles = Join-Path $intrinsicCase "profiles"
+    New-Item -ItemType Directory -Path $intrinsicProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $intrinsicCase "profiles.yaml"), "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n")
+    [System.IO.File]::WriteAllText((Join-Path $intrinsicCase "config.yaml"), "ipv6: true`ntun: null`n")
+    [System.IO.File]::WriteAllText((Join-Path $intrinsicCase "verge.yaml"), "enable_tun_mode: false`n")
+    $intrinsicScript = @'
+Array.isArray = function () { return false; };
+function main(config) {
+  Object.keys = function () { return []; };
+  JSON.stringify = function () { return "polluted"; };
+  config.previousRan = true;
+  return config;
+}
+'@
+    $intrinsicScriptPath = Join-Path $intrinsicProfiles "Script.js"
+    [System.IO.File]::WriteAllText($intrinsicScriptPath, $intrinsicScript)
+    Invoke-Installer $intrinsicCase
+    if ($onWindows) {
+        $intrinsicHarness = Join-Path $sandbox "run-intrinsic-script.js"
+        $intrinsicHarnessSource = @'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const context = {};
+vm.createContext(context);
+context.__claudeEasyFixture = {
+  proxies: [{ name: "Node", type: "ss", server: "proxy.invalid", password: "fixture-secret" }],
+  "proxy-groups": [{ name: "Main", type: "select", proxies: ["Node"] }],
+  dns: { enable: true, nameserver: ["223.5.5.5"], "nameserver-policy": {} },
+  rules: ["MATCH,Main"]
+};
+const script = fs.readFileSync(process.argv[2], "utf8");
+vm.runInContext(
+  "try {\n" + script + "\n" +
+    ";this.__claudeEasyResult = JSON.stringify(main(this.__claudeEasyFixture) || '');\n" +
+    "this.__claudeEasyIntrinsicsIntact = Array.isArray([]) && Object.keys({ friend: true }).length === 1 && JSON.stringify({ friend: true }).indexOf('friend') !== -1;\n" +
+  "} catch (error) { throw error; }",
+  context
+);
+const result = JSON.parse(context.__claudeEasyResult);
+if (!result || result.previousRan !== true) {
+  throw new Error("previous main did not run");
+}
+if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((name) => name.indexOf("claude-easy-cn-domain") === 0)) {
+  throw new Error("intrinsic pollution disabled the managed transform");
+}
+if (context.__claudeEasyIntrinsicsIntact !== true) {
+  throw new Error("previous script polluted shared intrinsics");
+}
+'@
+        [System.IO.File]::WriteAllText($intrinsicHarness, $intrinsicHarnessSource, (New-Object System.Text.UTF8Encoding($false)))
+        $intrinsicOutput = & $node.Source $intrinsicHarness $intrinsicScriptPath 2>&1 | Out-String
+        Assert-True ($LASTEXITCODE -eq 0) "generated Script.js did not isolate intrinsic pollution; $(Get-TestOutputDiagnostic $intrinsicOutput)"
+    }
+    Invoke-Uninstaller $intrinsicCase
+    Assert-True (
+        (Get-Content -LiteralPath $intrinsicScriptPath -Raw).Contains($intrinsicScript.Trim())
+    ) "uninstaller did not restore the intrinsic-polluting script"
 
     $asyncCase = Join-Path $sandbox "async-case"
     $asyncProfiles = Join-Path $asyncCase "profiles"
@@ -4935,7 +5793,16 @@ friend payload
 
     Assert-InstallerRejectsScript "reserved-symbol-case" "const claudeEasyTransform = 1;`nfunction main(config) { return config; }`n" "保留标识符"
     Assert-InstallerRejectsScript "recursive-main-case" "function main(config) { return config.retry ? main(config) : config; }`n" "递归"
+    Assert-InstallerRejectsScript "main-property-reference-case" "function main(config) { return config; }`nmain.version = 1;`n" "引用 main"
+    Assert-InstallerRejectsScript "main-alias-reference-case" "function main(config) { const handler = main; return handler(config); }`n" "引用 main"
+    Assert-InstallerRejectsScript "main-shorthand-reference-case" "function main(config) { module.exports = { main }; return config; }`n" "引用 main"
     Assert-InstallerRejectsScript "reassigned-main-case" "function main(config) { return config; }`nmain = function(config) { config.override = true; return config; };`n" "重新定义 main"
+    Assert-InstallerRejectsScript "eval-case" "function main(config) { return (0, eval)('config'); }`n" "动态执行"
+    Assert-InstallerRejectsScript "function-constructor-case" "function main(config) { return Function('return config')(); }`n" "动态执行"
+    Assert-InstallerRejectsScript "constructor-escape-case" "function main(config) { return (() => {}).constructor('return config')(); }`n" "动态执行"
+    Assert-InstallerRejectsScript "computed-constructor-escape-case" 'function main(config) { return (() => {})["constructor"]("return config")(); }' "动态执行"
+    Assert-InstallerRejectsScript "reflect-constructor-escape-case" 'function main(config) { const fn = () => {}; return Reflect.get(fn, "constructor")("return config")(); }' "动态执行"
+    Assert-InstallerRejectsScript "template-expression-case" 'function main(config) { return `${eval("config")}`; }' "动态执行"
 
     $invalidStateCase = Join-Path $sandbox "invalid-state-case"
     New-Item -ItemType Directory -Path $invalidStateCase -Force | Out-Null

@@ -39,6 +39,8 @@ module ClashRouteVerifier
     ["Claude", "https://claude.ai/", :ai, /(?:\A|\.)claude\.ai\z/i]
   ].freeze
   NON_PROXY_TERMINALS = %w[DIRECT REJECT REJECT-DROP COMPATIBLE PASS].freeze
+  PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance Relay].freeze
+  NON_PROXY_TYPES = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch].freeze
 
   def get_json(socket, endpoint)
     code, body = ClaudeEasy.controller_request(socket, "GET", endpoint)
@@ -109,17 +111,59 @@ module ClashRouteVerifier
     NON_PROXY_TERMINALS.any? { |terminal| terminal.casecmp(name.to_s).zero? }
   end
 
-  def route_passes?(chains, proxies:, kind:, expected_group:, expected_selection:, ai_group:)
-    return false if chains.any? { |name| non_proxy_terminal?(name) } || non_proxy_terminal?(expected_selection)
-    return chains.include?(expected_group) && chains.include?(expected_selection) if kind == :ai
-    return false if chains.include?(ai_group)
-    return true if chains.include?(expected_group) && chains.include?(expected_selection)
+  def selectionless_main_group?(proxies, group)
+    proxies.dig(group, "type").to_s.casecmp("LoadBalance").zero?
+  end
 
-    chains.any? do |name|
+  def proxy_group_type?(type)
+    PROXY_GROUP_TYPES.any? { |group_type| group_type.casecmp(type.to_s).zero? }
+  end
+
+  def live_chain_proxy(proxies, providers, name, provider_name)
+    unless provider_name.to_s.empty?
+      provider = providers[provider_name]
+      return nil unless provider.is_a?(Hash)
+
+      return Array(provider["proxies"]).find do |proxy|
+        proxy.is_a?(Hash) && proxy["name"].to_s == name.to_s
+      end
+    end
+    proxies[name]
+  end
+
+  def safe_live_chain?(chains, provider_chains, proxies, providers)
+    return false if chains.empty?
+
+    chains.each_with_index do |name, index|
+      return false if non_proxy_terminal?(name)
+
+      proxy = live_chain_proxy(proxies, providers, name, provider_chains[index])
+      return false unless proxy.is_a?(Hash)
+
+      type = proxy["type"].to_s
+      return false if type.empty? ||
+                      NON_PROXY_TYPES.any? { |blocked| blocked.casecmp(type).zero? }
+      return false if index.zero? && proxy_group_type?(type)
+    end
+    true
+  end
+
+  def route_passes?(chains, proxies:, kind:, expected_group:, expected_selection:, ai_group:,
+                    providers: {}, provider_chains: [])
+    return false unless safe_live_chain?(chains, provider_chains, proxies, providers)
+
+    expected_proxy = proxies[expected_group]
+    return false unless expected_proxy.is_a?(Hash) && proxy_group_type?(expected_proxy["type"])
+    return chains.include?(expected_group) if kind == :ai
+
+    return false if chains.include?(ai_group)
+    return true if chains.include?(expected_group)
+
+    chains.each_with_index.any? do |name, index|
       next false unless name.match?(/google/i)
 
-      selection = proxies.dig(name, "now").to_s
-      !selection.empty? && !non_proxy_terminal?(selection) && chains.include?(selection)
+      proxy = live_chain_proxy(proxies, providers, name, provider_chains[index])
+      proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
     end
   end
 
@@ -137,22 +181,36 @@ module ClashRouteVerifier
 
     proxies = get_json(socket, "/proxies")&.fetch("proxies", {})
     return false unless proxies.is_a?(Hash)
+    provider_payload = get_json(socket, "/providers/proxies")
+    return false unless provider_payload.is_a?(Hash)
+
+    providers = provider_payload.fetch("providers", {})
+    return false unless providers.is_a?(Hash)
 
     expected = { main: main_group, ai: ai_group }
     selections = {
       main: proxies.dig(main_group, "now").to_s,
       ai: proxies.dig(ai_group, "now").to_s
     }
-    return false if selections.values.any? { |selection| selection.empty? || selection == "DIRECT" }
+    return false if selections.fetch(:ai).empty? || non_proxy_terminal?(selections.fetch(:ai))
+    if selections.fetch(:main).empty?
+      return false unless selectionless_main_group?(proxies, main_group)
+    elsif non_proxy_terminal?(selections.fetch(:main))
+      return false
+    end
 
-    output.puts "主代理组：#{ClaudeEasy.safe_label(main_group)} → #{ClaudeEasy.safe_label(selections.fetch(:main))}"
+    main_selection = selections.fetch(:main)
+    main_selection = "动态选择" if main_selection.empty?
+    output.puts "主代理组：#{ClaudeEasy.safe_label(main_group)} → #{ClaudeEasy.safe_label(main_selection)}"
     output.puts "AI 分组：#{ClaudeEasy.safe_label(ai_group)} → #{ClaudeEasy.safe_label(selections.fetch(:ai))}"
 
     checks = TARGETS.map do |label, url, kind, host_pattern|
       connection = observe_connection(socket, url, host_pattern)
       chains = Array(connection && connection["chains"])
+      provider_chains = Array(connection && connection["providerChains"])
       ok = route_passes?(
-        chains, proxies: proxies, kind: kind, expected_group: expected.fetch(kind),
+        chains, provider_chains: provider_chains, proxies: proxies, providers: providers,
+        kind: kind, expected_group: expected.fetch(kind),
         expected_selection: selections.fetch(kind), ai_group: ai_group
       )
       selected = chains.first

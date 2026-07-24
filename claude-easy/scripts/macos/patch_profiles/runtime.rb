@@ -79,6 +79,16 @@ module ClaudeEasy
     nil
   end
 
+  def runtime_selections_for_profile(selections, path)
+    return nil unless selections.is_a?(Hash)
+
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    selector_names = selectable_groups(config).map { |group| group.fetch("name") }
+    selections.select { |name, _selected| selector_names.include?(name) }
+  rescue StandardError
+    nil
+  end
+
   def dns_runtime_healthy?(requester, name)
     status, body = requester.call("GET", "/dns/query?name=#{name}&type=A", nil)
     return false unless status == 200
@@ -104,19 +114,39 @@ module ClaudeEasy
     false
   end
 
+  def profile_result_current?(result)
+    expected = result[:patched_digest]
+    identity = result[:patched_identity]
+    expected_path = result[:patched_path]
+    path = result[:path]
+    return false unless
+      expected.is_a?(String) && expected.match?(/\A[0-9a-f]{64}\z/) &&
+      identity.is_a?(Array) && identity.length == 2 &&
+      identity.all? { |value| value.is_a?(Integer) && value >= 0 } &&
+      expected_path.is_a?(String) && expected_path == File.expand_path(expected_path) &&
+      path.is_a?(String)
+
+    write_path = File.realpath(path)
+    return false unless write_path == expected_path
+
+    current = regular_file_snapshot_once(write_path, "已提交配置")
+    current.fetch(:identity) == identity &&
+      Digest::SHA256.hexdigest(current.fetch(:bytes)) == expected
+  rescue SystemCallError, IOError, InvalidConfigError
+    false
+  end
+
   def restore_profile_bytes(result)
     original = result[:rollback_bytes]
-    expected = result[:patched_digest]
-    return false unless original.is_a?(String) && expected.is_a?(String)
+    return false unless original.is_a?(String) && profile_result_current?(result)
 
     path = result.fetch(:path)
-    current = File.binread(File.realpath(path))
-    return false unless Digest::SHA256.hexdigest(current) == expected
+    current = File.binread(result.fetch(:patched_path))
 
-    atomic_compare_and_swap_bytes(
+    transactional_compare_and_write_bytes(
       path, current, original,
-      expected_identity: result[:patched_identity],
-      expected_path: result[:patched_path]
+      expected_identity: result.fetch(:patched_identity),
+      expected_path: result.fetch(:patched_path)
     )
   rescue SystemCallError, IOError, KeyError
     false
@@ -156,9 +186,8 @@ module ClaudeEasy
     selections = runtime_selections(requester)
     return false unless selections
 
-    config = load_yaml(File.read(active.fetch(:path), encoding: "UTF-8"), active.fetch(:path))
-    selector_names = selectable_groups(config).map { |group| group.fetch("name") }
-    selections = selections.select { |name, _selected| selector_names.include?(name) }
+    selections = runtime_selections_for_profile(selections, active.fetch(:path))
+    return false unless selections
     expected_tun = if require_tun == :preserve
                      tun_state(requester: requester)
                    elsif require_tun
@@ -184,6 +213,9 @@ module ClaudeEasy
 
   def activate_updated_profile(result, socket: nil, requester: nil, connectivity_checker: nil,
                                require_tun: true, precommit_condition: nil)
+    pending = -> { result.merge(status: :reload_failed_restore_pending) }
+    return pending.call unless profile_result_current?(result)
+
     if requester.nil?
       socket ||= controller_socket
       return result.merge(
@@ -218,20 +250,25 @@ module ClaudeEasy
       )
     end
     return result.merge(status: rollback.call) if expected_tun == :unknown
+    candidate_selections = runtime_selections_for_profile(before, result.fetch(:path))
+    return result.merge(status: rollback.call) unless candidate_selections
     unless runtime_precommit_allowed?(precommit_condition)
       status = restore_profile_bytes(result) ? :reload_failed_rolled_back : :reload_failed_rollback_conflict
       return result.merge(status: status)
     end
+    return pending.call unless profile_result_current?(result)
 
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(result.fetch(:path)))
     )
+    return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback.call) unless code == 204
 
     healthy = runtime_health_healthy?(
-      requester, selections: before, expected_tun: expected_tun,
+      requester, selections: candidate_selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker
     )
+    return pending.call unless profile_result_current?(result)
     return result.merge(reloaded: true) if healthy
 
     result.merge(status: rollback.call)

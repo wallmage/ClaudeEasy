@@ -2,14 +2,30 @@
 
 require "digest"
 require "fileutils"
+require "fiddle/import"
 require "json"
 require "base64"
-require "fiddle/import"
 require "open3"
 require "optparse"
 require "psych"
+require "rbconfig"
 require "tempfile"
 require "time"
+
+module ClaudeEasyDarwinFilesystem
+  extend Fiddle::Importer
+
+  RENAME_EXCL = 0x00000004
+
+  dlload "/usr/lib/libSystem.B.dylib"
+  extern "int renamex_np(const char *, const char *, unsigned int)"
+
+  def self.rename_exclusive(source, destination)
+    return true if renamex_np(source, destination, RENAME_EXCL).zero?
+
+    raise SystemCallError.new("无法独占发布状态文件", Fiddle.last_error)
+  end
+end
 
 module ClaudeEasy
   VALIDATION_TIMEOUT_SECONDS = 30
@@ -19,7 +35,7 @@ module ClaudeEasyBootstrap
   module_function
 
   DEPENDENCIES = %w[
-    result_contract patch_profiles/transform patch_profiles/backups patch_profiles/mihomo
+    result_contract operation_lock patch_profiles/transform patch_profiles/backups patch_profiles/mihomo
     patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime patch_profiles/cli
   ].freeze
 

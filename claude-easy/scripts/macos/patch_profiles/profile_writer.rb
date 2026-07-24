@@ -2,15 +2,8 @@ module ClaudeEasy
   module_function
 
   LOCK_TIMEOUT_SECONDS = 5
-  RENAME_SWAP = 0x00000002
   PROFILE_TRANSACTION_BASENAME = ".claude-easy-profile-transaction.json".freeze
   PROFILE_OPERATION_LOCK_BASENAME = ".claude-easy-operation.lock".freeze
-
-  module DarwinRename
-    extend Fiddle::Importer
-    dlload "/usr/lib/libSystem.B.dylib"
-    extern "int renamex_np(const char *, const char *, unsigned int)"
-  end
 
   def monotonic_now
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -26,65 +19,34 @@ module ClaudeEasy
     end
   end
 
-  def atomic_swap_paths(first, second)
-    result = DarwinRename.renamex_np(first.to_s, second.to_s, RENAME_SWAP)
-    raise SystemCallError.new("无法原子交换配置文件", Fiddle.last_error) unless result.zero?
-
-    true
-  end
-
-  def same_file_identity?(stat, path)
-    current = File.stat(path)
-    stat.dev == current.dev && stat.ino == current.ino
-  rescue SystemCallError
-    false
-  end
-
-  def atomic_replace_locked(source, path, write_path, expected_bytes, replacement_bytes)
+  def transactional_replace_locked(source, path, write_path, expected_bytes, replacement_bytes)
     expected_bytes = expected_bytes.b
     replacement_bytes = replacement_bytes.b
     source.rewind
-    return false unless locked_source_current?(source, path, write_path) && source.read.b == expected_bytes
+    return false unless locked_source_current?(source, path, write_path) &&
+                        source.read.b == expected_bytes
 
-    source_stat = source.stat
-    Tempfile.create([".claude-easy-swap-", ".tmp"], File.dirname(write_path)) do |temporary|
-      temporary.binmode
-      temporary.write(replacement_bytes)
-      temporary.flush
-      temporary.fsync
-      File.chmod(source_stat.mode & 0o7777, temporary.path)
-      return false unless locked_source_current?(source, path, write_path)
+    write_locked_bytes(source, replacement_bytes, expected_bytes)
+    source.rewind
+    return false unless source.read.b == replacement_bytes
 
-      atomic_swap_paths(temporary.path, write_path)
-      committed = same_file_identity?(source_stat, temporary.path) &&
-                  File.binread(temporary.path) == expected_bytes &&
-                  File.realpath(path) == write_path &&
-                  File.binread(write_path) == replacement_bytes
-      unless committed
-        if File.exist?(temporary.path) && File.exist?(write_path) &&
-           same_file_identity?(source_stat, temporary.path) &&
-           File.binread(write_path) == replacement_bytes
-          atomic_swap_paths(temporary.path, write_path)
-        end
-        return false
-      end
-      true
-    end
+    locked_source_current?(source, path, write_path)
   end
 
-  def atomic_compare_and_swap_bytes(path, expected_bytes, replacement_bytes,
-                                    expected_identity: nil, expected_path: nil)
+  def transactional_compare_and_write_bytes(path, expected_bytes, replacement_bytes,
+                                            expected_identity: nil, expected_path: nil)
     expected_bytes = expected_bytes.b
     replacement_bytes = replacement_bytes.b
     write_path = File.realpath(path)
     return false if expected_path && write_path != expected_path
-    File.open(write_path, "rb") do |source|
+
+    File.open(write_path, "r+b") do |source|
       lock_exclusive_with_timeout(source)
       if expected_identity
         stat = source.stat
         return false unless [stat.dev, stat.ino] == expected_identity
       end
-      atomic_replace_locked(source, path, write_path, expected_bytes, replacement_bytes)
+      transactional_replace_locked(source, path, write_path, expected_bytes, replacement_bytes)
     end
   rescue SystemCallError, IOError
     false
@@ -92,20 +54,20 @@ module ClaudeEasy
 
   def write_locked_bytes(source, replacement_bytes, original_bytes)
     source.rewind
+    source.truncate(0)
     written = source.write(replacement_bytes)
     raise IOError, "配置写入不完整" unless written == replacement_bytes.bytesize
 
-    source.truncate(replacement_bytes.bytesize)
     source.flush
     source.fsync
     true
   rescue SystemCallError, IOError => write_error
     begin
       source.rewind
+      source.truncate(0)
       restored = source.write(original_bytes)
       raise IOError, "原配置恢复不完整" unless restored == original_bytes.bytesize
 
-      source.truncate(original_bytes.bytesize)
       source.flush
       source.fsync
     rescue SystemCallError, IOError => restore_error
@@ -145,11 +107,24 @@ module ClaudeEasy
     File.exist?(path) || File.symlink?(path)
   end
 
+  def fsync_parent_directory(path)
+    directory = File.dirname(File.expand_path(path))
+    File.open(directory, File::RDONLY) do |handle|
+      handle.fsync
+    end
+    true
+  end
+
   def profile_path_allowed?(path, roots)
     expanded = File.expand_path(path)
     roots.any? do |root|
-      prefix = File.expand_path(root) + File::SEPARATOR
-      expanded.start_with?(prefix)
+      candidates = [File.expand_path(root)]
+      candidates << File.realpath(root)
+      candidates.uniq.any? do |candidate|
+        expanded.start_with?(candidate + File::SEPARATOR)
+      end
+    rescue SystemCallError
+      expanded.start_with?(File.expand_path(root) + File::SEPARATOR)
     end
   end
 
@@ -168,6 +143,7 @@ module ClaudeEasy
         handle.read.b == snapshot.fetch(:bytes)
 
       File.unlink(path)
+      fsync_parent_directory(path)
     end
     true
   end
@@ -183,38 +159,82 @@ module ClaudeEasy
 
     state = JSON.parse(text)
     valid_state = state.is_a?(Hash) && state.keys.sort == %w[Items Version] &&
-                  state["Version"] == 1 && state["Items"].is_a?(Array) &&
+                  [1, 2].include?(state["Version"]) && state["Items"].is_a?(Array) &&
                   !state["Items"].empty?
     raise InvalidConfigError, "配置事务记录无效" unless valid_state
 
     seen = {}
     state.fetch("Items").each do |item|
-      valid_item = item.is_a?(Hash) &&
-                   item.keys.sort == %w[CandidateSha256 OriginalBase64 Path WritePath] &&
+      version = state.fetch("Version")
+      expected_keys = if version == 1
+                        %w[CandidateSha256 OriginalBase64 Path WritePath]
+                      else
+                        %w[CandidateBase64 CandidateSha256 OriginalBase64 OriginalIdentity Path WritePath]
+                      end
+      valid_item = item.is_a?(Hash) && item.keys.sort == expected_keys.sort &&
                    item["Path"].is_a?(String) && item["WritePath"].is_a?(String) &&
                    item["OriginalBase64"].is_a?(String) &&
                    item["CandidateSha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
+      if version == 2
+        identity = item["OriginalIdentity"]
+        valid_item &&= item["CandidateBase64"].is_a?(String) &&
+                       identity.is_a?(Array) && identity.length == 2 &&
+                       identity.all? { |value| value.is_a?(Integer) && value >= 0 }
+      end
       raise InvalidConfigError, "配置事务记录无效" unless valid_item
+      logical_path = item.fetch("Path")
+      write_path = item.fetch("WritePath")
       raise InvalidConfigError, "配置事务记录路径无效" unless
-        profile_path_allowed?(item.fetch("Path"), roots) &&
-        File.realpath(item.fetch("Path")) == item.fetch("WritePath")
-      raise InvalidConfigError, "配置事务记录包含重复目标" if seen[item.fetch("WritePath")]
+        logical_path == File.expand_path(logical_path) &&
+        write_path == File.expand_path(write_path) &&
+        profile_path_allowed?(logical_path, roots) &&
+        profile_path_allowed?(write_path, roots)
+      raise InvalidConfigError, "配置事务记录包含重复目标" if seen[write_path]
 
-      seen[item.fetch("WritePath")] = true
+      seen[write_path] = true
       original = Base64.strict_decode64(item.fetch("OriginalBase64"))
-      current = File.binread(item.fetch("WritePath"))
+      begin
+        target = File.lstat(write_path)
+        next unless target.file? && !target.symlink? && target.nlink == 1
+        next unless File.realpath(write_path) == write_path
+
+        current_snapshot = regular_file_snapshot_once(write_path, "配置事务目标")
+      rescue Errno::ENOENT, Errno::ENOTDIR, Errno::ELOOP
+        next
+      end
+      current = current_snapshot.fetch(:bytes)
+      if version == 2
+        candidate = Base64.strict_decode64(item.fetch("CandidateBase64"))
+        raise InvalidConfigError, "配置事务记录无效" unless
+          Digest::SHA256.hexdigest(candidate) == item.fetch("CandidateSha256")
+
+        expected_identity = item.fetch("OriginalIdentity")
+        next unless current_snapshot.fetch(:identity) == expected_identity
+        next if current == original
+        raise InvalidConfigError, "配置事务目标处于无法安全判定的部分写入状态" unless
+          current == candidate
+
+        restored = transactional_compare_and_write_bytes(
+          write_path, current, original,
+          expected_identity: expected_identity, expected_path: write_path
+        )
+        unless restored
+          latest = regular_file_snapshot_once(write_path, "配置事务目标")
+          next unless latest.fetch(:identity) == expected_identity
+          next if latest.fetch(:bytes) == original
+
+          raise IOError, "配置事务恢复失败"
+        end
+        next
+      end
+
       current_digest = Digest::SHA256.hexdigest(current)
       original_digest = Digest::SHA256.hexdigest(original)
       next if current_digest == original_digest
-      unless current_digest == item.fetch("CandidateSha256")
-        next if allowed_concurrent_paths[File.expand_path(item.fetch("Path"))]
+      next if current_digest != item.fetch("CandidateSha256") &&
+              allowed_concurrent_paths[File.expand_path(logical_path)]
 
-        raise InvalidConfigError, "配置事务目标包含新的并发修改"
-      end
-      restored = atomic_compare_and_swap_bytes(
-        item.fetch("Path"), current, original, expected_path: item.fetch("WritePath")
-      )
-      raise IOError, "配置事务恢复失败" unless restored
+      raise InvalidConfigError, "旧版配置事务缺少文件身份，不能自动恢复"
     end
     remove_profile_transaction(snapshot) unless keep_transaction
     snapshot
@@ -222,23 +242,37 @@ module ClaudeEasy
     raise InvalidConfigError, "配置事务记录无效"
   end
 
-  def prepare_profile_transaction(items, backup_root)
+  def prepare_profile_transaction(items, backup_root, roots:)
     root = secure_backup_root!(backup_root)
     path = profile_transaction_path(root)
     raise IOError, "发现尚未恢复的配置事务记录" if File.exist?(path) || File.symlink?(path)
 
     records = items.map do |item|
+      logical_path = File.expand_path(item.fetch(:path))
+      write_path = File.realpath(logical_path)
+      raise InvalidConfigError, "配置事务目标路径无效" unless
+        profile_path_allowed?(logical_path, roots) &&
+        profile_path_allowed?(write_path, roots)
+
+      current = regular_file_snapshot_once(write_path, "当前配置")
+      raise ConcurrentProfileChangeError, "配置在事务建立前发生变化" unless
+        current.fetch(:bytes) == item.fetch(:original).b &&
+        File.realpath(logical_path) == write_path
+
+      candidate = item.fetch(:candidate).b
       {
-        "Path" => File.expand_path(item.fetch(:path)),
-        "WritePath" => File.realpath(item.fetch(:path)),
+        "Path" => logical_path,
+        "WritePath" => write_path,
         "OriginalBase64" => Base64.strict_encode64(item.fetch(:original).b),
-        "CandidateSha256" => Digest::SHA256.hexdigest(item.fetch(:candidate).b)
+        "OriginalIdentity" => current.fetch(:identity),
+        "CandidateBase64" => Base64.strict_encode64(candidate),
+        "CandidateSha256" => Digest::SHA256.hexdigest(candidate)
       }
     end
     raise InvalidConfigError, "配置事务包含重复目标" unless
       records.map { |record| record.fetch("WritePath") }.uniq.length == records.length
 
-    bytes = (JSON.generate("Version" => 1, "Items" => records) + "\n").b
+    bytes = (JSON.generate("Version" => 2, "Items" => records) + "\n").b
     Tempfile.create([".claude-easy-profile-transaction-", ".tmp"], root) do |temporary|
       temporary.binmode
       temporary.write(bytes)
@@ -246,8 +280,19 @@ module ClaudeEasy
       temporary.fsync
       File.chmod(0o600, temporary.path)
       File.rename(temporary.path, path)
+      fsync_parent_directory(path)
     end
-    regular_file_snapshot_once(path, "配置事务记录")
+    snapshot = regular_file_snapshot_once(path, "配置事务记录")
+    targets = records.to_h do |record|
+      [
+        record.fetch("Path"),
+        {
+          write_path: record.fetch("WritePath"),
+          identity: record.fetch("OriginalIdentity")
+        }
+      ]
+    end
+    snapshot.merge(targets: targets)
   end
 
   def profile_work_items(roots, selected, active_root)
@@ -320,11 +365,19 @@ module ClaudeEasy
   end
 
   def patch_path_once(path, policy, dry_run:, backup_root:, validator:, usage_profile: 3,
-                      capture_transaction: false, expected_original: nil)
+                      capture_transaction: false, expected_original: nil,
+                      expected_identity: nil, expected_path: nil)
     write_path = File.realpath(path)
     outcome = nil
     File.open(write_path, dry_run ? "rb" : "r+b") do |source|
       lock_exclusive_with_timeout(source)
+      opened = source.stat
+      if (expected_path && write_path != expected_path) ||
+         (expected_identity && [opened.dev, opened.ino] != expected_identity)
+        return base_result(nil, :concurrent_change).merge(
+          path: path, transaction_commit: false
+        )
+      end
       original_bytes = source.read
       if expected_original && original_bytes.b != expected_original.b
         return base_result(nil, :concurrent_change).merge(path: path, transaction_commit: false)
@@ -382,9 +435,9 @@ module ClaudeEasy
             outcome = :retry
           else
             patched_bytes = File.binread(temporary.path)
-            swapped = atomic_replace_locked(source, path, write_path, original_bytes, patched_bytes)
-            outcome = if swapped
-                        committed = File.stat(write_path)
+            written = transactional_replace_locked(source, path, write_path, original_bytes, patched_bytes)
+            outcome = if written
+                        committed = source.stat
                         result.merge(
                           path: path,
                           rollback_bytes: original_bytes,
@@ -403,13 +456,15 @@ module ClaudeEasy
   end
 
   def patch_path(path, policy, dry_run: false, backup_root: nil, validator: nil, usage_profile: 3,
-                 capture_transaction: false, expected_original: nil)
+                 capture_transaction: false, expected_original: nil,
+                 expected_identity: nil, expected_path: nil)
     MAX_PATCH_ATTEMPTS.times do
       outcome = patch_path_once(
         path, policy, dry_run: dry_run, backup_root: backup_root,
         validator: validator, usage_profile: usage_profile,
         capture_transaction: capture_transaction,
-        expected_original: expected_original
+        expected_original: expected_original,
+        expected_identity: expected_identity, expected_path: expected_path
       )
       return outcome unless outcome == :retry
     end
@@ -500,25 +555,39 @@ module ClaudeEasy
         end
 
         transaction = nil
-        if backup_root
-          transaction_items = work_items.zip(preflight).each_with_object([]) do |(item, preview), output|
-            next unless preview.fetch(:status) == :updated
-            output << {
+        if backup_root && preflight.any? { |preview| preview.fetch(:status) == :updated }
+          transaction_items = work_items.zip(preflight).map do |item, preview|
+            {
               path: item.fetch(:path),
               original: preview.fetch(:transaction_original),
               candidate: preview.fetch(:transaction_candidate)
             }
           end
-          transaction = prepare_profile_transaction(transaction_items, backup_root) unless transaction_items.empty?
+          begin
+            transaction = prepare_profile_transaction(
+              transaction_items, backup_root, roots: roots
+            )
+          rescue ConcurrentProfileChangeError
+            if batch_attempt + 1 < MAX_PATCH_ATTEMPTS
+              next
+            end
+            return preflight.map do |result|
+              result.merge(status: :concurrent_change, dry_run: false, transaction_commit: false)
+            end
+          end
         end
 
         results = []
         transaction_expectations = if backup_root
                                      work_items.zip(preflight).to_h do |item, preview|
+                                       expanded_path = File.expand_path(item.fetch(:path))
+                                       target = transaction && transaction.fetch(:targets).fetch(expanded_path)
                                        [
-                                         File.expand_path(item.fetch(:path)),
+                                         expanded_path,
                                          {
-                                           original: preview.fetch(:transaction_original)
+                                           original: preview.fetch(:transaction_original),
+                                           identity: target&.fetch(:identity),
+                                           write_path: target&.fetch(:write_path)
                                          }
                                        ]
                                      end
@@ -531,7 +600,9 @@ module ClaudeEasy
           result = patch_path(
             path, policy, dry_run: dry_run, backup_root: backup_root,
             validator: validator, usage_profile: usage_profile,
-            expected_original: expectation&.fetch(:original)
+            expected_original: expectation&.fetch(:original),
+            expected_identity: expectation&.fetch(:identity),
+            expected_path: expectation&.fetch(:write_path)
           )
           result[:active] = item.fetch(:active)
           if auto_reload && !dry_run && result[:active] && result[:status] == :updated

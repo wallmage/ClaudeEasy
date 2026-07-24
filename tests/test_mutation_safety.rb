@@ -101,19 +101,108 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_windows_controller_secret_command_line_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/verify_routes.ps1",
+        '    if (-not [string]::IsNullOrEmpty($Secret)) {' + "\n",
+        '    if ($false) {' + "\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata"
+      )
+    end
+  end
+
+  def test_windows_controller_redirect_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/verify_routes.ps1",
+        '    $request.AllowAutoRedirect = $false' + "\n",
+        '    $request.AllowAutoRedirect = $true' + "\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata"
+      )
+    end
+  end
+
+  def test_windows_controller_loopback_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/verify_routes.ps1",
+        '    if (-not $rawHostIsLoopback) {' + "\n",
+        '    if ($false) {' + "\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata"
+      )
+    end
+  end
+
+  def test_windows_controller_proxy_bypass_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/verify_routes.ps1",
+        '    $request.Proxy = $null' + "\n",
+        '    $request.Proxy = [System.Net.WebRequest]::DefaultWebProxy' + "\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata"
+      )
+    end
+  end
+
+  def test_windows_supported_main_group_types_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/verify_routes.ps1",
+        "Test-SupportedRouteGroupType ([string]$property.Value.type)",
+        '[string]$property.Value.type -eq "Selector"'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_patch_runtime_route_verifiers_exist_on_both_platforms"
+      )
+    end
+  end
+
   def test_safe_update_path_identity_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "def locked_profile_current?(handle, path)\n",
-        "def locked_profile_current?(handle, path)\n    return true\n"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "  def locked_source_current?(source, path, write_path)\n",
+        "  def locked_source_current?(source, path, write_path)\n    return true\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_all_preserves_an_atomic_refresh_during_backup"
+        "--name", "test_transactional_replace_preserves_an_external_refresh_after_the_final_identity_check"
       )
     end
   end
@@ -138,21 +227,72 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_safe_update_precommit_journal_cleanup_mutation_is_killed
+  def test_profile_transaction_precommit_binding_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "        remove_profile_transaction(transaction)\n" \
-          "        return { status: :aborted, failed_profile: \"\", reason: :concurrent_change }\n",
-        "        true\n" \
-          "        return { status: :aborted, failed_profile: \"\", reason: :concurrent_change }\n"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "        current.fetch(:bytes) == item.fetch(:original).b &&\n" \
+          "        File.realpath(logical_path) == write_path\n",
+        "        true &&\n" \
+          "        File.realpath(logical_path) == write_path\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_all_discards_an_uncommitted_journal_after_a_preflight_refresh"
+        "--name", "test_normal_batch_binds_unchanged_preflight_items_before_committing_other_profiles"
+      )
+    end
+  end
+
+  def test_normal_batch_transaction_inode_binding_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "         (expected_identity && [opened.dev, opened.ino] != expected_identity)\n",
+        "         false\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_normal_batch_binds_each_commit_to_the_transaction_inode"
+      )
+    end
+  end
+
+  def test_safe_update_transaction_inode_binding_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "        item[:transaction_identity] = target.fetch(:identity)\n",
+        "        item[:transaction_identity] = [handle.stat.dev, handle.stat.ino]\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_safe_update_binds_each_commit_to_the_transaction_inode"
+      )
+    end
+  end
+
+  def test_safe_update_transaction_realpath_binding_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "        unless write_path == target.fetch(:write_path)\n",
+        "        if false\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_safe_update_binds_each_commit_to_the_transaction_realpath"
       )
     end
   end
@@ -162,8 +302,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        "    if ! rollback_profile_selection; then\n",
-        "    if false; then\n"
+        '    elif [ "$PROFILE_STATE_CHANGED" -eq 1 ] && ! rollback_profile_selection; then' + "\n",
+        '    elif [ "$PROFILE_STATE_CHANGED" -eq 1 ] && false; then' + "\n"
       )
 
       assert_mutation_is_killed(
@@ -174,20 +314,119 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_profile_state_file_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_macos.sh",
+        "  durable_sync_file \"$USAGE_STATE_PATH\"\n",
+        "  : # mutant: skip the profile file and parent-directory sync\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name",
+        "test_installer_restores_the_previous_profile_when_profile_publication_cannot_sync"
+      )
+    end
+  end
+
+  def test_uninstall_ready_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/uninstall_macos.sh",
+        "  /usr/bin/touch \"$UNINSTALL_STAGING/READY\"\n" \
+          "  durable_sync_file \"$UNINSTALL_STAGING/READY\"\n",
+        "  /usr/bin/touch \"$UNINSTALL_STAGING/READY\"\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name",
+        "test_uninstaller_never_deletes_install_files_before_ready_is_durable"
+      )
+    end
+  end
+
+  def test_uninstall_delete_directory_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/uninstall_macos.sh",
+        "  done\n" \
+          "  durable_sync_directory \"$INSTALL_DIR\"\n" \
+          "}\n\n" \
+          "commit_staged_install_files()",
+        "  done\n" \
+          "}\n\n" \
+          "commit_staged_install_files()"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name",
+        "test_uninstaller_restores_every_file_when_the_delete_directory_cannot_sync"
+      )
+    end
+  end
+
+  def test_wrapper_inherited_lock_verification_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/operation_lock.rb",
+        "  def inherited_lock_held?(path)\n" \
+          "    return false unless ENV[HELD_ENV] == \"1\"\n",
+        "  def inherited_lock_held?(_path)\n" \
+          "    return true if ENV[HELD_ENV] == \"1\"\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name", "test_wrappers_reject_a_forged_inherited_lock_before_any_mutation"
+      )
+    end
+  end
+
+  def test_cli_saved_profile_match_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/cli.rb",
+        "    return nil if saved == expected\n",
+        "    return nil if saved\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name",
+        "test_cli_profile_guard_rejects_unset_invalid_and_mismatched_state_before_work"
+      )
+    end
+  end
+
   def test_safe_update_rollback_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "        item.fetch(\"Path\"), current, original, expected_path: item.fetch(\"WritePath\")\n",
-        "        item.fetch(\"Path\"), current, current, expected_path: item.fetch(\"WritePath\")\n"
+        "          write_path, current, original,\n" \
+          "          expected_identity: expected_identity, expected_path: write_path\n",
+        "          write_path, current, current,\n" \
+          "          expected_identity: expected_identity, expected_path: write_path\n"
       )
 
       assert_mutation_is_killed(
         root,
         { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" },
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_production_probe_next_safe_update_recovers_batch_killed_after_first_swap"
+        "--name", "test_production_probe_next_safe_update_recovers_batch_killed_after_first_descriptor_commit"
       )
     end
   end
@@ -268,15 +507,76 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_active_reload_candidate_identity_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "    code, _body = requester.call(\n" \
+          "      \"PUT\", \"/configs?force=true\", JSON.generate(\"path\" => File.expand_path(result.fetch(:path)))\n" \
+          "    )\n" \
+          "    return pending.call unless profile_result_current?(result)\n",
+        "    code, _body = requester.call(\n" \
+          "      \"PUT\", \"/configs?force=true\", JSON.generate(\"path\" => File.expand_path(result.fetch(:path)))\n" \
+          "    )\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_active_reload_never_accepts_a_replaced_candidate_inode"
+      )
+    end
+  end
+
+  def test_active_reload_candidate_selection_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "      requester, selections: candidate_selections, expected_tun: expected_tun,\n",
+        "      requester, selections: before, expected_tun: expected_tun,\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_active_reload_allows_a_removed_legacy_managed_selector"
+      )
+    end
+  end
+
+  def test_runtime_profile_selection_filter_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "    selections.select { |name, _selected| selector_names.include?(name) }\n",
+        "    selections\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_active_reload_allows_a_removed_legacy_managed_selector"
+      )
+    end
+  end
+
   def test_restore_backup_transaction_creation_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    create_versioned_backup(target, backup_root, content: current_bytes, reason: \"pre-restore\")\n" \
-          "    transaction = prepare_profile_transaction(\n" \
-          "      [{ path: target, original: current_bytes, candidate: backup_bytes }], backup_root\n" \
-          "    )\n",
+          "    begin\n" \
+          "      transaction = prepare_profile_transaction(\n" \
+          "        [{ path: target, original: current_bytes, candidate: backup_bytes }],\n" \
+          "        backup_root, roots: directories\n" \
+          "      )\n" \
+          "    rescue ConcurrentProfileChangeError\n" \
+          "      return { status: :restore_conflict, path: target }\n" \
+          "    end\n",
         "    create_versioned_backup(target, backup_root, content: current_bytes, reason: \"pre-restore\")\n" \
           "    transaction = {}\n"
       )
@@ -326,15 +626,45 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_restore_backup_candidate_identity_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
+        "      status: :updated,\n" \
+          "      path: target,\n" \
+          "      rollback_bytes: current_bytes,\n" \
+          "      patched_digest: Digest::SHA256.hexdigest(backup_bytes),\n" \
+          "      patched_identity: transaction_target.fetch(:identity),\n",
+        "      status: :updated,\n" \
+          "      path: target,\n" \
+          "      rollback_bytes: current_bytes,\n" \
+          "      patched_digest: Digest::SHA256.hexdigest(backup_bytes),\n" \
+          "      patched_identity: nil,\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_backup_restore_runtime_rollback_never_overwrites_a_replaced_candidate_inode"
+      )
+    end
+  end
+
   def test_restore_backup_no_change_transaction_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    if current_bytes == backup_bytes\n" \
-          "      transaction = prepare_profile_transaction(\n" \
-          "        [{ path: target, original: current_bytes, candidate: backup_bytes }], backup_root\n" \
-          "      )\n",
+          "      begin\n" \
+          "        transaction = prepare_profile_transaction(\n" \
+          "          [{ path: target, original: current_bytes, candidate: backup_bytes }],\n" \
+          "          backup_root, roots: directories\n" \
+          "        )\n" \
+          "      rescue ConcurrentProfileChangeError\n" \
+          "        return { status: :restore_conflict, path: target }\n" \
+          "      end\n",
         "    if current_bytes == backup_bytes\n" \
           "      transaction = {}\n"
       )
@@ -347,19 +677,22 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_safe_update_completed_file_restore_mutation_is_killed
+  def test_safe_update_closes_locked_handles_before_rollback_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "  def safe_update_item_restored?(item)\n",
-        "  def safe_update_item_restored?(item)\n    return false\n"
+        "      handles.each { |_item, handle| handle.close rescue nil }\n" \
+          "      handles.clear\n" \
+          "      failures = finish_safe_update_rollback(items, transaction, backup_root, roots)\n",
+        "      handles.clear\n" \
+          "      failures = finish_safe_update_rollback(items, transaction, backup_root, roots)\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_does_not_treat_runtime_file_restore_as_a_second_rollback_failure"
+        "--name", "test_safe_update_closes_profile_handles_before_entering_rollback"
       )
     end
   end
@@ -413,96 +746,313 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_safe_update_final_restore_check_mutation_is_killed
+  def test_profile_transaction_original_inode_guard_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "    all_restored = items.all? { |item| safe_update_item_restored?(item) }\n",
-        "    all_restored = true\n"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "        next unless current_snapshot.fetch(:identity) == expected_identity\n",
+        "        true\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_keeps_the_transaction_when_a_restored_file_is_refreshed_before_cleanup"
+        "--name", "test_profile_transaction_preserves_an_atomic_refresh_after_an_interrupted_write"
       )
     end
   end
 
-  def test_safe_update_uncommitted_transaction_cleanup_mutation_is_killed
+  def test_profile_transaction_v1_identity_fail_closed_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "    if items.none? { |item| item[:committed_identity] } && !candidate_remains\n",
-        "    if false\n"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        '      raise InvalidConfigError, "旧版配置事务缺少文件身份，不能自动恢复"',
+        "      next"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_all_preserves_an_atomic_refresh_during_backup"
+        "--name", "test_profile_transaction_v1_never_overwrites_an_unidentified_candidate_inode"
       )
     end
   end
 
-  def test_safe_update_unrecorded_candidate_mutation_is_killed
+  def test_profile_transaction_interrupted_bytes_validation_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "    candidate_remains = items.any? { |item| safe_update_item_candidate_or_unknown?(item) }\n",
-        "    candidate_remains = false\n"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "        raise InvalidConfigError, \"配置事务目标处于无法安全判定的部分写入状态\" unless\n" \
+          "          current == candidate\n",
+        "        raise InvalidConfigError, \"配置事务目标处于无法安全判定的部分写入状态\" unless\n" \
+          "          candidate.start_with?(current)\n"
       )
 
       assert_mutation_is_killed(
         root,
-        { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" },
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_production_probe_safe_update_restores_a_swap_when_bookkeeping_raises"
+        "--name", "test_profile_transaction_preserves_ambiguous_partial_writes_for_manual_retry"
       )
     end
   end
 
-  def test_safe_update_unrecorded_candidate_identity_mutation_is_killed
+  def test_safe_update_v2_journal_recovery_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "    [stat.dev, stat.ino] == item.fetch(:candidate_identity) &&\n",
-        "    true &&\n"
+        "    recover_profile_transaction(backup_root, roots: roots, keep_transaction: keep_transaction)\n",
+        "    remove_profile_transaction(transaction)\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_preserves_an_equal_candidate_external_refresh_before_swap"
+        "--name", "test_safe_update_preserves_an_ambiguous_partial_descriptor_write_and_journal"
       )
     end
   end
 
-  def test_safe_update_unreadable_candidate_mutation_is_killed
+  def test_profile_transaction_write_path_boundary_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "      File.binread(item.fetch(:write_path)) == item.fetch(:candidate)\n" \
-          "  rescue StandardError\n" \
-          "    true\n" \
-          "  end\n\n" \
-          "  def rollback_safe_update_items",
-        "      File.binread(item.fetch(:write_path)) == item.fetch(:candidate)\n" \
-          "  rescue StandardError\n" \
-          "    false\n" \
-          "  end\n\n" \
-          "  def rollback_safe_update_items"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "        profile_path_allowed?(logical_path, roots) &&\n" \
+          "        profile_path_allowed?(write_path, roots)\n\n" \
+          "      current = regular_file_snapshot_once(write_path, \"当前配置\")\n",
+        "        profile_path_allowed?(logical_path, roots)\n\n" \
+          "      current = regular_file_snapshot_once(write_path, \"当前配置\")\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_rollback_reports_unreadable_candidate_recovery_failure"
+        "--name", "test_profile_transaction_rejects_a_symlink_target_outside_the_profile_root_before_publication"
+      )
+    end
+  end
+
+  def test_profile_transaction_journal_publication_directory_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "      File.rename(temporary.path, path)\n" \
+          "      fsync_parent_directory(path)\n",
+        "      File.rename(temporary.path, path)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_profile_transaction_fsyncs_the_journal_directory_after_publish_and_remove"
+      )
+    end
+  end
+
+  def test_profile_transaction_journal_removal_directory_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "      File.unlink(path)\n" \
+          "      fsync_parent_directory(path)\n",
+        "      File.unlink(path)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_profile_transaction_fsyncs_the_journal_directory_after_publish_and_remove"
+      )
+    end
+  end
+
+  def test_auto_update_ownership_directory_sync_barrier_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "        ClaudeEasyDarwinFilesystem.rename_exclusive(file.path, path)\n" \
+          "        fsync_parent_directory(path)\n",
+        "        ClaudeEasyDarwinFilesystem.rename_exclusive(file.path, path)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_auto_update_ownership_directory_sync_failure_prevents_the_preference_write"
+      )
+    end
+  end
+
+  def test_auto_update_ownership_exclusive_publication_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "        ClaudeEasyDarwinFilesystem.rename_exclusive(file.path, path)\n",
+        "        File.rename(file.path, path)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name",
+        "test_auto_update_ownership_initial_publication_never_overwrites_a_racing_file"
+      )
+    end
+  end
+
+  def test_secure_backup_root_parent_publication_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
+        "      fsync_directory(directory)\n" \
+          "      fsync_directory(File.dirname(directory))\n",
+        "      fsync_directory(directory)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_secure_backup_root_durably_publishes_each_new_directory"
+      )
+    end
+  end
+
+  def test_secure_backup_root_retry_resync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
+        "    existing_parent = File.dirname(cursor)\n" \
+          "    fsync_directory(existing_parent) unless existing_parent == cursor\n",
+        "    existing_parent = File.dirname(cursor)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_secure_backup_root_retry_resynchronizes_a_directory_left_by_a_failed_publication"
+      )
+    end
+  end
+
+  def test_wrapper_operation_lock_parent_publication_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/operation_lock.rb",
+        "      fsync_directory(directory)\n" \
+          "      fsync_directory(File.dirname(directory))\n",
+        "      fsync_directory(directory)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_wrapper_operation_lock_durably_publishes_each_new_state_directory"
+      )
+    end
+  end
+
+  def test_wrapper_operation_lock_retry_resync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/operation_lock.rb",
+        "    existing_parent = File.dirname(cursor)\n" \
+          "    fsync_directory(existing_parent) unless existing_parent == cursor\n",
+        "    existing_parent = File.dirname(cursor)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_wrapper_operation_lock_durably_publishes_each_new_state_directory"
+      )
+    end
+  end
+
+  def test_versioned_backup_directory_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/backups.rb",
+        "    FileUtils.chmod(0o600, destination)\n" \
+          "    fsync_directory(root)\n" \
+          "    destination\n",
+        "    FileUtils.chmod(0o600, destination)\n" \
+          "    destination\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_versioned_backup_syncs_its_directory_after_the_file_is_complete"
+      )
+    end
+  end
+
+  def test_auto_update_ownership_post_write_identity_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "      source.flush\n" \
+          "      source.fsync\n" \
+          "      locked_source_current?(source, path, write_path)\n",
+        "      source.flush\n" \
+          "      source.fsync\n" \
+          "      true\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_auto_update_ownership_release_preserves_an_atomic_refresh"
+      )
+    end
+  end
+
+  def test_auto_update_ownership_append_prefix_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "      source.truncate(valid_bytes.bytesize)\n",
+        "      source.truncate(0)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_auto_update_ownership_append_failure_preserves_the_fsynced_prefix"
+      )
+    end
+  end
+
+  def test_auto_update_ownership_release_event_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "    changed = append_auto_update_ownership_event(state, event)\n" \
+          "    raise IOError, \"订阅自动更新所有权状态同时发生变化\" unless changed\n",
+        "    changed = true\n" \
+          "    raise IOError, \"订阅自动更新所有权状态同时发生变化\" unless changed\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_auto_update_ownership_release_preserves_an_atomic_refresh"
       )
     end
   end
@@ -539,6 +1089,225 @@ class MutationSafetyTest < Minitest::Test
         "node", "--test",
         "--test-name-pattern=PowerShell safe update checks installed script and proxy-group prerequisites before acceptance",
         "tests/test_windows_patcher.js"
+      )
+    end
+  end
+
+  def test_contract_windows_safe_update_requires_a_passive_script_envelope
+    source = File.read(
+      File.join(
+        ROOT,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1"
+      )
+    )
+    analysis_source = File.read(
+      File.join(
+        ROOT,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1"
+      )
+    )
+
+    assert_includes source,
+                    "function Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive("
+    assert_includes source,
+                    "Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive $ScriptText"
+    assert_includes source, "Get-JavaScriptAnalysis $outsidePrefix"
+    assert_includes source, "Get-JavaScriptAnalysis $outsideSuffix"
+    assert_includes source, '$outsidePrefixAnalysis.HasLiteral'
+    assert_includes source, '$outsideSuffixAnalysis.HasLiteral'
+    assert_includes analysis_source, 'HasLiteral = $hasLiteral'
+  end
+
+  def test_contract_windows_script_composition_rejects_unrenamed_main_references
+    source = File.read(
+      File.join(
+        ROOT,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1"
+      )
+    )
+
+    assert_includes source, "function Assert-JavaScriptDoesNotReferenceMain("
+    assert_includes source, "Assert-JavaScriptDoesNotReferenceMain $withoutDeclaration"
+    assert_includes source, "不能在入口声明之外引用 main"
+  end
+
+  def test_contract_windows_delete_recovery_uses_an_atomic_private_file
+    source = File.read(
+      File.join(
+        ROOT,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1"
+      )
+    )
+    helper_start = source.index("function New-InterruptedRecoveryTemporaryFile(")
+    helper_end = source.index(
+      "function Remove-InterruptedRecoveryTemporaryFile(",
+      helper_start || 0
+    )
+    invoke_start = source.index("function Invoke-InterruptedTransactionRecovery(")
+    invoke_end = source.index(
+      "function Assert-InterruptedTransactionRecovered(",
+      invoke_start || 0
+    )
+
+    refute_nil helper_start
+    refute_nil helper_end
+    refute_nil invoke_start
+    refute_nil invoke_end
+    helper = source[helper_start...helper_end]
+    invocation = source[invoke_start...invoke_end]
+    assert_includes source,
+                    "public static SafeFileHandle CreatePrivateFile(string path)"
+    assert_includes source, "private struct SecurityAttributes"
+    assert_includes source, "security.GetSecurityDescriptorBinaryForm()"
+    assert_includes helper, "CreatePrivateFile"
+    assert_includes helper, '$stream.Flush($true)'
+    assert_includes invocation,
+                    "[System.IO.File]::Move(\n" \
+                    "                        $entry.Temporary.Path,\n" \
+                    "                        $entry.Item.Action.Path\n" \
+                    "                    )"
+    assert_includes source,
+                    '$snapshot.Identity -cne $action.Identity -and' \
+                    "\n            " \
+                    '($action.Action -ne "delete" -or ' \
+                    '$currentHash -ne $originalHash)'
+  end
+
+  def test_windows_safe_update_passive_envelope_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "    Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive $ScriptText\n",
+        ""
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_safe_update_requires_a_passive_script_envelope"
+      )
+    end
+  end
+
+  def test_windows_safe_update_literal_envelope_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "    if ($outsidePrefixAnalysis.HasLiteral -or\n" \
+          "        $outsideSuffixAnalysis.HasLiteral -or\n",
+        "    if ($false -or\n" \
+          "        $false -or\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_safe_update_requires_a_passive_script_envelope"
+      )
+    end
+  end
+
+  def test_windows_main_reference_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        "    Assert-JavaScriptDoesNotReferenceMain $withoutDeclaration\n",
+        ""
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_script_composition_rejects_unrenamed_main_references"
+      )
+    end
+  end
+
+  def test_windows_delete_recovery_identity_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
+        '            ($action.Action -ne "delete" -or ' \
+          '$currentHash -ne $originalHash)) {' + "\n",
+        '            -not ($action.Action -eq "delete" -and ' \
+          '$isInterruptedOriginal)) {' + "\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_delete_recovery_uses_an_atomic_private_file"
+      )
+    end
+  end
+
+  def test_windows_delete_recovery_atomic_publish_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
+        "                    [System.IO.File]::Move(\n" \
+          "                        $entry.Temporary.Path,\n" \
+          "                        $entry.Item.Action.Path\n" \
+          "                    )\n",
+        "                    [System.IO.File]::WriteAllBytes(\n" \
+          "                        $entry.Item.Action.Path,\n" \
+          "                        $entry.Item.Action.Original\n" \
+          "                    )\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_delete_recovery_uses_an_atomic_private_file"
+      )
+    end
+  end
+
+  def test_windows_delete_recovery_durable_temporary_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
+        "        $stream.SetLength($Bytes.Length)\n" \
+          "        $stream.Flush($true)\n" \
+          "        $completedBytes = Get-StreamBytes $stream\n",
+        "        $stream.SetLength($Bytes.Length)\n" \
+          "        $completedBytes = Get-StreamBytes $stream\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_delete_recovery_uses_an_atomic_private_file"
+      )
+    end
+  end
+
+  def test_windows_delete_recovery_private_temporary_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
+        "        $handle = [ClaudeEasy.VerifiedDeleteNative]::CreatePrivateFile($temporary)\n",
+        "        $handle = [ClaudeEasy.VerifiedDeleteNative]::Open($temporary, $true, $true)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_delete_recovery_uses_an_atomic_private_file"
       )
     end
   end
@@ -857,39 +1626,21 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "    begin\n      source.rewind\n      restored = source.write(original_bytes)",
-        "    begin\n      raise write_error\n      source.rewind\n      restored = source.write(original_bytes)"
+        "    begin\n" \
+          "      source.rewind\n" \
+          "      source.truncate(0)\n" \
+          "      restored = source.write(original_bytes)",
+        "    begin\n" \
+          "      raise write_error\n" \
+          "      source.rewind\n" \
+          "      source.truncate(0)\n" \
+          "      restored = source.write(original_bytes)"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
         "--name", "test_locked_write_restores_original_bytes_after_a_partial_write_error"
-      )
-    end
-  end
-
-  def test_atomic_swap_verification_recovery_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "        if File.exist?(temporary.path) && File.exist?(write_path) &&\n" \
-          "           same_file_identity?(source_stat, temporary.path) &&\n" \
-          "           File.binread(write_path) == replacement_bytes\n" \
-          "          atomic_swap_paths(temporary.path, write_path)\n" \
-          "        end\n",
-        "        if File.exist?(temporary.path) && File.exist?(write_path) &&\n" \
-          "           same_file_identity?(source_stat, temporary.path) &&\n" \
-          "           File.binread(write_path) == replacement_bytes\n" \
-          "          false\n" \
-          "        end\n"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_atomic_replace_restores_the_original_when_commit_verification_fails"
       )
     end
   end
@@ -943,6 +1694,79 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
         "--name", "test_route_verifier_ignores_same_host_traffic_from_another_source_port"
+      )
+    end
+  end
+
+  def test_route_custom_non_proxy_type_mutations_are_killed
+    types = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch]
+    types.each do |removed|
+      with_repo_copy do |root|
+        replace_once(
+          root,
+          "claude-easy/scripts/macos/verify_routes.rb",
+          "  NON_PROXY_TYPES = %w[#{types.join(' ')}].freeze\n",
+          "  NON_PROXY_TYPES = %w[#{(types - [removed]).join(' ')}].freeze\n"
+        )
+
+        assert_mutation_is_killed(
+          root,
+          RbConfig.ruby, "tests/test_macos_patcher.rb",
+          "--name", "test_route_verifier_rejects_every_custom_non_proxy_outbound_type"
+        )
+      end
+    end
+  end
+
+  def test_route_provider_leaf_lookup_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/verify_routes.rb",
+        "      return Array(provider[\"proxies\"]).find do |proxy|\n" \
+          "        proxy.is_a?(Hash) && proxy[\"name\"].to_s == name.to_s\n" \
+          "      end\n",
+        "      return nil\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_route_verifier_resolves_provider_leaf_types"
+      )
+    end
+  end
+
+  def test_route_provider_endpoint_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/verify_routes.rb",
+        '    provider_payload = get_json(socket, "/providers/proxies")',
+        '    provider_payload = get_json(socket, "/proxies")'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_route_verifier_runs_the_provider_endpoint_and_provider_chains_end_to_end"
+      )
+    end
+  end
+
+  def test_route_provider_chain_forwarding_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/verify_routes.rb",
+        '      provider_chains = Array(connection && connection["providerChains"])',
+        "      provider_chains = []"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_route_verifier_runs_the_provider_endpoint_and_provider_chains_end_to_end"
       )
     end
   end
@@ -1027,8 +1851,10 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        'disabled) AUTO_UPDATE_CHANGED=1; say "已自动关闭订阅更新，并保存修改前状态。" ;;',
-        'disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;'
+        "  if [ \"$PREVIOUS_PROFILE\" != \"3\" ]; then\n" \
+          "    AUTO_UPDATE_RECOVERY_REQUIRED=1\n" \
+          "  fi\n",
+        "  AUTO_UPDATE_RECOVERY_REQUIRED=0\n"
       )
 
       assert_mutation_is_killed(
@@ -1046,7 +1872,8 @@ class MutationSafetyTest < Minitest::Test
         "claude-easy/scripts/install_macos.sh",
         "preserve_profile_operation_state() {\n" \
           "  commit_profile_selection\n" \
-          "  AUTO_UPDATE_CHANGED=0\n" \
+          "  AUTO_UPDATE_RECOVERY_REQUIRED=0\n" \
+          "  AUTO_UPDATE_RECOVERY_PENDING=0\n" \
           "}\n",
         "preserve_profile_operation_state() {\n" \
           "  :\n" \
@@ -1066,11 +1893,11 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        "  trap ':' HUP INT TERM\n" \
-          "  set +e\n" \
-          "  /usr/bin/ruby \"$OPERATION_LOCK_SOURCE\" \"$OPERATION_LOCK_PATH\" /bin/sh \"$0\" \"$@\"\n",
-        "  set +e\n" \
-          "  /usr/bin/ruby \"$OPERATION_LOCK_SOURCE\" \"$OPERATION_LOCK_PATH\" /bin/sh \"$0\" \"$@\"\n"
+        "    trap ':' HUP INT TERM\n" \
+          "    set +e\n" \
+          "    /usr/bin/ruby \"$OPERATION_LOCK_SOURCE\" \"$OPERATION_LOCK_PATH\" /bin/sh \"$0\" \"$@\"\n",
+        "    set +e\n" \
+          "    /usr/bin/ruby \"$OPERATION_LOCK_SOURCE\" \"$OPERATION_LOCK_PATH\" /bin/sh \"$0\" \"$@\"\n"
       )
 
       assert_mutation_is_killed(
@@ -1206,10 +2033,10 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "      ownership = write_auto_update_ownership_state(\n" \
-          "        backup_root, domain, original, \"installed\", existing: auto_update_ownership_state(backup_root)\n" \
-          "      )\n",
-        "      ownership = { \"Path\" => auto_update_ownership_path(backup_root) }\n"
+        "    ownership = write_auto_update_ownership_state(\n" \
+          "      backup_root, domain, original, \"installed\", existing: auto_update_ownership_state(backup_root)\n" \
+          "    )\n",
+        "    ownership = { \"Path\" => auto_update_ownership_path(backup_root) }\n"
       )
 
       assert_mutation_is_killed(
@@ -1636,8 +2463,8 @@ class MutationSafetyTest < Minitest::Test
         replace_once(
           root,
           relative_path,
-          'if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ] &&',
-          'if [ "$OPERATION_LOCK_REQUIRED" -eq 0 ] &&'
+          'if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then',
+          'if [ "$OPERATION_LOCK_REQUIRED" -eq 0 ]; then'
         )
 
         assert_mutation_is_killed(
@@ -1695,8 +2522,9 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/uninstall_macos.sh",
         "  if /bin/ln \"$slot\" \"$destination\"; then\n" \
-        "    return 0\n" \
-        "  fi\n",
+          "    durable_sync_directory \"$destination_directory\"\n" \
+          "    return 0\n" \
+          "  fi\n",
         "  /bin/cp -p \"$slot\" \"$destination\"\n"
       )
 
@@ -1714,9 +2542,10 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/uninstall_macos.sh",
         "  if [ ! -f \"$UNINSTALL_STAGING/READY\" ]; then\n" \
-        "    /bin/rm -rf \"$UNINSTALL_STAGING\"\n" \
-        "    return 0\n" \
-        "  fi\n",
+          "    /bin/rm -rf \"$UNINSTALL_STAGING\"\n" \
+          "    durable_sync_directory \"$INSTALL_DIR\"\n" \
+          "    return 0\n" \
+          "  fi\n",
         ""
       )
 
@@ -1806,14 +2635,17 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/transaction.ps1",
-        '            -not ($action.Action -eq "delete" -and $isInterruptedOriginal)) {',
-        '            $true) {'
+        '            ($action.Action -ne "delete" -or ' \
+          '$currentHash -ne $originalHash)) {',
+        '            ($action.Action -ne "delete" -or ' \
+          '$isInterruptedOriginal)) {'
       )
 
       assert_mutation_is_killed(
         root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_interrupted_recovery_accepts_only_original_byte_prefixes"
+        RbConfig.ruby, "tests/test_mutation_safety.rb",
+        "--name",
+        "test_contract_windows_delete_recovery_uses_an_atomic_private_file"
       )
     end
   end
@@ -1823,8 +2655,14 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/script_js.ps1",
-        "                Assert-JavaScriptDoesNotBindMain $suffix\n",
-        "                Assert-JavaScriptReservedIdentifiers $suffix\n"
+        "                    Assert-JavaScriptCanCompose $restored\n" \
+          "                    $previous = Rename-JavaScriptMain $restored \"main\" \"claudeEasyPreviousMain\"\n" \
+          "                }\n" \
+          "            } else {\n",
+        "                    Assert-JavaScriptReservedIdentifiers $restored\n" \
+          "                    $previous = Rename-JavaScriptMain $restored \"main\" \"claudeEasyPreviousMain\"\n" \
+          "                }\n" \
+          "            } else {\n"
       )
 
       assert_mutation_is_killed(
@@ -1848,6 +2686,127 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
         "--name", "test_windows_existing_script_cannot_rebind_main_outside_its_declaration"
+      )
+    end
+  end
+
+  def test_windows_dynamic_code_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        "    Assert-JavaScriptDoesNotUseDynamicCode $Text\n",
+        "    Assert-JavaScriptReservedIdentifiers $Text\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_existing_script_rejects_dynamic_global_escape_before_writing"
+      )
+    end
+  end
+
+  def test_windows_computed_constructor_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        '$_.Substring(1, $_.Length - 2) -ceq "constructor"',
+        '$_.Substring(1, $_.Length - 2) -ceq "constructor-disabled"'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_existing_script_rejects_dynamic_global_escape_before_writing"
+      )
+    end
+  end
+
+  def test_windows_template_expression_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        "                \$templateExpressionDepths += 1\n",
+        "                \$templateExpressionDepths += 0\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_existing_script_rejects_dynamic_global_escape_before_writing"
+      )
+    end
+  end
+
+  def test_windows_safe_update_envelope_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "    $managed = Get-ClaudeEasyManagedScriptEnvelope $ScriptText $UsageProfile\n",
+        "    $managed = Get-ClaudeEasyManagedScriptBlock $ScriptText $UsageProfile\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_safe_update_compares_managed_envelope_not_user_script_body"
+      )
+    end
+  end
+
+  def test_windows_managed_script_entry_seal_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        '$parts += "    configurable: false"',
+        '$parts += "    configurable: true"'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_managed_script_preserves_top_level_semantics_then_seals_entry"
+      )
+    end
+  end
+
+  def test_windows_managed_script_finally_restore_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        '$parts += "        claudeEasyRestoreIntrinsics();"',
+        '$parts += "        // intrinsic restoration removed"'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_managed_script_preserves_top_level_semantics_then_seals_entry"
+      )
+    end
+  end
+
+  def test_windows_managed_script_finalization_order_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/script_js.ps1",
+        "    $parts += $originalEnd\n" \
+          "    $parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === \"function\" ? claudeEasyPreviousMain : null);'\n",
+        "    $parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === \"function\" ? claudeEasyPreviousMain : null);'\n" \
+          "    $parts += $originalEnd\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_windows_managed_script_preserves_top_level_semantics_then_seals_entry"
       )
     end
   end
