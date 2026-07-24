@@ -19,11 +19,15 @@ class MacosWrapperTest < Minitest::Test
     profile changes checks items messages warnings
   ].freeze
 
+  def usage_state_path(home)
+    File.join(home, "Library", "Application Support", "ClaudeEasy", "usage-profile.plist")
+  end
+
   def run_script(path, *arguments, home:, extra_env: {})
-    state = File.join(home, "usage-profile.plist")
+    state = usage_state_path(home)
     env = {
       "HOME" => home,
-      "CLAUDE_EASY_USAGE_STATE_PATH" => state,
+      "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
       "CLAUDE_EASY_USAGE_PROFILE" => nil,
       "CLAUDE_EASY_PROFILE_DIR" => nil
     }.merge(extra_env)
@@ -139,6 +143,64 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_installer_does_not_write_usage_state_outside_its_managed_state_directory
+    with_supported_mihomo_installer do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          external_file = File.join(home, "important-user-file")
+          canonical_state = File.join(
+            home, "Library", "Application Support", "ClaudeEasy", "usage-profile.plist"
+          )
+          File.binwrite(external_file, "keep-me")
+
+          stdout, stderr, status = Open3.capture3(
+            {
+              "HOME" => home,
+              "CLAUDE_EASY_USAGE_STATE_PATH" => external_file,
+              "CLAUDE_EASY_USAGE_PROFILE" => nil,
+              "CLAUDE_EASY_PROFILE_DIR" => nil
+            },
+            "/bin/sh", installer, "--profile", "1", "--json"
+          )
+
+          assert status.success?, "#{stdout}\n#{stderr}"
+          assert_equal "keep-me", File.binread(external_file)
+          assert File.file?(canonical_state)
+        end
+      end
+    end
+  end
+
+  def test_uninstaller_does_not_delete_usage_state_outside_its_managed_state_directory
+    with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
+      Dir.mktmpdir do |home|
+        install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
+        backup_dir = File.join(install_dir, "backups")
+        canonical_state = File.join(install_dir, "usage-profile.plist")
+        external_file = File.join(home, "important-user-file")
+        FileUtils.mkdir_p(backup_dir)
+        File.binwrite(File.join(install_dir, "patch_profiles.rb"), "owned-patcher")
+        File.binwrite(File.join(install_dir, "policy.json"), "{}")
+        File.binwrite(canonical_state, "owned-state")
+        File.binwrite(external_file, "keep-me")
+
+        stdout, stderr, status = Open3.capture3(
+          {
+            "HOME" => home,
+            "CLAUDE_EASY_USAGE_STATE_PATH" => external_file,
+            "CLAUDE_EASY_USAGE_PROFILE" => nil,
+            "CLAUDE_EASY_PROFILE_DIR" => nil
+          },
+          "/bin/sh", uninstaller, "--json"
+        )
+
+        assert status.success?, "#{stdout}\n#{stderr}"
+        assert_equal "keep-me", File.binread(external_file)
+        refute File.exist?(canonical_state)
+      end
+    end
+  end
+
   def test_production_probe_uninstall_preserves_a_file_replaced_after_staging
     require_production_probe!
     patcher = <<~'RUBY'
@@ -165,7 +227,8 @@ class MacosWrapperTest < Minitest::Test
         backup_dir = File.join(install_dir, "backups")
         FileUtils.mkdir_p(backup_dir)
         installed_patcher = File.join(install_dir, "patch_profiles.rb")
-        state = File.join(home, "usage-profile.plist")
+        state = usage_state_path(home)
+        FileUtils.mkdir_p(File.dirname(state))
         ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json")
         preference = File.join(home, "auto-update-state")
         File.binwrite(installed_patcher, "owned-patcher")
@@ -254,7 +317,8 @@ class MacosWrapperTest < Minitest::Test
             FileUtils.mkdir_p(install_dir)
             File.binwrite(File.join(install_dir, "patch_profiles.rb"), "owned-patcher")
             File.binwrite(File.join(install_dir, "policy.json"), "{}")
-            state = File.join(home, "usage-profile.plist")
+            state = usage_state_path(home)
+            FileUtils.mkdir_p(File.dirname(state))
             system("/usr/bin/plutil", "-create", "xml1", state)
             system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
             system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
@@ -381,7 +445,8 @@ class MacosWrapperTest < Minitest::Test
           FileUtils.mkdir_p(backup_dir)
           File.binwrite(File.join(install_dir, "patch_profiles.rb"), "owned-patcher")
           File.binwrite(File.join(install_dir, "policy.json"), "{}")
-          state = File.join(home, "usage-profile.plist")
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
@@ -514,7 +579,8 @@ class MacosWrapperTest < Minitest::Test
           File.binwrite(File.join(home, "runtime-profile"), "original")
           File.binwrite(File.join(home, "auto-update-state"), "enabled")
           ready = File.join(home, "profile-transaction-ready")
-          state = File.join(home, "usage-profile.plist")
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
           env = {
             "HOME" => home,
             "CLAUDE_EASY_USAGE_STATE_PATH" => state,
@@ -600,7 +666,7 @@ class MacosWrapperTest < Minitest::Test
         protected_files = {
           File.join(install_dir, "patch_profiles.rb") => "owned-patcher",
           File.join(install_dir, "policy.json") => "{}",
-          File.join(home, "usage-profile.plist") => "owned-usage-state",
+          usage_state_path(home) => "owned-usage-state",
           File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") => "{}",
           File.join(backup_dir, ".claude-easy-profile-transaction.json") => "pending",
           File.join(profile_dir, "friend.yaml") => "candidate",
@@ -645,7 +711,8 @@ class MacosWrapperTest < Minitest::Test
         backup_dir = File.join(install_dir, "backups")
         FileUtils.mkdir_p(backup_dir)
         installed_patcher = File.join(install_dir, "patch_profiles.rb")
-        state = File.join(home, "usage-profile.plist")
+        state = usage_state_path(home)
+        FileUtils.mkdir_p(File.dirname(state))
         ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json")
         original = ("owned-patcher-" * 65_536).b
         File.binwrite(installed_patcher, original)
@@ -845,7 +912,8 @@ class MacosWrapperTest < Minitest::Test
 
   def test_uninstaller_rejects_unknown_arguments_without_removing_state
     Dir.mktmpdir do |home|
-      state = File.join(home, "usage-profile.plist")
+      state = usage_state_path(home)
+      FileUtils.mkdir_p(File.dirname(state))
       File.write(state, "owned")
 
       stdout, _stderr, status = run_script(UNINSTALLER, "--typo", home: home)
@@ -1035,7 +1103,8 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer(patcher_source: failing_patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          state = File.join(home, "usage-profile.plist")
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
@@ -1089,7 +1158,8 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          state = File.join(home, "usage-profile.plist")
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
@@ -1188,7 +1258,8 @@ class MacosWrapperTest < Minitest::Test
           [false, true].each do |json|
             Dir.mktmpdir do |home|
               with_supported_app(home) do
-                state = File.join(home, "usage-profile.plist")
+                state = usage_state_path(home)
+                FileUtils.mkdir_p(File.dirname(state))
                 system("/usr/bin/plutil", "-create", "xml1", state)
                 system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
                 system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
@@ -1274,7 +1345,8 @@ class MacosWrapperTest < Minitest::Test
         [false, true].each do |json|
           Dir.mktmpdir do |home|
             with_supported_app(home) do
-              state = File.join(home, "usage-profile.plist")
+              state = usage_state_path(home)
+              FileUtils.mkdir_p(File.dirname(state))
               system("/usr/bin/plutil", "-create", "xml1", state)
               system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
               system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
@@ -1353,7 +1425,8 @@ class MacosWrapperTest < Minitest::Test
           [false, true].each do |json|
             Dir.mktmpdir do |home|
               with_supported_app(home) do
-                state = File.join(home, "usage-profile.plist")
+                state = usage_state_path(home)
+                FileUtils.mkdir_p(File.dirname(state))
                 system("/usr/bin/plutil", "-create", "xml1", state)
                 system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
                 system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
@@ -1474,7 +1547,8 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          state = File.join(home, "usage-profile.plist")
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
           File.symlink(File.join(home, "outside-state"), state)
           File.write(File.join(home, "patcher-calls.log"), "")
 
@@ -1558,7 +1632,8 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          state = File.join(home, "usage-profile.plist")
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
@@ -1621,7 +1696,8 @@ class MacosWrapperTest < Minitest::Test
       FileUtils.mkdir_p(backup_dir)
       File.write(File.join(install_dir, "patch_profiles.rb"), "owned")
       File.write(File.join(install_dir, "policy.json"), "owned")
-      state = File.join(home, "usage-profile.plist")
+      state = usage_state_path(home)
+      FileUtils.mkdir_p(File.dirname(state))
       File.write(state, "owned")
       File.write(File.join(backup_dir, "keep.backup"), "keep")
       stdout, _stderr, status = run_script(UNINSTALLER, home: home)
@@ -1651,7 +1727,8 @@ class MacosWrapperTest < Minitest::Test
         backup_dir = File.join(home, "Library", "Application Support", "ClaudeEasy", "backups")
         FileUtils.mkdir_p(backup_dir)
         File.write(File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json"), "{}")
-        usage_state = File.join(home, "usage-profile.plist")
+        usage_state = usage_state_path(home)
+        FileUtils.mkdir_p(File.dirname(usage_state))
         File.write(usage_state, "owned")
 
         stdout, _stderr, status = run_script(uninstaller, home: home)
@@ -1684,7 +1761,8 @@ class MacosWrapperTest < Minitest::Test
         FileUtils.mkdir_p(backup_dir)
         ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json")
         File.write(ownership, "{}")
-        usage_state = File.join(home, "usage-profile.plist")
+        usage_state = usage_state_path(home)
+        FileUtils.mkdir_p(File.dirname(usage_state))
         File.write(usage_state, "owned")
 
         stdout, _stderr, status = run_script(uninstaller, home: home)

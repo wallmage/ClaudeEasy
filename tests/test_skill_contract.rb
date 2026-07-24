@@ -168,11 +168,14 @@ class SkillContractTest < Minitest::Test
         SH
         FileUtils.chmod(0o700, fake_core)
         preferences_fixture = write_release_preferences_fixture(directory)
+        release_usage_state = File.join(
+          release_home, "Library", "Application Support", "ClaudeEasy", "usage-profile.plist"
+        )
         release_env = {
           "HOME" => release_home,
           "RUBYOPT" => "-r#{preferences_fixture}",
           "CLAUDE_EASY_PROFILE_DIR" => profile_directory,
-          "CLAUDE_EASY_USAGE_STATE_PATH" => File.join(release_home, "usage-profile.plist"),
+          "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
           "CLAUDE_EASY_USAGE_PROFILE" => nil
         }
         controller_server, controller_thread, controller_socket_path, controller_requests =
@@ -217,7 +220,7 @@ class SkillContractTest < Minitest::Test
         assert_equal status.exitstatus, result.fetch("exit_code")
         assert_equal "install", result.fetch("command")
         assert result.fetch("ok")
-        assert File.file?(release_env.fetch("CLAUDE_EASY_USAGE_STATE_PATH"))
+        assert File.file?(release_usage_state)
         patched_profile = YAML.safe_load(File.read(File.join(profile_directory, "friend.yaml")))
         assert patched_profile.fetch("rule-providers").key?("claude-easy-cn-domain")
       end
@@ -332,6 +335,7 @@ class SkillContractTest < Minitest::Test
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
     design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     mac_installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
+    mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows_installer = windows_installer_source
 
     [readme, skill, policy, design].each do |document|
@@ -354,6 +358,8 @@ class SkillContractTest < Minitest::Test
 
     assert_includes mac_installer, "CLAUDE_EASY_USAGE_PROFILE"
     assert_includes mac_installer, "usage-profile.plist"
+    refute_includes mac_installer, "CLAUDE_EASY_USAGE_STATE_PATH"
+    refute_includes mac_uninstaller, "CLAUDE_EASY_USAGE_STATE_PATH"
     assert_includes mac_installer, "--profile"
     assert_includes windows_installer, "CLAUDE_EASY_USAGE_PROFILE"
     assert_includes windows_installer, "claude-easy-usage-profile.json"

@@ -6,7 +6,7 @@ CUSTOM_PROFILE_DIR="${CLAUDE_EASY_PROFILE_DIR:-}"
 INSTALL_DIR="$HOME/Library/Application Support/ClaudeEasy"
 BACKUP_DIR="$INSTALL_DIR/backups"
 AUTO_UPDATE_OWNERSHIP_PATH="$BACKUP_DIR/clashx-meta-kAutoUpdateEnable.state.json"
-USAGE_STATE_PATH="${CLAUDE_EASY_USAGE_STATE_PATH:-$INSTALL_DIR/usage-profile.plist}"
+USAGE_STATE_PATH="$INSTALL_DIR/usage-profile.plist"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PATCHER_SOURCE="$SCRIPT_DIR/macos/patch_profiles.rb"
 RESULT_CONTRACT_SOURCE="$SCRIPT_DIR/macos/result_contract.rb"

@@ -6,7 +6,7 @@ INSTALL_DIR="$HOME/Library/Application Support/ClaudeEasy"
 BACKUP_DIR="$INSTALL_DIR/backups"
 CUSTOM_PROFILE_DIR="${CLAUDE_EASY_PROFILE_DIR:-}"
 STATE_PATH="$INSTALL_DIR/install-state.plist"
-USAGE_STATE_PATH="${CLAUDE_EASY_USAGE_STATE_PATH:-$INSTALL_DIR/usage-profile.plist}"
+USAGE_STATE_PATH="$INSTALL_DIR/usage-profile.plist"
 DEFAULTS_DOMAIN="com.metacubex.ClashX.meta"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RESULT_CONTRACT_SOURCE="$SCRIPT_DIR/macos/result_contract.rb"

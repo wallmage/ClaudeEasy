@@ -38,7 +38,7 @@ Diagnostics 不要求你会看日志，也不会因为提到 Clash 就先改配�
 
 第一次在一台电脑上配置时，Skill 会问：“你使用网络代理主要用于哪些用途？”选择会保存在本机，以后可以修改：
 
-- macOS 保存在 `~/Library/Application Support/ClaudeEasy/usage-profile.plist`；
+- macOS 固定保存在 `~/Library/Application Support/ClaudeEasy/usage-profile.plist`，安装和卸载都不接受把这个内部状态文件改到其他位置；
 - Windows 保存在 Clash Verge Rev 应用目录中的 `claude-easy-usage-profile.json`；
 - 两个文件都只记录版本号和数字档位，不含任何订阅信息。
 
