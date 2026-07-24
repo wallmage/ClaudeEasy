@@ -1257,6 +1257,12 @@ test('Windows route verifier keeps PowerShell 5 route arrays and empty selection
   );
 });
 
+test('Windows route verifier removes a PowerShell 5 stdin BOM before using the secret', () => {
+  const source = fs.readFileSync(routeVerifierPath, 'utf8');
+
+  assert.match(source, /\$value\[0\] -eq \[char\]0xFEFF/);
+});
+
 test('PowerShell scripts never assign to read-only automatic variables', () => {
   const scriptsRoot = path.join(root, 'claude-easy/scripts');
   const pending = [scriptsRoot];

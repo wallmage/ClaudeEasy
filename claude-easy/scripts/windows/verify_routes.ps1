@@ -29,6 +29,9 @@ function Read-ControllerSecretFromStandardInput {
     }
     if (-not $SecretStdin) { return "" }
     $value = [Console]::In.ReadToEnd()
+    if ($value.Length -gt 0 -and $value[0] -eq [char]0xFEFF) {
+        $value = $value.Substring(1)
+    }
     if ($value.EndsWith("`r`n", [StringComparison]::Ordinal)) {
         $value = $value.Substring(0, $value.Length - 2)
     } elseif ($value.EndsWith("`n", [StringComparison]::Ordinal)) {
