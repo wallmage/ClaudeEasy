@@ -2,8 +2,7 @@ module ClaudeEasy
   module_function
 
   AI_GROUP_BASE = "🤖 AI · ClaudeEasy".freeze
-  LEGACY_AI_GROUP_BASE = "🤖 AI · Clash Patch".freeze
-  LEGACY_SAFE_GROUP_BASE = "🛡 安全代理 · Clash Patch".freeze
+  SAFE_GROUP_BASE = "🛡 安全代理 · ClaudeEasy".freeze
   MIN_MIHOMO_VERSION = [1, 19, 27].freeze
   MAX_PATCH_ATTEMPTS = 3
   POLICY_VERSION = 1
@@ -66,19 +65,9 @@ module ClaudeEasy
     }
   end
 
-  LEGACY_CN_PROVIDER_BASE = "clash-patch-cn-domain".freeze
-  LEGACY_CN_PROVIDER_PATH = "./ruleset/clash-patch-cn-domain.mrs".freeze
-
-  def legacy_managed_cn_provider_name?(name)
-    name.is_a?(String) && name.match?(/\A#{Regexp.escape(LEGACY_CN_PROVIDER_BASE)}#{CN_PROVIDER_SUFFIX}\z/)
-  end
-
   def managed_cn_provider_name?(name, policy)
     base = policy.dig("cn_domain_provider", "name")
-    return true if base.is_a?(String) && name.is_a?(String) &&
-                   name.match?(/\A#{Regexp.escape(base)}#{CN_PROVIDER_SUFFIX}\z/)
-
-    legacy_managed_cn_provider_name?(name)
+    base.is_a?(String) && name.is_a?(String) && name.match?(/\A#{Regexp.escape(base)}#{CN_PROVIDER_SUFFIX}\z/)
   end
 
   def cn_provider_path(provider_policy, name)
@@ -91,25 +80,12 @@ module ClaudeEasy
     base_path.delete_suffix(extension) + suffix + extension
   end
 
-  def legacy_cn_provider_path(name)
-    suffix = name.delete_prefix(LEGACY_CN_PROVIDER_BASE)
-    return LEGACY_CN_PROVIDER_PATH if suffix.empty?
-
-    extension = File.extname(LEGACY_CN_PROVIDER_PATH)
-    LEGACY_CN_PROVIDER_PATH.delete_suffix(extension) + suffix + extension
-  end
-
   def owned_cn_provider?(name, provider, policy)
     provider_policy = policy["cn_domain_provider"]
     return false unless provider_policy.is_a?(Hash) && provider.is_a?(Hash)
     return false unless managed_cn_provider_name?(name, policy)
 
-    expected_path = if legacy_managed_cn_provider_name?(name)
-                      legacy_cn_provider_path(name)
-                    else
-                      cn_provider_path(provider_policy, name)
-                    end
-    provider["url"] == provider_policy["url"] && provider["path"] == expected_path
+    provider["url"] == provider_policy["url"] && provider["path"] == cn_provider_path(provider_policy, name)
   end
 
   def ensure_cn_provider(config, policy, route_group)
@@ -118,15 +94,8 @@ module ClaudeEasy
 
     providers = config["rule-providers"].is_a?(Hash) ? config["rule-providers"] : {}
     config["rule-providers"] = providers
-    name = providers.find { |candidate, provider|
-      owned_cn_provider?(candidate, provider, policy) && !legacy_managed_cn_provider_name?(candidate)
-    }&.first
+    name = providers.find { |candidate, provider| owned_cn_provider?(candidate, provider, policy) }&.first
     unless name
-      # 旧名受管提供器迁移到新 base：删除旧条目，按新 base 重建唯一名提供器。
-      legacy_names = providers.select { |candidate, provider|
-        legacy_managed_cn_provider_name?(candidate) && owned_cn_provider?(candidate, provider, policy)
-      }.keys
-      legacy_names.each { |legacy_name| providers.delete(legacy_name) }
       base = provider_policy.fetch("name")
       name = base
       sequence = 2
@@ -168,8 +137,6 @@ module ClaudeEasy
     dns["direct-nameserver"] = deep_copy(policy["direct_resolvers"])
     dns["direct-nameserver-follow-policy"] = false
     policies = dns["nameserver-policy"].is_a?(Hash) ? deep_copy(dns["nameserver-policy"]) : {}
-    # 迁移前旧名的键先删除；当前提供器名保持原位重建，避免序列化键序漂移。
-    owned_names.each { |owned_name| policies.delete("rule-set:#{owned_name}") unless owned_name == provider_name }
     policies["rule-set:#{provider_name}"] = deep_copy(policy["direct_resolvers"])
     dns["nameserver-policy"] = policies
 
@@ -208,12 +175,8 @@ module ClaudeEasy
     name.is_a?(String) && name.match?(/\A#{Regexp.escape(base)}(?: (?:[2-9]|[1-9][0-9]+))?\z/)
   end
 
-  def managed_ai_group_name?(name)
-    managed_name?(name, AI_GROUP_BASE) || managed_name?(name, LEGACY_AI_GROUP_BASE)
-  end
-
   def managed_group_name?(name)
-    managed_ai_group_name?(name) || managed_name?(name, LEGACY_SAFE_GROUP_BASE)
+    managed_name?(name, AI_GROUP_BASE) || managed_name?(name, SAFE_GROUP_BASE)
   end
 
   def detect_main_group(config, policy)
@@ -384,8 +347,7 @@ module ClaudeEasy
   end
 
   def ensure_ai_group(config, policy)
-    group = find_managed_select_group(config, AI_GROUP_BASE, :ai, policy) ||
-            find_managed_select_group(config, LEGACY_AI_GROUP_BASE, :ai, policy)
+    group = find_managed_select_group(config, AI_GROUP_BASE, :ai, policy)
     unless group
       group = { "name" => unique_group_name(config, AI_GROUP_BASE), "type" => "select" }
       config["proxy-groups"] << group
@@ -400,10 +362,10 @@ module ClaudeEasy
 
   def owned_managed_group_names(config, policy)
     ai_names = selectable_groups(config).map { |group| group["name"] }.select do |name|
-      managed_ai_group_name?(name) && owned_ai_group?(config, name, policy)
+      managed_name?(name, AI_GROUP_BASE) && owned_ai_group?(config, name, policy)
     end
     safe_names = selectable_groups(config).map { |group| group["name"] }.select do |name|
-      managed_name?(name, LEGACY_SAFE_GROUP_BASE) && owned_safe_group?(config, name)
+      managed_name?(name, SAFE_GROUP_BASE) && owned_safe_group?(config, name)
     end
     [ai_names, safe_names]
   end

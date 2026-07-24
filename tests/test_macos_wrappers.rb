@@ -118,6 +118,27 @@ class MacosWrapperTest < Minitest::Test
     result
   end
 
+  def test_operation_lock_rejects_symlinked_claude_easy_state_root
+    Dir.mktmpdir do |home|
+      application_support = File.join(home, "Library", "Application Support")
+      outside = File.join(home, "outside-state")
+      state_root = File.join(application_support, "ClaudeEasy")
+      FileUtils.mkdir_p(application_support)
+      FileUtils.mkdir_p(outside)
+      File.symlink(outside, state_root)
+
+      _stdout, _stderr, status = Open3.capture3(
+        "/usr/bin/ruby",
+        OPERATION_LOCK,
+        File.join(state_root, "backups", ".claude-easy-wrapper.lock"),
+        "/usr/bin/true"
+      )
+
+      assert_equal 76, status.exitstatus
+      refute File.exist?(File.join(outside, "backups"))
+    end
+  end
+
   def test_production_probe_uninstall_preserves_a_file_replaced_after_staging
     require_production_probe!
     patcher = <<~'RUBY'
@@ -701,14 +722,14 @@ class MacosWrapperTest < Minitest::Test
         else
           assert File.binread(installed_patcher) == original
         end
-        recovery_entry = "restore_uncommitted_uninstall\n\nremove_owned_agent"
+        recovery_entry = "restore_uncommitted_uninstall\n\nAUTO_UPDATE_OWNED=0"
         resume_source = File.binread(UNINSTALLER)
         assert_equal 1, resume_source.scan(recovery_entry).length
         File.binwrite(
           uninstaller,
           resume_source.sub(
             recovery_entry,
-            "restore_uncommitted_uninstall\nexit 99\n\nremove_owned_agent"
+            "restore_uncommitted_uninstall\nexit 99\n\nAUTO_UPDATE_OWNED=0"
           )
         )
         _stdout, _stderr, status, = run_script(uninstaller, home: home)
@@ -733,14 +754,14 @@ class MacosWrapperTest < Minitest::Test
         File.binwrite(File.join(staging, "patcher"), "partial")
         File.binwrite(File.join(staging, "patcher.meta"), "present:incomplete\n")
 
-        recovery_entry = "restore_uncommitted_uninstall\n\nremove_owned_agent"
+        recovery_entry = "restore_uncommitted_uninstall\n\nAUTO_UPDATE_OWNED=0"
         source = File.binread(uninstaller)
         assert_equal 1, source.scan(recovery_entry).length
         File.binwrite(
           uninstaller,
           source.sub(
             recovery_entry,
-            "restore_uncommitted_uninstall\nexit 99\n\nremove_owned_agent"
+            "restore_uncommitted_uninstall\nexit 99\n\nAUTO_UPDATE_OWNED=0"
           )
         )
 
@@ -812,33 +833,6 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_installer_recovers_pending_legacy_uninstall_before_mihomo_preflight
-    with_missing_mihomo_installer do |installer|
-      FileUtils.cp(UNINSTALLER, File.join(File.dirname(installer), "uninstall_macos.sh"))
-      Dir.mktmpdir do |home|
-        with_supported_app(home) do
-          legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-          current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-          staging = File.join(legacy, ".clash-patch-uninstall-staging")
-          FileUtils.mkdir_p(staging)
-          File.binwrite(File.join(legacy, "migration-marker"), "legacy")
-
-          stdout, _stderr, status = run_script(
-            installer, "--profile", "1", home: home,
-            extra_env: { "CLAUDE_EASY_USAGE_STATE_PATH" => nil }
-          )
-
-          assert_equal 8, status.exitstatus
-          assert_includes stdout, "没有找到可用的 Mihomo 内核"
-          refute File.exist?(legacy)
-          refute File.exist?(File.join(current, ".clash-patch-uninstall-staging"))
-          refute File.exist?(File.join(current, ".claude-easy-uninstall-staging"))
-          assert_equal "legacy", File.binread(File.join(current, "migration-marker"))
-        end
-      end
-    end
-  end
-
   def test_uninstaller_json_mode_returns_one_contract_object
     Dir.mktmpdir do |home|
       stdout, stderr, status = run_script(UNINSTALLER, "--json", home: home)
@@ -887,206 +881,6 @@ class MacosWrapperTest < Minitest::Test
         INSTALLER, "--show-profile", "--profile", "1", home: home
       )
       assert_equal 64, status.exitstatus
-    end
-  end
-
-  def test_read_only_and_invalid_requests_do_not_migrate_legacy_state
-    [
-      [INSTALLER, ["--help"]],
-      [INSTALLER, ["--show-profile"]],
-      [INSTALLER, ["--unknown"]],
-      [UNINSTALLER, ["--help"]],
-      [UNINSTALLER, ["--unknown"]]
-    ].each do |script, arguments|
-      Dir.mktmpdir do |home|
-        legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-        current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-        FileUtils.mkdir_p(legacy)
-        File.binwrite(File.join(legacy, "migration-marker"), "legacy")
-
-        run_script(script, *arguments, home: home)
-
-        assert File.file?(File.join(legacy, "migration-marker")),
-               "#{File.basename(script)} #{arguments.join(' ')} moved legacy state"
-        refute File.exist?(current),
-               "#{File.basename(script)} #{arguments.join(' ')} created current state"
-      end
-    end
-  end
-
-  def test_show_profile_reads_legacy_state_without_migrating_it
-    Dir.mktmpdir do |home|
-      legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-      current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-      state = File.join(legacy, "usage-profile.plist")
-      FileUtils.mkdir_p(legacy)
-      system("/usr/bin/plutil", "-create", "xml1", state, exception: true)
-      system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state, exception: true)
-      system("/usr/bin/plutil", "-insert", "Profile", "-integer", "2", state, exception: true)
-
-      stdout, _stderr, status = run_script(
-        INSTALLER, "--show-profile", home: home,
-        extra_env: { "CLAUDE_EASY_USAGE_STATE_PATH" => nil }
-      )
-
-      assert status.success?
-      assert_equal "2\n", stdout
-      assert File.file?(state)
-      refute File.exist?(current)
-    end
-  end
-
-  def test_installer_keeps_legacy_state_when_a_profile_has_not_been_selected
-    Dir.mktmpdir do |home|
-      legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-      current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-      FileUtils.mkdir_p(legacy)
-      File.binwrite(File.join(legacy, "migration-marker"), "legacy")
-
-      stdout, _stderr, status = run_script(
-        INSTALLER, home: home,
-        extra_env: { "CLAUDE_EASY_USAGE_STATE_PATH" => nil }
-      )
-
-      assert_equal 10, status.exitstatus
-      assert_includes stdout, "还没有选择用途档位"
-      assert_equal "legacy", File.binread(File.join(legacy, "migration-marker"))
-      refute File.exist?(current)
-    end
-  end
-
-  def test_installer_keeps_legacy_state_when_read_only_environment_checks_fail
-    with_missing_mihomo_installer do |installer|
-      Dir.mktmpdir do |home|
-        with_supported_app(home) do
-          legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-          current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-          state = File.join(legacy, "usage-profile.plist")
-          FileUtils.mkdir_p(legacy)
-          File.binwrite(File.join(legacy, "migration-marker"), "legacy")
-          system("/usr/bin/plutil", "-create", "xml1", state, exception: true)
-          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state, exception: true)
-          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state, exception: true)
-
-          stdout, _stderr, status = run_script(
-            installer, home: home,
-            extra_env: { "CLAUDE_EASY_USAGE_STATE_PATH" => nil }
-          )
-
-          assert_equal 8, status.exitstatus
-          assert_includes stdout, "没有找到可用的 Mihomo 内核"
-          assert_equal "legacy", File.binread(File.join(legacy, "migration-marker"))
-          refute File.exist?(current)
-        end
-      end
-    end
-  end
-
-  def test_mutating_wrappers_preflight_legacy_internal_conflicts_before_directory_move
-    conflicting_entries = [
-      ["backups/.clash-patch-wrapper.lock", "backups/.claude-easy-wrapper.lock", :file],
-      [".clash-patch-uninstall-staging", ".claude-easy-uninstall-staging", :directory],
-      [
-        "backups/.clash-patch-profile-transaction.json",
-        "backups/.claude-easy-profile-transaction.json",
-        :file
-      ],
-      ["backups/.clash-patch-operation.lock", "backups/.claude-easy-operation.lock", :file]
-    ]
-
-    [INSTALLER, UNINSTALLER].each do |script|
-      conflicting_entries.each do |legacy_name, current_name, type|
-        Dir.mktmpdir do |home|
-          legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-          current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-          [legacy_name, current_name].each do |name|
-            path = File.join(legacy, name)
-            if type == :directory
-              FileUtils.mkdir_p(path)
-            else
-              FileUtils.mkdir_p(File.dirname(path))
-              File.binwrite(path, name)
-            end
-          end
-          File.binwrite(File.join(legacy, "migration-marker"), "legacy")
-
-          stdout, _stderr, status = run_script(script, home: home)
-
-          assert_equal 1, status.exitstatus
-          assert_includes stdout, "同时存在"
-          assert_equal "legacy", File.binread(File.join(legacy, "migration-marker")),
-                       "#{File.basename(script)} moved legacy state before rejecting #{legacy_name}"
-          refute File.exist?(current),
-                 "#{File.basename(script)} created current state before rejecting #{legacy_name}"
-        end
-      end
-    end
-  end
-
-  def test_uninstaller_migrates_legacy_state_and_reuses_the_held_wrapper_lock
-    Dir.mktmpdir do |home|
-      legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-      current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-      legacy_backups = File.join(legacy, "backups")
-      legacy_lock = File.join(legacy_backups, ".clash-patch-wrapper.lock")
-      legacy_staging = File.join(legacy, ".clash-patch-uninstall-staging")
-      FileUtils.mkdir_p(legacy_backups)
-      FileUtils.mkdir_p(legacy_staging)
-      File.binwrite(File.join(legacy_backups, "keep.backup"), "keep")
-      File.binwrite(legacy_lock, "legacy-lock")
-      File.binwrite(File.join(legacy_staging, "partial"), "partial")
-
-      stdout, _stderr, status = run_script(UNINSTALLER, home: home)
-
-      assert status.success?, stdout
-      refute File.exist?(legacy)
-      assert_equal "keep", File.binread(File.join(current, "backups", "keep.backup"))
-      assert File.file?(File.join(current, "backups", ".claude-easy-wrapper.lock"))
-      refute File.exist?(File.join(current, "backups", ".clash-patch-wrapper.lock"))
-      refute File.exist?(File.join(current, ".clash-patch-uninstall-staging"))
-      refute File.exist?(File.join(current, ".claude-easy-uninstall-staging"))
-    end
-  end
-
-  def test_mutating_wrapper_refuses_two_state_directories_without_changing_either
-    Dir.mktmpdir do |home|
-      legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-      current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-      FileUtils.mkdir_p(legacy)
-      FileUtils.mkdir_p(current)
-      File.binwrite(File.join(legacy, "marker"), "legacy")
-      File.binwrite(File.join(current, "marker"), "current")
-
-      stdout, _stderr, status = run_script(UNINSTALLER, home: home)
-
-      assert_equal 1, status.exitstatus
-      assert_includes stdout, "同时存在"
-      assert_equal "legacy", File.binread(File.join(legacy, "marker"))
-      assert_equal "current", File.binread(File.join(current, "marker"))
-      refute File.exist?(File.join(current, "backups"))
-    end
-  end
-
-  def test_uninstaller_recognizes_the_old_launch_agent_patcher_path_after_directory_migration
-    Dir.mktmpdir do |home|
-      legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-      agent_dir = File.join(home, "Library", "LaunchAgents")
-      agent = File.join(agent_dir, "com.clashpatch.profiles.plist")
-      old_patcher = File.join(legacy, "patch_profiles.rb")
-      FileUtils.mkdir_p(legacy)
-      FileUtils.mkdir_p(agent_dir)
-      File.binwrite(old_patcher, "owned")
-      system("/usr/bin/plutil", "-create", "xml1", agent, exception: true)
-      system("/usr/bin/plutil", "-insert", "Label", "-string", "com.clashpatch.profiles", agent, exception: true)
-      system("/usr/bin/plutil", "-insert", "ProgramArguments", "-xml", "<array/>", agent, exception: true)
-      system("/usr/bin/plutil", "-insert", "ProgramArguments.0", "-string", "/usr/bin/ruby", agent, exception: true)
-      system("/usr/bin/plutil", "-insert", "ProgramArguments.1", "-string", old_patcher, agent, exception: true)
-
-      stdout, _stderr, status = run_script(UNINSTALLER, home: home)
-
-      assert status.success?, stdout
-      refute File.exist?(agent)
-      refute File.exist?(File.join(home, "Library", "Application Support", "ClaudeEasy", "patch_profiles.rb"))
     end
   end
 
@@ -1820,21 +1614,16 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_uninstaller_removes_owned_files_preserves_backups_and_keeps_unowned_agent
+  def test_uninstaller_removes_owned_files_and_preserves_backups
     Dir.mktmpdir do |home|
       install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
       backup_dir = File.join(install_dir, "backups")
-      agent_dir = File.join(home, "Library", "LaunchAgents")
       FileUtils.mkdir_p(backup_dir)
-      FileUtils.mkdir_p(agent_dir)
       File.write(File.join(install_dir, "patch_profiles.rb"), "owned")
       File.write(File.join(install_dir, "policy.json"), "owned")
       state = File.join(home, "usage-profile.plist")
       File.write(state, "owned")
       File.write(File.join(backup_dir, "keep.backup"), "keep")
-      unowned_agent = File.join(agent_dir, "com.clashpatch.profiles.plist")
-      File.write(unowned_agent, "not a plist owned by this tool")
-
       stdout, _stderr, status = run_script(UNINSTALLER, home: home)
 
       assert status.success?, stdout
@@ -1842,9 +1631,7 @@ class MacosWrapperTest < Minitest::Test
       refute File.exist?(File.join(install_dir, "policy.json"))
       refute File.exist?(state)
       assert File.file?(File.join(backup_dir, "keep.backup"))
-      assert File.file?(unowned_agent)
       assert_includes stdout, "备份仍保留"
-      assert_includes stdout, "无法确认"
     end
   end
 

@@ -5,8 +5,6 @@ module ClaudeEasy
   RENAME_SWAP = 0x00000002
   PROFILE_TRANSACTION_BASENAME = ".claude-easy-profile-transaction.json".freeze
   PROFILE_OPERATION_LOCK_BASENAME = ".claude-easy-operation.lock".freeze
-  LEGACY_PROFILE_TRANSACTION_BASENAME = ".clash-patch-profile-transaction.json".freeze
-  LEGACY_PROFILE_OPERATION_LOCK_BASENAME = ".clash-patch-operation.lock".freeze
 
   module DarwinRename
     extend Fiddle::Importer
@@ -126,49 +124,11 @@ module ClaudeEasy
     false
   end
 
-  # 旧版中断留下的状态只能在旧锁已经独占后采用，避免与旧进程并发恢复。
-  def rename_legacy_profile_state_file(root, legacy_basename, basename)
-    current = File.join(root, basename)
-    legacy = File.join(root, legacy_basename)
-    current_exists = File.exist?(current) || File.symlink?(current)
-    legacy_exists = File.exist?(legacy) || File.symlink?(legacy)
-    if current_exists && legacy_exists
-      raise InvalidConfigError, "旧版与当前配置事务状态同时存在；未执行任何修改"
-    end
-    return unless legacy_exists
-    unless File.file?(legacy) && !File.symlink?(legacy)
-      raise InvalidConfigError, "旧版配置事务状态不安全；未执行任何修改"
-    end
-
-    File.rename(legacy, current)
-  end
-
   def profile_operation_lock(backup_root)
     root = secure_backup_root!(backup_root)
     path = File.join(root, PROFILE_OPERATION_LOCK_BASENAME)
-    legacy_path = File.join(root, LEGACY_PROFILE_OPERATION_LOCK_BASENAME)
-    current_exists = File.exist?(path) || File.symlink?(path)
-    legacy_exists = File.exist?(legacy_path) || File.symlink?(legacy_path)
-    if current_exists && legacy_exists
-      raise InvalidConfigError, "旧版与当前配置操作锁同时存在；未执行任何修改"
-    end
-    if legacy_exists
-      unless File.file?(legacy_path) && !File.symlink?(legacy_path)
-        raise InvalidConfigError, "旧版配置操作锁不安全；未执行任何修改"
-      end
-      handle = File.open(legacy_path, File::RDWR)
-      lock_exclusive_with_timeout(handle)
-      if File.exist?(path) || File.symlink?(path)
-        raise InvalidConfigError, "旧版与当前配置操作锁同时存在；未执行任何修改"
-      end
-      File.rename(legacy_path, path)
-    else
-      handle = File.open(path, File::RDWR | File::CREAT, 0o600)
-      lock_exclusive_with_timeout(handle)
-    end
-    rename_legacy_profile_state_file(
-      root, LEGACY_PROFILE_TRANSACTION_BASENAME, PROFILE_TRANSACTION_BASENAME
-    )
+    handle = File.open(path, File::RDWR | File::CREAT, 0o600)
+    lock_exclusive_with_timeout(handle)
     FileUtils.chmod(0o600, path)
     handle
   rescue StandardError

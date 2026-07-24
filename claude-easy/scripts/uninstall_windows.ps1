@@ -160,9 +160,6 @@ try {
     if ($lockMessage -eq "客户端保持运行；中断的当前配置事务等待恢复。") {
         Complete-UninstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的当前配置事务仍在等待安全恢复，请稍后重试。"
     }
-    if ($lockMessage -match "^旧版与当前 ClaudeEasy") {
-        Complete-UninstallResult 1 "failed" "legacy_state_conflict" $lockMessage
-    }
     if ($lockMessage -eq "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。") {
         Complete-UninstallResult 1 "failed" "operation_in_progress" $lockMessage
     }
@@ -263,20 +260,14 @@ try {
                 throw "Script.js 标记不完整或重复，原文件未修改。"
             }
             $managedBlock = $current.Substring($beginMarkers[0].Start, $endMarkers[0].End - $beginMarkers[0].Start)
-            $hasPolicyMarker = $managedBlock.Contains("CLASH PATCH POLICY BEGIN") -or $managedBlock.Contains("CLAUDEEASY POLICY BEGIN")
-            $hasTransform = $managedBlock.Contains("function clashPatchTransform") -or $managedBlock.Contains("function claudeEasyTransform")
-            if (-not $hasPolicyMarker -or -not $hasTransform) {
+            if (-not $managedBlock.Contains("CLAUDEEASY POLICY BEGIN") -or -not $managedBlock.Contains("function claudeEasyTransform")) {
                 throw "Script.js 中的同名标记不是本工具创建的，原文件未修改。"
             }
 
             $prefix = $current.Substring(0, $beginMarkers[0].Start).TrimEnd()
             $suffix = $current.Substring($endMarkers[0].End).Trim()
             if (-not [string]::IsNullOrWhiteSpace($prefix)) {
-                $previousMainName = "clashPatchPreviousMain"
-                if ((Get-JavaScriptAnalysis $prefix).Code -match '(?m)^\s*function\s+claudeEasyPreviousMain\s*\(') {
-                    $previousMainName = "claudeEasyPreviousMain"
-                }
-                $prefix = (Rename-JavaScriptMain $prefix $previousMainName "main").TrimEnd()
+                $prefix = (Rename-JavaScriptMain $prefix "claudeEasyPreviousMain" "main").TrimEnd()
             }
             $remaining = @($prefix, $suffix) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
             $scriptBytes = if ($remaining.Count -eq 0) {

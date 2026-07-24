@@ -12,9 +12,9 @@
                 $finish = $index + 2
                 while ($finish -lt $Text.Length -and $Text[$finish] -ne "`r" -and $Text[$finish] -ne "`n") { $finish++ }
                 $comment = $Text.Substring($index, $finish - $index).Trim()
-                if ($comment -eq "// CLASH PATCH BEGIN" -or $comment -eq "// CLAUDEEASY BEGIN") {
+                if ($comment -eq "// CLAUDEEASY BEGIN") {
                     $markers += [pscustomobject]@{ Kind = "begin"; Start = $index; End = $finish }
-                } elseif ($comment -eq "// CLASH PATCH END" -or $comment -eq "// CLAUDEEASY END") {
+                } elseif ($comment -eq "// CLAUDEEASY END") {
                     $markers += [pscustomobject]@{ Kind = "end"; Start = $index; End = $finish }
                 }
                 while ($index -lt $finish) { [void]$mask.Append(" "); $index++ }
@@ -80,7 +80,7 @@ function Rename-JavaScriptMain([string]$Text, [string]$From, [string]$To) {
 
 function Assert-JavaScriptReservedIdentifiers([string]$Text) {
     $analysis = Get-JavaScriptAnalysis $Text
-    if ([regex]::IsMatch($analysis.Code, '\b(?:clashPatch[A-Za-z0-9_$]*|CLASH_PATCH_[A-Za-z0-9_$]*|claudeEasy[A-Za-z0-9_$]*|CLAUDE_EASY_[A-Za-z0-9_$]*)\b')) {
+    if ([regex]::IsMatch($analysis.Code, '\b(?:claudeEasy[A-Za-z0-9_$]*|CLAUDE_EASY_[A-Za-z0-9_$]*)\b')) {
         throw "现有脚本使用了 ClaudeEasy 保留标识符，无法安全合并。原脚本没有被修改。"
     }
 }
@@ -138,19 +138,13 @@ function Build-GlobalScript(
                 throw "检测到不完整或重复的 ClaudeEasy 标记。原脚本没有被修改。"
             }
             $managedBlock = $current.Substring($beginMarkers[0].Start, $endMarkers[0].End - $beginMarkers[0].Start)
-            $hasPolicyMarker = $managedBlock.Contains("CLASH PATCH POLICY BEGIN") -or $managedBlock.Contains("CLAUDEEASY POLICY BEGIN")
-            $hasTransform = $managedBlock.Contains("function clashPatchTransform") -or $managedBlock.Contains("function claudeEasyTransform")
-            if (-not $hasPolicyMarker -or -not $hasTransform) {
+            if (-not $managedBlock.Contains("CLAUDEEASY POLICY BEGIN") -or -not $managedBlock.Contains("function claudeEasyTransform")) {
                 throw "检测到非本工具创建的同名标记。原脚本没有被修改。"
             }
             $prefix = $current.Substring(0, $beginMarkers[0].Start).TrimEnd()
             $suffix = $current.Substring($endMarkers[0].End).Trim()
             if (-not [string]::IsNullOrWhiteSpace($prefix)) {
-                $previousMainName = "clashPatchPreviousMain"
-                if ((Get-JavaScriptAnalysis $prefix).Code -match '(?m)^\s*function\s+claudeEasyPreviousMain\s*\(') {
-                    $previousMainName = "claudeEasyPreviousMain"
-                }
-                $restoredPrefix = Rename-JavaScriptMain $prefix $previousMainName "main"
+                $restoredPrefix = Rename-JavaScriptMain $prefix "claudeEasyPreviousMain" "main"
                 Assert-JavaScriptCanCompose $restoredPrefix
                 $prefix = Rename-JavaScriptMain $restoredPrefix "main" "claudeEasyPreviousMain"
             }

@@ -335,7 +335,7 @@ function Get-TreeContentSnapshot([string]$Path) {
         )
         if ($_.PSIsContainer) {
             "D:$relative"
-        } elseif ($_.Name -in @(".clash-patch.lock", ".claude-easy.lock")) {
+        } elseif ($_.Name -eq ".claude-easy.lock") {
             "F:${relative}:<locked>"
         } else {
             "F:${relative}:" + [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($_.FullName))
@@ -910,116 +910,6 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         $uninstallWrapperOutput = & $uninstallWrapper -AppHome $wrapperCase 2>&1 | Out-String
         Assert-True ($LASTEXITCODE -eq 0) "uninstall_windows.cmd did not propagate a successful exit; $(Get-TestOutputDiagnostic $uninstallWrapperOutput)"
         Assert-True (Test-Path -LiteralPath $wrapperBackup -PathType Leaf) "uninstall_windows.cmd deleted configuration history"
-
-        $legacyMigrationCase = Join-Path $sandbox "legacy-state-migration-case"
-        New-Item -ItemType Directory -Path $legacyMigrationCase -Force | Out-Null
-        [System.IO.File]::WriteAllText(
-            (Join-Path $legacyMigrationCase "clash-patch-usage-profile.json"),
-            '{"Version":1,"Profile":2}' + "`r`n"
-        )
-        $legacyBackup = Join-Path (Join-Path $legacyMigrationCase "clash-patch-backups") "keep.backup"
-        New-Item -ItemType Directory -Path (Split-Path -Parent $legacyBackup) -Force | Out-Null
-        [System.IO.File]::WriteAllText($legacyBackup, "keep")
-        $legacyMigration = Invoke-TestPowerShell $installer @(
-            "-AppHome", $legacyMigrationCase,
-            "-ShowUsageProfile",
-            "-Json"
-        )
-        $legacyMigrationJson = Assert-JsonResult $legacyMigration "install" 0
-        Assert-True ($legacyMigrationJson.code -eq "usage_profile_shown") "legacy usage profile was not readable after migration"
-        Assert-True ([int]$legacyMigrationJson.profile -eq 2) "legacy usage profile changed during migration"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $legacyMigrationCase "clash-patch-usage-profile.json"))) "legacy usage state name remained after migration"
-        Assert-True (Test-Path -LiteralPath (Join-Path $legacyMigrationCase "claude-easy-usage-profile.json") -PathType Leaf) "current usage state was not published"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $legacyMigrationCase "clash-patch-backups"))) "legacy backup directory name remained after migration"
-        Assert-True ((Get-Content -LiteralPath (Join-Path (Join-Path $legacyMigrationCase "claude-easy-backups") "keep.backup") -Raw) -ceq "keep") "legacy backup content changed during migration"
-
-        $legacyConflictCase = Join-Path $sandbox "legacy-state-conflict-case"
-        New-Item -ItemType Directory -Path $legacyConflictCase -Force | Out-Null
-        [System.IO.File]::WriteAllText(
-            (Join-Path $legacyConflictCase "clash-patch-usage-profile.json"),
-            '{"Version":1,"Profile":1}' + "`r`n"
-        )
-        [System.IO.File]::WriteAllText(
-            (Join-Path $legacyConflictCase "claude-easy-usage-profile.json"),
-            '{"Version":1,"Profile":2}' + "`r`n"
-        )
-        [System.IO.File]::WriteAllText((Join-Path $legacyConflictCase ".clash-patch.lock"), "")
-        [System.IO.File]::WriteAllText((Join-Path $legacyConflictCase ".claude-easy.lock"), "")
-        $legacyConflictBefore = Get-TreeContentSnapshot $legacyConflictCase
-        $legacyConflict = Invoke-TestPowerShell $installer @(
-            "-AppHome", $legacyConflictCase,
-            "-ShowUsageProfile",
-            "-Json"
-        )
-        $legacyConflictJson = Assert-JsonResult $legacyConflict "install" 1
-        Assert-True ($legacyConflictJson.code -eq "legacy_state_conflict") "conflicting legacy state did not fail explicitly"
-        Assert-True ((Get-TreeContentSnapshot $legacyConflictCase) -ceq $legacyConflictBefore) "legacy-state conflict changed AppHome"
-
-        $legacyLockCase = Join-Path $sandbox "legacy-lock-compatibility-case"
-        $legacyLockReady = Join-Path $sandbox "legacy-lock-compatibility.ready"
-        $legacyLockRelease = Join-Path $sandbox "legacy-lock-compatibility.release"
-        $legacyLockHolderPath = Join-Path $sandbox "legacy-lock-compatibility-holder.ps1"
-        New-Item -ItemType Directory -Path $legacyLockCase -Force | Out-Null
-        [System.IO.File]::WriteAllText(
-            (Join-Path $legacyLockCase "clash-patch-usage-profile.json"),
-            '{"Version":1,"Profile":1}' + "`r`n"
-        )
-        $legacyLockHolderSource = @'
-param(
-    [string]$LockPath,
-    [string]$ReadyPath,
-    [string]$ReleasePath
-)
-$stream = [System.IO.File]::Open(
-    $LockPath,
-    [System.IO.FileMode]::OpenOrCreate,
-    [System.IO.FileAccess]::ReadWrite,
-    [System.IO.FileShare]::None
-)
-try {
-    [System.IO.File]::WriteAllText($ReadyPath, "ready")
-    $deadline = [DateTime]::UtcNow.AddSeconds(60)
-    while (-not (Test-Path -LiteralPath $ReleasePath -PathType Leaf) -and
-        [DateTime]::UtcNow -lt $deadline) {
-        Start-Sleep -Milliseconds 25
-    }
-} finally {
-    $stream.Dispose()
-}
-'@
-        [System.IO.File]::WriteAllText(
-            $legacyLockHolderPath,
-            $legacyLockHolderSource,
-            [System.Text.Encoding]::ASCII
-        )
-        $legacyLockHolder = Start-Process -FilePath $PowerShellPath -ArgumentList @(
-            "-NoLogo", "-NoProfile", "-File", $legacyLockHolderPath,
-            "-LockPath", (Join-Path $legacyLockCase ".clash-patch.lock"),
-            "-ReadyPath", $legacyLockReady,
-            "-ReleasePath", $legacyLockRelease
-        ) -PassThru
-        try {
-            $legacyLockDeadline = [DateTime]::UtcNow.AddSeconds(5)
-            while (-not (Test-Path -LiteralPath $legacyLockReady -PathType Leaf) -and
-                [DateTime]::UtcNow -lt $legacyLockDeadline) {
-                Start-Sleep -Milliseconds 25
-            }
-            Assert-True (Test-Path -LiteralPath $legacyLockReady -PathType Leaf) "legacy lock holder did not become ready"
-            $legacyLockBefore = Get-TreeContentSnapshot $legacyLockCase
-            $legacyLockInstall = Invoke-TestPowerShell $installer @(
-                "-AppHome", $legacyLockCase,
-                "-ShowUsageProfile",
-                "-Json"
-            )
-            $legacyLockJson = Assert-JsonResult $legacyLockInstall "install" 1
-            Assert-True ($legacyLockJson.code -eq "operation_in_progress") "legacy lock did not block the new installer"
-            Assert-True ((Get-TreeContentSnapshot $legacyLockCase) -ceq $legacyLockBefore) "installer changed state before acquiring the legacy lock"
-        } finally {
-            [System.IO.File]::WriteAllText($legacyLockRelease, "release")
-            if (-not $legacyLockHolder.WaitForExit(5000)) {
-                Stop-Process -Id $legacyLockHolder.Id -Force
-            }
-        }
 
         $mutexCase = Join-Path $sandbox "app-home-mutex-case"
         $mutexReadyPath = Join-Path $sandbox "app-home-mutex.ready"
@@ -5027,9 +4917,9 @@ if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((na
     $templateScript = @'
 function main(config) {
   const markerPayload = `
-// CLASH PATCH BEGIN
+// CLAUDEEASY BEGIN
 friend payload
-// CLASH PATCH END
+// CLAUDEEASY END
 `;
   config.markerPayload = markerPayload;
   return config;
@@ -5065,7 +4955,7 @@ friend payload
     $badMarkerProfiles = Join-Path $badMarkerCase "profiles"
     New-Item -ItemType Directory -Path $badMarkerProfiles -Force | Out-Null
     $badMarkerPath = Join-Path $badMarkerProfiles "Script.js"
-    $badMarkerScript = "// CLASH PATCH BEGIN`nfunction main(config) { return config; }`n// CLASH PATCH END`n// CLASH PATCH END`n"
+    $badMarkerScript = "// CLAUDEEASY BEGIN`nfunction main(config) { return config; }`n// CLAUDEEASY END`n// CLAUDEEASY END`n"
     [System.IO.File]::WriteAllText($badMarkerPath, $badMarkerScript)
     $badMarkerResult = Invoke-TestPowerShell $uninstaller @("-AppHome", $badMarkerCase)
     Assert-True ($badMarkerResult.ExitCode -eq 1) "uninstaller accepted duplicate end markers"

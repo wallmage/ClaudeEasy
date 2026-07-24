@@ -73,162 +73,46 @@ function Get-AppHomeRelativePath([string]$Path) {
     )
 }
 
-function Rename-ClaudeEasyLegacyState(
-    [string]$AppHome,
-    [string[]]$Names = @(
-        "claude-easy-usage-profile.json",
-        "claude-easy-install-state.json",
-        "claude-easy-auto-update-state.json",
-        "claude-easy-safe-update.json",
-        "claude-easy-backups"
-    )
-) {
-    $migrations = @()
-    foreach ($name in $Names) {
-        $legacyName = $name.Replace("claude-easy", "clash-patch")
-        $path = Join-Path $AppHome $name
-        $legacyPath = Join-Path $AppHome $legacyName
-        try {
-            $currentItem = Get-Item -LiteralPath $path -Force -ErrorAction Stop
-        } catch [System.Management.Automation.ItemNotFoundException] {
-            $currentItem = $null
-        }
-        try {
-            $legacyItem = Get-Item -LiteralPath $legacyPath -Force -ErrorAction Stop
-        } catch [System.Management.Automation.ItemNotFoundException] {
-            $legacyItem = $null
-        }
-        if ($null -ne $currentItem -and $null -ne $legacyItem) {
-            throw "旧版与当前 ClaudeEasy 状态同时存在：$legacyName。为避免覆盖，未执行迁移。"
-        }
-        if ($null -eq $legacyItem) { continue }
-        if (($legacyItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "旧版 ClaudeEasy 状态不能是重解析点：$legacyName。"
-        }
-        $isDirectory = [bool]$legacyItem.PSIsContainer
-        if ($name -eq "claude-easy-backups") {
-            if (-not $isDirectory) { throw "旧版 ClaudeEasy 备份状态类型无效。" }
-        } else {
-            if ($isDirectory) { throw "旧版 ClaudeEasy 文件状态类型无效：$legacyName。" }
-            $legacyHandle = $null
-            try {
-                $legacyHandle = [ClaudeEasy.VerifiedDeleteNative]::Open(
-                    $legacyPath, $false, $false
-                )
-                if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($legacyHandle) -or
-                    [ClaudeEasy.VerifiedDeleteNative]::GetLinkCount($legacyHandle) -ne 1) {
-                    throw "旧版 ClaudeEasy 文件状态不能是链接：$legacyName。"
-                }
-            } finally {
-                if ($null -ne $legacyHandle) { $legacyHandle.Dispose() }
-            }
-        }
-        $migrations += [pscustomobject]@{
-            LegacyPath = $legacyPath
-            CurrentPath = $path
-            IsDirectory = $isDirectory
-        }
-    }
-    foreach ($migration in $migrations) {
-        if ($migration.IsDirectory) {
-            [System.IO.Directory]::Move($migration.LegacyPath, $migration.CurrentPath)
-        } else {
-            [System.IO.File]::Move($migration.LegacyPath, $migration.CurrentPath)
-        }
-    }
-}
-
-function Get-ClaudeEasyMigrationItem([string]$Path) {
-    try {
-        return Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-    } catch [System.Management.Automation.ItemNotFoundException] {
-        return $null
-    }
-}
-
-function Open-ClaudeEasyMutationLockStream([string]$Path) {
-    $handle = $null
-    try {
-        $handle = [ClaudeEasy.VerifiedDeleteNative]::OpenLockFile($Path)
-        if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($handle) -or
-            [ClaudeEasy.VerifiedDeleteNative]::GetLinkCount($handle) -ne 1) {
-            throw "ClaudeEasy 锁文件不能是链接。"
-        }
-        $stream = New-Object System.IO.FileStream($handle, [System.IO.FileAccess]::ReadWrite)
-        $handle = $null
-        return $stream
-    } finally {
-        if ($null -ne $handle) { $handle.Dispose() }
-    }
-}
-
 function Enter-AppHomeMutationLock([string]$AppHome) {
     $canonical = ConvertTo-NormalizedWindowsPath $AppHome
     Assert-NoReparsePointPath $canonical "Clash Verge Rev 配置目录"
     Initialize-VerifiedFileNative
     $rootHandle = $null
-    $legacyLockStream = $null
-    $currentLockStream = $null
+    $lockStream = $null
     try {
-        $rootHandle = [ClaudeEasy.VerifiedDeleteNative]::OpenDirectory($canonical)
-        if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($rootHandle)) {
-            throw "Clash Verge Rev 配置目录不能是符号链接、目录联接或其他重解析点。"
-        }
         try {
-            $legacyLockStream = Open-ClaudeEasyMutationLockStream (
-                Join-Path $canonical ".clash-patch.lock"
+            $rootHandle = [ClaudeEasy.VerifiedDeleteNative]::OpenDirectory($canonical)
+            if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($rootHandle)) {
+                throw "Clash Verge Rev 配置目录不能是符号链接、目录联接或其他重解析点。"
+            }
+            $lockHandle = [ClaudeEasy.VerifiedDeleteNative]::OpenLockFile(
+                (Join-Path $canonical ".claude-easy.lock")
             )
-            $currentLockStream = Open-ClaudeEasyMutationLockStream (
-                Join-Path $canonical ".claude-easy.lock"
-            )
+            if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($lockHandle) -or
+                [ClaudeEasy.VerifiedDeleteNative]::GetLinkCount($lockHandle) -ne 1) {
+                $lockHandle.Dispose()
+                throw "ClaudeEasy 锁文件不能是链接。"
+            }
+            $lockStream = New-Object System.IO.FileStream($lockHandle, [System.IO.FileAccess]::ReadWrite)
         } catch [System.ComponentModel.Win32Exception] {
             throw "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。"
         }
 
         $script:ClaudeEasyMutationRoot = $canonical
-        $legacyJournalPath = Join-Path $canonical ".clash-patch-transaction.json"
-        $legacyPreparationPath = Join-Path $canonical ".clash-patch-transaction-preparation.json"
-        $currentJournalPath = Join-Path $canonical ".claude-easy-transaction.json"
-        $currentPreparationPath = Join-Path $canonical ".claude-easy-transaction-preparation.json"
-        $legacyRecovery = (
-            $null -ne (Get-ClaudeEasyMigrationItem $legacyJournalPath) -or
-            $null -ne (Get-ClaudeEasyMigrationItem $legacyPreparationPath)
-        )
-        $currentRecovery = (
-            $null -ne (Get-ClaudeEasyMigrationItem $currentJournalPath) -or
-            $null -ne (Get-ClaudeEasyMigrationItem $currentPreparationPath)
-        )
-        if ($legacyRecovery -and $currentRecovery) {
-            throw "旧版与当前 ClaudeEasy 事务记录同时存在；为避免按错误顺序恢复，未执行任何修改。"
-        }
-        if ($legacyRecovery) {
-            $script:ClaudeEasyTransactionJournalPath = $legacyJournalPath
-            $script:ClaudeEasyTransactionPreparationPath = $legacyPreparationPath
-        } else {
-            $script:ClaudeEasyTransactionJournalPath = $currentJournalPath
-            $script:ClaudeEasyTransactionPreparationPath = $currentPreparationPath
-        }
+        $script:ClaudeEasyTransactionJournalPath = Join-Path $canonical ".claude-easy-transaction.json"
+        $script:ClaudeEasyTransactionPreparationPath = Join-Path $canonical ".claude-easy-transaction-preparation.json"
+        $recoveredTransaction = Test-Path -LiteralPath $script:ClaudeEasyTransactionJournalPath -PathType Leaf
+        $recoveredPreparation = Test-Path -LiteralPath $script:ClaudeEasyTransactionPreparationPath -PathType Leaf
         Repair-InterruptedFileTransaction
         Repair-InterruptedFilePreparation
-        if ($legacyRecovery -and (
-            $null -ne (Get-ClaudeEasyMigrationItem $legacyJournalPath) -or
-            $null -ne (Get-ClaudeEasyMigrationItem $legacyPreparationPath)
-        )) {
-            throw "旧版 ClaudeEasy 事务记录未能完整恢复；未迁移其他状态。"
-        }
-        Rename-ClaudeEasyLegacyState $canonical
-        $script:ClaudeEasyTransactionJournalPath = $currentJournalPath
-        $script:ClaudeEasyTransactionPreparationPath = $currentPreparationPath
         return [pscustomobject]@{
             Root = $canonical
             RootHandle = $rootHandle
-            LegacyLockStream = $legacyLockStream
-            LockStream = $currentLockStream
-            RecoveredTransaction = ($legacyRecovery -or $currentRecovery)
+            LockStream = $lockStream
+            RecoveredTransaction = ($recoveredTransaction -or $recoveredPreparation)
         }
     } catch {
-        if ($null -ne $currentLockStream) { $currentLockStream.Dispose() }
-        if ($null -ne $legacyLockStream) { $legacyLockStream.Dispose() }
+        if ($null -ne $lockStream) { $lockStream.Dispose() }
         if ($null -ne $rootHandle) { $rootHandle.Dispose() }
         $script:ClaudeEasyMutationRoot = $null
         $script:ClaudeEasyTransactionJournalPath = $null
@@ -242,19 +126,15 @@ function Exit-AppHomeMutationLock([object]$Lock) {
     try {
         if ($null -ne $Lock.LockStream) { $Lock.LockStream.Dispose() }
     } finally {
-        try {
-            if ($null -ne $Lock.LegacyLockStream) { $Lock.LegacyLockStream.Dispose() }
-        } finally {
-            if ($null -ne $Lock.RootHandle) { $Lock.RootHandle.Dispose() }
-            if ([string]::Equals(
-                [string]$script:ClaudeEasyMutationRoot,
-                [string]$Lock.Root,
-                [StringComparison]::OrdinalIgnoreCase
-            )) {
-                $script:ClaudeEasyMutationRoot = $null
-                $script:ClaudeEasyTransactionJournalPath = $null
-                $script:ClaudeEasyTransactionPreparationPath = $null
-            }
+        if ($null -ne $Lock.RootHandle) { $Lock.RootHandle.Dispose() }
+        if ([string]::Equals(
+            [string]$script:ClaudeEasyMutationRoot,
+            [string]$Lock.Root,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            $script:ClaudeEasyMutationRoot = $null
+            $script:ClaudeEasyTransactionJournalPath = $null
+            $script:ClaudeEasyTransactionPreparationPath = $null
         }
     }
 }

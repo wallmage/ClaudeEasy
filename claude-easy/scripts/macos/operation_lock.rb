@@ -16,6 +16,10 @@ module ClaudeEasyOperationLock
 
   def acquire(path, timeout_seconds: LOCK_TIMEOUT_SECONDS)
     directory = File.dirname(path)
+    state_root = File.dirname(directory)
+    raise IOError, "operation lock state root is unsafe" if File.symlink?(state_root) ||
+                                                             (File.exist?(state_root) && !File.directory?(state_root))
+
     FileUtils.mkdir_p(directory, mode: 0o700)
     raise IOError, "operation lock directory is unsafe" if File.symlink?(directory)
     raise IOError, "operation lock path is unsafe" if File.symlink?(path) ||

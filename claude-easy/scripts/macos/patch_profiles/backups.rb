@@ -3,7 +3,7 @@ module ClaudeEasy
 
   def excluded_path?(path)
     basename = File.basename(path)
-    basename.start_with?(".") || basename.match?(/(?:^|[._-])(?:bak|backup|clash-patch|claude-easy)(?:[._-]|\z)/i) ||
+    basename.start_with?(".") || basename.match?(/(?:^|[._-])(?:bak|backup|claude-easy)(?:[._-]|\z)/i) ||
       basename.match?(/(?:\.tmp|\.bak|\.backup)\z/i)
   end
 

@@ -284,65 +284,33 @@ class SkillContractTest < Minitest::Test
     assert_equal "ClaudeEasy 配置与诊断", metadata.dig("interface", "display_name")
   end
 
-  def test_old_brand_tokens_are_limited_to_upgrade_compatibility
-    product_files = [
-      File.join(ROOT, "README.md"),
-      File.join(SKILL, "SKILL.md"),
-      File.join(SKILL, "references/patch-policy.md")
-    ] + Dir.glob(File.join(SKILL, "scripts/**/*.{rb,js,ps1,sh,cmd}"))
-    old_token = /(?:ClashPatch|Clash Patch|clash-patch|clashPatch|CLASH PATCH|CLASH_PATCH)/
-    compatibility_token = /
-      旧版|旧补丁|遗留|迁移|兼容|legacy|Legacy|LEGACY|
-      \.clash-patch|clash-patch-(?:usage|install|auto|safe|backups|cn-domain)|
-      bak\|backup\|clash-patch|CLASH\ PATCH\ (?:BEGIN|END|POLICY)|
-      clashPatch[A-Za-z0-9_$]*|CLASH_PATCH_[A-Za-z0-9_$]*
-    /x
+  def test_retired_project_name_is_absent_from_repository
+    client_word = "clash"
+    profile_word = "profile"
+    change_word = "patch"
+    retired_name = Regexp.new(
+      "#{Regexp.escape(client_word)}[\\s_-]*(?:#{Regexp.escape(profile_word)}[\\s_-]*)?" \
+      "#{Regexp.escape(change_word)}(?:er)?",
+      Regexp::IGNORECASE
+    )
+    retired_localized_name = Regexp.new("#{Regexp.escape(client_word)}\\s*补丁", Regexp::IGNORECASE)
     offenders = []
-    product_files.each do |path|
-      File.foreach(path).with_index(1) do |line, number|
-        next unless line.match?(old_token)
-        next if line.match?(compatibility_token)
+    paths = Dir.glob(File.join(ROOT, "**", "*"), File::FNM_DOTMATCH)
+               .reject { |path| path == File.join(ROOT, ".git") || path.start_with?(File.join(ROOT, ".git", "")) }
 
-        offenders << "#{path}:#{number}:#{line.strip}"
+    paths.each do |path|
+      relative = path.delete_prefix("#{ROOT}/")
+      offenders << relative if relative.match?(retired_name) || relative.match?(retired_localized_name)
+      next unless File.file?(path)
+
+      File.binread(path).force_encoding("UTF-8").scrub.each_line.with_index(1) do |line, number|
+        if line.match?(retired_name) || line.match?(retired_localized_name)
+          offenders << "#{relative}:#{number}:#{line.strip}"
+        end
       end
     end
 
-    assert_empty offenders, "old brand escaped upgrade compatibility:\n#{offenders.join("\n")}"
-  end
-
-  def test_windows_legacy_state_is_migrated_only_after_both_compatibility_locks
-    transaction = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
-    ).force_encoding("UTF-8")
-    installer = File.binread(
-      File.join(SKILL, "scripts/install_windows.ps1")
-    ).force_encoding("UTF-8")
-    uninstaller = File.binread(
-      File.join(SKILL, "scripts/uninstall_windows.ps1")
-    ).force_encoding("UTF-8")
-    windows_tests = File.binread(
-      File.join(ROOT, "tests/test_windows_installer.ps1")
-    ).force_encoding("UTF-8")
-
-    refute_match(/^\s*Rename-ClaudeEasyLegacyState\s+\$AppHome\s*$/m, installer)
-    refute_match(/^\s*Rename-ClaudeEasyLegacyState\s+\$AppHome\s*$/m, uninstaller)
-
-    enter_lock = transaction[
-      /function Enter-AppHomeMutationLock\b.*?(?=^function Exit-AppHomeMutationLock\b)/m
-    ]
-    refute_nil enter_lock
-    legacy_lock = enter_lock.index('".clash-patch.lock"')
-    current_lock = enter_lock.index('".claude-easy.lock"')
-    migration = enter_lock.index("Rename-ClaudeEasyLegacyState")
-    refute_nil legacy_lock
-    refute_nil current_lock
-    refute_nil migration
-    assert_operator legacy_lock, :<, current_lock
-    assert_operator current_lock, :<, migration
-    assert_includes windows_tests, "legacy-state-migration-case"
-    assert_includes windows_tests, "legacy-state-conflict-case"
-    assert_includes windows_tests, "legacy-lock-compatibility-case"
-    assert_includes windows_tests, "legacy_state_conflict"
+    assert_empty offenders, "retired project name remains:\n#{offenders.join("\n")}"
   end
 
   def test_skill_exposes_patch_and_diagnostics_as_separate_modules
@@ -1143,7 +1111,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "/cache/dns/flush"
   end
 
-  def test_macos_installer_is_one_shot_and_removes_legacy_persistence
+  def test_macos_installer_is_one_shot
     path = File.join(SKILL, "scripts/install_macos.sh")
     skip unless File.file?(path)
 
@@ -1153,7 +1121,7 @@ class SkillContractTest < Minitest::Test
     refute_includes source, "KeepAlive"
     patcher = mac_patcher_source
     assert_includes patcher, 'File.join(home, ".config", "clash.meta")'
-    assert_includes source, "launchctl bootout"
+    refute_includes source, "launchctl bootout"
     assert_match(/[\p{Han}]/, source)
     assert_includes source, "plutil"
     refute_includes source, "<plist version="
@@ -1177,45 +1145,13 @@ class SkillContractTest < Minitest::Test
       assert_includes source, '"$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"'
       assert_includes source, "operation_in_progress"
     end
-    assert_includes installer,
-                    "if [ \"$PENDING_UNINSTALL_RECOVERY\" -eq 0 ]; then\n" \
-                    "  resolve_usage_profile"
-    assert_includes installer,
-                    "if [ \"$PENDING_UNINSTALL_RECOVERY\" -eq 1 ]; then\n" \
-                    "  # 未完成卸载优先于新安装的客户端和 Mihomo 检查"
-    pending_recovery = installer.index(
-      "migrate_legacy_state_under_lock\n" \
-      "  recover_interrupted_uninstall\n" \
-      "  resolve_usage_profile"
-    )
+    pending_recovery = installer.index("recover_interrupted_uninstall\nresolve_usage_profile")
     client_preflight = installer.index('if [ ! -d "/Applications/ClashX Meta.app" ]')
     refute_nil pending_recovery
     refute_nil client_preflight
     assert_operator pending_recovery, :<, client_preflight
     assert_includes installer, 'recovery_json=$(/bin/sh "$UNINSTALLER_SOURCE" --json'
     assert_includes installer, "uninstall_recovery_failed"
-    [installer, uninstaller].each do |source|
-      preflight = source.match(/^ *preflight_legacy_state_under_lock$/)&.begin(0)
-      migration = source.match(/^ *migrate_legacy_state_under_lock$/)&.begin(0)
-      refute_nil preflight
-      refute_nil migration
-      assert_operator preflight, :<, migration
-    end
-    installer_cleanup = installer.match(/^ *remove_legacy_agent \\$/)&.begin(0)
-    installer_migration = installer.match(/^ *migrate_legacy_state_under_lock$/)&.begin(0)
-    uninstaller_cleanup = uninstaller.match(/^ *remove_owned_agent \\$/)&.begin(0)
-    uninstaller_migration = uninstaller.match(/^ *migrate_legacy_state_under_lock$/)&.begin(0)
-    assert_operator installer_cleanup, :<, installer_migration
-    assert_operator uninstaller_cleanup, :<, uninstaller_migration
-    wrappers = File.read(File.join(ROOT, "tests/test_macos_wrappers.rb"))
-    assert_includes wrappers,
-                    "test_installer_keeps_legacy_state_when_a_profile_has_not_been_selected"
-    assert_includes wrappers,
-                    "test_installer_keeps_legacy_state_when_read_only_environment_checks_fail"
-    assert_includes wrappers,
-                    "test_mutating_wrappers_preflight_legacy_internal_conflicts_before_directory_move"
-    assert_includes wrappers,
-                    "test_installer_recovers_pending_legacy_uninstall_before_mihomo_preflight"
   end
 
   def test_macos_profile_operation_signal_handoff_preserves_committed_state
@@ -1376,13 +1312,10 @@ class SkillContractTest < Minitest::Test
     patcher = mac_patcher_source
     recovery = uninstaller.index("\nrecover_pending_profile_transaction\n")
     uninstall_recovery = uninstaller.index("\nrestore_uncommitted_uninstall\n", recovery)
-    first_removal = uninstaller.index("\nremove_owned_agent ", recovery)
 
     refute_nil recovery
     refute_nil uninstall_recovery
-    refute_nil first_removal
     assert_operator recovery, :<, uninstall_recovery
-    assert_operator recovery, :<, first_removal
     assert_includes uninstaller, "--recover-profile-transaction"
     assert_includes uninstaller, "profile_transaction_recovery_failed"
     assert_includes patcher, "--recover-profile-transaction"
@@ -1757,19 +1690,12 @@ class SkillContractTest < Minitest::Test
     assert_operator profile_stage, :<, mac_install.index('--disable-subscription-auto-update')
     assert_includes mac_install, "rollback_profile_selection"
     assert_operator mac_install.index('core_status='), :<, mac_install.index('--disable-subscription-auto-update')
-    assert_operator mac_install.index('plutil -extract Label'), :<, mac_install.index('launchctl bootout')
-    assert_operator mac_install.index('ProgramArguments.0'), :<, mac_install.index('launchctl bootout')
-    assert_operator mac_install.index('ProgramArguments.1'), :<, mac_install.index('launchctl bootout')
-    assert_includes mac_install, "com.clashpatch.profiles"
-    assert_includes mac_install, "com.wallny.clash-profile-patcher"
-    assert_includes mac_uninstall, "com.clashpatch.profiles"
-    assert_includes mac_uninstall, "com.wallny.clash-profile-patcher"
     refute_includes mac_install, "launchctl bootstrap"
+    refute_includes mac_install, "launchctl bootout"
     refute_includes mac_install, "WatchPaths"
+    refute_includes mac_uninstall, "launchctl bootout"
     refute_includes mac_uninstall, 'defaults write "$DEFAULTS_DOMAIN" restoreTunProxy'
     assert_includes mac_uninstall, "旧版安装前的 TUN 偏好无法证明仍是当前选择"
-    assert_operator mac_uninstall.index('ProgramArguments.0'), :<, mac_uninstall.index('launchctl bootout')
-    assert_operator mac_uninstall.index('ProgramArguments.1'), :<, mac_uninstall.index('launchctl bootout')
     assert_includes patcher, "File::EXCL"
 
     assert_equal "\xEF\xBB\xBF".b, windows_install_entry.byteslice(0, 3)
@@ -2427,14 +2353,10 @@ class SkillContractTest < Minitest::Test
     assert_includes source, "wallmage"
   end
 
-  def test_uninstallers_remove_persistence_without_deleting_backups
+  def test_uninstallers_preserve_backups
     mac = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows = File.read(File.join(SKILL, "scripts/uninstall_windows.ps1"))
-    assert_includes mac, "bootout"
-    assert_operator mac.index("plutil -extract Label"), :<, mac.index("launchctl bootout")
-    assert_operator mac.index("ProgramArguments.0"), :<, mac.index("launchctl bootout")
-    assert_operator mac.index("ProgramArguments.1"), :<, mac.index("launchctl bootout")
-    assert_includes windows, "CLASH PATCH POLICY BEGIN"
+    assert_includes windows, "CLAUDEEASY POLICY BEGIN"
     refute_match(/Remove-Item[^\n]+backups/i, windows)
     refute_match(%r{/bin/rm[^\n]+backups}i, mac)
   end

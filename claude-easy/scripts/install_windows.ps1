@@ -108,9 +108,6 @@ try {
     if ($lockMessage -eq "客户端保持运行；中断的当前配置事务等待恢复。") {
         Complete-InstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的当前配置事务仍在等待安全恢复，请稍后重试。"
     }
-    if ($lockMessage -match "^旧版与当前 ClaudeEasy") {
-        Complete-InstallResult 1 "failed" "legacy_state_conflict" $lockMessage
-    }
     if ($lockMessage -eq "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。") {
         Complete-InstallResult 1 "failed" "operation_in_progress" $lockMessage
     }

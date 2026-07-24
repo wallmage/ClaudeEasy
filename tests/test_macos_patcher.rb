@@ -1337,7 +1337,7 @@ class MacosPatcherTest < Minitest::Test
     ai_group = patched.fetch("proxy-groups").find { |group| group["name"] == result.fetch(:ai_group) }
     assert_equal ["台湾家宽 01", "日本家宽 01", "美国家宽 01"], ai_group.fetch("proxies")
     refute ai_group.key?("use")
-    refute patched.fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::LEGACY_SAFE_GROUP_BASE) }
+    refute patched.fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::SAFE_GROUP_BASE) }
     assert_includes patched.fetch("rules"), "DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy"
     assert_equal "NETWORK,UDP,🤖 AI · ClaudeEasy", patched.fetch("rules")[0]
     assert patched.dig("dns", "nameserver-policy", "+.openai.com").all? do |value|
@@ -1390,10 +1390,10 @@ class MacosPatcherTest < Minitest::Test
     assert_equal config, result.fetch(:config)
   end
 
-  def test_migrates_owned_single_main_ai_group_to_independent_node_selector
+  def test_normalizes_owned_single_main_ai_group_to_independent_node_selector
     config = base_config
     config["proxy-groups"].reject! { |group| group["name"] == "AI" }
-    ai_name = ClaudeEasy::LEGACY_AI_GROUP_BASE
+    ai_name = ClaudeEasy::AI_GROUP_BASE
     config["proxy-groups"] << { "name" => ai_name, "type" => "select", "proxies" => ["Main"] }
     config["rules"] = ClaudeEasy.render_ai_rules(@policy, ai_name) + config.fetch("rules")
 
@@ -1405,10 +1405,10 @@ class MacosPatcherTest < Minitest::Test
     refute_includes ai_group.fetch("proxies"), "Main"
   end
 
-  def test_removes_groups_created_by_an_older_patch
+  def test_removes_obsolete_managed_groups
     config = base_config
     ai_name = ClaudeEasy::AI_GROUP_BASE
-    safe_name = ClaudeEasy::LEGACY_SAFE_GROUP_BASE
+    safe_name = ClaudeEasy::SAFE_GROUP_BASE
     config["proxy-groups"] << { "name" => ai_name, "type" => "select", "proxies" => ["台湾家宽 01"] }
     config["proxy-groups"] << {
       "name" => safe_name, "type" => "select", "proxies" => ["台湾家宽 01", "日本家宽 01"],
@@ -3918,7 +3918,6 @@ class MacosPatcherTest < Minitest::Test
       File.write(File.join(directory, "friend.yaml.backup"), "rules: []\n")
       File.write(File.join(directory, "friend.backup.yaml"), "rules: []\n")
       File.write(File.join(directory, "friend.bak.yml"), "rules: []\n")
-      File.write(File.join(directory, "friend.clash-patch.yaml"), "rules: []\n")
       File.write(File.join(directory, "friend.claude-easy.yaml"), "rules: []\n")
       FileUtils.mkdir_p(File.join(directory, "providers"))
       File.write(File.join(directory, "providers", "cache.yaml"), "rules: []\n")
@@ -5017,7 +5016,7 @@ class MacosPatcherTest < Minitest::Test
     refute result.key?(:selected_home)
     assert_includes main.fetch("proxies"), "台湾家宽 DIRECT"
     assert_includes main.fetch("proxies"), "台湾家宽 REMATCH"
-    refute result.fetch(:config).fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::LEGACY_SAFE_GROUP_BASE) }
+    refute result.fetch(:config).fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::SAFE_GROUP_BASE) }
   end
 
   def test_owned_ai_group_is_independent_and_collision_safe
@@ -5038,7 +5037,7 @@ class MacosPatcherTest < Minitest::Test
     config = base_config
     config["proxy-groups"].reject! { |group| group["name"] == "AI" }
     user_group = {
-      "name" => ClaudeEasy::LEGACY_AI_GROUP_BASE,
+      "name" => ClaudeEasy::AI_GROUP_BASE,
       "type" => "select",
       "proxies" => ["Main", "日本家宽 01"],
       "icon" => "https://example.invalid/user-icon.png"
@@ -5050,7 +5049,7 @@ class MacosPatcherTest < Minitest::Test
     preserved = first.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == user_group["name"] }
 
     assert_equal user_group, preserved
-    assert_equal ClaudeEasy::LEGACY_AI_GROUP_BASE, first.fetch(:ai_group)
+    assert_equal ClaudeEasy::AI_GROUP_BASE, first.fetch(:ai_group)
     refute second.fetch(:changed)
   end
 
@@ -5058,15 +5057,15 @@ class MacosPatcherTest < Minitest::Test
     config = base_config
     config["proxy-groups"].reject! { |group| group["name"] == "AI" }
     user_group = {
-      "name" => ClaudeEasy::LEGACY_AI_GROUP_BASE,
+      "name" => ClaudeEasy::AI_GROUP_BASE,
       "type" => "select",
       "proxies" => ["Main", "日本家宽 01"],
       "icon" => "https://example.invalid/user-icon.png"
     }
     config["proxy-groups"] << user_group
     config["rules"].unshift(
-      "DOMAIN-SUFFIX,anthropic.com,#{ClaudeEasy::LEGACY_AI_GROUP_BASE}",
-      "DOMAIN-SUFFIX,openai.com,#{ClaudeEasy::LEGACY_AI_GROUP_BASE}"
+      "DOMAIN-SUFFIX,anthropic.com,#{ClaudeEasy::AI_GROUP_BASE}",
+      "DOMAIN-SUFFIX,openai.com,#{ClaudeEasy::AI_GROUP_BASE}"
     )
 
     first = ClaudeEasy.patch(config, @policy)
@@ -5074,8 +5073,8 @@ class MacosPatcherTest < Minitest::Test
 
     assert_equal user_group, first.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == user_group["name"] }
     assert_equal user_group, second.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == user_group["name"] }
-    assert_equal ClaudeEasy::LEGACY_AI_GROUP_BASE, first.fetch(:ai_group)
-    assert_equal ClaudeEasy::LEGACY_AI_GROUP_BASE, second.fetch(:ai_group)
+    assert_equal ClaudeEasy::AI_GROUP_BASE, first.fetch(:ai_group)
+    assert_equal ClaudeEasy::AI_GROUP_BASE, second.fetch(:ai_group)
     refute second.fetch(:changed)
   end
 
@@ -5084,21 +5083,21 @@ class MacosPatcherTest < Minitest::Test
     config["proxy-groups"].reject! { |group| group["name"] == "AI" }
     config["proxies"].unshift(
       { "name" => "🤖 AI · ClaudeEasy", "type" => "ss", "server" => "ai.example", "port" => 443 },
-      { "name" => "🛡 安全代理 · Clash Patch", "type" => "ss", "server" => "safe.example", "port" => 443 }
+      { "name" => "🛡 安全代理 · ClaudeEasy", "type" => "ss", "server" => "safe.example", "port" => 443 }
     )
 
     result = ClaudeEasy.patch(config, @policy)
 
     assert_equal "🤖 AI · ClaudeEasy 2", result.fetch(:ai_group)
     assert_equal "Main", result.fetch(:route_group)
-    refute result.fetch(:config).fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::LEGACY_SAFE_GROUP_BASE) }
+    refute result.fetch(:config).fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::SAFE_GROUP_BASE) }
   end
 
   def test_migrates_legacy_owned_ai_rules_and_dns_pattern
     old = base_config
     old["proxy-groups"].reject! { |group| group["name"] == "AI" }
     ai_group = ClaudeEasy::AI_GROUP_BASE
-    safe_group = ClaudeEasy::LEGACY_SAFE_GROUP_BASE
+    safe_group = ClaudeEasy::SAFE_GROUP_BASE
     old["proxy-groups"] << { "name" => ai_group, "type" => "select", "proxies" => ["台湾家宽 01"] }
     old["proxy-groups"] << {
       "name" => safe_group, "type" => "select", "proxies" => ["台湾家宽 01"], "include-all" => true,
@@ -5151,7 +5150,7 @@ class MacosPatcherTest < Minitest::Test
 
   def test_existing_ai_group_is_reused_even_when_many_similar_names_exist
     config = base_config
-    base = ClaudeEasy::LEGACY_AI_GROUP_BASE
+    base = ClaudeEasy::AI_GROUP_BASE
     config["proxy-groups"] << { "name" => base, "type" => "select", "proxies" => ["Main"] }
     (2..9).each do |suffix|
       config["proxy-groups"] << { "name" => "#{base} #{suffix}", "type" => "select", "proxies" => ["Main"] }
@@ -5164,261 +5163,6 @@ class MacosPatcherTest < Minitest::Test
     refute first.fetch(:config).fetch("proxy-groups").any? { |group| group["name"] == "#{base} 10" }
     refute second.fetch(:changed)
     assert_equal first.fetch(:config), second.fetch(:config)
-  end
-
-  def test_managed_ai_group_name_recognizes_current_and_legacy_bases
-    assert ClaudeEasy.managed_ai_group_name?(ClaudeEasy::AI_GROUP_BASE)
-    assert ClaudeEasy.managed_ai_group_name?("#{ClaudeEasy::AI_GROUP_BASE} 2")
-    assert ClaudeEasy.managed_ai_group_name?(ClaudeEasy::LEGACY_AI_GROUP_BASE)
-    assert ClaudeEasy.managed_ai_group_name?("#{ClaudeEasy::LEGACY_AI_GROUP_BASE} 12")
-    refute ClaudeEasy.managed_ai_group_name?("#{ClaudeEasy::LEGACY_AI_GROUP_BASE} 1")
-    refute ClaudeEasy.managed_ai_group_name?("🤖 AI · ClaudeEasyish")
-    refute ClaudeEasy.managed_ai_group_name?(nil)
-  end
-
-  def test_owned_legacy_ai_group_with_a_numbered_suffix_is_reused_without_renaming
-    config = base_config
-    config["proxy-groups"].reject! { |group| group["name"] == "AI" }
-    ai_name = "#{ClaudeEasy::LEGACY_AI_GROUP_BASE} 2"
-    config["proxy-groups"] << { "name" => ai_name, "type" => "select", "proxies" => ["台湾家宽 01"] }
-    config["rules"] = ClaudeEasy.render_ai_rules(@policy, ai_name) + config.fetch("rules")
-
-    result = ClaudeEasy.patch(config, @policy)
-    patched = result.fetch(:config)
-
-    assert_equal ai_name, result.fetch(:ai_group)
-    assert result.fetch(:ai_group_reset)
-    ai_group = patched.fetch("proxy-groups").find { |group| group["name"] == ai_name }
-    assert_equal ["台湾家宽 01", "日本家宽 01", "美国家宽 01"], ai_group.fetch("proxies")
-    refute patched.fetch("proxy-groups").any? { |group| group["name"] == ClaudeEasy::AI_GROUP_BASE }
-    refute ClaudeEasy.patch(patched, @policy).fetch(:changed)
-  end
-
-  def legacy_cn_provider_entry(name, proxy: "Main")
-    provider_policy = @policy.fetch("cn_domain_provider")
-    suffix = name.delete_prefix(ClaudeEasy::LEGACY_CN_PROVIDER_BASE)
-    path = ClaudeEasy::LEGACY_CN_PROVIDER_PATH.delete_suffix(".mrs") + suffix + ".mrs"
-    {
-      "type" => provider_policy.fetch("type"),
-      "behavior" => provider_policy.fetch("behavior"),
-      "format" => provider_policy.fetch("format"),
-      "url" => provider_policy.fetch("url"),
-      "path" => path,
-      "interval" => provider_policy.fetch("interval"),
-      "proxy" => proxy,
-      "size-limit" => provider_policy.fetch("size_limit")
-    }
-  end
-
-  def test_legacy_cn_provider_is_migrated_to_the_current_policy_name
-    config = base_config
-    legacy_name = ClaudeEasy::LEGACY_CN_PROVIDER_BASE
-    config["rule-providers"] = { legacy_name => legacy_cn_provider_entry(legacy_name) }
-    config["dns"]["nameserver-policy"] = { "rule-set:#{legacy_name}" => ["https://223.5.5.5/dns-query#DIRECT"] }
-    config["rules"] = ["RULE-SET,#{legacy_name},DIRECT"] + config.fetch("rules")
-
-    result = ClaudeEasy.patch(config, @policy)
-    patched = result.fetch(:config)
-    new_name = @policy.fetch("cn_domain_provider").fetch("name")
-
-    assert_equal new_name, result.fetch(:cn_provider)
-    refute patched.fetch("rule-providers").key?(legacy_name)
-    assert_equal @policy.fetch("cn_domain_provider").fetch("path"), patched.dig("rule-providers", new_name, "path")
-    assert_equal "Main", patched.dig("rule-providers", new_name, "proxy")
-    refute patched.fetch("rules").any? { |rule| rule.include?(legacy_name) }
-    assert_includes patched.fetch("rules"), "RULE-SET,#{new_name},DIRECT"
-    refute patched.dig("dns", "nameserver-policy").key?("rule-set:#{legacy_name}")
-    assert_equal @policy.fetch("direct_resolvers"), patched.dig("dns", "nameserver-policy", "rule-set:#{new_name}")
-  end
-
-  def test_legacy_cn_provider_with_a_numeric_suffix_is_migrated_to_a_unique_name
-    config = base_config
-    legacy_name = "#{ClaudeEasy::LEGACY_CN_PROVIDER_BASE}-2"
-    new_base = @policy.fetch("cn_domain_provider").fetch("name")
-    config["rule-providers"] = {
-      legacy_name => legacy_cn_provider_entry(legacy_name),
-      new_base => { "type" => "file", "behavior" => "domain", "path" => "./user-owned.yaml" }
-    }
-    config["dns"]["nameserver-policy"] = { "rule-set:#{legacy_name}" => ["https://223.5.5.5/dns-query#DIRECT"] }
-    config["rules"] = ["RULE-SET,#{legacy_name},DIRECT"] + config.fetch("rules")
-
-    result = ClaudeEasy.patch(config, @policy)
-    patched = result.fetch(:config)
-
-    assert_equal "#{new_base}-2", result.fetch(:cn_provider)
-    refute patched.fetch("rule-providers").key?(legacy_name)
-    assert_equal "./user-owned.yaml", patched.dig("rule-providers", new_base, "path")
-    assert_equal "./ruleset/#{new_base}-2.mrs", patched.dig("rule-providers", "#{new_base}-2", "path")
-    refute patched.fetch("rules").any? { |rule| rule.include?(legacy_name) }
-    assert_includes patched.fetch("rules"), "RULE-SET,#{new_base}-2,DIRECT"
-    refute patched.dig("dns", "nameserver-policy").key?("rule-set:#{legacy_name}")
-    assert patched.dig("dns", "nameserver-policy", "rule-set:#{new_base}-2")
-  end
-
-  def test_legacy_cn_provider_migration_is_idempotent_in_serialized_form
-    config = base_config
-    legacy_name = ClaudeEasy::LEGACY_CN_PROVIDER_BASE
-    config["rule-providers"] = { legacy_name => legacy_cn_provider_entry(legacy_name) }
-    config["dns"]["nameserver-policy"] = { "rule-set:#{legacy_name}" => ["https://223.5.5.5/dns-query#DIRECT"] }
-    config["rules"] = ["RULE-SET,#{legacy_name},DIRECT"] + config.fetch("rules")
-
-    first = ClaudeEasy.patch(config, @policy)
-    assert_equal :updated, first.fetch(:status)
-    output = ClaudeEasy.dump_config(first.fetch(:config))
-    second = ClaudeEasy.patch(ClaudeEasy.load_yaml(output), @policy)
-
-    refute second.fetch(:changed)
-    assert_equal output, ClaudeEasy.dump_config(second.fetch(:config))
-  end
-
-  def test_cli_help_does_not_migrate_a_legacy_state_directory
-    Dir.mktmpdir do |home|
-      legacy = File.join(home, "Library", "Application Support", "ClashPatch")
-      current = File.join(home, "Library", "Application Support", "ClaudeEasy")
-      FileUtils.mkdir_p(legacy)
-      File.binwrite(File.join(legacy, "migration-marker"), "legacy")
-
-      output, error = capture_io do
-        with_home(home) { assert_equal 0, ClaudeEasy.cli(["--help"]) }
-      end
-
-      assert_includes output, "用法："
-      assert_empty error
-      assert File.file?(File.join(legacy, "migration-marker"))
-      refute File.exist?(current)
-    end
-  end
-
-  def test_profile_operation_lock_adopts_legacy_state_files
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      legacy_lock = File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_OPERATION_LOCK_BASENAME)
-      legacy_transaction = File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_TRANSACTION_BASENAME)
-      File.binwrite(legacy_lock, "legacy-lock")
-      File.binwrite(legacy_transaction, "legacy-transaction")
-
-      handle = ClaudeEasy.profile_operation_lock(backup_root)
-      begin
-        refute File.exist?(legacy_lock)
-        refute File.exist?(legacy_transaction)
-        assert_equal "legacy-lock", File.binread(File.join(backup_root, ClaudeEasy::PROFILE_OPERATION_LOCK_BASENAME))
-        assert_equal "legacy-transaction", File.binread(File.join(backup_root, ClaudeEasy::PROFILE_TRANSACTION_BASENAME))
-      ensure
-        handle.close
-      end
-    end
-  end
-
-  def test_profile_state_migration_refuses_conflicting_transaction_files
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      current_transaction = File.join(backup_root, ClaudeEasy::PROFILE_TRANSACTION_BASENAME)
-      legacy_transaction = File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_TRANSACTION_BASENAME)
-      File.binwrite(current_transaction, "current")
-      File.binwrite(legacy_transaction, "legacy")
-
-      error = assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.profile_operation_lock(backup_root)
-      end
-
-      assert_includes error.message, "旧版"
-      assert_equal "current", File.binread(current_transaction)
-      assert_equal "legacy", File.binread(legacy_transaction)
-    end
-  end
-
-  def test_profile_state_migration_rejects_unsafe_and_racing_legacy_locks
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      current_lock = File.join(backup_root, ClaudeEasy::PROFILE_OPERATION_LOCK_BASENAME)
-      legacy_lock = File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_OPERATION_LOCK_BASENAME)
-      File.binwrite(current_lock, "current")
-      File.binwrite(legacy_lock, "legacy")
-
-      assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.profile_operation_lock(backup_root)
-      end
-    end
-
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      real = File.join(backup_root, "real-lock")
-      legacy_lock = File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_OPERATION_LOCK_BASENAME)
-      File.binwrite(real, "real")
-      File.symlink(real, legacy_lock)
-
-      assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.profile_operation_lock(backup_root)
-      end
-    end
-
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      legacy_transaction = File.join(
-        backup_root, ClaudeEasy::LEGACY_PROFILE_TRANSACTION_BASENAME
-      )
-      File.symlink(File.join(backup_root, "missing"), legacy_transaction)
-
-      assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.profile_operation_lock(backup_root)
-      end
-    end
-
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      current_lock = File.join(backup_root, ClaudeEasy::PROFILE_OPERATION_LOCK_BASENAME)
-      legacy_lock = File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_OPERATION_LOCK_BASENAME)
-      File.binwrite(legacy_lock, "legacy")
-      racing_lock = lambda do |_handle|
-        File.binwrite(current_lock, "racing")
-        true
-      end
-
-      ClaudeEasy.stub(:lock_exclusive_with_timeout, racing_lock) do
-        assert_raises(ClaudeEasy::InvalidConfigError) do
-          ClaudeEasy.profile_operation_lock(backup_root)
-        end
-      end
-      assert_equal "legacy", File.binread(legacy_lock)
-      assert_equal "racing", File.binread(current_lock)
-    end
-  end
-
-  def test_legacy_profile_transaction_is_recovered_after_the_state_rename
-    Dir.mktmpdir do |directory|
-      backup_root = File.join(directory, "backups")
-      FileUtils.mkdir_p(backup_root)
-      profile = File.join(directory, "friend.yaml")
-      original = "rules: []\n"
-      candidate = "rules:\n- MATCH,DIRECT\n"
-      File.binwrite(profile, candidate)
-      record = {
-        "Version" => 1,
-        "Items" => [{
-          "Path" => File.expand_path(profile),
-          "WritePath" => File.realpath(profile),
-          "OriginalBase64" => Base64.strict_encode64(original.b),
-          "CandidateSha256" => Digest::SHA256.hexdigest(candidate.b)
-        }]
-      }
-      File.binwrite(
-        File.join(backup_root, ClaudeEasy::LEGACY_PROFILE_TRANSACTION_BASENAME),
-        JSON.generate(record) + "\n"
-      )
-
-      ClaudeEasy.profile_operation_lock(backup_root).close
-      snapshot = ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
-
-      assert snapshot
-      assert_equal original.b, File.binread(profile)
-      refute ClaudeEasy.profile_transaction_pending?(backup_root)
-    end
   end
 
   def test_rule_template_inserts_group_name_literally

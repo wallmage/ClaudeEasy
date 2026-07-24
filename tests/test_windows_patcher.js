@@ -213,7 +213,7 @@ test('reuses the existing AI group without creating visible groups', { skip: !av
 
   assert.deepEqual(patched['proxy-groups'].find((group) => group.name === 'AI'), originalAi);
   assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
-  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch(?: \d+)?$/.test(group.name)), false);
+  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
   assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,AI', 'NETWORK,UDP,REJECT']);
   assert.ok(patched.dns.nameserver.every((value) => value.endsWith('#Main')));
@@ -229,7 +229,7 @@ test('creates an AI group with all inline nodes when the subscription has none',
   const ai = patched['proxy-groups'].find((group) => group.name === '🤖 AI · ClaudeEasy');
   assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
   assert.equal(Object.hasOwn(ai, 'use'), false);
-  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch(?: \d+)?$/.test(group.name)), false);
+  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
   assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,🤖 AI · ClaudeEasy', 'NETWORK,UDP,REJECT']);
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#🤖 AI · ClaudeEasy')));
@@ -280,7 +280,7 @@ test('does not create an AI group without nodes or providers', { skip: !availabl
 test('migrates owned single-main AI group to an independent node selector', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
-  const aiName = '🤖 AI · Clash Patch';
+  const aiName = '🤖 AI · ClaudeEasy';
   config['proxy-groups'].push({ name: aiName, type: 'select', proxies: ['Main'] });
   config.rules = engine.claudeEasyRenderAiRules(aiName).concat(config.rules);
 
@@ -293,8 +293,8 @@ test('migrates owned single-main AI group to an independent node selector', { sk
 
 test('removes groups created by an older patch', { skip: !available }, () => {
   const config = baseConfig();
-  const aiName = '🤖 AI · Clash Patch';
-  const safeName = '🛡 安全代理 · Clash Patch';
+  const aiName = '🤖 AI · ClaudeEasy';
+  const safeName = '🛡 安全代理 · ClaudeEasy';
   config['proxy-groups'].push({ name: aiName, type: 'select', proxies: ['台湾家宽 01'] });
   config['proxy-groups'].push({
     name: safeName, type: 'select', proxies: ['台湾家宽 01', '日本家宽 01'],
@@ -870,7 +870,7 @@ test('direct and rematch home names are not selected automatically', { skip: !av
   assert.deepEqual(ai.proxies, ['Main']);
   assert.ok(mainGroup.proxies.includes('台湾家宽 DIRECT'));
   assert.ok(mainGroup.proxies.includes('台湾家宽 REMATCH'));
-  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch/.test(group.name)), false);
+  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy/.test(group.name)), false);
 });
 
 test('tun arrays are replaced by a mapping', { skip: !available }, () => {
@@ -897,7 +897,7 @@ test('user-owned branded select group is preserved', { skip: !available }, () =>
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const userGroup = {
-    name: '🤖 AI · Clash Patch',
+    name: '🤖 AI · ClaudeEasy',
     type: 'select',
     proxies: ['Main', '日本家宽 01'],
     icon: 'https://example.invalid/user-icon.png'
@@ -906,8 +906,8 @@ test('user-owned branded select group is preserved', { skip: !available }, () =>
   const first = engine.claudeEasyTransform(config, 'fixture');
   const second = engine.claudeEasyTransform(first, 'fixture');
   assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
-  assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · Clash Patch 2'), false);
-  assert.ok(first.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'));
+  assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'), false);
+  assert.ok(first.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
   assert.deepEqual(second, first);
 });
 
@@ -915,21 +915,21 @@ test('branded user group with AI rules is not mistaken for patch ownership', { s
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const userGroup = {
-    name: '🤖 AI · Clash Patch',
+    name: '🤖 AI · ClaudeEasy',
     type: 'select',
     proxies: ['Main', '日本家宽 01'],
     icon: 'https://example.invalid/user-icon.png'
   };
   config['proxy-groups'].push(userGroup);
   config.rules.unshift(
-    'DOMAIN-SUFFIX,anthropic.com,🤖 AI · Clash Patch',
-    'DOMAIN-SUFFIX,openai.com,🤖 AI · Clash Patch'
+    'DOMAIN-SUFFIX,anthropic.com,🤖 AI · ClaudeEasy',
+    'DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'
   );
   const first = engine.claudeEasyTransform(config, 'fixture');
   const second = engine.claudeEasyTransform(first, 'fixture');
   assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
   assert.deepEqual(second['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
-  assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · Clash Patch 2'), false);
+  assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'), false);
   assert.deepEqual(second, first);
 });
 
@@ -938,18 +938,18 @@ test('inline proxy names reserve managed group names', { skip: !available }, () 
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   config.proxies.unshift(
     { name: '🤖 AI · ClaudeEasy', type: 'ss', server: 'ai.example', port: 443 },
-    { name: '🛡 安全代理 · Clash Patch', type: 'ss', server: 'safe.example', port: 443 }
+    { name: '🛡 安全代理 · ClaudeEasy', type: 'ss', server: 'safe.example', port: 443 }
   );
   const patched = engine.claudeEasyTransform(config, 'fixture');
   assert.ok(patched['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'));
-  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · Clash Patch(?: \d+)?$/.test(group.name)), false);
+  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
 });
 
 test('migrates legacy owned AI rules and DNS pattern', { skip: !available }, () => {
   const old = baseConfig();
   old['proxy-groups'] = old['proxy-groups'].filter((group) => group.name !== 'AI');
-  const aiGroup = '🤖 AI · Clash Patch';
-  const safeGroup = '🛡 安全代理 · Clash Patch';
+  const aiGroup = '🤖 AI · ClaudeEasy';
+  const safeGroup = '🛡 安全代理 · ClaudeEasy';
   old['proxy-groups'].push({ name: aiGroup, type: 'select', proxies: ['台湾家宽 01'] });
   old['proxy-groups'].push({
     name: safeGroup, type: 'select', proxies: ['台湾家宽 01'], 'include-all': true,
@@ -989,7 +989,7 @@ test('patches config without a rules array', { skip: !available }, () => {
 
 test('existing AI group is reused even when many similar names exist', { skip: !available }, () => {
   const config = baseConfig();
-  const base = '🤖 AI · Clash Patch';
+  const base = '🤖 AI · ClaudeEasy';
   config['proxy-groups'].push({ name: base, type: 'select', proxies: ['Main'] });
   for (let suffix = 2; suffix <= 9; suffix += 1) {
     config['proxy-groups'].push({ name: `${base} ${suffix}`, type: 'select', proxies: ['Main'] });
@@ -1093,8 +1093,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'common.ps1': ['Write-Info', 'Complete-InstallResult', 'Get-SavedUsageProfile', 'Save-UsageProfile'],
     'transaction.ps1': [
       'Protect-BackupAcl', 'ConvertTo-NormalizedWindowsPath', 'Resolve-ClashVergeAppHome',
-      'Get-AppHomeRelativePath', 'Rename-ClaudeEasyLegacyState',
-      'Get-ClaudeEasyMigrationItem', 'Open-ClaudeEasyMutationLockStream',
+      'Get-AppHomeRelativePath',
       'Enter-AppHomeMutationLock', 'Exit-AppHomeMutationLock',
       'Get-PathKey', 'Assert-NoReparsePointPath', 'Backup-Versioned', 'Backup-InitialOnce', 'Write-BytesAtomic',
       'ConvertTo-Utf8Bytes', 'Write-Utf8Atomic', 'Get-BytesSha256', 'Get-FileSha256',

@@ -31,12 +31,11 @@ function Get-ClaudeEasyManagedScriptBlock([string]$ScriptText, [int]$UsageProfil
         $beginMarkers[0].Start,
         $endMarkers[0].End - $beginMarkers[0].Start
     )
-    $hasTransform = $managed.Contains("function clashPatchTransform") -or $managed.Contains("function claudeEasyTransform")
-    $hasDetectMain = $managed.Contains("function clashPatchDetectMain") -or $managed.Contains("function claudeEasyDetectMain")
-    if (-not $hasTransform -or -not $hasDetectMain) {
+    if (-not $managed.Contains("function claudeEasyTransform") -or
+        -not $managed.Contains("function claudeEasyDetectMain")) {
         throw "已安装的全局扩展脚本缺少转换入口。"
     }
-    $profileMatches = [regex]::Matches($managed, 'const\s+(?:CLASH_PATCH_USAGE_PROFILE|CLAUDE_EASY_USAGE_PROFILE)\s*=\s*([123])\s*;')
+    $profileMatches = [regex]::Matches($managed, 'const\s+CLAUDE_EASY_USAGE_PROFILE\s*=\s*([123])\s*;')
     if ($profileMatches.Count -ne 1 -or [int]$profileMatches[0].Groups[1].Value -ne $UsageProfile) {
         throw "已安装的全局扩展脚本与当前用途档位不一致。"
     }

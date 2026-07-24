@@ -105,19 +105,12 @@ const CLAUDE_EASY_POLICY = {
 // CLAUDEEASY POLICY END
 
 const CLAUDE_EASY_AI_GROUP = "🤖 AI · ClaudeEasy";
-// Groups created by the legacy Clash Patch release stay managed and are
-// reused as-is; only newly created groups use the new base name.
-const CLAUDE_EASY_LEGACY_AI_GROUP = "🤖 AI · Clash Patch";
-const CLAUDE_EASY_LEGACY_SAFE_GROUP = "🛡 安全代理 · Clash Patch";
+const CLAUDE_EASY_SAFE_GROUP = "🛡 安全代理 · ClaudeEasy";
 const CLAUDE_EASY_DIRECT_NAMES = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH"];
 const CLAUDE_EASY_DIRECT_TYPES = ["direct", "dns", "reject", "pass", "compatible", "rematch"];
 const CLAUDE_EASY_ROUTE_GROUP_TYPES = ["select", "url-test", "fallback", "load-balance", "relay"];
 const CLAUDE_EASY_LEGACY_QUIC_REJECT_RULE = "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT";
 const CLAUDE_EASY_USAGE_PROFILE = 3;
-// Legacy Clash Patch rule-provider naming stays recognized as managed and
-// is migrated to the current policy name on apply.
-const CLAUDE_EASY_LEGACY_CN_PROVIDER_NAME = "clash-patch-cn-domain";
-const CLAUDE_EASY_LEGACY_CN_PROVIDER_PATH = "./ruleset/clash-patch-cn-domain.mrs";
 
 function claudeEasyClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -150,12 +143,8 @@ function claudeEasyManagedName(name, base) {
   return /^(?:[2-9]|[1-9][0-9]+)$/.test(name.slice(base.length + 1));
 }
 
-function claudeEasyManagedAiName(name) {
-  return claudeEasyManagedName(name, CLAUDE_EASY_AI_GROUP) || claudeEasyManagedName(name, CLAUDE_EASY_LEGACY_AI_GROUP);
-}
-
 function claudeEasyManagedGroupName(name) {
-  return claudeEasyManagedAiName(name) || claudeEasyManagedName(name, CLAUDE_EASY_LEGACY_SAFE_GROUP);
+  return claudeEasyManagedName(name, CLAUDE_EASY_AI_GROUP) || claudeEasyManagedName(name, CLAUDE_EASY_SAFE_GROUP);
 }
 
 // Prefer an independent non-AI group. AI-named and managed groups remain
@@ -345,8 +334,7 @@ function claudeEasyConfigureManagedAiGroup(group, config) {
 }
 
 function claudeEasyEnsureAiGroup(config) {
-  let group = claudeEasyFindManagedSelect(config, CLAUDE_EASY_AI_GROUP, "ai") ||
-    claudeEasyFindManagedSelect(config, CLAUDE_EASY_LEGACY_AI_GROUP, "ai");
+  let group = claudeEasyFindManagedSelect(config, CLAUDE_EASY_AI_GROUP, "ai");
   if (!group) {
     group = { name: claudeEasyUniqueGroupName(config, CLAUDE_EASY_AI_GROUP), type: "select" };
     config["proxy-groups"].push(group);
@@ -358,10 +346,10 @@ function claudeEasyOwnedManagedNames(config) {
   const names = claudeEasySelectableGroups(config).map(function (group) { return group.name; });
   return {
     ai: names.filter(function (name) {
-      return claudeEasyManagedAiName(name) && claudeEasyOwnedAiGroup(config, name);
+      return claudeEasyManagedName(name, CLAUDE_EASY_AI_GROUP) && claudeEasyOwnedAiGroup(config, name);
     }),
     safe: names.filter(function (name) {
-      return claudeEasyManagedName(name, CLAUDE_EASY_LEGACY_SAFE_GROUP) && claudeEasyOwnedSafeGroup(config, name);
+      return claudeEasyManagedName(name, CLAUDE_EASY_SAFE_GROUP) && claudeEasyOwnedSafeGroup(config, name);
     })
   };
 }
@@ -571,30 +559,19 @@ function claudeEasyBroadRule(rule) {
   return ["MATCH", "GEOSITE", "GEOIP", "RULE-SET"].indexOf(claudeEasyRuleInfo(rule).type) !== -1;
 }
 
-function claudeEasyManagedCnProviderBaseName(name, base) {
+function claudeEasyManagedCnProviderName(name) {
+  const base = CLAUDE_EASY_POLICY.cnDomainProvider.name;
   const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp("^" + escaped + "(?:-[2-9]|-[1-9][0-9]+)?$").test(String(name));
 }
 
-function claudeEasyManagedCnProviderName(name) {
-  return claudeEasyManagedCnProviderBaseName(name, CLAUDE_EASY_POLICY.cnDomainProvider.name) ||
-    claudeEasyManagedCnProviderBaseName(name, CLAUDE_EASY_LEGACY_CN_PROVIDER_NAME);
-}
-
-function claudeEasyCnProviderBasePath(name, base, basePath) {
-  const suffix = String(name).slice(base.length);
-  if (!suffix) return basePath;
-  const dot = basePath.lastIndexOf(".");
-  if (dot === -1) return basePath + suffix;
-  return basePath.slice(0, dot) + suffix + basePath.slice(dot);
-}
-
 function claudeEasyCnProviderPath(name) {
   const provider = CLAUDE_EASY_POLICY.cnDomainProvider;
-  if (claudeEasyManagedCnProviderBaseName(name, provider.name)) {
-    return claudeEasyCnProviderBasePath(name, provider.name, provider.path);
-  }
-  return claudeEasyCnProviderBasePath(name, CLAUDE_EASY_LEGACY_CN_PROVIDER_NAME, CLAUDE_EASY_LEGACY_CN_PROVIDER_PATH);
+  const suffix = String(name).slice(provider.name.length);
+  if (!suffix) return provider.path;
+  const dot = provider.path.lastIndexOf(".");
+  if (dot === -1) return provider.path + suffix;
+  return provider.path.slice(0, dot) + suffix + provider.path.slice(dot);
 }
 
 function claudeEasyOwnedCnProvider(name, provider) {
@@ -608,14 +585,6 @@ function claudeEasyEnsureCnProvider(config, routeGroup) {
   const providers = config["rule-providers"] && typeof config["rule-providers"] === "object" &&
     !Array.isArray(config["rule-providers"]) ? config["rule-providers"] : {};
   config["rule-providers"] = providers;
-  // Legacy-named managed providers are dropped and recreated under the
-  // current policy name below.
-  Object.keys(providers).forEach(function (candidate) {
-    if (claudeEasyOwnedCnProvider(candidate, providers[candidate]) &&
-      !claudeEasyManagedCnProviderBaseName(candidate, expected.name)) {
-      delete providers[candidate];
-    }
-  });
   let name = Object.keys(providers).find(function (candidate) {
     return claudeEasyOwnedCnProvider(candidate, providers[candidate]);
   });
@@ -668,14 +637,6 @@ function claudeEasyCommonCn(config, routeGroup) {
   dns["direct-nameserver-follow-policy"] = false;
   const policies = dns["nameserver-policy"] && typeof dns["nameserver-policy"] === "object" &&
     !Array.isArray(dns["nameserver-policy"]) ? claudeEasyClone(dns["nameserver-policy"]) : {};
-  // Migrated legacy providers lose their nameserver-policy entries; the new
-  // provider name gets its own entry below.
-  oldOwnedNames.forEach(function (oldName) {
-    if (oldName !== providerName &&
-      !claudeEasyManagedCnProviderBaseName(oldName, CLAUDE_EASY_POLICY.cnDomainProvider.name)) {
-      delete policies["rule-set:" + oldName];
-    }
-  });
   policies["rule-set:" + providerName] = CLAUDE_EASY_POLICY.directResolvers.slice();
   dns["nameserver-policy"] = policies;
 
