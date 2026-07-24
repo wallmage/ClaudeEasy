@@ -1294,7 +1294,15 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
     $routeHarness = (@($routeFunctionSources) + $routeHarnessMocks) -join "`r`n"
     [System.IO.File]::WriteAllText($routeHarnessPath, $routeHarness, (New-Object System.Text.UTF8Encoding($true)))
     $routeObservation = Invoke-TestPowerShell $routeHarnessPath @()
-    Assert-True ($routeObservation.ExitCode -eq 0) "Observe-Route crashed on a matching connection; $(Get-TestOutputDiagnostic $routeObservation.Output)"
+    $routeObservationFirstLine = [string](@(
+        $routeObservation.Output -split "\r?\n" |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            Select-Object -First 1
+    )[0])
+    Assert-True ($routeObservation.ExitCode -eq 0) (
+        "Observe-Route crashed on a matching connection; first_line=$routeObservationFirstLine; " +
+        (Get-TestOutputDiagnostic $routeObservation.Output)
+    )
 
     if ($onWindows) {
         $routeSecretCanary =
