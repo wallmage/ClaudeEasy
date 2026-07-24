@@ -131,8 +131,10 @@ function Invoke-ControllerJson([string]$Endpoint) {
     $request.ReadWriteTimeout = 5000
     $request.KeepAlive = $false
     if (-not [string]::IsNullOrEmpty($script:ClaudeEasyControllerSecret)) {
-        $request.Headers[[System.Net.HttpRequestHeader]::Authorization] =
+        $request.Headers.Set(
+            [System.Net.HttpRequestHeader]::Authorization,
             "Bearer " + $script:ClaudeEasyControllerSecret
+        )
     }
     $response = $null
     $reader = $null
