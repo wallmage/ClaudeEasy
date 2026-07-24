@@ -28,7 +28,19 @@ function Read-ControllerSecretFromStandardInput {
         throw "不能通过 -Secret 传入非空控制器密钥；请改用 -SecretStdin。"
     }
     if (-not $SecretStdin) { return "" }
-    $value = [Console]::In.ReadToEnd()
+    $inputStream = [Console]::OpenStandardInput()
+    $inputReader = New-Object System.IO.StreamReader(
+        $inputStream,
+        [Console]::InputEncoding,
+        $true,
+        1024,
+        $true
+    )
+    try {
+        $value = $inputReader.ReadToEnd()
+    } finally {
+        $inputReader.Dispose()
+    }
     if ($value.Length -gt 0 -and $value[0] -eq [char]0xFEFF) {
         $value = $value.Substring(1)
     }
