@@ -53,7 +53,7 @@ function Test-StrictIpv4LoopbackHost([string]$HostName) {
 }
 
 function Get-ValidatedControllerBaseUri([string]$Value) {
-    $parsed = $null
+    [Uri]$parsed = $null
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains("\") -or
         -not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$parsed)) {
         throw "控制器地址无效；只允许本机回环 HTTP 或 HTTPS 地址。"

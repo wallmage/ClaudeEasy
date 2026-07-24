@@ -1247,6 +1247,7 @@ test('Windows route verifier accepts an explicit non-AI Google proxy group', () 
 test('Windows route verifier keeps PowerShell 5 route arrays and empty selections safe', () => {
   const source = fs.readFileSync(routeVerifierPath, 'utf8');
 
+  assert.match(source, /\[Uri\]\$parsed = \$null/);
   assert.match(source, /\$chainItems = @\(\$Chains\)/);
   assert.match(source, /\$providerChainItems = @\(\$ProviderChains\)/);
   assert.match(source, /\$connection\.PSObject\.Properties\["providerChains"\]/);
