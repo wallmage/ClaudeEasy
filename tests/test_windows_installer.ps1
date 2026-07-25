@@ -2895,7 +2895,16 @@ rules:
         )
         $utf8SafeUpdateTarget = Join-Path $utf8SafeUpdateProfiles "R-utf8.yaml"
         $utf8OriginalText = "mode: rule`nproxies: []`nproxy-groups: [{ name: Main, type: select, proxies: [DIRECT] }]`nrules: [MATCH,Main]`n"
-        [System.IO.File]::WriteAllText($utf8SafeUpdateTarget, $utf8OriginalText)
+        $utf8OriginalBytes = [System.Text.Encoding]::UTF8.GetBytes($utf8OriginalText)
+        [System.IO.File]::WriteAllBytes($utf8SafeUpdateTarget, $utf8OriginalBytes)
+        $utf8Install = Invoke-TestPowerShell $installer @(
+            "-AppHome", $utf8SafeUpdateCase,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore
+        )
+        Assert-True (
+            $utf8Install.ExitCode -eq 0
+        ) "invalid UTF-8 fixture install failed; $(Get-TestOutputDiagnostic $utf8Install.Output)"
         $utf8Snapshot = Invoke-TestPowerShell $installer @(
             "-AppHome", $utf8SafeUpdateCase,
             "-SnapshotProfiles",
@@ -2905,7 +2914,9 @@ rules:
         [byte[]]$utf8InvalidBytes = @(
             [System.Text.Encoding]::UTF8.GetBytes("mode: rule`n# invalid ")
         ) + [byte[]]@(0xff) + [byte[]]@(
-            [System.Text.Encoding]::UTF8.GetBytes("`nproxies: []`n")
+            [System.Text.Encoding]::UTF8.GetBytes(
+                "`nproxies: []`nproxy-groups: [{ name: Main, type: select, proxies: [DIRECT] }]`nrules: [MATCH,Main]`n"
+            )
         )
         [System.IO.File]::WriteAllBytes($utf8SafeUpdateTarget, $utf8InvalidBytes)
         $utf8Verify = Invoke-TestPowerShell $installer @(
@@ -2916,10 +2927,16 @@ rules:
         )
         $utf8ManifestPath = Join-Path $utf8SafeUpdateCase "claude-easy-safe-update.json"
         Assert-True (
-            $utf8Verify.ExitCode -eq 1 -and
-            (Get-Content -LiteralPath $utf8SafeUpdateTarget -Raw) -eq $utf8OriginalText -and
+            $utf8Verify.ExitCode -eq 1
+        ) "safe update accepted invalid UTF-8 bytes; $(Get-TestOutputDiagnostic $utf8Verify.Output)"
+        Assert-True (
+            [Convert]::ToBase64String(
+                [System.IO.File]::ReadAllBytes($utf8SafeUpdateTarget)
+            ) -ceq [Convert]::ToBase64String($utf8OriginalBytes)
+        ) "invalid UTF-8 safe update did not restore the exact original bytes"
+        Assert-True (
             -not (Test-Path -LiteralPath $utf8ManifestPath)
-        ) "safe update accepted invalid UTF-8 bytes after replacement-character decoding"
+        ) "invalid UTF-8 safe update retained a stale recovery manifest"
     }
 
     $missingMappingDirectory = Join-Path $safeUpdateCase "missing-mapping"
