@@ -185,23 +185,156 @@ function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes) {
     Test-MihomoCandidate $core $text (Split-Path -Parent $TargetPath)
 }
 
+function Test-SafeUpdateRefreshEvidence(
+    [string]$BeforeSha256,
+    [string]$CurrentSha256,
+    [string]$BeforeUpdated,
+    [string]$CurrentUpdated,
+    [bool]$UseUpdatedEvidence
+) {
+    if ($BeforeSha256 -match '^[0-9a-f]{64}$' -and
+        $CurrentSha256 -match '^[0-9a-f]{64}$' -and
+        $CurrentSha256 -cne $BeforeSha256) {
+        return $true
+    }
+    if (-not $UseUpdatedEvidence) { return $false }
+    $currentTimestamp = 0L
+    if ([string]::IsNullOrEmpty($CurrentUpdated) -or
+        -not [long]::TryParse($CurrentUpdated, [ref]$currentTimestamp) -or
+        $currentTimestamp -lt 0) {
+        return $false
+    }
+    if ([string]::IsNullOrEmpty($BeforeUpdated)) { return $true }
+    $beforeTimestamp = 0L
+    if (-not [long]::TryParse($BeforeUpdated, [ref]$beforeTimestamp) -or
+        $beforeTimestamp -lt 0) {
+        return $false
+    }
+    return $currentTimestamp -gt $beforeTimestamp
+}
+
+function Open-SafeUpdateVersionGuard([string]$Path, [string]$Label) {
+    Initialize-VerifiedFileNative
+    $directoryGuards = @(Open-VerifiedDirectoryChain (Split-Path -Parent $Path))
+    $handle = $null
+    $stream = $null
+    try {
+        $handle = [ClaudeEasy.VerifiedDeleteNative]::Open($Path, $false, $false)
+        if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($handle)) {
+            throw "$Label 不能是符号链接或其他重解析点。"
+        }
+        if ([ClaudeEasy.VerifiedDeleteNative]::GetLinkCount($handle) -ne 1) {
+            throw "$Label 不能有硬链接别名。"
+        }
+        $stream = New-Object System.IO.FileStream($handle, [System.IO.FileAccess]::Read)
+        $handle = $null
+        return [pscustomobject]@{
+            Stream = $stream
+            DirectoryGuards = $directoryGuards
+        }
+    } catch {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        } elseif ($null -ne $handle) {
+            $handle.Dispose()
+        }
+        for ($index = $directoryGuards.Count - 1; $index -ge 0; $index--) {
+            $directoryGuards[$index].Dispose()
+        }
+        throw
+    }
+}
+
+function New-SafeUpdateSnapshotContext(
+    [string]$ProfilesIndex,
+    [string]$ProfileDirectory,
+    [string]$CorePath
+) {
+    $fileGuards = @()
+    $directoryGuards = @()
+    try {
+        $indexVersionGuard = Open-SafeUpdateVersionGuard $ProfilesIndex "远程订阅清单"
+        $indexGuard = $indexVersionGuard.Stream
+        $fileGuards += $indexGuard
+        $directoryGuards += @($indexVersionGuard.DirectoryGuards)
+        $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+        $indexText = $strictUtf8.GetString((Get-StreamBytes $indexGuard))
+        if ($indexText.Length -gt 0 -and $indexText[0] -eq [char]0xFEFF) {
+            $indexText = $indexText.Substring(1)
+        }
+        $profiles = @(Get-RemoteSubscriptionTargets $indexText $ProfileDirectory)
+        $snapshotProfiles = @()
+        foreach ($profile in @($profiles | Sort-Object Path)) {
+            $profileVersionGuard = Open-SafeUpdateVersionGuard $profile.Path "远程订阅"
+            $profileGuard = $profileVersionGuard.Stream
+            $fileGuards += $profileGuard
+            $directoryGuards += @($profileVersionGuard.DirectoryGuards)
+            $profileBytes = Get-StreamBytes $profileGuard
+            $profileText = $strictUtf8.GetString($profileBytes)
+            if ($profileText.Length -gt 0 -and $profileText[0] -eq [char]0xFEFF) {
+                $profileText = $profileText.Substring(1)
+            }
+            $file = Split-Path -Leaf $profile.Path
+            Test-GeneratedYaml $profileText $file | Out-Null
+            Assert-ClaudeEasyProxyGroupCollection $profileText $file
+            Test-MihomoCandidate $CorePath $profileText $ProfileDirectory | Out-Null
+            $snapshotProfiles += [pscustomobject]@{
+                Uid = $profile.Uid
+                Name = $profile.Name
+                Path = $profile.Path
+                Updated = $profile.Updated
+                SnapshotSha256 = Get-BytesSha256 $profileBytes
+                SnapshotBytes = $profileBytes
+            }
+        }
+        $guards = @($fileGuards)
+        for ($index = $directoryGuards.Count - 1; $index -ge 0; $index--) {
+            $guards += $directoryGuards[$index]
+        }
+        return [pscustomobject]@{
+            Profiles = $snapshotProfiles
+            Guards = $guards
+        }
+    } catch {
+        foreach ($guard in $fileGuards) { $guard.Dispose() }
+        for ($index = $directoryGuards.Count - 1; $index -ge 0; $index--) {
+            $directoryGuards[$index].Dispose()
+        }
+        throw
+    }
+}
+
 function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [string]$BackupDirectory) {
     $items = @()
+    $manifestVersion = [long]$Manifest.Version
     foreach ($item in @($Manifest.Profiles)) {
         $properties = @($item.PSObject.Properties.Name | Sort-Object)
-        if (($properties -join ",") -cne "Backup,BeforeSha256,File,Uid" -or
+        $expectedProperties = if ($manifestVersion -eq 1) {
+            "Backup,BeforeSha256,File,Uid"
+        } else {
+            "Backup,BeforeSha256,BeforeUpdated,File,Uid"
+        }
+        if (($properties -join ",") -cne $expectedProperties -or
             -not ($item.Uid -is [string]) -or
             -not ($item.File -is [string]) -or
             -not ($item.Backup -is [string]) -or
-            -not ($item.BeforeSha256 -is [string])) {
+            -not ($item.BeforeSha256 -is [string]) -or
+            ($manifestVersion -eq 2 -and -not ($item.BeforeUpdated -is [string]))) {
             throw "安全更新准备记录包含无效订阅项。"
         }
         $uid = [string]$item.Uid
         $file = [string]$item.File
         $backup = [string]$item.Backup
         $beforeSha = ([string]$item.BeforeSha256).ToLowerInvariant()
+        $beforeUpdated = if ($manifestVersion -eq 2) { [string]$item.BeforeUpdated } else { "" }
         if ($uid -notmatch '^[A-Za-z0-9._-]+$' -or $file -notin @("$uid.yaml", "$uid.yml")) {
             throw "安全更新准备记录包含无效订阅标识。"
+        }
+        $beforeUpdatedTimestamp = 0L
+        if (-not [string]::IsNullOrEmpty($beforeUpdated) -and
+            (-not [long]::TryParse($beforeUpdated, [ref]$beforeUpdatedTimestamp) -or
+             $beforeUpdatedTimestamp -lt 0)) {
+            throw "安全更新准备记录包含无效更新时间。"
         }
         if ($backup -ne (Split-Path -Leaf $backup) -or $backup -notlike "*.backup" -or $beforeSha -notmatch '^[0-9a-f]{64}$') {
             throw "安全更新准备记录包含无效备份信息。"
@@ -210,10 +343,22 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
         $expectedSuffix = "--$(Get-PathKey $targetPath)--$file.backup"
         if (-not $backup.EndsWith($expectedSuffix)) { throw "安全更新准备记录中的备份与订阅不匹配。" }
         $backupPath = Join-Path $BackupDirectory $backup
-        if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf) -or (Get-FileSha256 $backupPath) -ne $beforeSha) {
+        if ($manifestVersion -eq 2 -and (
+            -not (Test-Path -LiteralPath $backupPath -PathType Leaf) -or
+            (Get-FileSha256 $backupPath) -ne $beforeSha
+        )) {
             throw "安全更新前备份缺失或哈希不匹配。"
         }
-        $items += [pscustomobject]@{ Uid = $uid; File = $file; TargetPath = $targetPath; BackupPath = $backupPath; BeforeSha256 = $beforeSha }
+        $items += [pscustomobject]@{
+            Uid = $uid
+            File = $file
+            TargetPath = $targetPath
+            BackupPath = $backupPath
+            BeforeSha256 = $beforeSha
+            BeforeUpdated = $beforeUpdated
+            UseUpdatedEvidence = ($manifestVersion -eq 2)
+            CanAutoRestore = ($manifestVersion -eq 2)
+        }
     }
     if ($items.Count -eq 0 -or @($items.TargetPath | Sort-Object -Unique).Count -ne $items.Count) {
         throw "安全更新准备记录中的订阅清单无效。"
@@ -268,6 +413,7 @@ function Get-SafeUpdateVerificationTargets(
             Uid = [string]$item[0].Uid
             Name = [string]$item[0].Name
             Path = $path
+            Updated = [string]$item[0].Updated
         }
     }
     return @($targets)

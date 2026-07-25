@@ -57,10 +57,21 @@
         $typeValue = (($typeValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"")
         $uidValues = @($fieldValues["uid"])
         $nameValues = @($fieldValues["name"])
+        $updatedValues = @($fieldValues["updated"])
         $uidValue = if ($uidValues.Count -eq 1) { (($uidValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"") } else { "" }
         $nameValue = if ($nameValues.Count -eq 1) { (($nameValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"") } else { "" }
+        $updatedRawValue = if ($updatedValues.Count -eq 1) { (($updatedValues[0] -replace '\s+#.*$', '').Trim()) } else { "" }
+        $updatedValue = $updatedRawValue.Trim("'`"")
+        if ($updatedRawValue -match '^(?:~|null|Null|NULL)$') {
+            $updatedValue = ""
+        }
         if ($typeValue -eq "remote" -and ($uidValues.Count -ne 1 -or $uidValue -notmatch '^[A-Za-z0-9._-]+$')) {
             throw "profiles.yaml 的远程订阅缺少安全且唯一的 uid。"
+        }
+        if ($typeValue -eq "remote" -and
+            ($updatedValues.Count -gt 1 -or
+             (-not [string]::IsNullOrEmpty($updatedValue) -and $updatedValue -notmatch '^\d+$'))) {
+            throw "profiles.yaml 的远程订阅更新时间无效。"
         }
         $items += [pscustomobject]@{
             Start = $start.Index
@@ -70,6 +81,7 @@
             Type = $typeValue
             Uid = $uidValue
             Name = $nameValue
+            Updated = $updatedValue
             OptionIndex = $(if ($optionIndexes.Count -eq 1) { [int]$optionIndexes[0] } else { -1 })
         }
     }
@@ -376,7 +388,12 @@ function Get-RemoteSubscriptionTargets([string]$ProfilesIndexText, [string]$Dire
         if ($matches.Count -ne 1) { throw "远程订阅无法对应到唯一配置文件：$($item.Uid)。" }
         $path = (Resolve-Path -LiteralPath $matches[0]).Path
         if (-not $targetPaths.Add($path)) { throw "多个远程订阅对应到同一配置文件。" }
-        $targets += [pscustomobject]@{ Uid = $item.Uid; Name = $item.Name; Path = $path }
+        $targets += [pscustomobject]@{
+            Uid = $item.Uid
+            Name = $item.Name
+            Path = $path
+            Updated = $item.Updated
+        }
     }
     return @($targets)
 }

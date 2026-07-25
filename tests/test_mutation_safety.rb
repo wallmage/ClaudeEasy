@@ -1093,6 +1093,174 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_macos_owned_disabled_uninstall_recovery_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/uninstall_macos.sh",
+        "      disabled|already_disabled|already_disabled_owned) ;;\n",
+        "      disabled|already_disabled) ;;\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_running_profile_three_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_windows.ps1",
+        "    if ($resolvedUsageProfile -eq 3 -and $clientRunning) {\n",
+        "    if ($false) {\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_safe_update_refresh_evidence_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "        $CurrentSha256 -cne $BeforeSha256) {\n" \
+          "        return $true\n" \
+          "    }\n" \
+          "    if (-not $UseUpdatedEvidence) { return $false }\n",
+        "        $CurrentSha256 -cne $BeforeSha256) {\n" \
+          "        return $false\n" \
+          "    }\n" \
+          "    if (-not $UseUpdatedEvidence) { return $false }\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_legacy_safe_update_auto_restore_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_windows.ps1",
+        '        if (@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0) {' + "\n",
+        "        if ($false) {\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_legacy_safe_update_backup_dependency_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "        if ($manifestVersion -eq 2 -and (\n",
+        "        if ($true -and (\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_safe_update_control_file_concurrency_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_windows.ps1",
+        "        if (-not $safeUpdateContentRestoreEligible) {\n",
+        "        if ($false) {\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_null_update_timestamp_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/profiles.ps1",
+        "        if ($updatedRawValue -match '^(?:~|null|Null|NULL)$') {\n",
+        "        if ($false) {\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_safe_update_snapshot_index_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "        $fileGuards += $indexGuard\n",
+        "        $indexGuard.Dispose()\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
+  def test_windows_safe_update_snapshot_validation_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
+        "            Test-MihomoCandidate $CorePath $profileText $ProfileDirectory | Out-Null\n",
+        ""
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
+      )
+    end
+  end
+
   def test_contract_windows_safe_update_requires_a_passive_script_envelope
     source = File.read(
       File.join(

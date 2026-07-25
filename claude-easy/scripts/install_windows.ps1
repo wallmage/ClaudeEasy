@@ -125,30 +125,55 @@ if ($SnapshotProfiles) {
         throw "发现尚未验收的安全更新；请先运行 -VerifySafeUpdate，不能覆盖更新前清单。"
     }
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
-    $indexText = Get-Content -LiteralPath $profilesIndexPath -Raw -Encoding UTF8
-    $profiles = @(Get-RemoteSubscriptionTargets $indexText $profilesDirectory)
-    $manifestItems = @()
-    foreach ($profile in $profiles) {
-        Backup-InitialOnce $profile.Path $backupRoot | Out-Null
-        $backup = Backup-Versioned $profile.Path $backupRoot "pre-update" -WithMetadata
-        $manifestItems += [ordered]@{
-            Uid = $profile.Uid
-            File = (Split-Path -Leaf $profile.Path)
-            BeforeSha256 = $backup.Sha256
-            Backup = (Split-Path -Leaf $backup.Path)
+    $snapshotContext = $null
+    try {
+        $core = Find-MihomoCore $MihomoPath
+        $snapshotContext = New-SafeUpdateSnapshotContext `
+            $profilesIndexPath `
+            $profilesDirectory `
+            $core
+        $profiles = @($snapshotContext.Profiles)
+        $manifestItems = @()
+        foreach ($profile in $profiles) {
+            Backup-InitialOnce `
+                $profile.Path `
+                $backupRoot `
+                -SourceBytes $profile.SnapshotBytes `
+                -UseSourceBytes | Out-Null
+            $backup = Backup-Versioned `
+                $profile.Path `
+                $backupRoot `
+                "pre-update" `
+                -WithMetadata `
+                -SourceBytes $profile.SnapshotBytes `
+                -UseSourceBytes
+            if ($backup.Sha256 -cne [string]$profile.SnapshotSha256) {
+                throw "远程订阅在安全更新快照期间发生变化。"
+            }
+            $manifestItems += [ordered]@{
+                Uid = $profile.Uid
+                File = (Split-Path -Leaf $profile.Path)
+                BeforeSha256 = $backup.Sha256
+                BeforeUpdated = [string]$profile.Updated
+                Backup = (Split-Path -Leaf $backup.Path)
+            }
+        }
+        $manifest = [ordered]@{ Version = 2; CreatedAt = [DateTimeOffset]::Now.ToString("o"); Profiles = $manifestItems }
+        $manifestBytes = ConvertTo-Utf8Bytes (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
+        Invoke-VerifiedFileTransaction @(
+            [pscustomobject]@{
+                Path = $safeUpdateStatePath
+                Bytes = $manifestBytes
+                Existed = $false
+                OriginalBytes = $null
+                OriginalIdentity = $null
+            }
+        )
+    } finally {
+        if ($null -ne $snapshotContext) {
+            foreach ($guard in @($snapshotContext.Guards)) { $guard.Dispose() }
         }
     }
-    $manifest = [ordered]@{ Version = 1; CreatedAt = [DateTimeOffset]::Now.ToString("o"); Profiles = $manifestItems }
-    $manifestBytes = ConvertTo-Utf8Bytes (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
-    Invoke-VerifiedFileTransaction @(
-        [pscustomobject]@{
-            Path = $safeUpdateStatePath
-            Bytes = $manifestBytes
-            Existed = $false
-            OriginalBytes = $null
-            OriginalIdentity = $null
-        }
-    )
     Write-Info "已核对远程清单，并为 $($profiles.Count) 份订阅创建安全更新前备份。"
     foreach ($profile in $profiles) { Write-Info ("待更新：" + $(if ([string]::IsNullOrWhiteSpace($profile.Name)) { $profile.Uid } else { $profile.Name })) }
     Complete-InstallResult 0 "ok" "snapshot_created" "已创建全部远程订阅的安全更新前备份。" @("profile_backups")
@@ -166,7 +191,7 @@ if ($VerifySafeUpdate) {
     ).Count -eq 1
     if (($manifestProperties -join ",") -cne "CreatedAt,Profiles,Version" -or
         -not ($manifest.Version -is [int] -or $manifest.Version -is [long]) -or
-        [long]$manifest.Version -ne 1 -or
+        [long]$manifest.Version -notin @(1, 2) -or
         -not $createdAtIsJsonString -or
         @($manifest.Profiles).Count -eq 0) {
         throw "安全更新准备记录无效。"
@@ -174,6 +199,10 @@ if ($VerifySafeUpdate) {
     $recoveryItems = @(Get-SafeUpdateRecoveryItems $manifest $profilesDirectory $backupRoot)
     $validated = @()
     $observedCurrentHashes = @{}
+    $legacySnapshotRetirement = $false
+    $safeUpdateContentRestoreEligible = $false
+    $indexSnapshot = $null
+    $scriptSnapshot = $null
     try {
         $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"
         if (-not $indexSnapshot.Exists) { throw "远程订阅清单在更新期间消失。" }
@@ -181,6 +210,7 @@ if ($VerifySafeUpdate) {
         $currentTargets = @(
             Get-SafeUpdateVerificationTargets $indexText $profilesDirectory $recoveryItems
         )
+        $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
         $missingTarget = $false
         foreach ($recovery in $recoveryItems) {
             $targetSnapshot = Get-OptionalFileSnapshot $recovery.TargetPath "更新后的订阅"
@@ -191,31 +221,64 @@ if ($VerifySafeUpdate) {
                 $missingTarget = $true
             }
         }
-        if ($missingTarget) { throw "更新后的订阅文件缺失。" }
+        if ($missingTarget) {
+            $safeUpdateContentRestoreEligible = $true
+            throw "更新后的订阅文件缺失。"
+        }
+        $refreshPending = @()
+        foreach ($recovery in $recoveryItems) {
+            $target = @($currentTargets | Where-Object {
+                [string]::Equals(
+                    [string]$_.Uid,
+                    [string]$recovery.Uid,
+                    [StringComparison]::Ordinal
+                )
+            })
+            if ($target.Count -ne 1 -or
+                -not (Test-SafeUpdateRefreshEvidence `
+                    ([string]$recovery.BeforeSha256) `
+                    ([string]$observedCurrentHashes[$recovery.TargetPath]) `
+                    ([string]$recovery.BeforeUpdated) `
+                    ([string]$target[0].Updated) `
+                    ([bool]$recovery.UseUpdatedEvidence))) {
+                $refreshPending += $recovery.Uid
+            }
+        }
+        if ($refreshPending.Count -gt 0) {
+            if (@($recoveryItems | Where-Object { $_.CanAutoRestore }).Count -eq 0) {
+                $legacySnapshotRetirement = $true
+            } else {
+                Complete-InstallResult 1 "partial" "safe_update_refresh_pending" "仍有远程订阅缺少本轮刷新凭据；安全更新清单和订阅文件保持不变，请在客户端完成全部更新后重试验收。" @() @("refresh_evidence")
+            }
+        }
         $savedProfile = Get-SavedUsageProfile $usageStatePath
         if ($savedProfile -notin @(1, 2, 3)) { throw "没有可用于安全更新验收的用途档位。" }
-        $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
         if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
         $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
         $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
         Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript
         $core = Find-MihomoCore $MihomoPath
         foreach ($item in @($manifest.Profiles)) {
-            $target = @($currentTargets | Where-Object { $_.Uid -eq [string]$item.Uid -and (Split-Path -Leaf $_.Path) -eq [string]$item.File })
-            if ($target.Count -ne 1) { throw "远程订阅清单在更新期间发生变化。" }
-            $validatedBytes = [System.IO.File]::ReadAllBytes($target[0].Path)
-            $validatedHash = Get-BytesSha256 $validatedBytes
-            $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
-            Test-GeneratedYaml $text ([string]$item.File) | Out-Null
-            Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
-            Test-MihomoCandidate $core $text $profilesDirectory
-            if ((Get-FileSha256 $target[0].Path) -ne $validatedHash) {
-                throw "订阅在验收期间再次发生变化。"
-            }
-            $validated += [pscustomobject]@{
-                Target = $target[0]
-                Manifest = $item
-                ValidatedSha256 = $validatedHash
+            try {
+                $target = @($currentTargets | Where-Object { $_.Uid -eq [string]$item.Uid -and (Split-Path -Leaf $_.Path) -eq [string]$item.File })
+                if ($target.Count -ne 1) { throw "远程订阅清单在更新期间发生变化。" }
+                $validatedBytes = [System.IO.File]::ReadAllBytes($target[0].Path)
+                $validatedHash = Get-BytesSha256 $validatedBytes
+                $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
+                Test-GeneratedYaml $text ([string]$item.File) | Out-Null
+                Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
+                Test-MihomoCandidate $core $text $profilesDirectory
+                if ((Get-FileSha256 $target[0].Path) -ne $validatedHash) {
+                    throw "订阅在验收期间再次发生变化。"
+                }
+                $validated += [pscustomobject]@{
+                    Target = $target[0]
+                    Manifest = $item
+                    ValidatedSha256 = $validatedHash
+                }
+            } catch {
+                $safeUpdateContentRestoreEligible = $true
+                throw
             }
         }
         if ($savedProfile -eq 3) { Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null }
@@ -258,7 +321,49 @@ if ($VerifySafeUpdate) {
             foreach ($guard in $versionGuards) { $guard.Dispose() }
         }
     } catch {
-        $restoreResult = Restore-SafeUpdateFiles $recoveryItems $observedCurrentHashes $safeUpdateStatePath $manifestSnapshot
+        if (@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0) {
+            Complete-InstallResult 1 "partial" "safe_update_legacy_recovery_pending" "旧版安全更新记录中的备份无法确认来自一致快照；已保留当前订阅和清单，请在客户端重新更新全部订阅后重试验收。" @() @("legacy_recovery")
+        }
+        if (-not $safeUpdateContentRestoreEligible) {
+            Complete-InstallResult 1 "partial" "safe_update_verification_retry_pending" "验收依赖的清单、脚本或状态在检查期间变化；已保留当前订阅和安全更新清单，请待客户端写入完成后重试。" @() @("verification_state")
+        }
+        $controlGuards = @()
+        $controlStateStable = $true
+        try {
+            if ($null -eq $indexSnapshot -or
+                -not [bool]$indexSnapshot.Exists -or
+                $null -eq $scriptSnapshot -or
+                -not [bool]$scriptSnapshot.Exists) {
+                throw "缺少安全更新恢复所需的控制文件快照。"
+            }
+            foreach ($control in @(
+                [pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot },
+                [pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot }
+            )) {
+                $controlGuard = [System.IO.File]::Open(
+                    $control.Path,
+                    [System.IO.FileMode]::Open,
+                    [System.IO.FileAccess]::Read,
+                    [System.IO.FileShare]::Read
+                )
+                $controlGuards += $controlGuard
+                if ((Get-BytesSha256 (Get-StreamBytes $controlGuard)) -ne
+                    (Get-BytesSha256 $control.Snapshot.Bytes)) {
+                    throw "安全更新恢复所需的控制文件在验收期间变化。"
+                }
+            }
+        } catch {
+            $controlStateStable = $false
+        }
+        if (-not $controlStateStable) {
+            foreach ($controlGuard in $controlGuards) { $controlGuard.Dispose() }
+            Complete-InstallResult 1 "partial" "safe_update_verification_retry_pending" "验收依赖的清单、脚本或状态在检查期间变化；已保留当前订阅和安全更新清单，请待客户端写入完成后重试。" @() @("verification_state")
+        }
+        try {
+            $restoreResult = Restore-SafeUpdateFiles $recoveryItems $observedCurrentHashes $safeUpdateStatePath $manifestSnapshot
+        } finally {
+            foreach ($controlGuard in $controlGuards) { $controlGuard.Dispose() }
+        }
         if ($restoreResult.Conflicts.Count -gt 0) {
             throw "更新验收失败；检测到订阅同时发生变化，未覆盖新内容：$($restoreResult.Conflicts -join '、')。安全更新记录已保留。"
         }
@@ -270,6 +375,9 @@ if ($VerifySafeUpdate) {
         Write-Info ($(if ($changed) { "已更新并通过检查：" } else { "内容未变化并通过检查：" }) + $(if ([string]::IsNullOrWhiteSpace($entry.Target.Name)) { $entry.Target.Uid } else { $entry.Target.Name }))
     }
     Write-Info "全部远程订阅已逐份通过全局脚本、代理组、YAML 与 Mihomo 检查。"
+    if ($legacySnapshotRetirement) {
+        Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v2 快照后再更新。" @() @("legacy_manifest_retired")
+    }
     Complete-InstallResult 0 "ok" "safe_update_verified" "全部远程订阅已逐份通过检查。" @() @("global_script", "yaml", "mihomo", "auto_update")
 }
 
@@ -404,6 +512,14 @@ try {
     if ($savedUsageProfile -eq 3 -and $resolvedUsageProfile -ne 3 -and $profileSource -ne "saved") {
         throw "从档位 3 改为轻量档位前，必须先运行安全卸载。"
     }
+    if ($resolvedUsageProfile -eq 3 -and $clientRunning) {
+        if (-not $Json) {
+            [Console]::Error.WriteLine(
+                "[ClaudeEasy] Clash Verge Rev 正在运行；为避免客户端内存状态覆盖 profiles.yaml，本次未修改用途档位、所有权、脚本或客户端配置。请在客户端未运行时重试档位 3。"
+            )
+        }
+        Complete-InstallResult 1 "partial" "client_running_profile_three_deferred" "客户端正在运行；本次未修改用途档位、所有权、脚本或客户端配置，请在客户端未运行时重试档位 3。"
+    }
     $usageProfileTarget = $null
     if ($profileSource -ne "saved") {
         $usageProfileSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
@@ -484,33 +600,6 @@ try {
     $profilesIndexOutput = Set-RemoteSubscriptionAutoUpdateDisabled $profilesIndexInput
     Assert-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput | Out-Null
     $profilesIndexBytes = ConvertTo-Utf8Bytes $profilesIndexOutput
-
-    if ($clientRunning) {
-        $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "Script.js"
-        $scriptExisted = [bool]$scriptSnapshot.Exists
-        $scriptOriginalBytes = $scriptSnapshot.Bytes
-        $scriptCurrentText = if ($scriptExisted) { $strictUtf8.GetString($scriptOriginalBytes) } else { $null }
-        $scriptOutput = Build-GlobalScript $enginePath $targetScript $resolvedUsageProfile $scriptCurrentText
-        $scriptBytes = ConvertTo-Utf8Bytes $scriptOutput
-        $runningTargets = @(
-            [pscustomobject]@{ Path = $targetScript; Bytes = $scriptBytes; Existed = $scriptExisted; OriginalBytes = $scriptOriginalBytes; OriginalIdentity = $scriptSnapshot.Identity },
-            [pscustomobject]@{ Path = $profilesIndexPath; Bytes = $profilesIndexBytes; Existed = $true; OriginalBytes = $profilesIndexOriginalBytes; OriginalIdentity = $profilesIndexSnapshot.Identity }
-        )
-        if ($null -ne $autoUpdateStateTarget) { $runningTargets += $autoUpdateStateTarget }
-        if ($null -ne $usageProfileTarget) { $runningTargets += $usageProfileTarget }
-        foreach ($target in $runningTargets) {
-            if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
-            Backup-InitialOnce $target.Path $backupRoot | Out-Null
-            Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
-        }
-        Invoke-VerifiedFileTransaction $runningTargets
-        Assert-RemoteSubscriptionAutoUpdateDisabled (Get-Content -LiteralPath $profilesIndexPath -Raw -Encoding UTF8) | Out-Null
-        if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
-        Write-Info "Clash Verge Rev 保持运行；已更新全局扩展脚本，并自动关闭全部远程订阅的自动更新。"
-        Write-Info "config.yaml、verge.yaml 和当前运行配置均未修改。下次订阅刷新时应用补丁。"
-        Complete-InstallResult 0 "ok" "installed_running_client" "客户端保持运行；全局扩展脚本与自动更新设置已更新。" @("global_script", "auto_update")
-        exit 0
-    }
 
     $installState = $null
     $stateSnapshot = Get-OptionalFileSnapshot $statePath "安装状态"

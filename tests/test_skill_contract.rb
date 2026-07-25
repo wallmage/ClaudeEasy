@@ -1384,6 +1384,172 @@ class SkillContractTest < Minitest::Test
     end
   end
 
+  def test_p1_recovery_and_refresh_guards_are_documented_and_exercised
+    mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
+    windows_installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
+    windows_profiles = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/profiles.ps1")
+    )
+    windows_safe_update = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    )
+    mac_tests = File.read(File.join(ROOT, "tests/test_macos_wrappers.rb"))
+    windows_tests = File.binread(
+      File.join(ROOT, "tests/test_windows_installer.ps1")
+    ).force_encoding("UTF-8")
+
+    assert_includes mac_uninstaller,
+                    "disabled|already_disabled|already_disabled_owned)"
+    assert_includes mac_tests, 'puts "already_disabled_owned"'
+
+    running_gate = windows_installer.index(
+      'if ($resolvedUsageProfile -eq 3 -and $clientRunning) {'
+    )
+    first_install_target = windows_installer.index('$usageProfileTarget = $null')
+    refute_nil running_gate
+    refute_nil first_install_target
+    assert_operator running_gate, :<, first_install_target
+    assert_includes windows_installer, '"client_running_profile_three_deferred"'
+    refute_includes windows_installer, "installed_running_client"
+    assert_includes windows_tests, 'Get-TreeContentSnapshot $runningCase'
+    assert_includes windows_tests, "client_running_profile_three_deferred"
+
+    assert_includes windows_profiles, 'Updated = $updatedValue'
+    assert_includes windows_profiles,
+                    "$updatedRawValue -match '^(?:~|null|Null|NULL)$'"
+    assert_includes windows_installer, 'BeforeUpdated = [string]$profile.Updated'
+    assert_includes windows_installer, "Version = 2"
+    assert_includes windows_installer, "Test-SafeUpdateRefreshEvidence"
+    assert_includes windows_installer, '"safe_update_refresh_pending"'
+    assert_includes windows_safe_update,
+                    'UseUpdatedEvidence = ($manifestVersion -eq 2)'
+    assert_includes windows_safe_update,
+                    'CanAutoRestore = ($manifestVersion -eq 2)'
+    assert_includes windows_safe_update,
+                    'if ($manifestVersion -eq 2 -and ('
+    assert_includes windows_installer,
+                    '@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0'
+    assert_includes windows_installer, '"safe_update_legacy_recovery_pending"'
+    assert_includes windows_installer, '"safe_update_legacy_snapshot_required"'
+    assert_includes windows_installer, '$safeUpdateContentRestoreEligible = $false'
+    assert_includes windows_installer, 'if (-not $safeUpdateContentRestoreEligible) {'
+    assert_includes windows_installer, '"safe_update_verification_retry_pending"'
+    assert_includes windows_installer,
+                    '[pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot }'
+    assert_includes windows_installer,
+                    '[pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot }'
+    version_guard_function = windows_safe_update[
+      windows_safe_update.index("function Open-SafeUpdateVersionGuard")...
+      windows_safe_update.index("function New-SafeUpdateSnapshotContext")
+    ]
+    refute_nil version_guard_function
+    assert_includes version_guard_function,
+                    '[ClaudeEasy.VerifiedDeleteNative]::Open($Path, $false, $false)'
+    assert_includes version_guard_function,
+                    "[ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint"
+    assert_includes version_guard_function,
+                    "[ClaudeEasy.VerifiedDeleteNative]::GetLinkCount"
+    snapshot_function = windows_safe_update[
+      windows_safe_update.index("function New-SafeUpdateSnapshotContext")...
+      windows_safe_update.index("function Get-SafeUpdateRecoveryItems")
+    ]
+    refute_nil snapshot_function
+    assert_includes snapshot_function,
+                    'Assert-ClaudeEasyProxyGroupCollection $profileText $file'
+    assert_includes snapshot_function,
+                    'Test-MihomoCandidate $CorePath $profileText $ProfileDirectory'
+    assert_includes snapshot_function, 'SnapshotBytes = $profileBytes'
+    assert_includes snapshot_function, '$fileGuards += $indexGuard'
+    assert_includes snapshot_function, '$fileGuards += $profileGuard'
+    windows_transaction = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
+    )
+    assert_includes windows_transaction, '[switch]$UseSourceBytes'
+    assert_includes windows_transaction,
+                    '$backupStream.Write($SourceBytes, 0, $SourceBytes.Length)'
+    assert_includes windows_installer, '-SourceBytes $profile.SnapshotBytes'
+    assert_includes windows_installer, "-UseSourceBytes"
+    snapshot_guard = windows_installer.index(
+      '$snapshotContext = New-SafeUpdateSnapshotContext'
+    )
+    snapshot_backup = windows_installer.index(
+      '$backup = Backup-Versioned `'
+    )
+    snapshot_manifest = windows_installer.index(
+      '$manifest = [ordered]@{ Version = 2'
+    )
+    snapshot_dispose = windows_installer.index(
+      'foreach ($guard in @($snapshotContext.Guards)) { $guard.Dispose() }'
+    )
+    [snapshot_guard, snapshot_backup, snapshot_manifest, snapshot_dispose].each do |index|
+      refute_nil index
+    end
+    assert_operator snapshot_guard, :<, snapshot_backup
+    assert_operator snapshot_backup, :<, snapshot_manifest
+    assert_operator snapshot_manifest, :<, snapshot_dispose
+    refresh_function = windows_safe_update[
+      windows_safe_update.index("function Test-SafeUpdateRefreshEvidence")...
+      windows_safe_update.index("function Get-SafeUpdateRecoveryItems")
+    ]
+    refute_nil refresh_function
+    assert_match(
+      /\$CurrentSha256 -cne \$BeforeSha256\) \{\s+return \$true/,
+      refresh_function
+    )
+    assert_includes refresh_function,
+                    'if (-not $UseUpdatedEvidence) { return $false }'
+    assert_includes refresh_function, 'return $currentTimestamp -gt $beforeTimestamp'
+    assert_includes windows_tests,
+                    "safe update verification accepted a batch in which no subscription was refreshed"
+    assert_includes windows_tests,
+                    "newer client update timestamp"
+    assert_includes windows_tests,
+                    "snapshot accepted a subscription written before the client's profiles index commit"
+    assert_includes windows_tests,
+                    "legacy safe-update manifest auto-restored an untrusted backup"
+    assert_includes windows_tests,
+                    "unchanged valid legacy snapshot with missing or corrupted backups remained permanently pending"
+    assert_includes windows_tests,
+                    "legacy recovery could not complete after every subscription was refreshed"
+    assert_includes windows_tests,
+                    "concurrent profiles index change triggered a safe-update rollback"
+    assert_includes windows_tests, "# concurrent candidate one"
+    assert_includes windows_tests, "# index-race candidate one"
+    assert_includes windows_tests,
+                    "unquoted YAML null was not accepted as an absent client update timestamp"
+    assert_includes windows_tests,
+                    "quoted null was accepted as client update metadata"
+    lock_setup = windows_tests.index(
+      '$runningFixtureLock = Enter-AppHomeMutationLock $runningCase'
+    )
+    lock_baseline = windows_tests.index(
+      '$runningBefore = Get-TreeContentSnapshot $runningCase'
+    )
+    refute_nil lock_setup
+    refute_nil lock_baseline
+    assert_operator lock_setup, :<, lock_baseline
+
+    documents = [
+      File.read(File.join(ROOT, "README.md")),
+      File.read(File.join(SKILL, "SKILL.md")),
+      File.read(File.join(SKILL, "references/patch-policy.md")),
+      File.read(
+        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+      ),
+      File.read(File.join(ROOT, "tests/baseline.md"))
+    ]
+    documents.each do |document|
+      assert_includes document, "already_disabled_owned"
+      assert_includes document, "client_running_profile_three_deferred"
+      assert_includes document, "safe_update_refresh_pending"
+      assert_includes document, "safe_update_legacy_recovery_pending"
+      assert_includes document, "safe_update_legacy_snapshot_required"
+      assert_includes document, "safe_update_verification_retry_pending"
+      assert_includes document, "updated: null"
+      assert_includes document, "只读版本锁"
+    end
+  end
+
   def test_windows_failed_safe_update_rollback_deletes_manifest_in_the_same_transaction
     installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
     safe_update = File.read(

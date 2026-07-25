@@ -592,7 +592,7 @@ class MacosWrapperTest < Minitest::Test
       if ARGV.include?("--disable-subscription-auto-update")
         File.write(preference, "disabled")
         File.write(ownership, "{}") unless File.exist?(ownership)
-        puts "already_disabled"
+        puts "already_disabled_owned"
         exit 0
       end
       if ARGV.include?("--restore-owned-subscription-auto-update")

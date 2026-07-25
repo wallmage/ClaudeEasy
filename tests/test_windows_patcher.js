@@ -1064,7 +1064,8 @@ test('Windows installation fails closed and preserves exact restore state', () =
   assert.match(installer, /Mihomo 1\.19\.27/);
   assert.match(installer, /Join-Path \(Join-Path \$env:LOCALAPPDATA "Clash Verge"\) "verge-mihomo\.exe"/);
   assert.match(installer, /function Test-ClashVergeRunning/);
-  assert.match(installer, /if \(\$clientRunning\)[\s\S]*\$runningTargets[\s\S]*Invoke-VerifiedFileTransaction \$runningTargets[\s\S]*exit 0/);
+  assert.match(installer, /if \(\$resolvedUsageProfile -eq 3 -and \$clientRunning\)[\s\S]*client_running_profile_three_deferred/);
+  assert.doesNotMatch(installer, /installed_running_client/);
   assert.match(installer, /WaitForExit\(\$TimeoutSeconds \* 1000\)/);
   assert.match(installer, /\$process\.Kill\(\)/);
   assert.doesNotMatch(installer, /Get-Process -Name "verge-mihomo"/);
@@ -1139,6 +1140,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive',
       'Assert-ClaudeEasyManagedScriptCurrent',
       'Test-ClaudeEasyFlowSequenceHasItem', 'Assert-ClaudeEasyProxyGroupCollection', 'Test-RestoreCandidate',
+      'Test-SafeUpdateRefreshEvidence',
+      'Open-SafeUpdateVersionGuard', 'New-SafeUpdateSnapshotContext',
       'Get-SafeUpdateRecoveryItems', 'Get-SafeUpdateVerificationTargets', 'Restore-SafeUpdateFiles'
     ]
   };

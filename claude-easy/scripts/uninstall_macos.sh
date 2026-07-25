@@ -169,7 +169,7 @@ restore_uncommitted_uninstall() {
       finish 1 failed auto_update_rollback_failed "无法恢复未完成安全卸载的订阅自动更新状态。"
     fi
     case "$disable_result" in
-      disabled|already_disabled) ;;
+      disabled|already_disabled|already_disabled_owned) ;;
       *) finish 1 failed auto_update_rollback_failed "订阅自动更新回退结果异常。" ;;
     esac
     if ! restored_ownership=$(/usr/bin/ruby "$PATCHER_SOURCE" \

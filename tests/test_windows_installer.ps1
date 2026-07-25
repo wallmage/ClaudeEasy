@@ -1983,6 +1983,7 @@ items:
 - uid: R-first
   type: remote
   name: First
+  updated: null
   option:
     update_interval: 1440
     allow_auto_update: true
@@ -1992,6 +1993,7 @@ items:
 - uid: R-second
   type: remote
   name: Second
+  updated: 200
   option: null
 '@
     $profilesIndexOutput = Set-RemoteSubscriptionAutoUpdateDisabled $profilesIndexInput
@@ -2000,6 +2002,31 @@ items:
     Assert-True ($profilesIndexOutput.Contains("update_interval: 1440")) "unrelated remote option was removed"
     Assert-True ((Set-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput) -eq $profilesIndexOutput) "profiles.yaml transform is not idempotent"
     Assert-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput
+    $nullUpdatedTargets = @(
+        Get-RemoteSubscriptionProfileItems @(Split-YamlLines $profilesIndexInput) |
+            Where-Object { $_.Type -eq "remote" }
+    )
+    Assert-True (
+        $nullUpdatedTargets.Count -eq 2 -and
+        [string]::IsNullOrEmpty([string]$nullUpdatedTargets[0].Updated)
+    ) "unquoted YAML null was not accepted as an absent client update timestamp"
+    $quotedNullUpdatedRejected = $false
+    try {
+        Get-RemoteSubscriptionProfileItems @(
+            Split-YamlLines (
+                $profilesIndexInput.Replace("updated: null", 'updated: "null"')
+            )
+        ) | Out-Null
+    } catch {
+        $quotedNullUpdatedRejected = $true
+    }
+    Assert-True $quotedNullUpdatedRejected "quoted null was accepted as client update metadata"
+    $sameRefreshHash = "a" * 64
+    Assert-True (-not (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "100" "100" $true)) "unchanged content and timestamp were accepted as refresh evidence"
+    Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash ("b" * 64) "100" "100" $false) "changed subscription bytes were not accepted as refresh evidence"
+    Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "100" "101" $true) "newer client update metadata was not accepted for unchanged subscription bytes"
+    Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "" "101" $true) "first client update timestamp was not accepted after a null baseline"
+    Assert-True (-not (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "" "101" $false)) "legacy manifest without a timestamp baseline accepted unchanged subscription bytes"
 
     $ownershipInput = @'
 current: R-a
@@ -2159,8 +2186,38 @@ items:
     $safeUpdateProfiles = Join-Path $safeUpdateCase "profiles"
     New-Item -ItemType Directory -Path $safeUpdateProfiles -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateCase "profiles.yaml"), $profilesIndexInput)
-    $firstSafeOriginal = "proxies: []`nrules: []`n"
-    $secondSafeOriginal = "proxies: []`nproxy-groups: []`n"
+    $firstSafeOriginal = @'
+proxies:
+  - name: Old One
+    type: ss
+    server: old-one.invalid
+    port: 443
+    cipher: aes-128-gcm
+    password: fixture-secret
+proxy-groups:
+  - name: Main
+    type: select
+    proxies:
+      - Old One
+rules:
+  - MATCH,Main
+'@
+    $secondSafeOriginal = @'
+proxies:
+  - name: Old Two
+    type: ss
+    server: old-two.invalid
+    port: 443
+    cipher: aes-128-gcm
+    password: fixture-secret
+proxy-groups:
+  - name: Main
+    type: select
+    proxies:
+      - Old Two
+rules:
+  - MATCH,Main
+'@
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeOriginal)
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeOriginal)
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "L-local.yaml"), "local: true`n")
@@ -2171,6 +2228,31 @@ items:
     $remoteTargets = @(Get-RemoteSubscriptionTargets $profilesIndexInput $safeUpdateProfiles)
     Assert-True ($remoteTargets.Count -eq 2) "two distinct remote subscriptions were not mapped independently"
     Assert-True ((@($remoteTargets | ForEach-Object { $_.Path } | Sort-Object -Unique)).Count -eq 2) "distinct remote subscriptions were mapped to one file"
+    $snapshotGuardContext = New-SafeUpdateSnapshotContext (
+        Join-Path $safeUpdateCase "profiles.yaml"
+    ) $safeUpdateProfiles $fakeCore
+    try {
+        foreach ($guardedPath in @(
+            (Join-Path $safeUpdateCase "profiles.yaml"),
+            (Join-Path $safeUpdateProfiles "R-first.yaml")
+        )) {
+            $writeBlocked = $false
+            try {
+                $writeProbe = [System.IO.File]::Open(
+                    $guardedPath,
+                    [System.IO.FileMode]::Open,
+                    [System.IO.FileAccess]::Write,
+                    [System.IO.FileShare]::ReadWrite
+                )
+                $writeProbe.Dispose()
+            } catch {
+                $writeBlocked = $true
+            }
+            Assert-True $writeBlocked "safe-update snapshot did not hold a read-only version guard: $guardedPath"
+        }
+    } finally {
+        foreach ($guard in @($snapshotGuardContext.Guards)) { $guard.Dispose() }
+    }
     if ($onWindows) {
         $caseAliasIndex = "items:`n- uid: Case-Alias`n  type: remote`n- uid: case-alias`n  type: remote`n"
         [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "case-alias.yaml"), "proxies: []`n")
@@ -2178,7 +2260,32 @@ items:
         try { Get-RemoteSubscriptionTargets $caseAliasIndex $safeUpdateProfiles | Out-Null } catch { $caseAliasRejected = $true }
         Assert-True $caseAliasRejected "case-alias remote subscriptions were allowed to share one file"
     }
-    $snapshotResult = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles")
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-first.yaml"),
+        "proxy-groups: []`n"
+    )
+    $racedSnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore
+    )
+    Assert-True ($racedSnapshot.ExitCode -eq 1) "snapshot accepted a subscription written before the client's profiles index commit"
+    Assert-True (-not (
+        Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json")
+    )) "rejected in-progress snapshot published a manifest"
+    Assert-True (@(
+        Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File |
+            Where-Object { $_.Name -like "*--pre-update--*" }
+    ).Count -eq 0) "rejected in-progress snapshot created update backups"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-first.yaml"),
+        $firstSafeOriginal
+    )
+    $snapshotResult = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore
+    )
     Assert-True ($snapshotResult.ExitCode -eq 0) "safe update snapshot failed; $(Get-TestOutputDiagnostic $snapshotResult.Output)"
     $safeBackups = @(Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--pre-update--*" })
     Assert-True ($safeBackups.Count -eq 2) "snapshot did not back up exactly the two remote subscriptions"
@@ -2209,6 +2316,7 @@ items:
     $missingTargetSnapshot = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore,
         "-Json"
     )
     Assert-JsonResult $missingTargetSnapshot "install" 0 | Out-Null
@@ -2238,7 +2346,11 @@ items:
         )
     )) "missing-target rollback retained a stale safe-update manifest"
 
-    $noMainSnapshot = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles")
+    $noMainSnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore
+    )
     Assert-True ($noMainSnapshot.ExitCode -eq 0) "main-group failure snapshot failed; $(Get-TestOutputDiagnostic $noMainSnapshot.Output)"
     $noMainUpdated = @'
 mode: rule
@@ -2262,7 +2374,11 @@ rules:
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "main-group validation failure did not restore second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed main-group rollback left a stale safe-update manifest"
 
-    $successSnapshot = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles")
+    $successSnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore
+    )
     Assert-True ($successSnapshot.ExitCode -eq 0) "successful safe update snapshot failed; $(Get-TestOutputDiagnostic $successSnapshot.Output)"
     $firstSafeUpdated = @'
 mode: rule
@@ -2296,6 +2412,190 @@ rules: ["MATCH,AI"]
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeUpdated) "valid safe update incorrectly restored first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeUpdated) "valid safe update incorrectly restored second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "accepted safe update left a stale manifest"
+
+    $legacyRetirementSnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    Assert-JsonResult $legacyRetirementSnapshot "install" 0 | Out-Null
+    $legacyManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    $legacyManifest = (
+        [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
+    )
+    $legacyManifest.Version = 1
+    foreach ($profile in @($legacyManifest.Profiles)) {
+        $profile.PSObject.Properties.Remove("BeforeUpdated")
+    }
+    Remove-Item -LiteralPath (
+        Join-Path (
+            Join-Path $safeUpdateCase "claude-easy-backups"
+        ) @($legacyManifest.Profiles)[0].Backup
+    ) -Force
+    [System.IO.File]::WriteAllText(
+        (
+            Join-Path (
+                Join-Path $safeUpdateCase "claude-easy-backups"
+            ) @($legacyManifest.Profiles)[1].Backup
+        ),
+        "corrupted legacy backup"
+    )
+    [System.IO.File]::WriteAllText(
+        $legacyManifestPath,
+        (($legacyManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
+    $legacyRetirementVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $legacyRetirementJson = Assert-JsonResult $legacyRetirementVerify "install" 1
+    Assert-True (
+        $legacyRetirementJson.status -eq "partial" -and
+        $legacyRetirementJson.code -eq "safe_update_legacy_snapshot_required"
+    ) "unchanged valid legacy snapshot with missing or corrupted backups remained permanently pending"
+    Assert-True (-not (
+        Test-Path -LiteralPath $legacyManifestPath
+    )) "validated legacy snapshot retirement retained its manifest"
+
+    $legacySnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    Assert-JsonResult $legacySnapshot "install" 0 | Out-Null
+    $legacyManifest = (
+        [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
+    )
+    $legacyManifest.Version = 1
+    foreach ($profile in @($legacyManifest.Profiles)) {
+        $profile.PSObject.Properties.Remove("BeforeUpdated")
+    }
+    $legacyBadBackup = [System.Text.Encoding]::UTF8.GetBytes("proxy-groups: [`n")
+    $legacyFirstProfile = @($legacyManifest.Profiles)[0]
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path (Join-Path $safeUpdateCase "claude-easy-backups") $legacyFirstProfile.Backup),
+        $legacyBadBackup
+    )
+    $legacyFirstProfile.BeforeSha256 = Get-BytesSha256 $legacyBadBackup
+    [System.IO.File]::WriteAllText(
+        $legacyManifestPath,
+        (($legacyManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-first.yaml"),
+        "proxy-groups: []`n"
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-second.yml"),
+        "proxy-groups: []`n"
+    )
+    $legacyCurrentBefore = Get-TreeContentSnapshot $safeUpdateProfiles
+    $legacyManifestBefore = [System.IO.File]::ReadAllBytes($legacyManifestPath)
+    $legacyVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $legacyVerifyJson = Assert-JsonResult $legacyVerify "install" 1
+    Assert-True (
+        $legacyVerifyJson.status -eq "partial" -and
+        $legacyVerifyJson.code -eq "safe_update_legacy_recovery_pending"
+    ) "legacy safe-update manifest auto-restored an untrusted backup"
+    Assert-True (
+        (Get-TreeContentSnapshot $safeUpdateProfiles) -ceq $legacyCurrentBefore
+    ) "legacy safe-update recovery changed current subscription files"
+    Assert-True (
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($legacyManifestPath)) -eq
+        [Convert]::ToBase64String($legacyManifestBefore)
+    ) "legacy safe-update recovery consumed or rewrote its manifest"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-first.yaml"),
+        $firstSafeUpdated
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-second.yml"),
+        ($secondSafeUpdated + "# refreshed after legacy recovery`n")
+    )
+    $legacyRecoveryRetry = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $legacyRecoveryRetryJson = Assert-JsonResult $legacyRecoveryRetry "install" 0
+    Assert-True (
+        $legacyRecoveryRetryJson.code -eq "safe_update_verified"
+    ) "legacy recovery could not complete after every subscription was refreshed"
+    Assert-True (-not (
+        Test-Path -LiteralPath $legacyManifestPath
+    )) "successful legacy recovery retry retained its manifest"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $safeUpdateProfiles "R-second.yml"),
+        $secondSafeUpdated
+    )
+
+    $noActionSnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    Assert-JsonResult $noActionSnapshot "install" 0 | Out-Null
+    $noActionManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    $noActionManifestBefore = [System.IO.File]::ReadAllBytes($noActionManifestPath)
+    $noActionVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $noActionVerifyJson = Assert-JsonResult $noActionVerify "install" 1
+    Assert-True (
+        $noActionVerifyJson.status -eq "partial" -and
+        $noActionVerifyJson.code -eq "safe_update_refresh_pending"
+    ) "safe update verification accepted a batch in which no subscription was refreshed"
+    Assert-True (
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($noActionManifestPath)) -eq
+        [Convert]::ToBase64String($noActionManifestBefore)
+    ) "missing refresh evidence consumed or rewrote the safe-update manifest"
+
+    $unchangedProfilesIndex = Get-Content -LiteralPath (Join-Path $safeUpdateCase "profiles.yaml") -Raw
+    $unchangedProfilesIndex = $unchangedProfilesIndex.Replace("updated: null", "updated: 101")
+    [System.IO.File]::WriteAllText((Join-Path $safeUpdateCase "profiles.yaml"), $unchangedProfilesIndex)
+    $partialRefreshVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $partialRefreshJson = Assert-JsonResult $partialRefreshVerify "install" 1
+    Assert-True (
+        $partialRefreshJson.status -eq "partial" -and
+        $partialRefreshJson.code -eq "safe_update_refresh_pending"
+    ) "safe update verification accepted a batch in which only one subscription was refreshed"
+    Assert-True (
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($noActionManifestPath)) -eq
+        [Convert]::ToBase64String($noActionManifestBefore)
+    ) "partial refresh evidence consumed or rewrote the safe-update manifest"
+
+    $unchangedProfilesIndex = $unchangedProfilesIndex.Replace("updated: 200", "updated: 201")
+    [System.IO.File]::WriteAllText((Join-Path $safeUpdateCase "profiles.yaml"), $unchangedProfilesIndex)
+    $unchangedVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $unchangedVerifyJson = Assert-JsonResult $unchangedVerify "install" 0
+    Assert-True (
+        $unchangedVerifyJson.code -eq "safe_update_verified"
+    ) "safe update rejected unchanged subscription content with a newer client update timestamp"
+    Assert-True (-not (Test-Path -LiteralPath $noActionManifestPath)) "verified unchanged refresh retained the safe-update manifest"
 
     if ($onWindows) {
         Invoke-DeferredProbe "safe-update rollback manifest strong-kill recovery" {
@@ -2375,6 +2675,7 @@ rules:
             $rollbackCrashSnapshot = Invoke-TestPowerShell $rollbackCrashInstaller @(
                 "-AppHome", $rollbackCrashHome,
                 "-SnapshotProfiles",
+                "-MihomoPath", $fakeCore,
                 "-Json"
             )
             Assert-JsonResult $rollbackCrashSnapshot "install" 0 | Out-Null
@@ -2435,10 +2736,20 @@ rules:
     }
 
     if ($onWindows) {
-        $concurrentVerifySnapshot = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles")
+        $concurrentVerifySnapshot = Invoke-TestPowerShell $installer @(
+            "-AppHome", $safeUpdateCase,
+            "-SnapshotProfiles",
+            "-MihomoPath", $fakeCore
+        )
         Assert-True ($concurrentVerifySnapshot.ExitCode -eq 0) "concurrent verification snapshot failed; $(Get-TestOutputDiagnostic $concurrentVerifySnapshot.Output)"
-        [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeUpdated)
-        [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeUpdated)
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-first.yaml"),
+            ($firstSafeUpdated + "# concurrent candidate one`n")
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-second.yml"),
+            ($secondSafeUpdated + "# concurrent candidate two`n")
+        )
         $env:CLAUDE_EASY_MUTATE_TARGET = Join-Path $safeUpdateProfiles "R-first.yaml"
         try {
             $concurrentVerify = Invoke-TestPowerShell $installer @(
@@ -2451,6 +2762,76 @@ rules:
         Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw).Contains("friend_concurrent: true")) "safe update overwrote a concurrent refresh"
         Assert-True (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json") -PathType Leaf) "concurrent validation failure discarded its recovery manifest"
         Remove-Item -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json") -Force
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-first.yaml"),
+            $firstSafeUpdated
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-second.yml"),
+            $secondSafeUpdated
+        )
+
+        $indexConcurrentSnapshot = Invoke-TestPowerShell $installer @(
+            "-AppHome", $safeUpdateCase,
+            "-SnapshotProfiles",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        )
+        Assert-JsonResult $indexConcurrentSnapshot "install" 0 | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-first.yaml"),
+            ($firstSafeUpdated + "# index-race candidate one`n")
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-second.yml"),
+            ($secondSafeUpdated + "# index-race candidate two`n")
+        )
+        $indexConcurrentProfilesBefore = Get-TreeContentSnapshot $safeUpdateProfiles
+        $indexConcurrentManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+        $indexConcurrentManifestBefore = [System.IO.File]::ReadAllBytes(
+            $indexConcurrentManifestPath
+        )
+        $profilesIndexBeforeConcurrentVerify = [System.IO.File]::ReadAllBytes(
+            (Join-Path $safeUpdateCase "profiles.yaml")
+        )
+        $env:CLAUDE_EASY_MUTATE_TARGET = Join-Path $safeUpdateCase "profiles.yaml"
+        try {
+            $indexConcurrentVerify = Invoke-TestPowerShell $installer @(
+                "-AppHome", $safeUpdateCase,
+                "-VerifySafeUpdate",
+                "-MihomoPath", $mutatingCore,
+                "-Json"
+            )
+        } finally {
+            $env:CLAUDE_EASY_MUTATE_TARGET = $null
+        }
+        $indexConcurrentVerifyJson = Assert-JsonResult $indexConcurrentVerify "install" 1
+        Assert-True (
+            $indexConcurrentVerifyJson.status -eq "partial" -and
+            $indexConcurrentVerifyJson.code -eq "safe_update_verification_retry_pending"
+        ) "concurrent profiles index change triggered a safe-update rollback"
+        Assert-True (
+            (Get-TreeContentSnapshot $safeUpdateProfiles) -ceq
+                $indexConcurrentProfilesBefore
+        ) "concurrent profiles index change overwrote valid refreshed subscriptions"
+        Assert-True (
+            [Convert]::ToBase64String(
+                [System.IO.File]::ReadAllBytes($indexConcurrentManifestPath)
+            ) -eq [Convert]::ToBase64String($indexConcurrentManifestBefore)
+        ) "concurrent profiles index change consumed or rewrote the recovery manifest"
+        [System.IO.File]::WriteAllBytes(
+            (Join-Path $safeUpdateCase "profiles.yaml"),
+            $profilesIndexBeforeConcurrentVerify
+        )
+        Remove-Item -LiteralPath $indexConcurrentManifestPath -Force
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-first.yaml"),
+            $firstSafeUpdated
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $safeUpdateProfiles "R-second.yml"),
+            $secondSafeUpdated
+        )
     }
 
     Invoke-DeferredProbe "strict safe-update manifest schema" {
@@ -2462,8 +2843,15 @@ rules:
             "items:`n- uid: R-schema`n  type: remote`n  option:`n    allow_auto_update: true`n"
         )
         $schemaSafeUpdateTarget = Join-Path $schemaSafeUpdateProfiles "R-schema.yaml"
-        [System.IO.File]::WriteAllText($schemaSafeUpdateTarget, "mode: rule`nproxies: []`n")
-        $schemaSnapshot = Invoke-TestPowerShell $installer @("-AppHome", $schemaSafeUpdateCase, "-SnapshotProfiles")
+        [System.IO.File]::WriteAllText(
+            $schemaSafeUpdateTarget,
+            "mode: rule`nproxies: []`nproxy-groups: [{ name: Main, type: select, proxies: [DIRECT] }]`nrules: [MATCH,Main]`n"
+        )
+        $schemaSnapshot = Invoke-TestPowerShell $installer @(
+            "-AppHome", $schemaSafeUpdateCase,
+            "-SnapshotProfiles",
+            "-MihomoPath", $fakeCore
+        )
         Assert-True ($schemaSnapshot.ExitCode -eq 0) "safe-update schema fixture snapshot failed"
         $schemaUpdatedText = "mode: global`nproxy-groups: []`n"
         [System.IO.File]::WriteAllText($schemaSafeUpdateTarget, $schemaUpdatedText)
@@ -2499,9 +2887,13 @@ rules:
             "items:`n- uid: R-utf8`n  type: remote`n  option:`n    allow_auto_update: true`n"
         )
         $utf8SafeUpdateTarget = Join-Path $utf8SafeUpdateProfiles "R-utf8.yaml"
-        $utf8OriginalText = "mode: rule`nproxies: []`n"
+        $utf8OriginalText = "mode: rule`nproxies: []`nproxy-groups: [{ name: Main, type: select, proxies: [DIRECT] }]`nrules: [MATCH,Main]`n"
         [System.IO.File]::WriteAllText($utf8SafeUpdateTarget, $utf8OriginalText)
-        $utf8Snapshot = Invoke-TestPowerShell $installer @("-AppHome", $utf8SafeUpdateCase, "-SnapshotProfiles")
+        $utf8Snapshot = Invoke-TestPowerShell $installer @(
+            "-AppHome", $utf8SafeUpdateCase,
+            "-SnapshotProfiles",
+            "-MihomoPath", $fakeCore
+        )
         Assert-True ($utf8Snapshot.ExitCode -eq 0) "invalid UTF-8 fixture snapshot failed"
         [byte[]]$utf8InvalidBytes = @(
             [System.Text.Encoding]::UTF8.GetBytes("mode: rule`n# invalid ")
@@ -2921,6 +3313,25 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
     $savedBackup = [System.IO.File]::ReadAllBytes($firstVersionedBackup)
     Assert-True (([Convert]::ToBase64String($savedBackup)) -eq ([Convert]::ToBase64String($backupBytes))) "first versioned backup changed"
     Assert-True ((Get-Content -LiteralPath $secondVersionedBackup -Raw) -eq "second") "second versioned backup did not capture the next write"
+    $lockedBackupGuard = Open-SafeUpdateVersionGuard $backupSource "测试备份来源"
+    try {
+        $lockedBackupBytes = Get-StreamBytes $lockedBackupGuard.Stream
+        $lockedVersionedBackup = Backup-Versioned `
+            $backupSource `
+            $versionedBackupRoot `
+            "pre-update" `
+            -SourceBytes $lockedBackupBytes `
+            -UseSourceBytes
+        Assert-True (
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($lockedVersionedBackup)) -eq
+            [Convert]::ToBase64String($lockedBackupBytes)
+        ) "locked snapshot bytes were not used for the versioned backup"
+    } finally {
+        $lockedBackupGuard.Stream.Dispose()
+        for ($guardIndex = $lockedBackupGuard.DirectoryGuards.Count - 1; $guardIndex -ge 0; $guardIndex--) {
+            $lockedBackupGuard.DirectoryGuards[$guardIndex].Dispose()
+        }
+    }
     $initialOne = Backup-InitialOnce $backupSource $versionedBackupRoot
     $initialTwo = Backup-InitialOnce $backupSource $versionedBackupRoot
     Assert-True (-not [string]::IsNullOrWhiteSpace($initialOne)) "initial backup was not created"
@@ -4996,25 +5407,36 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
         [System.IO.File]::WriteAllText((Join-Path $runningProfiles "R-test.yaml"), "proxies: []`n")
         [System.IO.File]::WriteAllText((Join-Path $runningCase "config.yaml"), $runningConfig)
         [System.IO.File]::WriteAllText((Join-Path $runningCase "verge.yaml"), $runningVerge)
+        $runningFixtureLock = Enter-AppHomeMutationLock $runningCase
+        Exit-AppHomeMutationLock $runningFixtureLock
         $runningClientPath = Join-Path $sandbox "clash-verge.exe"
         Copy-Item -LiteralPath (Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe") -Destination $runningClientPath
         $runningClient = Start-Process -FilePath $runningClientPath -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
+        $runningBefore = Get-TreeContentSnapshot $runningCase
         try {
             Start-Sleep -Milliseconds 100
-            $runningResult = Invoke-TestPowerShell $installer @("-AppHome", $runningCase, "-MihomoPath", $fakeCore)
-            Assert-True ($runningResult.ExitCode -eq 0) "installer did not use the running-client boundary; $(Get-TestOutputDiagnostic $runningResult.Output)"
-            Assert-True (Test-Path -LiteralPath (Join-Path $runningProfiles "Script.js") -PathType Leaf) "running client did not receive the global script"
-            Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+false\s*$') "running client did not disable remote auto-update"
-            Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "config.yaml") -Raw) -eq $runningConfig) "running client changed config.yaml"
-            Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "verge.yaml") -Raw) -eq $runningVerge) "running client changed verge.yaml"
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-install-state.json"))) "running client created an offline install state"
-            Assert-True (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-auto-update-state.json") -PathType Leaf) "running client install did not save auto-update ownership"
+            $runningResult = Invoke-TestPowerShell $installer @(
+                "-AppHome", $runningCase,
+                "-MihomoPath", $fakeCore,
+                "-Json"
+            )
+            $runningJson = Assert-JsonResult $runningResult "install" 1
+            Assert-True (
+                $runningJson.status -eq "partial" -and
+                $runningJson.code -eq "client_running_profile_three_deferred"
+            ) "running profile 3 install reported success without changing the client's in-memory subscription state"
+            Assert-True (
+                (Get-TreeContentSnapshot $runningCase) -ceq $runningBefore
+            ) "deferred running profile 3 install changed AppHome"
         } finally {
             if (-not $runningClient.HasExited) { Stop-Process -Id $runningClient.Id -Force }
         }
+        Invoke-Installer $runningCase
+        Assert-True (Test-Path -LiteralPath (Join-Path $runningProfiles "Script.js") -PathType Leaf) "stopped-client retry did not install the global script"
+        Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+false\s*$') "stopped-client retry did not disable remote auto-update"
         Invoke-Uninstaller $runningCase
-        Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+true\s*$') "running-client install could not later restore auto-update"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-auto-update-state.json"))) "running-client uninstall retained auto-update ownership"
+        Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+true\s*$') "stopped-client retry could not later restore auto-update"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-auto-update-state.json"))) "stopped-client retry uninstall retained auto-update ownership"
 
         $deferredUninstallCase = Join-Path $sandbox "deferred-running-uninstall-case"
         New-Item -ItemType Directory -Path $deferredUninstallCase -Force | Out-Null

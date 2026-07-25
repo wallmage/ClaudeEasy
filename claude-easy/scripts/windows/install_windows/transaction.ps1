@@ -177,7 +177,9 @@ function Backup-Versioned(
     [string]$Path,
     [string]$BackupRoot,
     [string]$Reason = "prewrite",
-    [switch]$WithMetadata
+    [switch]$WithMetadata,
+    [byte[]]$SourceBytes = $null,
+    [switch]$UseSourceBytes
 ) {
     Assert-NoReparsePointPath $Path "备份来源"
     Assert-NoReparsePointPath $BackupRoot "备份目录"
@@ -208,10 +210,15 @@ function Backup-Versioned(
     $createdBytes = $null
     $failure = $null
     try {
-        $sourceStream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
         $backupStream = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
         $created = $true
-        $sourceStream.CopyTo($backupStream)
+        if ($UseSourceBytes) {
+            if ($null -eq $SourceBytes) { $SourceBytes = [byte[]]@() }
+            $backupStream.Write($SourceBytes, 0, $SourceBytes.Length)
+        } else {
+            $sourceStream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+            $sourceStream.CopyTo($backupStream)
+        }
         $backupStream.Flush($true)
         $createdBytes = Get-StreamBytes $backupStream
     } catch {
@@ -247,7 +254,12 @@ function Backup-Versioned(
     return $destination
 }
 
-function Backup-InitialOnce([string]$Path, [string]$BackupRoot) {
+function Backup-InitialOnce(
+    [string]$Path,
+    [string]$BackupRoot,
+    [byte[]]$SourceBytes = $null,
+    [switch]$UseSourceBytes
+) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $key = Get-PathKey $Path
     $basename = Split-Path -Leaf $Path
@@ -257,7 +269,12 @@ function Backup-InitialOnce([string]$Path, [string]$BackupRoot) {
         } | Select-Object -First 1
         if ($null -ne $existing) { return }
     }
-    return (Backup-Versioned $Path $BackupRoot "initial")
+    return (Backup-Versioned `
+        $Path `
+        $BackupRoot `
+        "initial" `
+        -SourceBytes $SourceBytes `
+        -UseSourceBytes:$UseSourceBytes)
 }
 
 function Write-BytesAtomic([string]$Path, [byte[]]$Bytes) {
