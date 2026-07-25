@@ -521,6 +521,16 @@ function Invoke-Uninstaller([string]$AppHome) {
     }
 }
 
+function Read-TestUtf8Text([string]$Path) {
+    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    return $encoding.GetString([System.IO.File]::ReadAllBytes($Path))
+}
+
+function Write-TestUtf8Text([string]$Path, [string]$Text) {
+    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    [System.IO.File]::WriteAllBytes($Path, $encoding.GetBytes($Text))
+}
+
 function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$MessageFragment) {
     $case = Join-Path $sandbox $Name
     $profiles = Join-Path $case "profiles"
@@ -529,11 +539,11 @@ function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$
     [System.IO.File]::WriteAllText((Join-Path $case "verge.yaml"), "enable_tun_mode: false`n")
     [System.IO.File]::WriteAllText((Join-Path $case "profiles.yaml"), "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n")
     $scriptPath = Join-Path $profiles "Script.js"
-    [System.IO.File]::WriteAllText($scriptPath, $Script)
+    Write-TestUtf8Text $scriptPath $Script
     $result = Invoke-TestPowerShell $installer @("-AppHome", $case, "-MihomoPath", $fakeCore)
     Assert-True ($result.ExitCode -eq 1) "$Name was accepted"
     Assert-True ($result.Output.Contains($MessageFragment)) "$Name rejection did not explain the problem; $(Get-TestOutputDiagnostic $result.Output)"
-    Assert-True ((Get-Content -LiteralPath $scriptPath -Raw) -eq $Script) "$Name rejection changed Script.js"
+    Assert-True ((Read-TestUtf8Text $scriptPath) -eq $Script) "$Name rejection changed Script.js"
 }
 
 try {
@@ -1908,7 +1918,7 @@ public static class FakeCurl {
     Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "verge.yaml") -Raw) -eq $lightVerge) "profile 1 modified verge.yaml"
     $lightScript = Join-Path (Join-Path $lightCase "profiles") "Script.js"
     Assert-True (Test-Path -LiteralPath $lightScript -PathType Leaf) "profile 1 did not install the shared subscription patch"
-    $profileOneScript = Get-Content -LiteralPath $lightScript -Raw
+    $profileOneScript = Read-TestUtf8Text $lightScript
     Assert-True ($profileOneScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 1;")) "profile 1 script has the wrong usage profile"
     Assert-True ($profileOneScript.Contains("cnDomainProvider")) "profile 1 script omitted the China-domain provider"
     $savedProfileOne = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
@@ -1917,7 +1927,7 @@ public static class FakeCurl {
     Assert-True ($profileTwo.ExitCode -eq 0) "profile 2 installer failed; $(Get-TestOutputDiagnostic $profileTwo.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "config.yaml") -Raw) -eq $lightConfig) "profile 2 modified config.yaml"
     Assert-True (Test-Path -LiteralPath $lightScript -PathType Leaf) "profile 2 removed the shared subscription patch"
-    $profileTwoScript = Get-Content -LiteralPath $lightScript -Raw
+    $profileTwoScript = Read-TestUtf8Text $lightScript
     Assert-True ($profileTwoScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 2;")) "profile 2 script has the wrong usage profile"
     Assert-True ($profileTwoScript.Contains("cnDomainProvider")) "profile 2 script omitted the China-domain provider"
     $savedProfileTwo = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
@@ -2953,10 +2963,9 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
             $backupCrashRoot = Join-Path $backupCrashHome "claude-easy-backups"
             $backupCrashReady = Join-Path $sandbox "backup-crash.ready"
             New-Item -ItemType Directory -Path $backupCrashProfiles -Force | Out-Null
-            [System.IO.File]::WriteAllText(
-                (Join-Path $backupCrashProfiles "Script.js"),
+            Write-TestUtf8Text `
+                (Join-Path $backupCrashProfiles "Script.js") `
                 "function main(config) { config.friend = true; return config; }`n"
-            )
             [System.IO.File]::WriteAllText((Join-Path $backupCrashHome "config.yaml"), "ipv6: true`ntun: null`n")
             [System.IO.File]::WriteAllText((Join-Path $backupCrashHome "verge.yaml"), "enable_tun_mode: false`n")
             [System.IO.File]::WriteAllText(
@@ -5502,29 +5511,31 @@ Object.defineProperty(globalThis, "main", {
   configurable: true
 });
 '@
-    [System.IO.File]::WriteAllText((Join-Path $composeProfiles "Script.js"), $originalScript)
+    Write-TestUtf8Text (Join-Path $composeProfiles "Script.js") $originalScript
     Invoke-Installer $composeCase
     $composedPath = Join-Path $composeProfiles "Script.js"
     $enginePath = Join-Path (Join-Path $root "claude-easy/scripts/windows") "clash_verge_global.js"
     $canonicalComposedBytes = [System.IO.File]::ReadAllBytes($composedPath)
     $commentWrappedComposed = "// friend prefix comment`r`n" +
-        (Get-Content -LiteralPath $composedPath -Raw) +
+        (Read-TestUtf8Text $composedPath) +
         "/* friend suffix comment */`r`n"
-    [System.IO.File]::WriteAllText($composedPath, $commentWrappedComposed)
+    Write-TestUtf8Text $composedPath $commentWrappedComposed
     Assert-ClaudeEasyManagedScriptCurrent (
-        Get-Content -LiteralPath $composedPath -Raw
+        Read-TestUtf8Text $composedPath
     ) 3 $enginePath $composedPath
+    Assert-True (
+        (Read-TestUtf8Text $composedPath).Contains("🤖 AI · ClaudeEasy")
+    ) "Script.js UTF-8 fixture corrupted non-ASCII managed content"
     [System.IO.File]::WriteAllBytes($composedPath, $canonicalComposedBytes)
 
     $directivePrefix = '"use strict"' + "`r`n"
-    [System.IO.File]::WriteAllText(
-        $composedPath,
-        $directivePrefix + (Get-Content -LiteralPath $composedPath -Raw)
+    Write-TestUtf8Text $composedPath (
+        $directivePrefix + (Read-TestUtf8Text $composedPath)
     )
     $directivePrefixRejected = $false
     try {
         Assert-ClaudeEasyManagedScriptCurrent (
-            Get-Content -LiteralPath $composedPath -Raw
+            Read-TestUtf8Text $composedPath
         ) 3 $enginePath $composedPath
     } catch {
         $directivePrefixRejected = $true
@@ -5533,14 +5544,13 @@ Object.defineProperty(globalThis, "main", {
     [System.IO.File]::WriteAllBytes($composedPath, $canonicalComposedBytes)
 
     $templateSuffix = "`r`n" + '`friend template literal`'
-    [System.IO.File]::WriteAllText(
-        $composedPath,
-        (Get-Content -LiteralPath $composedPath -Raw) + $templateSuffix
+    Write-TestUtf8Text $composedPath (
+        (Read-TestUtf8Text $composedPath) + $templateSuffix
     )
     $templateSuffixRejected = $false
     try {
         Assert-ClaudeEasyManagedScriptCurrent (
-            Get-Content -LiteralPath $composedPath -Raw
+            Read-TestUtf8Text $composedPath
         ) 3 $enginePath $composedPath
     } catch {
         $templateSuffixRejected = $true
@@ -5549,21 +5559,20 @@ Object.defineProperty(globalThis, "main", {
     [System.IO.File]::WriteAllBytes($composedPath, $canonicalComposedBytes)
 
     $prefixPollution = "Object.prototype.friendOutsideManagedBlock = true;`r`n"
-    [System.IO.File]::WriteAllText(
-        $composedPath,
-        $prefixPollution + (Get-Content -LiteralPath $composedPath -Raw)
+    Write-TestUtf8Text $composedPath (
+        $prefixPollution + (Read-TestUtf8Text $composedPath)
     )
     $prefixPollutionRejected = $false
     try {
         Assert-ClaudeEasyManagedScriptCurrent (
-            Get-Content -LiteralPath $composedPath -Raw
+            Read-TestUtf8Text $composedPath
         ) 3 $enginePath $composedPath
     } catch {
         $prefixPollutionRejected = $true
     }
     Assert-True $prefixPollutionRejected "safe-update script check accepted executable prefix code outside the managed block"
     Invoke-Installer $composeCase
-    $migratedPrefixScript = Get-Content -LiteralPath $composedPath -Raw
+    $migratedPrefixScript = Read-TestUtf8Text $composedPath
     Assert-True (
         $migratedPrefixScript.Contains($prefixPollution.Trim()) -and
         $migratedPrefixScript.TrimStart().StartsWith("// CLAUDEEASY BEGIN")
@@ -5571,30 +5580,30 @@ Object.defineProperty(globalThis, "main", {
     Assert-ClaudeEasyManagedScriptCurrent $migratedPrefixScript 3 $enginePath $composedPath
 
     $composedWithSuffix = $migratedPrefixScript + "const friendAfterPatch = true;`r`n"
-    [System.IO.File]::WriteAllText($composedPath, $composedWithSuffix)
+    Write-TestUtf8Text $composedPath $composedWithSuffix
     $suffixCodeRejected = $false
     try {
         Assert-ClaudeEasyManagedScriptCurrent (
-            Get-Content -LiteralPath $composedPath -Raw
+            Read-TestUtf8Text $composedPath
         ) 3 $enginePath $composedPath
     } catch {
         $suffixCodeRejected = $true
     }
     Assert-True $suffixCodeRejected "safe-update script check accepted executable suffix code outside the managed block"
     Invoke-Installer $composeCase
-    Assert-True ((Get-Content -LiteralPath $composedPath -Raw).Contains("const friendAfterPatch = true;")) "reinstall discarded code after the managed block"
+    Assert-True ((Read-TestUtf8Text $composedPath).Contains("const friendAfterPatch = true;")) "reinstall discarded code after the managed block"
     Assert-ClaudeEasyManagedScriptCurrent (
-        Get-Content -LiteralPath $composedPath -Raw
+        Read-TestUtf8Text $composedPath
     ) 3 $enginePath $composedPath
     $safeComposedBytes = [System.IO.File]::ReadAllBytes($composedPath)
-    [System.IO.File]::AppendAllText(
-        $composedPath,
-        "function main(config) { config.suffixMain = true; return config; }`r`n"
+    Write-TestUtf8Text $composedPath (
+        (Read-TestUtf8Text $composedPath) +
+            "function main(config) { config.suffixMain = true; return config; }`r`n"
     )
     $suffixMainCurrentRejected = $false
     try {
         Assert-ClaudeEasyManagedScriptCurrent (
-            Get-Content -LiteralPath $composedPath -Raw
+            Read-TestUtf8Text $composedPath
         ) 3 $enginePath $composedPath
     } catch {
         $suffixMainCurrentRejected = $true
@@ -5656,7 +5665,7 @@ for (const serialized of context.__claudeEasyResults) {
         Assert-True ($LASTEXITCODE -eq 0) "generated Script.js failed syntax or execution; $(Get-TestOutputDiagnostic $generatedScriptOutput)"
     }
     Invoke-Uninstaller $composeCase
-    $restoredScript = Get-Content -LiteralPath (Join-Path $composeProfiles "Script.js") -Raw
+    $restoredScript = Read-TestUtf8Text (Join-Path $composeProfiles "Script.js")
     Assert-True ($restoredScript.Contains($originalScript.Trim())) "uninstaller did not restore the composed script"
     Assert-True ($restoredScript.Contains("const friendAfterPatch = true;")) "uninstaller discarded code after the managed block"
     Assert-True ((Get-Content -LiteralPath (Join-Path $composeCase "config.yaml") -Raw) -eq $composeConfigOriginal) "uninstaller did not restore config.yaml"
@@ -5680,7 +5689,7 @@ function main(config) {
 }
 '@
     $lexicalScriptPath = Join-Path $lexicalProfiles "Script.js"
-    [System.IO.File]::WriteAllText($lexicalScriptPath, $lexicalScript)
+    Write-TestUtf8Text $lexicalScriptPath $lexicalScript
     Invoke-Installer $lexicalCase
     if ($onWindows) {
         $lexicalHarness = Join-Path $sandbox "run-lexical-script.js"
@@ -5716,7 +5725,7 @@ if (result.templateValue !== "globalThis:friend") {
     }
     Invoke-Uninstaller $lexicalCase
     Assert-True (
-        (Get-Content -LiteralPath $lexicalScriptPath -Raw).Contains($lexicalScript.Trim())
+        (Read-TestUtf8Text $lexicalScriptPath).Contains($lexicalScript.Trim())
     ) "uninstaller did not restore lexical global declarations"
 
     $intrinsicCase = Join-Path $sandbox "intrinsic-pollution-case"
@@ -5735,7 +5744,7 @@ function main(config) {
 }
 '@
     $intrinsicScriptPath = Join-Path $intrinsicProfiles "Script.js"
-    [System.IO.File]::WriteAllText($intrinsicScriptPath, $intrinsicScript)
+    Write-TestUtf8Text $intrinsicScriptPath $intrinsicScript
     Invoke-Installer $intrinsicCase
     if ($onWindows) {
         $intrinsicHarness = Join-Path $sandbox "run-intrinsic-script.js"
@@ -5775,7 +5784,7 @@ if (context.__claudeEasyIntrinsicsIntact !== true) {
     }
     Invoke-Uninstaller $intrinsicCase
     Assert-True (
-        (Get-Content -LiteralPath $intrinsicScriptPath -Raw).Contains($intrinsicScript.Trim())
+        (Read-TestUtf8Text $intrinsicScriptPath).Contains($intrinsicScript.Trim())
     ) "uninstaller did not restore the intrinsic-polluting script"
 
     $asyncCase = Join-Path $sandbox "async-case"
@@ -5788,14 +5797,14 @@ if (context.__claudeEasyIntrinsicsIntact !== true) {
     [System.IO.File]::WriteAllText((Join-Path $asyncCase "config.yaml"), $asyncConfig)
     [System.IO.File]::WriteAllText((Join-Path $asyncCase "verge.yaml"), $asyncVerge)
     $asyncScriptPath = Join-Path $asyncProfiles "Script.js"
-    [System.IO.File]::WriteAllText($asyncScriptPath, $asyncScript)
+    Write-TestUtf8Text $asyncScriptPath $asyncScript
     $asyncUsageStatePath = Join-Path $asyncCase "claude-easy-usage-profile.json"
     $asyncUsageState = '{"Version":1,"Profile":1}' + "`r`n"
     [System.IO.File]::WriteAllText($asyncUsageStatePath, $asyncUsageState)
     $asyncResult = Invoke-TestPowerShell $installer @("-AppHome", $asyncCase, "-UsageProfile", "3", "-MihomoPath", $fakeCore)
     Assert-True ($asyncResult.ExitCode -eq 1) "installer accepted an async main that Clash Verge Rev cannot await"
     Assert-True ($asyncResult.Output.Contains("异步 main")) "async main rejection did not explain the incompatibility"
-    Assert-True ((Get-Content -LiteralPath $asyncScriptPath -Raw) -eq $asyncScript) "async main rejection changed Script.js"
+    Assert-True ((Read-TestUtf8Text $asyncScriptPath) -eq $asyncScript) "async main rejection changed Script.js"
     Assert-True ((Get-Content -LiteralPath (Join-Path $asyncCase "config.yaml") -Raw) -eq $asyncConfig) "async main rejection changed config.yaml"
     Assert-True ((Get-Content -LiteralPath (Join-Path $asyncCase "verge.yaml") -Raw) -eq $asyncVerge) "async main rejection changed verge.yaml"
     Assert-True ((Get-Content -LiteralPath $asyncUsageStatePath -Raw) -eq $asyncUsageState) "failed install changed the saved usage profile"
@@ -5818,12 +5827,12 @@ friend payload
 }
 '@
     $templateScriptPath = Join-Path $templateMarkerProfiles "Script.js"
-    [System.IO.File]::WriteAllText($templateScriptPath, $templateScript)
+    Write-TestUtf8Text $templateScriptPath $templateScript
     Invoke-Installer $templateMarkerCase
-    $templateComposed = Get-Content -LiteralPath $templateScriptPath -Raw
+    $templateComposed = Read-TestUtf8Text $templateScriptPath
     Assert-True ($templateComposed.Contains("friend payload")) "marker text inside a template literal was treated as a managed boundary"
     Invoke-Uninstaller $templateMarkerCase
-    Assert-True ((Get-Content -LiteralPath $templateScriptPath -Raw).Contains("friend payload")) "uninstaller discarded marker text inside a template literal"
+    Assert-True ((Read-TestUtf8Text $templateScriptPath).Contains("friend payload")) "uninstaller discarded marker text inside a template literal"
 
     Assert-InstallerRejectsScript "reserved-symbol-case" "const claudeEasyTransform = 1;`nfunction main(config) { return config; }`n" "保留标识符"
     Assert-InstallerRejectsScript "recursive-main-case" "function main(config) { return config.retry ? main(config) : config; }`n" "递归"
@@ -5857,10 +5866,10 @@ friend payload
     New-Item -ItemType Directory -Path $badMarkerProfiles -Force | Out-Null
     $badMarkerPath = Join-Path $badMarkerProfiles "Script.js"
     $badMarkerScript = "// CLAUDEEASY BEGIN`nfunction main(config) { return config; }`n// CLAUDEEASY END`n// CLAUDEEASY END`n"
-    [System.IO.File]::WriteAllText($badMarkerPath, $badMarkerScript)
+    Write-TestUtf8Text $badMarkerPath $badMarkerScript
     $badMarkerResult = Invoke-TestPowerShell $uninstaller @("-AppHome", $badMarkerCase)
     Assert-True ($badMarkerResult.ExitCode -eq 1) "uninstaller accepted duplicate end markers"
-    Assert-True ((Get-Content -LiteralPath $badMarkerPath -Raw) -eq $badMarkerScript) "uninstaller modified an ambiguously marked script"
+    Assert-True ((Read-TestUtf8Text $badMarkerPath) -eq $badMarkerScript) "uninstaller modified an ambiguously marked script"
 
     if ($script:deferredProbeFailures.Count -gt 0) {
         throw ("deferred production probes failed:`n- " + ($script:deferredProbeFailures -join "`n- "))

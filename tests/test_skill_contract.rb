@@ -628,7 +628,7 @@ class SkillContractTest < Minitest::Test
 
     assert_includes source, '[switch]$SecretStdin'
     assert_includes source, "function Read-ControllerSecretFromStandardInput"
-    assert_includes source, '[Console]::In.ReadToEnd()'
+    assert_includes source, '$inputReader.ReadToEnd()'
     assert_includes source, '不能通过 -Secret 传入非空控制器密钥'
     assert_includes source, "function Get-ValidatedControllerBaseUri"
     assert_includes source, 'Test-StrictIpv4LoopbackHost $rawHost'
