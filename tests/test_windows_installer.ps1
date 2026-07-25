@@ -2273,10 +2273,17 @@ rules:
     Assert-True (-not (
         Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json")
     )) "rejected in-progress snapshot published a manifest"
-    Assert-True (@(
-        Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File |
-            Where-Object { $_.Name -like "*--pre-update--*" }
-    ).Count -eq 0) "rejected in-progress snapshot created update backups"
+    $rejectedSnapshotBackups = @()
+    $rejectedSnapshotBackupRoot = Join-Path $safeUpdateCase "claude-easy-backups"
+    if (Test-Path -LiteralPath $rejectedSnapshotBackupRoot -PathType Container) {
+        $rejectedSnapshotBackups = @(
+            Get-ChildItem -LiteralPath $rejectedSnapshotBackupRoot -File |
+                Where-Object { $_.Name -like "*--pre-update--*" }
+        )
+    }
+    Assert-True (
+        $rejectedSnapshotBackups.Count -eq 0
+    ) "rejected in-progress snapshot created update backups"
     [System.IO.File]::WriteAllText(
         (Join-Path $safeUpdateProfiles "R-first.yaml"),
         $firstSafeOriginal
