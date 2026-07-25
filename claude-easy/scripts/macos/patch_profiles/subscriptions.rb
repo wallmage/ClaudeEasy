@@ -340,18 +340,24 @@ module ClaudeEasy
     exported = defaults_export_domain(runner: runner)
     return nil unless exported
 
-    json, _error, status = runner.call(
-      "/usr/bin/plutil", "-convert", "json", "-o", "-", "-",
+    xml, _error, status = runner.call(
+      "/usr/bin/plutil", "-convert", "xml1", "-o", "-", "-",
       stdin_data: exported.fetch(:plist)
     )
     return nil unless status.success?
 
-    preferences = JSON.parse(json)
-    return nil unless preferences.is_a?(Hash)
-    return "" unless preferences.key?("selectConfigName")
+    document = REXML::Document.new(xml)
+    dictionary = document.elements["plist/dict"]
+    return nil unless dictionary
 
-    selected = preferences["selectConfigName"]
-    selected.is_a?(String) ? selected.strip : nil
+    elements = dictionary.elements.to_a
+    key_index = elements.index do |element|
+      element.name == "key" && element.text.to_s == "selectConfigName"
+    end
+    return "" unless key_index
+
+    selected = elements[key_index + 1]
+    selected&.name == "string" ? selected.text.to_s.strip : nil
   rescue StandardError
     nil
   end

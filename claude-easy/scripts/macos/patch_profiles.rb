@@ -9,6 +9,7 @@ require "open3"
 require "optparse"
 require "psych"
 require "rbconfig"
+require "rexml/document"
 require "tempfile"
 require "time"
 

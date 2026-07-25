@@ -811,6 +811,35 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不得把完整补丁验收当成每次诊断的固定步骤"
   end
 
+  def test_ai_availability_diagnostics_check_official_incidents_before_local_state
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    )
+
+    [readme, skill, policy, design].each do |document|
+      assert_includes document, "AI 服务状态前置检查"
+      assert_includes document, "对应提供商的官方状态页和事件历史"
+    end
+    [skill, policy].each do |document|
+      assert_includes document, "https://status.openai.com/"
+      assert_includes document, "https://status.anthropic.com/"
+    end
+
+    assert_operator(
+      skill.index("AI 服务状态前置检查"),
+      :<,
+      skill.index("Diagnostics 每次开始都先读取本机保存的档位")
+    )
+    assert_operator(
+      policy.index("### AI 服务状态前置检查"),
+      :<,
+      policy.index("### 通用工作循环")
+    )
+  end
+
   def test_diagnostics_finishes_with_repair_explanation_and_verification
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
 

@@ -8,7 +8,6 @@ module MacosRuntimeFixture
   def write_release_preferences_fixture(directory, selected: "friend")
     path = File.join(directory, "claude_easy_preferences_fixture.rb")
     File.write(path, <<~RUBY)
-      require "json"
       require "open3"
 
       ClaudeEasyFixtureStatus = Struct.new(:success?)
@@ -27,7 +26,7 @@ module MacosRuntimeFixture
                arguments[1] == "-convert" &&
                options[:stdin_data].to_s.include?("selectConfigName")
               return [
-                JSON.generate("selectConfigName" => "#{selected}"), "",
+                options[:stdin_data], "",
                 ClaudeEasyFixtureStatus.new(true)
               ]
             end

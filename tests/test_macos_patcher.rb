@@ -6181,12 +6181,28 @@ class MacosPatcherTest < Minitest::Test
     plist = "<?xml version=\"1.0\"?><plist><dict/></plist>"
     cases = [
       [
-        [[plist, "", success], [JSON.generate("selectConfigName" => "friend"), "", success]],
+        [
+          [plist, "", success],
+          [
+            "<plist><dict><key>selectConfigName</key><string>friend</string></dict></plist>",
+            "", success
+          ]
+        ],
         "friend"
       ],
       [
-        [[plist, "", success], [JSON.generate({}), "", success]],
+        [[plist, "", success], ["<plist><dict/></plist>", "", success]],
         ""
+      ],
+      [
+        [
+          [plist, "", success],
+          [
+            "<plist><dict><key>selectConfigName</key><integer>3</integer></dict></plist>",
+            "", success
+          ]
+        ],
+        nil
       ],
       [
         [[plist, "", success], ["", "invalid plist", failure]],
@@ -6211,6 +6227,33 @@ class MacosPatcherTest < Minitest::Test
         responses.shift || raise(IOError, "plutil unavailable")
       }
     )
+  end
+
+  def test_selected_profile_snapshot_ignores_unrelated_non_json_plist_values
+    success = Struct.new(:success?).new(true)
+    plist = <<~PLIST
+      <?xml version="1.0" encoding="UTF-8"?>
+      <plist version="1.0">
+        <dict>
+          <key>lastCheckedAt</key>
+          <date>2026-07-25T13:00:00Z</date>
+          <key>opaqueState</key>
+          <data>AQID</data>
+          <key>selectConfigName</key>
+          <string>friend</string>
+        </dict>
+      </plist>
+    PLIST
+    real_runner = Open3.method(:capture3)
+    runner = lambda do |*arguments, **options|
+      if arguments[0] == "/usr/bin/defaults" && arguments[1] == "export"
+        [plist, "", success]
+      else
+        real_runner.call(*arguments, **options)
+      end
+    end
+
+    assert_equal "friend", ClaudeEasy.selected_profile_name(runner: runner)
   end
 
   def test_single_custom_profile_directory_is_active
@@ -8296,7 +8339,6 @@ class MacosPatcherTest < Minitest::Test
       File.chmod(0o700, core)
       preferences = File.join(home, "preferences_fixture.rb")
       File.binwrite(preferences, <<~'RUBY')
-        require "json"
         require "open3"
         ClaudeEasyPublicPatchStatus = Struct.new(:success?)
         module Open3
@@ -8312,7 +8354,7 @@ class MacosPatcherTest < Minitest::Test
               if arguments[0] == "/usr/bin/plutil" && arguments[1] == "-convert" &&
                  options[:stdin_data].to_s.include?("selectConfigName")
                 return [
-                  JSON.generate("selectConfigName" => "friend"), "",
+                  options[:stdin_data], "",
                   ClaudeEasyPublicPatchStatus.new(true)
                 ]
               end
