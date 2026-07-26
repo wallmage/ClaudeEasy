@@ -599,16 +599,62 @@ class SkillContractTest < Minitest::Test
     %w[Selector URLTest Fallback LoadBalance Relay].each do |group_type|
       assert_includes windows_verifier, %("#{group_type}")
     end
-    assert_includes windows_verifier, "Test-SupportedRouteGroupType ([string]$property.Value.type)"
+    assert_includes(
+      windows_verifier,
+      "if ($null -eq $property -or -not (Test-SupportedRouteGroupType ([string]$property.Value.type))) {"
+    )
   end
 
-  def test_windows_route_verifier_uses_live_match_rule_for_main_group
-    source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+  def test_both_route_verifiers_use_live_match_rule_for_main_group
+    mac_source = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
+    windows_source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
 
-    assert_includes source, "function Get-LiveMainGroup"
-    assert_includes source, 'Invoke-ControllerJson "/rules"'
-    assert_includes source, '$rule.proxy'
-    assert_includes source, '$main = Get-LiveMainGroup $proxies'
+    assert_includes mac_source, "def live_main_group"
+    assert_includes mac_source, 'get_json(socket, "/rules")'
+    assert_includes mac_source, 'rule["proxy"]'
+    assert_includes mac_source, "main_group = live_main_group(socket, proxies, main_group)"
+    assert_includes mac_source, 'ai_group = find_group(proxies, policy["ai_group_names"], ai_group, ai: true)'
+    assert_includes windows_source, "function Get-LiveMainGroup"
+    assert_includes windows_source, 'Invoke-ControllerJson "/rules"'
+    assert_includes windows_source, '$rule.proxy'
+    assert_includes windows_source, '$main = Get-LiveMainGroup $proxies'
+  end
+
+  def test_route_verifiers_share_group_overrides_observation_window_and_result_shape
+    mac_source = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
+    windows_source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+
+    assert_includes mac_source, '"--main-group NAME"'
+    assert_includes mac_source, '"--ai-group NAME"'
+    assert_includes mac_source, '"--observation-seconds N"'
+    assert_includes mac_source, '"not_observed"'
+    assert_includes mac_source, 'ok ? "passed" : "failed"'
+    assert_includes windows_source, "Test-UsableRouteGroupSelection"
+    assert_includes windows_source, '"not_observed"'
+    assert_includes windows_source, '"route_verification_failed"'
+  end
+
+  def test_route_verifiers_share_targets_and_supported_runtime_types
+    mac_source = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
+    windows_source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+
+    {
+      "Google" => "https://www.google.com/search?q=clash-route-verification",
+      "OpenAI" => "https://openai.com/",
+      "Anthropic" => "https://www.anthropic.com/",
+      "Claude" => "https://claude.ai/"
+    }.each do |label, url|
+      assert_includes mac_source, %(["#{label}", "#{url}")
+      assert_includes windows_source, %("#{label}" "#{url}")
+    end
+    %w[Selector URLTest Fallback LoadBalance Relay].each do |group_type|
+      assert_includes mac_source, group_type
+      assert_includes windows_source, group_type
+    end
+    %w[DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH].each do |terminal|
+      assert_includes mac_source, terminal
+      assert_includes windows_source, terminal
+    end
   end
 
   def test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata

@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require "json"
+require "optparse"
 require "socket"
 require "stringio"
 
@@ -16,7 +17,7 @@ module ClashRouteBootstrap
     output.write(JSON.generate(
       "schema" => "claude-easy.result", "version" => 1, "command" => "verify_routes",
       "platform" => "macos", "client" => "clashx-meta", "operation" => "load",
-      "ok" => false, "status" => "failed", "code" => "incomplete_package", "exit_code" => 1,
+      "ok" => false, "status" => "failed", "code" => "incomplete_package", "exit_code" => 6,
       "summary_zh" => "安装包不完整。", "profile" => nil, "changes" => [], "checks" => [],
       "items" => [], "messages" => [], "warnings" => []
     ) + "\n")
@@ -27,7 +28,7 @@ end
 dependencies_loaded = ClashRouteBootstrap.load_dependencies(
   loader: ->(path) { require_relative path }, argv: ARGV, output: $stdout
 )
-exit 1 unless dependencies_loaded
+exit 6 unless dependencies_loaded
 
 module ClashRouteVerifier
   module_function
@@ -38,7 +39,9 @@ module ClashRouteVerifier
     ["Anthropic", "https://www.anthropic.com/", :ai, /(?:\A|\.)anthropic\.com\z/i],
     ["Claude", "https://claude.ai/", :ai, /(?:\A|\.)claude\.ai\z/i]
   ].freeze
-  NON_PROXY_TERMINALS = %w[DIRECT REJECT REJECT-DROP COMPATIBLE PASS].freeze
+  NON_PROXY_TERMINALS = %w[
+    DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
+  ].freeze
   PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance Relay].freeze
   NON_PROXY_TYPES = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch].freeze
 
@@ -67,7 +70,7 @@ module ClashRouteVerifier
     listener&.close
   end
 
-  def observe_connection(socket, url, host_pattern)
+  def observe_connection(socket, url, host_pattern, observation_seconds: 15)
     existing = Array(get_json(socket, "/connections")&.fetch("connections", [])).map { |entry| entry["id"] }
     source_port = reserve_local_port
     pid = Process.spawn(
@@ -75,7 +78,7 @@ module ClashRouteVerifier
       "--local-port", source_port.to_s, url,
       out: File::NULL, err: File::NULL
     )
-    100.times do
+    (observation_seconds * 10).times do
       sleep 0.1
       connections = Array(get_json(socket, "/connections")&.fetch("connections", []))
       observed = connections.find do |entry|
@@ -111,12 +114,60 @@ module ClashRouteVerifier
     NON_PROXY_TERMINALS.any? { |terminal| terminal.casecmp(name.to_s).zero? }
   end
 
-  def selectionless_main_group?(proxies, group)
-    proxies.dig(group, "type").to_s.casecmp("LoadBalance").zero?
-  end
-
   def proxy_group_type?(type)
     PROXY_GROUP_TYPES.any? { |group_type| group_type.casecmp(type.to_s).zero? }
+  end
+
+  def usable_route_group_selection?(proxies, group)
+    proxy = proxies[group]
+    return false unless proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
+
+    selection = proxy["now"].to_s
+    return proxy["type"].to_s.casecmp("LoadBalance").zero? if selection.empty?
+
+    !non_proxy_terminal?(selection)
+  end
+
+  def find_group(proxies, candidates, requested = nil, ai: false)
+    unless requested.to_s.empty?
+      proxy = proxies[requested]
+      return requested if proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
+
+      return nil
+    end
+
+    Array(candidates).each do |candidate|
+      proxy = proxies[candidate]
+      return candidate if proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
+    end
+    return nil unless ai
+
+    proxies.each do |name, proxy|
+      next unless proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
+      return name if name.to_s.match?(/(?:\A|[^A-Za-z])AI(?:[^A-Za-z]|\z)|OpenAI|人工智能|🤖/i)
+    end
+    nil
+  end
+
+  def live_main_group(socket, proxies, requested = nil)
+    unless requested.to_s.empty?
+      proxy = proxies[requested]
+      return requested if proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
+
+      return nil
+    end
+
+    rules = get_json(socket, "/rules")&.fetch("rules", nil)
+    return nil unless rules.is_a?(Array)
+
+    rule = rules.reverse.find do |entry|
+      entry.is_a?(Hash) && entry["type"].to_s.casecmp("MATCH").zero?
+    end
+    group = rule && rule["proxy"].to_s
+    proxy = proxies[group]
+    return nil unless proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
+
+    group
   end
 
   def live_chain_proxy(proxies, providers, name, provider_name)
@@ -167,20 +218,20 @@ module ClashRouteVerifier
     end
   end
 
-  def run(output: $stdout, details: nil)
+  def run(output: $stdout, details: nil, main_group: nil, ai_group: nil,
+          observation_seconds: 15)
     socket = ClaudeEasy.controller_socket
-    path = active_profile
-    return false unless socket && path
+    return false unless socket
 
     policy_path = File.expand_path("../../references/policy.json", __dir__)
     policy = JSON.parse(File.read(policy_path, encoding: "UTF-8"))
-    config = ClaudeEasy.load_yaml(File.read(path, encoding: "UTF-8"), path)
-    main_group = ClaudeEasy.detect_main_group(config, policy)
-    ai_group = ClaudeEasy.existing_ai_group(config, policy)&.fetch("name", nil)
-    return false unless main_group && ai_group
-
     proxies = get_json(socket, "/proxies")&.fetch("proxies", {})
     return false unless proxies.is_a?(Hash)
+    main_group = live_main_group(socket, proxies, main_group)
+    ai_group = find_group(proxies, policy["ai_group_names"], ai_group, ai: true)
+    return false unless main_group && ai_group && usable_route_group_selection?(proxies, main_group) &&
+                                               usable_route_group_selection?(proxies, ai_group)
+
     provider_payload = get_json(socket, "/providers/proxies")
     return false unless provider_payload.is_a?(Hash)
 
@@ -192,20 +243,18 @@ module ClashRouteVerifier
       main: proxies.dig(main_group, "now").to_s,
       ai: proxies.dig(ai_group, "now").to_s
     }
-    return false if selections.fetch(:ai).empty? || non_proxy_terminal?(selections.fetch(:ai))
-    if selections.fetch(:main).empty?
-      return false unless selectionless_main_group?(proxies, main_group)
-    elsif non_proxy_terminal?(selections.fetch(:main))
-      return false
-    end
 
     main_selection = selections.fetch(:main)
     main_selection = "动态选择" if main_selection.empty?
+    ai_selection = selections.fetch(:ai)
+    ai_selection = "动态选择" if ai_selection.empty?
     output.puts "主代理组：#{ClaudeEasy.safe_label(main_group)} → #{ClaudeEasy.safe_label(main_selection)}"
-    output.puts "AI 分组：#{ClaudeEasy.safe_label(ai_group)} → #{ClaudeEasy.safe_label(selections.fetch(:ai))}"
+    output.puts "AI 分组：#{ClaudeEasy.safe_label(ai_group)} → #{ClaudeEasy.safe_label(ai_selection)}"
 
     checks = TARGETS.map do |label, url, kind, host_pattern|
-      connection = observe_connection(socket, url, host_pattern)
+      connection = observe_connection(
+        socket, url, host_pattern, observation_seconds: observation_seconds
+      )
       chains = Array(connection && connection["chains"])
       provider_chains = Array(connection && connection["providerChains"])
       ok = route_passes?(
@@ -215,7 +264,15 @@ module ClashRouteVerifier
       )
       selected = chains.first
       output.puts "#{label}：#{ok ? '通过' : '失败'}（#{ClaudeEasy.safe_label(selected)}）"
-      details[:checks] << { "name" => label.downcase, "ok" => ok } if details
+      status = if connection.nil?
+                 "not_observed"
+               else
+                 ok ? "passed" : "failed"
+               end
+      details[:checks] << {
+        "name" => label.downcase, "ok" => ok,
+        "status" => status
+      } if details
       ok
     end
     checks.all?
@@ -224,9 +281,28 @@ module ClashRouteVerifier
   end
 
   def cli(argv = ARGV, output: $stdout)
-    unknown = argv.reject { |argument| argument == "--json" }
-    unless unknown.empty?
-      json_mode = argv.include?("--json")
+    json_mode = argv.include?("--json")
+    options = {
+      main_group: nil, ai_group: nil, observation_seconds: 15,
+      json: json_mode, help: false
+    }
+    parser = OptionParser.new do |opts|
+      opts.banner = "用法：verify_routes.rb [选项]"
+      opts.on("--main-group NAME", "指定当前运行配置的主代理组") { |value| options[:main_group] = value }
+      opts.on("--ai-group NAME", "指定当前运行配置的 AI 分组") { |value| options[:ai_group] = value }
+      opts.on("--observation-seconds N", Integer, "每项连接的观察秒数（1–60）") do |value|
+        options[:observation_seconds] = value
+      end
+      opts.on("--json", "输出 JSON v1 结果") { options[:json] = true }
+      opts.on("-h", "--help", "显示帮助") { options[:help] = true }
+    end
+    begin
+      parser.parse!(argv)
+      raise OptionParser::InvalidArgument, "观察时间必须为 1 到 60 秒" unless
+        options[:observation_seconds].between?(1, 60)
+      raise OptionParser::InvalidArgument, "代理组名称不能为空" if
+        [options[:main_group], options[:ai_group]].compact.any? { |value| value.strip.empty? }
+    rescue OptionParser::ParseError
       if json_mode
         ClaudeEasyResult.write(
           output: output, command: "verify_routes", operation: "verify_routes", ok: false,
@@ -237,11 +313,26 @@ module ClashRouteVerifier
       end
       return 64
     end
-    json_mode = argv.include?("--json")
+    if options[:help]
+      if options[:json]
+        ClaudeEasyResult.write(
+          output: output, command: "verify_routes", operation: "help", ok: true,
+          status: "ok", code: "help", exit_code: 0, summary_zh: "已显示帮助。"
+        )
+      else
+        output.puts parser
+      end
+      return 0
+    end
+
     details = { checks: [] }
-    ok = run(output: json_mode ? StringIO.new : output, details: details)
+    ok = run(
+      output: options[:json] ? StringIO.new : output, details: details,
+      main_group: options[:main_group], ai_group: options[:ai_group],
+      observation_seconds: options[:observation_seconds]
+    )
     exit_code = ok ? 0 : 1
-    if json_mode
+    if options[:json]
       ClaudeEasyResult.write(
         output: output, command: "verify_routes", operation: "verify_routes", ok: ok,
         status: ok ? "ok" : "failed", code: ok ? "routes_verified" : "route_verification_failed",

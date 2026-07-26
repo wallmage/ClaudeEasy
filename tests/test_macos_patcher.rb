@@ -50,6 +50,17 @@ class MacosPatcherTest < Minitest::Test
       ENV["CLAUDE_EASY_RUN_PRODUCTION_PROBES"] == "1"
   end
 
+  def route_controller_getter(proxies, main_group: "Main", providers: { "providers" => {} })
+    lambda do |_socket, endpoint|
+      case endpoint
+      when "/proxies" then proxies
+      when "/rules"
+        { "rules" => [{ "type" => "MATCH", "proxy" => main_group }] }
+      when "/providers/proxies" then providers
+      end
+    end
+  end
+
   def with_internal_wrapper_operation(backup_root)
     keys = %w[
       CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD
@@ -1329,7 +1340,7 @@ class MacosPatcherTest < Minitest::Test
 
       [[patcher, "patch"], [verifier, "verify_routes"]].each do |path, command|
         output, error, status = capture_ruby_entrypoint(path, "--json")
-        assert_equal 1, status.exitstatus
+        assert_equal 6, status.exitstatus
         assert_empty error
         result = JSON.parse(output)
         assert_equal command, result.fetch("command")
@@ -1349,6 +1360,7 @@ class MacosPatcherTest < Minitest::Test
       result = JSON.parse(output.string)
       assert_equal command, result.fetch("command")
       assert_equal "incomplete_package", result.fetch("code")
+      assert_equal 6, result.fetch("exit_code")
       assert_raises(LoadError) do
         bootstrap.load_dependencies(
           loader: ->(_path) { raise LoadError, "fixture" }, argv: [], output: StringIO.new
@@ -1372,19 +1384,95 @@ class MacosPatcherTest < Minitest::Test
 
   def test_route_verifier_cli_json_does_not_forward_human_output
     output = StringIO.new
-    ClashRouteVerifier.stub(:run, ->(output:, details:) { output.puts("PRIVATE-NODE"); details[:checks] << { "name" => "google", "ok" => true }; true }) do
+    ClashRouteVerifier.stub(:run, ->(output:, details:, **_options) { output.puts("PRIVATE-NODE"); details[:checks] << { "name" => "google", "ok" => true, "status" => "passed" }; true }) do
       assert_equal 0, ClashRouteVerifier.cli(["--json"], output: output)
     end
 
     result = JSON.parse(output.string)
     assert_equal "ok", result.fetch("status")
-    assert_equal [{ "name" => "google", "ok" => true }], result.fetch("checks")
+    assert_equal(
+      [{ "name" => "google", "ok" => true, "status" => "passed" }],
+      result.fetch("checks")
+    )
     refute_includes output.string, "PRIVATE-NODE"
+  end
+
+  def test_route_verifier_cli_accepts_cross_platform_group_and_observation_options
+    output = StringIO.new
+    received = nil
+    runner = lambda do |output:, details:, main_group:, ai_group:, observation_seconds:|
+      received = [main_group, ai_group, observation_seconds]
+      details[:checks] << { "name" => "google", "ok" => true, "status" => "passed" }
+      true
+    end
+    ClashRouteVerifier.stub(:run, runner) do
+      assert_equal(
+        0,
+        ClashRouteVerifier.cli(
+          ["--main-group", "Main Live", "--ai-group", "AI Live",
+           "--observation-seconds", "21", "--json"],
+          output: output
+        )
+      )
+    end
+
+    assert_equal ["Main Live", "AI Live", 21], received
+    assert_equal "routes_verified", JSON.parse(output.string).fetch("code")
+  end
+
+  def test_route_verifier_cli_rejects_an_invalid_observation_window
+    output = StringIO.new
+    ClashRouteVerifier.stub(:run, ->(**) { flunk "invalid window reached route verification" }) do
+      assert_equal(
+        64,
+        ClashRouteVerifier.cli(["--observation-seconds", "0", "--json"], output: output)
+      )
+    end
+    result = JSON.parse(output.string)
+    assert_equal "invalid_request", result.fetch("status")
+    assert_equal "invalid_arguments", result.fetch("code")
+  end
+
+  def test_route_verifier_cli_returns_structured_json_help
+    output = StringIO.new
+    ClashRouteVerifier.stub(:run, ->(**) { flunk "help reached route verification" }) do
+      assert_equal 0, ClashRouteVerifier.cli(["--help", "--json"], output: output)
+    end
+
+    result = JSON.parse(output.string)
+    assert_equal "ok", result.fetch("status")
+    assert_equal "help", result.fetch("code")
+    assert_equal 0, result.fetch("exit_code")
+  end
+
+  def test_route_verifier_cli_returns_text_help
+    output = StringIO.new
+    ClashRouteVerifier.stub(:run, ->(**) { flunk "help reached route verification" }) do
+      assert_equal 0, ClashRouteVerifier.cli(["--help"], output: output)
+    end
+    assert_includes output.string, "用法：verify_routes.rb"
+  end
+
+  def test_route_verifier_cli_rejects_a_blank_group_name
+    output = StringIO.new
+    ClashRouteVerifier.stub(:run, ->(**) { flunk "blank group reached route verification" }) do
+      assert_equal 64, ClashRouteVerifier.cli(["--main-group=", "--json"], output: output)
+    end
+    assert_equal "invalid_arguments", JSON.parse(output.string).fetch("code")
+
+    whitespace_output = StringIO.new
+    ClashRouteVerifier.stub(:run, ->(**) { flunk "whitespace group reached route verification" }) do
+      assert_equal(
+        64,
+        ClashRouteVerifier.cli(["--ai-group", "  ", "--json"], output: whitespace_output)
+      )
+    end
+    assert_equal "invalid_arguments", JSON.parse(whitespace_output.string).fetch("code")
   end
 
   def test_route_verifier_cli_keeps_default_human_output
     output = StringIO.new
-    ClashRouteVerifier.stub(:run, ->(output:, details:) { output.puts("中文结果"); false }) do
+    ClashRouteVerifier.stub(:run, ->(output:, details:, **_options) { output.puts("中文结果"); false }) do
       assert_equal 1, ClashRouteVerifier.cli([], output: output)
     end
     assert_equal "中文结果\n", output.string
@@ -5287,7 +5375,10 @@ class MacosPatcherTest < Minitest::Test
       File.write(profile, YAML.dump(base_config))
       proxies = { "proxies" => {
         "Main" => { "type" => "Selector", "now" => "Taiwan" },
-        "AI" => { "type" => "Selector", "now" => "Nested" }
+        "AI" => { "type" => "Selector", "now" => "Nested" },
+        "Taiwan" => { "type" => "Shadowsocks" },
+        "Nested" => { "type" => "Selector", "now" => "DIRECT" },
+        "DIRECT" => { "type" => "Direct" }
       } }
       observations = [
         { "chains" => ["Taiwan", "Main"] },
@@ -5298,8 +5389,8 @@ class MacosPatcherTest < Minitest::Test
 
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
-          ClashRouteVerifier.stub(:get_json, proxies) do
-            ClashRouteVerifier.stub(:observe_connection, ->(*_args) { observations.shift }) do
+          ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
+            ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
               refute ClashRouteVerifier.run(output: StringIO.new)
             end
           end
@@ -9521,9 +9612,9 @@ class MacosPatcherTest < Minitest::Test
     assert_empty waits
   end
 
-  def test_route_verifier_returns_false_when_profile_loading_raises
+  def test_route_verifier_returns_false_when_live_proxy_loading_raises
     ClaudeEasy.stub(:controller_socket, "socket") do
-      ClashRouteVerifier.stub(:active_profile, -> { raise IOError, "profile disappeared" }) do
+      ClashRouteVerifier.stub(:get_json, ->(*_args) { raise IOError, "controller disappeared" }) do
         refute ClashRouteVerifier.run(output: StringIO.new)
       end
     end
@@ -9569,6 +9660,133 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_route_verifier_uses_the_live_match_rule_for_main_group
+    proxies = {
+      "Disk Main" => { "type" => "Selector", "now" => "Disk Node" },
+      "Live Main" => { "type" => "LoadBalance" },
+      "Disk Node" => { "type" => "Shadowsocks" },
+      "Live Node" => { "type" => "Vmess" }
+    }
+    rules = {
+      "rules" => [
+        { "type" => "DomainSuffix", "proxy" => "Disk Main" },
+        { "type" => "MATCH", "proxy" => "Live Main" }
+      ]
+    }
+    getter = ->(_socket, endpoint) { endpoint == "/rules" ? rules : nil }
+
+    ClashRouteVerifier.stub(:get_json, getter) do
+      assert_equal "Live Main", ClashRouteVerifier.live_main_group("socket", proxies)
+    end
+  end
+
+  def test_route_verifier_finds_ai_group_from_live_proxies
+    policy = { "ai_group_names" => ["AI"] }
+    proxies = {
+      "AI Balanced" => { "type" => "LoadBalance" },
+      "Main" => { "type" => "Selector", "now" => "Taiwan" }
+    }
+
+    assert_equal(
+      "AI Balanced",
+      ClashRouteVerifier.find_group(proxies, policy.fetch("ai_group_names"), nil, ai: true)
+    )
+  end
+
+  def test_route_verifier_validates_explicit_live_groups
+    proxies = {
+      "Main Live" => { "type" => "Relay", "now" => "Taiwan" },
+      "Not A Group" => { "type" => "Vmess" }
+    }
+
+    assert_equal(
+      "Main Live",
+      ClashRouteVerifier.find_group(proxies, [], "Main Live")
+    )
+    assert_nil ClashRouteVerifier.find_group(proxies, [], "Missing")
+    assert_equal(
+      "Main Live",
+      ClashRouteVerifier.live_main_group("socket", proxies, "Main Live")
+    )
+    assert_nil ClashRouteVerifier.live_main_group("socket", proxies, "Not A Group")
+  end
+
+  def test_route_verifier_does_not_read_the_disk_to_find_ai_group
+    proxies_payload = { "proxies" => {
+      "Main" => { "type" => "Selector", "now" => "Taiwan" },
+      "AI" => { "type" => "Selector", "now" => "Japan" },
+      "Taiwan" => { "type" => "Shadowsocks" },
+      "Japan" => { "type" => "Vmess" }
+    } }
+    responses = {
+      "/proxies" => proxies_payload,
+      "/rules" => { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] },
+      "/providers/proxies" => { "providers" => {} }
+    }
+    observations = [
+      { "chains" => ["Taiwan", "Main"] },
+      { "chains" => ["Japan", "AI"] },
+      { "chains" => ["Japan", "AI"] },
+      { "chains" => ["Japan", "AI"] }
+    ]
+
+    ClaudeEasy.stub(:controller_socket, "socket") do
+      ClashRouteVerifier.stub(:active_profile, -> { flunk "read the disk for a live group" }) do
+        ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
+          ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
+            assert ClashRouteVerifier.run(output: StringIO.new)
+          end
+        end
+      end
+    end
+  end
+
+  def test_route_verifier_rejects_every_non_proxy_terminal_as_a_group_selection
+    terminals = %w[
+      DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
+    ]
+    proxies = terminals.to_h do |selection|
+      [
+        selection,
+        {
+          "type" => "Selector",
+          "now" => selection
+        }
+      ]
+    end
+
+    proxies.each_key do |group|
+      refute ClashRouteVerifier.usable_route_group_selection?(proxies, group), group
+    end
+  end
+
+  def test_route_verifier_marks_unobserved_connections_like_windows
+    responses = {
+      "/proxies" => { "proxies" => {
+        "Main" => { "type" => "Selector", "now" => "Taiwan" },
+        "AI" => { "type" => "Selector", "now" => "Japan" },
+        "Taiwan" => { "type" => "Shadowsocks" },
+        "Japan" => { "type" => "Vmess" }
+      } },
+      "/rules" => { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] },
+      "/providers/proxies" => { "providers" => {} }
+    }
+    details = { checks: [] }
+
+    ClaudeEasy.stub(:controller_socket, "socket") do
+      ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
+        ClashRouteVerifier.stub(:observe_connection, nil) do
+          refute ClashRouteVerifier.run(output: StringIO.new, details: details)
+        end
+      end
+    end
+
+    assert_equal(
+      %w[not_observed not_observed not_observed not_observed],
+      details.fetch(:checks).map { |check| check.fetch("status") }
+    )
+  end
+
   def test_route_verifier_reports_a_full_healthy_route_check
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "friend.yaml")
@@ -9587,8 +9805,8 @@ class MacosPatcherTest < Minitest::Test
       ]
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
-          ClashRouteVerifier.stub(:get_json, proxies) do
-            ClashRouteVerifier.stub(:observe_connection, ->(*_args) { observations.shift }) do
+          ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
+            ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
               output = StringIO.new
               assert ClashRouteVerifier.run(output: output)
               assert_includes output.string, "Google：通过"
@@ -9622,9 +9840,48 @@ class MacosPatcherTest < Minitest::Test
       ]
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
-          ClashRouteVerifier.stub(:get_json, proxies) do
-            ClashRouteVerifier.stub(:observe_connection, ->(*_args) { observations.shift }) do
+          ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
+            ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
               assert ClashRouteVerifier.run(output: StringIO.new)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def test_route_verifier_accepts_load_balance_ai_group_without_now
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      config = base_config
+      ai = config.fetch("proxy-groups").find { |group| group.fetch("name") == "AI" }
+      ai["type"] = "load-balance"
+      ai["url"] = "https://example.invalid/generate_204"
+      File.write(profile, YAML.dump(config))
+      proxies_payload = { "proxies" => {
+        "Main" => { "type" => "Selector", "now" => "Taiwan" },
+        "AI" => { "type" => "LoadBalance" },
+        "Taiwan" => { "type" => "Shadowsocks" },
+        "Japan" => { "type" => "Shadowsocks" }
+      } }
+      provider_payload = { "providers" => {} }
+      rules_payload = { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] }
+      responses = {
+        "/proxies" => proxies_payload,
+        "/providers/proxies" => provider_payload,
+        "/rules" => rules_payload
+      }
+      observations = [
+        { "chains" => ["Taiwan", "Main"] },
+        { "chains" => ["Japan", "AI"] },
+        { "chains" => ["Japan", "AI"] },
+        { "chains" => ["Japan", "AI"] }
+      ]
+      ClaudeEasy.stub(:controller_socket, "socket") do
+        ClashRouteVerifier.stub(:active_profile, profile) do
+          ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
+            ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
+              assert ClashRouteVerifier.run(output: StringIO.new, ai_group: "AI")
             end
           end
         end
@@ -9674,8 +9931,8 @@ class MacosPatcherTest < Minitest::Test
       ]
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
-          ClashRouteVerifier.stub(:get_json, proxies) do
-            ClashRouteVerifier.stub(:observe_connection, ->(*_args) { observations.shift }) do
+          ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
+            ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
               assert ClashRouteVerifier.run(output: StringIO.new)
             end
           end
@@ -9782,20 +10039,24 @@ class MacosPatcherTest < Minitest::Test
       endpoints = []
       get_json = lambda do |_socket, endpoint|
         endpoints << endpoint
-        { "/proxies" => proxies, "/providers/proxies" => provider_payload }[endpoint]
+        {
+          "/proxies" => proxies,
+          "/rules" => { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] },
+          "/providers/proxies" => provider_payload
+        }[endpoint]
       end
 
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, get_json) do
             observations = healthy_observations.map(&:dup)
-            ClashRouteVerifier.stub(:observe_connection, ->(*_args) { observations.shift }) do
+            ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
               assert ClashRouteVerifier.run(output: StringIO.new)
             end
           end
         end
       end
-      assert_equal ["/proxies", "/providers/proxies"], endpoints
+      assert_equal ["/proxies", "/rules", "/providers/proxies"], endpoints
 
       [
         [nil, healthy_observations, "missing provider endpoint"],
@@ -9805,13 +10066,17 @@ class MacosPatcherTest < Minitest::Test
          "missing provider node"]
       ].each do |payload, observations_fixture, label|
         get_json = lambda do |_socket, endpoint|
-          { "/proxies" => proxies, "/providers/proxies" => payload }[endpoint]
+          {
+            "/proxies" => proxies,
+            "/rules" => { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] },
+            "/providers/proxies" => payload
+          }[endpoint]
         end
         ClaudeEasy.stub(:controller_socket, "socket") do
           ClashRouteVerifier.stub(:active_profile, profile) do
             ClashRouteVerifier.stub(:get_json, get_json) do
               observations = observations_fixture.map(&:dup)
-              ClashRouteVerifier.stub(:observe_connection, ->(*_args) { observations.shift }) do
+              ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
                 refute ClashRouteVerifier.run(output: StringIO.new), label
               end
             end

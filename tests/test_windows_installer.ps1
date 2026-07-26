@@ -1196,10 +1196,26 @@ try {
         "-Json"
     )
     $jsonRouteFailureResult = Assert-JsonResult $jsonRouteFailure "verify_routes" 1
-    Assert-True ($jsonRouteFailureResult.code -eq "verification_failed") "route verifier did not structure its parameter failure"
+    Assert-True ($jsonRouteFailureResult.code -eq "route_verification_failed") "route verifier did not structure its parameter failure"
     Assert-True (
         -not $jsonRouteFailure.Output.Contains($rejectedRouteSecretCanary)
     ) "route verifier echoed a rejected command-line secret"
+    $invalidObservation = Invoke-TestPowerShell $routeVerifier @(
+        "-ObservationSeconds", "0",
+        "-Json"
+    )
+    $invalidObservationResult = Assert-JsonResult $invalidObservation "verify_routes" 64
+    Assert-True (
+        $invalidObservationResult.code -eq "invalid_arguments"
+    ) "route verifier did not reject an invalid observation window consistently"
+    $blankRouteGroup = Invoke-TestPowerShell $routeVerifier @(
+        "-AiGroup", " ",
+        "-Json"
+    )
+    $blankRouteGroupResult = Assert-JsonResult $blankRouteGroup "verify_routes" 64
+    Assert-True (
+        $blankRouteGroupResult.code -eq "invalid_arguments"
+    ) "route verifier did not reject a blank group override consistently"
 
     $routeHarnessPath = Join-Path $sandbox "verify-route-observer.ps1"
     $routeFunctionSources = $routeAst.FindAll({
@@ -1208,7 +1224,9 @@ try {
             $node.Name -in @(
                 "Test-StrictIpv4LoopbackHost",
                 "Get-ValidatedControllerBaseUri",
-                "Test-SupportedRouteGroupType", "Get-LiveMainGroup",
+                "Find-Group",
+                "Test-SupportedRouteGroupType", "Test-UsableRouteGroupSelection",
+                "Get-LiveMainGroup",
                 "Get-LiveChainProxy", "Test-SafeLiveChain", "Test-RouteChains", "Observe-Route"
             )
     }, $true) | ForEach-Object { $_.Extent.Text }
@@ -1282,6 +1300,27 @@ foreach ($groupType in @("Selector", "URLTest", "Fallback", "LoadBalance", "Rela
     if ((Get-LiveMainGroup $mainProxies) -ne "Main") {
         throw "Get-LiveMainGroup rejected supported group type: $groupType"
     }
+}
+$loadBalanceSelection = [pscustomobject]@{ type = "LoadBalance"; now = "" }
+if (-not (Test-UsableRouteGroupSelection $loadBalanceSelection)) {
+    throw "selectionless LoadBalance was rejected"
+}
+$selectorSelection = [pscustomobject]@{ type = "Selector"; now = "" }
+if (Test-UsableRouteGroupSelection $selectorSelection) {
+    throw "selectionless Selector was accepted"
+}
+$liveAiGroups = [pscustomobject]@{
+    "AI Balanced" = [pscustomobject]@{ type = "LoadBalance"; now = "" }
+}
+if ((Find-Group $liveAiGroups @() "" "AI 分组") -ne "AI Balanced") {
+    throw "live LoadBalance AI group was not detected"
+}
+$liveAiCandidates = [pscustomobject]@{
+    AI = [pscustomobject]@{ type = "Vmess" }
+    OpenAI = [pscustomobject]@{ type = "Selector"; now = "Japan" }
+}
+if ((Find-Group $liveAiCandidates @("AI", "OpenAI") "" "AI 分组") -ne "OpenAI") {
+    throw "non-group AI candidate blocked a later live AI group"
 }
 $unsupportedRejected = $false
 try {
@@ -3145,6 +3184,9 @@ rules:
         "Node B" = [pscustomobject]@{ type = "Vmess" }
         Local = [pscustomobject]@{ type = "Direct" }
     }
+    Assert-True (
+        Test-UsableRouteGroupSelection $routeChains.Balanced
+    ) "Windows route verifier rejected a load-balance AI group without now"
     Assert-True (Test-RouteChains $routeChains @("Singapore", "Google") "Main" "Taiwan" "AI" $true) "Windows route verifier rejected a user Google proxy group"
     Assert-True (-not (Test-RouteChains $routeChains @("GameNode", "Gaming") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted an unrelated selector for Google traffic"
     Assert-True (-not (Test-RouteChains $routeChains @("Japan", "AI", "Google") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted the AI group for ordinary Google traffic"

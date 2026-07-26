@@ -177,6 +177,18 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
   }
 });
 
+test('Windows preserves REALITY short-id text exactly like macOS', { skip: !available }, () => {
+  const config = baseConfig();
+  config.proxies[0]['reality-opts'] = { 'short-id': '0906152e4' };
+  config.proxies[1]['reality-opts'] = { 'short-id': 'not-hex!!' };
+
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+
+  assert.equal(patched.proxies[0]['reality-opts']['short-id'], '0906152e4');
+  assert.equal(typeof patched.proxies[0]['reality-opts']['short-id'], 'string');
+  assert.equal(patched.proxies[1]['reality-opts']['short-id'], 'not-hex!!');
+});
+
 test('common China-domain baseline preserves a colliding user provider', { skip: !available }, () => {
   const input = baseConfig();
   const providerName = engine.CLAUDE_EASY_POLICY.cnDomainProvider.name;

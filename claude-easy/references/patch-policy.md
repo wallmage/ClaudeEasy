@@ -478,7 +478,7 @@ Windows 全局脚本也必须做二次转换一致性检查；结果不一致时
 - 没有已有 AI 分组，并且订阅中找不到任何有效内联节点或代理提供者：不创建空组，写成“未修改：找不到可用的 AI 节点”。
 - 已有 Windows 全局脚本只有一个同步 `main`：先运行原脚本，再运行 ClaudeEasy 补丁。Clash Verge Rev 当前不会等待 Promise，因此必须拒绝 `async function main`。
 - 已有 Windows 脚本结构无法安全组合：保留原文件，请用户发送提示和 `Script.js` 截图。
-- macOS 的 REALITY `short-id`：只保护已有且格式有效的十六进制文本；不补齐、不截断、不猜缺失值。Windows 脚本不改这个字段。
+- 两端都原样保留已有的 REALITY `short-id` 文本，不补齐、不截断、不猜缺失值。macOS 读写 YAML 时显式保护容易被误判为数字的有效十六进制文本；Windows 的对象转换不得改变该字段。
 - 当前配置只有自动刷新和运行检查全部通过，才能写成“已更新并自动生效”。刷新失败并恢复时写成“自动刷新失败，已恢复原配置”；文件恢复但内核未恢复时必须单独说明。
 - ClashX Meta 正在运行时保持运行，不调用 AppleScript，不修改 `restoreTunProxy`，不切换 TUN 或代理节点。
 - 远程 `proxy-providers` 在 Mihomo 写入前检查中可能需要网络；离线检查失败时保留原文件，并提示联网后重试。
@@ -487,7 +487,7 @@ Windows 全局脚本也必须做二次转换一致性检查；结果不一致时
 
 档位 1 只验收系统代理与 Google、Twitter、用户常用站点；档位 2 只验收 TUN、Clash 自己的系统代理开关、Google、Twitter、ChatGPT、Gemini 和一个命令行或 Agent 连接。不能因为未运行泄漏测试而把档位 1、2判为失败。以下完整验收只属于档位 3。
 
-先生成 Google、OpenAI 和 Claude/Anthropic 的真实连接，同时读取 Mihomo `/connections`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`；Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`。Windows `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段；控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝，请求禁用系统代理和重定向，命令行、环境变量、输出与日志都不能出现密钥。Windows 默认从 `/rules` 的最后一个 `MATCH` 读取当前运行配置实际使用的主代理组，不再用固定名称单独推断。每个测试请求必须先绑定独立源端口，观察器只接受启动后出现且 TCP、源端口和目标域名全部匹配的连接 ID；同域名的浏览器、更新器或后台连接不得代替测试请求。验收结合 `chains` 与 `providerChains` 查出本次连接的实际叶子类型，整条链出现 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 均失败，即使出站使用自定义名称也一样。Google 的连接链必须包含当前主代理组；若订阅有明确的 Google 专用组，也可包含该非 AI 组，但不能经过 AI 分组。AI 网站的连接链必须包含 AI 分组。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 和 `Relay` 都以实际连接链为准；没有 `now` 的 `LoadBalance` 也使用观察到的叶子，请求前的 `now` 只用于预检或显示。只看配置文件或网页出口 IP 不足以证明分流正确。
+先生成 Google、OpenAI 和 Claude/Anthropic 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段；控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝，请求禁用系统代理和重定向，命令行、环境变量、输出与日志都不能出现密钥。两端都从 `/rules` 的最后一个 `MATCH` 读取当前运行配置实际使用的主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不再从磁盘配置或固定名称单独推断。每个测试请求必须先绑定独立源端口，观察器只接受启动后出现且 TCP、源端口和目标域名全部匹配的连接 ID；同域名的浏览器、更新器或后台连接不得代替测试请求。验收结合 `chains` 与 `providerChains` 查出本次连接的实际叶子类型，整条链出现 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 均失败，即使出站使用自定义名称也一样。Google 的连接链必须包含当前主代理组；若订阅有明确的 Google 专用组，也可包含该非 AI 组，但不能经过 AI 分组。AI 网站的连接链必须包含 AI 分组。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 和 `Relay` 都以实际连接链为准；没有 `now` 的主代理组或 AI `LoadBalance` 都使用观察到的叶子，请求前的 `now` 只用于预检或显示。JSON 成功码为 `routes_verified`，失败码为 `route_verification_failed`；每项检查状态只取 `passed`、`failed` 或 `not_observed`。只看配置文件或网页出口 IP 不足以证明分流正确。
 
 然后必须测试：
 

@@ -116,7 +116,7 @@ Diagnostics 不要求你会看日志，也不会因为提到 Clash 就先改配�
 
 ### REALITY 与其他保护
 
-- macOS 会保护已有且格式有效的 REALITY `short-id` 文本：不补齐、不截断、不猜测缺失值；Windows 脚本不处理该字段。
+- 两端都会原样保留已有的 REALITY `short-id` 文本，不补齐、不截断、不猜测缺失值。macOS 在读写 YAML 时还会显式保护容易被误判为数字的有效十六进制文本；Windows 的客户端对象转换保持同一结果。
 - 订阅用 YAML 1.2 核心类型读取，`yes`、`on`、`0123`、`1:20` 和日期保持文本；多文档 YAML、循环别名和超出安全递归深度的文件按无效内容跳过，不影响同批其他订阅。
 - 候选写回前会重新解析并再次执行完整转换；二次转换仍报告变化（补丁不具备幂等性）时，保留原文件并标记“已跳过：二次转换不一致”。
 
@@ -187,7 +187,7 @@ bash claude-easy/scripts/install_macos.sh --profile N
 - macOS 安装器：`--profile N`（保存并执行档位）、`--show-profile`（读取已保存档位，未保存时输出 `unset`）、`--safe-update`（安全更新全部远程订阅）、`--json`。
 - macOS 补丁程序 `scripts/macos/patch_profiles.rb`：`--usage-profile N`、`--dry-run`（只预览不写入）、`--no-reload`（只更新文件不刷新）、`--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`、`--snapshot-initial`、`--print-core-status`、`--print-tun-state` 等；完整列表见 `--help`。普通 Patch 和安全更新必须显式指定档位，并在任何下载、备份或配置写入前与固定位置中已保存的档位一致；`--dry-run` 也必须显式指定档位，但不写状态。所有变更型 Ruby 入口会先取得同一把外层操作锁；自动更新修改命令只供已持有并可验证该锁的安装、卸载和恢复流程使用。
 - Windows 安装器：`-UsageProfile N`、`-ShowUsageProfile`、`-SnapshotProfiles`、`-VerifySafeUpdate`、`-ListBackups`、`-CompareBackup ID`、`-RestoreBackup ID -ExpectedCurrentSha256 SHA256`、`-AppHome`（指定应用目录）、`-MihomoPath`（指定内核路径）、`-Json`。
-- 分流验证：macOS 运行 `ruby claude-easy/scripts/macos/verify_routes.rb`；Windows 运行 `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1`。Windows `-ControllerUrl` 只接受本机回环 HTTP/HTTPS；有控制器密钥时，用 `Read-Host -AsSecureString` 读取后仅经标准输入传给 `-SecretStdin`。非空 `-Secret` 会被拒绝，请求不使用代理也不跟随重定向，密钥不会进入命令行、环境变量、输出或日志；`-MainGroup`、`-AiGroup` 仍可按需调整。
+- 分流验证：macOS 运行 `ruby claude-easy/scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows `-ControllerUrl` 只接受本机回环 HTTP/HTTPS；有控制器密钥时，用 `Read-Host -AsSecureString` 读取后仅经标准输入传给 `-SecretStdin`。非空 `-Secret` 会被拒绝，请求不使用代理也不跟随重定向，密钥不会进入命令行、环境变量、输出或日志。
 
 ### JSON v1 机器输出
 
@@ -244,7 +244,7 @@ macOS 恢复备份前若发现未完成的 Patch，会先恢复原文件和原�
 
 ## 第三档验证
 
-先检查实时分流：macOS 使用 `scripts/macos/verify_routes.rb`，Windows 使用 `scripts/windows/verify_routes.ps1`。两个脚本都让各自启动的 curl 绑定独立源端口，只接受 `/connections` 中同一源端口、TCP、目标域名和新连接 ID 同时匹配的记录，避免把浏览器或后台程序的并发流量误算成测试结果。脚本结合 `/proxies`、`/providers/proxies`、`chains` 与 `providerChains` 检查本次连接的实际叶子类型，自定义名称的 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 出站也不能通过。Google 应经过主代理组，或订阅明确提供的非 AI 专用组，不能经过 AI 分组；OpenAI、Anthropic 和 Claude 应经过 AI 分组。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 与 `Relay` 都按实际连接链验收，没有 `now` 的 `LoadBalance` 也以观察到的叶子为准。国内网站的大陆 CDN、HTTPS 耗时与 `DIRECT` 连接在随后步骤中单独核对。只看配置文件或网页出口 IP 不足以证明分流正确。然后测试：
+先检查实时分流：macOS 使用 `scripts/macos/verify_routes.rb`，Windows 使用 `scripts/windows/verify_routes.ps1`。两端都从 Mihomo `/rules` 的最后一个 `MATCH` 读取当前主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不再从磁盘配置猜运行状态。两个脚本都让各自启动的 curl 绑定独立源端口，只接受 `/connections` 中同一源端口、TCP、目标域名和新连接 ID 同时匹配的记录，避免把浏览器或后台程序的并发流量误算成测试结果。脚本结合 `/proxies`、`/providers/proxies`、`chains` 与 `providerChains` 检查本次连接的实际叶子类型，自定义名称的 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 出站也不能通过。Google 应经过主代理组，或订阅明确提供的非 AI 专用组，不能经过 AI 分组；OpenAI、Anthropic 和 Claude 应经过 AI 分组。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 与 `Relay` 都按实际连接链验收；没有 `now` 的主代理组或 AI `LoadBalance` 都以观察到的叶子为准。两端的 JSON 成功码为 `routes_verified`，失败码为 `route_verification_failed`；每项检查统一返回 `passed`、`failed` 或 `not_observed`。国内网站的大陆 CDN、HTTPS 耗时与 `DIRECT` 连接在随后步骤中单独核对。只看配置文件或网页出口 IP 不足以证明分流正确。然后测试：
 
 1. [IPInfo WebRTC 检测](https://ipinfo.cv/webrtc-check)
 2. [DNS 泄漏检测](https://ip.net.coffee/dns/)：点击“深度测试”

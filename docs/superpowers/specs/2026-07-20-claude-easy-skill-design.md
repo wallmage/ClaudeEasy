@@ -80,7 +80,7 @@ AdGuard for Mac 是 Patch 和 Diagnostics 共享的已知兼容路径。档位 2
 
 ## 平台架构
 
-两端按“用户可获得的能力”尽量保持对等，允许客户端机制不同：都支持用途档位、Diagnostics、配置历史、安全更新、档位 3 策略、实时分流和浏览器验收。Windows 客户端运行时的普通备份恢复只能比较和准备，不能停止客户端或把文件恢复假装成运行内核恢复；这是明确的客户端安全边界。Windows Computer Use 已在 2026-07-09 的桌面版中提供；当前会话实际启用时，Windows 与 macOS 都用它完成客户端开关、原应用复现和浏览器测试。Windows 只能操作前台桌面，设备需保持解锁；没有工具时不能声称已自动验收。脚本和本地控制器能可靠完成的步骤不改走界面。
+两端按“用户可获得的能力”保持对等，客户端机制可以不同：都必须支持用途档位、Diagnostics、配置历史、安全更新、档位 3 策略、实时分流和浏览器验收；同一公开功能必须有相同的成功条件、失败语义和机器结果。Windows 客户端运行时的普通备份恢复只能比较和准备，不能停止客户端或把文件恢复假装成运行内核恢复；这属于执行时机不同，恢复能力与验收要求不变。Windows Computer Use 已在 2026-07-09 的桌面版中提供；当前会话实际启用时，Windows 与 macOS 都用它完成客户端开关、原应用复现和浏览器测试。Windows 只能操作前台桌面，设备需保持解锁；没有工具时不能声称已自动验收。脚本和本地控制器能可靠完成的步骤不改走界面。
 
 ### macOS
 
@@ -140,11 +140,11 @@ Windows 卸载在建立任何恢复候选前检查安全更新清单。清单尚
 
 安全更新前从 `profiles.yaml` 核对全部远程 uid 与本地文件；读取索引后持有它和全部远程订阅的只读版本锁，当前每份订阅先确认有非空代理组并通过 YAML、Mihomo，再从锁内同一版本建立脱敏清单和备份、记录 `updated`，清单发布后才释放锁；`updated: null` 表示客户端尚未记录更新时间，按空基线处理。客户端先写订阅、后保存索引的更新若已写出订阅但尚未保存索引，订阅必须先通过基线校验；索引写入在版本锁期间失败，只有清单发布后重试成功才成为本轮时间戳凭据。未通过校验的中间文件不会成为更新前备份。Computer Use 触发“全部更新”后，PowerShell 先要求清单中的每份订阅都以文件 SHA-256 变化或更晚的 `updated` 时间戳证明本轮已经刷新；内容不变但时间戳更新可以通过，两者都不变时保留清单和文件并返回 `safe_update_refresh_pending`。随后确认已安装的受管全局脚本与当前安装包及保存档位一致，并要求受管区块外只有空白或注释；可执行前缀、后缀或额外 `main` 不能判为当前版本。重装可在组合检查通过后迁移并保留区块外旧代码。脚本检查通过后再逐份确认顶层 `proxy-groups` 是非空的块状或行内列表，然后验证 YAML、Mihomo 和自动更新状态；缺少代理组或列表为空时整批恢复。PowerShell 不复制一套不完整的 YAML/JavaScript 解释器，也不把结构前提检查写成已经执行了全局脚本。`profiles.yaml` 映射未变但订阅文件缺失时，从清单绑定且哈希匹配的备份原子重建，并与清单删除一起提交；同一路径重新出现时不覆盖，清单继续保留。只有订阅内容缺失或检查失败，且 `profiles.yaml` 与受管脚本仍与初始快照相同，才在持续锁住两者时整批恢复；索引、脚本或其他验收状态并发变化时返回 `safe_update_verification_retry_pending`，当前订阅和清单保持不变。订阅文件本身并发变化时也不会被覆盖。旧版 v1 清单仍可凭内容变化验收，且不再依赖不会用于自动恢复的旧备份；内容没变但当前订阅完整通过检查时，删除旧清单并返回 `safe_update_legacy_snapshot_required`，允许下一次建立 v2 快照。验收失败时返回 `safe_update_legacy_recovery_pending`，保留当前订阅和清单，不自动写回来源无法确认的旧备份。允许整批恢复 v2 快照时，旧订阅写回与本次清单删除由同一个持久写删事务提交；强制中断后不能把旧订阅当成本次更新结果再次验收。Windows 使用自己的 `verify_routes.ps1` 从 `/rules` 的最后一个 `MATCH` 绑定当前运行配置的主代理组，再结合 `/proxies`、`/providers/proxies`、`chains` 和 `providerChains` 验证本次连接的实际叶子类型，与 macOS 一样用 curl 的独立源端口、TCP、目标域名和新连接 ID 绑定每次测试请求。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 和 `Relay` 五类运行代理组都按实际链验收；八类直连或拒绝出站即使使用自定义名称也不得通过。
 
-Windows 分流验证的 `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段。控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝；请求禁用代理和重定向，命令行、环境变量、输出与日志都不能包含密钥。
+两端的分流验证都从 `/rules` 最后一个 `MATCH` 读取当前主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组；五类代理组、八类非代理终点、四个测试目标、1–60 秒观察窗口、`routes_verified` / `route_verification_failed` 结果码以及 `passed` / `failed` / `not_observed` 检查状态必须一致。macOS 参数为 `--main-group`、`--ai-group`、`--observation-seconds`；Windows 对应为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows 分流验证的 `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段。控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝；请求禁用代理和重定向，命令行、环境变量、输出与日志都不能包含密钥。
 
 ## 公开接口与代码组织
 
-所有公开命令都提供 JSON v1：macOS 使用 `--json`，Windows 使用 `-Json`。默认中文输出保持兼容；JSON 模式的标准输出只有一个对象，`exit_code` 与实际退出码一致，`code` 和 `operation` 可供自动化稳定判断。`command` 只取 `install`、`uninstall`、`patch`、`verify_routes`，字段和类型由 `claude-easy/references/result-contract.json` 定义。任何机器输出都不能包含 URL、密钥、完整本机路径或节点名称。Skill 调用脚本时优先读取机器输出。
+所有公开命令都提供 JSON v1：macOS 使用 `--json`，Windows 使用 `-Json`。默认中文输出保持兼容；JSON 模式的标准输出只有一个对象，`exit_code` 与实际退出码一致，`code` 和 `operation` 可供自动化稳定判断。`command` 只取 `install`、`uninstall`、`patch`、`verify_routes`，字段和类型由 `claude-easy/references/result-contract.json` 定义。安装包不完整时统一返回退出码 `6` 和 `incomplete_package`。任何机器输出都不能包含 URL、密钥、完整本机路径或节点名称。Skill 调用脚本时优先读取机器输出。
 
 ClaudeEasy 的公开入口固定在 `claude-easy/`；参数和调用方式不因内部调整而改变。macOS 与 Windows 的大脚本按配置转换、备份与事务、Mihomo 校验、订阅处理、安全更新、运行状态和 CLI 拆分；入口只做编排。模块边界不能改变先校验后写入、失败恢复、并发保护和客户端运行边界。
 

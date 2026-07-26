@@ -4,7 +4,7 @@
     [switch]$SecretStdin,
     [string]$MainGroup = "",
     [string]$AiGroup = "",
-    [int]$ObservationSeconds = 15,
+    [string]$ObservationSeconds = "15",
     [switch]$Json
 )
 
@@ -22,6 +22,34 @@ if (-not (Test-Path -LiteralPath $resultContractPath -PathType Leaf)) {
 $script:ClaudeEasyChecks = New-Object System.Collections.ArrayList
 $script:ClaudeEasyControllerBaseUrl = ""
 $script:ClaudeEasyControllerSecret = ""
+$observationSecondsValue = 0
+if (-not [int]::TryParse(
+        $ObservationSeconds,
+        [System.Globalization.NumberStyles]::Integer,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [ref]$observationSecondsValue
+    ) -or $observationSecondsValue -lt 1 -or $observationSecondsValue -gt 60) {
+    if ($Json) {
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "观察时间必须为 1 到 60 秒。")
+    } else {
+        [Console]::Error.WriteLine("[ClaudeEasy] 观察时间必须为 1 到 60 秒。")
+    }
+    exit 64
+}
+$ObservationSeconds = $observationSecondsValue
+$blankGroupOverride =
+    ($PSBoundParameters.ContainsKey("MainGroup") -and
+        [string]::IsNullOrWhiteSpace($MainGroup)) -or
+    ($PSBoundParameters.ContainsKey("AiGroup") -and
+        [string]::IsNullOrWhiteSpace($AiGroup))
+if ($blankGroupOverride) {
+    if ($Json) {
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "代理组名称不能为空。")
+    } else {
+        [Console]::Error.WriteLine("[ClaudeEasy] 代理组名称不能为空。")
+    }
+    exit 64
+}
 
 function Read-ControllerSecretFromStandardInput {
     if (-not [string]::IsNullOrEmpty($Secret)) {
@@ -201,12 +229,17 @@ function Find-Group([object]$Proxies, [object[]]$Candidates, [string]$Requested,
     }
     foreach ($candidate in $Candidates) {
         $name = [string]$candidate
-        if ($null -ne $Proxies.PSObject.Properties[$name]) { return $name }
+        $property = $Proxies.PSObject.Properties[$name]
+        if ($null -ne $property -and
+            (Test-SupportedRouteGroupType ([string]$property.Value.type))) {
+            return $name
+        }
     }
     if ($Label -eq "AI 分组") {
         foreach ($property in $Proxies.PSObject.Properties) {
             $type = [string]$property.Value.type
-            if ($type -eq "Selector" -and [string]$property.Name -match '(?i)(^|[^A-Za-z])AI([^A-Za-z]|$)|OpenAI|人工智能|🤖') {
+            if ((Test-SupportedRouteGroupType $type) -and
+                [string]$property.Name -match '(?i)(^|[^A-Za-z])AI([^A-Za-z]|$)|OpenAI|人工智能|🤖') {
                 return [string]$property.Name
             }
         }
@@ -216,6 +249,21 @@ function Find-Group([object]$Proxies, [object[]]$Candidates, [string]$Requested,
 
 function Test-SupportedRouteGroupType([string]$GroupType) {
     return $GroupType -in @("Selector", "URLTest", "Fallback", "LoadBalance", "Relay")
+}
+
+function Test-UsableRouteGroupSelection([object]$Group) {
+    if ($null -eq $Group -or
+        -not (Test-SupportedRouteGroupType ([string]$Group.type))) {
+        return $false
+    }
+    $selection = [string]$Group.now
+    if ([string]::IsNullOrWhiteSpace($selection)) {
+        return [string]$Group.type -eq "LoadBalance"
+    }
+    return $selection -notin @(
+        "DIRECT", "DNS", "REJECT", "REJECT-DROP",
+        "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH"
+    )
 }
 
 function Get-LiveChainProxy(
@@ -419,7 +467,6 @@ try {
         Read-ControllerSecretFromStandardInput
     $script:ClaudeEasyControllerBaseUrl =
         Get-ValidatedControllerBaseUri $ControllerUrl
-    if ($ObservationSeconds -lt 1 -or $ObservationSeconds -gt 60) { throw "观察时间必须为 1 到 60 秒。" }
     $policy = Get-Policy
     $proxyResponse = Invoke-ControllerJson "/proxies"
     $proxies = $proxyResponse.proxies
@@ -436,12 +483,12 @@ try {
     $ai = Find-Group $proxies @($policy.ai_group_names) $AiGroup "AI 分组"
     $mainSelection = [string]$proxies.PSObject.Properties[$main].Value.now
     $aiSelection = [string]$proxies.PSObject.Properties[$ai].Value.now
-    $mainType = [string]$proxies.PSObject.Properties[$main].Value.type
-    if (([string]::IsNullOrWhiteSpace($mainSelection) -and $mainType -ne "LoadBalance") -or
-        $mainSelection -eq "DIRECT") {
+    if (-not (Test-UsableRouteGroupSelection $proxies.PSObject.Properties[$main].Value)) {
         throw "主代理组当前没有选择有效代理节点。"
     }
-    if ([string]::IsNullOrWhiteSpace($aiSelection) -or $aiSelection -eq "DIRECT") { throw "AI 分组当前没有选择有效代理节点。" }
+    if (-not (Test-UsableRouteGroupSelection $proxies.PSObject.Properties[$ai].Value)) {
+        throw "AI 分组当前没有选择有效代理节点。"
+    }
 
     if (-not $Json) {
         Write-Output "主代理组：已识别；当前选择已隐藏"
@@ -454,7 +501,7 @@ try {
         (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $proxies $ai $false $providers)
     )
     if (@($checks | Where-Object { -not $_ }).Count -gt 0) {
-        if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_check_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Checks @($script:ClaudeEasyChecks)) }
+        if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Checks @($script:ClaudeEasyChecks)) }
         exit 1
     }
     if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $true -Status "ok" -Code "routes_verified" -ExitCode 0 -SummaryZh "Windows 分流验证通过。" -Checks @($script:ClaudeEasyChecks)) }
@@ -462,7 +509,7 @@ try {
 } catch {
     $failureMessage = Get-SafeVerificationFailureMessage $_.Exception.Message
     if ($Json) {
-        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $failureMessage) -Checks @($script:ClaudeEasyChecks))
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $failureMessage) -Checks @($script:ClaudeEasyChecks))
     } else {
         [Console]::Error.WriteLine("[ClaudeEasy] Windows 分流验证失败：$failureMessage")
     }

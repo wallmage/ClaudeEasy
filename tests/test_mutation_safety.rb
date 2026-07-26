@@ -96,8 +96,35 @@ class MutationSafetyTest < Minitest::Test
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_route_verifier_uses_live_match_rule_for_main_group"
+        "--name", "test_both_route_verifiers_use_live_match_rule_for_main_group"
       )
+    end
+  end
+
+  def test_macos_live_group_discovery_mutations_are_killed
+    {
+      "main_group = live_main_group(socket, proxies, main_group)" => [
+        'main_group = "Proxy"',
+        "test_route_verifier_does_not_read_the_disk_to_find_ai_group"
+      ],
+      'ai_group = find_group(proxies, policy["ai_group_names"], ai_group, ai: true)' =>
+        ['ai_group = "Missing AI"', "test_route_verifier_does_not_read_the_disk_to_find_ai_group"]
+    }.each do |source, mutation|
+      replacement, test_name = mutation
+      with_repo_copy do |root|
+        replace_once(
+          root,
+          "claude-easy/scripts/macos/verify_routes.rb",
+          source,
+          replacement
+        )
+
+        assert_mutation_is_killed(
+          root,
+          RbConfig.ruby, "tests/test_macos_patcher.rb",
+          "--name", test_name
+        )
+      end
     end
   end
 
@@ -178,8 +205,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/verify_routes.ps1",
-        "Test-SupportedRouteGroupType ([string]$property.Value.type)",
-        '[string]$property.Value.type -eq "Selector"'
+        "if ($null -eq $property -or -not (Test-SupportedRouteGroupType ([string]$property.Value.type))) {",
+        'if ($null -eq $property -or -not ([string]$property.Value.type -eq "Selector")) {'
       )
 
       assert_mutation_is_killed(
