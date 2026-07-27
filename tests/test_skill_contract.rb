@@ -391,6 +391,82 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不得自动切换节点"
   end
 
+  def test_profile_three_closes_the_claude_region_fingerprint_loop_in_the_system_browser
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+
+    [readme, skill, policy, design].each do |document|
+      assert_includes document, "https://fuck-claude.vercel.app/zh/"
+      assert_includes document, "绿色"
+      assert_includes document, "低风险"
+      assert_includes document, "0–30"
+      assert_includes document, "20 分"
+      assert_includes document, "区域指纹"
+      assert_includes document, "DNS、WebRTC"
+      assert_includes document, "估计"
+    end
+
+    [skill, policy].each do |document|
+      assert_includes document, "系统默认浏览器"
+      assert_includes document, "Computer Use"
+      assert_includes document, "不得使用 Codex 内置浏览器"
+      assert_includes document, "开始检测"
+      assert_includes document, "重新扫描"
+      assert_includes document, "修改后的系统默认浏览器"
+      assert_includes document, "修改前基线"
+      assert_includes document, "不得写死"
+      assert_includes document, "未验证"
+      assert_includes document, "最多等待 60 秒"
+      assert_includes document, "只刷新一次"
+    end
+
+    assert_operator skill.index("修改前基线"), :<, skill.index("运行平台安装程序")
+    assert_operator policy.index("修改前基线"), :<, policy.index("运行平台安装程序")
+  end
+
+  def test_profile_three_classifies_region_signals_and_requires_consent_for_user_preferences
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+
+    [skill, policy].each do |document|
+      %w[
+        Asia/Taipei
+        zh-TW
+        en-US
+        ANTHROPIC_BASE_URL
+        已安装中文字体
+        国产厂商字体
+        国产浏览器
+        国产品牌设备
+        时区偏移
+        Emoji
+      ].each { |term| assert_includes document, term }
+      assert_includes document, "征得用户同意"
+      assert_includes document, "浏览器语言与 Intl 区域设置"
+      assert_includes document, "不得删除中文字体"
+      assert_includes document, "只说明当前用于检测的浏览器"
+      assert_includes document, "不得伪装设备或 User-Agent"
+      assert_includes document, "UTC+8"
+      assert_includes document, "不会改变当前时间"
+      assert_includes document, "Safari 或 Chrome"
+      assert_includes document, "Edge 或 Chrome"
+      assert_includes document, "完整 hostname"
+      assert_includes document, "向下滚动"
+      assert_includes document, "一次申请"
+      assert_includes document, "只回复“同意”"
+      assert_includes document, "默认使用繁体中文"
+      assert_includes document, "台湾区域设置"
+      assert_includes document, "明确要求英文"
+      assert_includes document, "美国区域设置"
+      assert_includes document, "最终用于复测的浏览器"
+      assert_includes document, "系统和其他应用"
+      assert_includes document, "移除 `zh-CN`"
+      assert_includes document, "`zh-Hans`"
+    end
+  end
+
   def test_profile_changes_are_safe_and_lower_profiles_do_not_run_the_full_patch
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
@@ -632,6 +708,14 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_source, "Test-UsableRouteGroupSelection"
     assert_includes windows_source, '"not_observed"'
     assert_includes windows_source, '"route_verification_failed"'
+  end
+
+  def test_windows_route_tests_load_all_verifier_functions_without_drifting_allowlists
+    windows_test = File.read(File.join(ROOT, "tests/test_windows_installer.ps1"))
+
+    assert_includes windows_test, '$routeFunctionAsts = @($routeAst.FindAll({'
+    assert_includes windows_test, '$routeFunctionAsts | ForEach-Object {'
+    assert_includes windows_test, '$routeFunctionSources = $routeFunctionAsts | ForEach-Object'
   end
 
   def test_route_verifiers_share_targets_and_supported_runtime_types

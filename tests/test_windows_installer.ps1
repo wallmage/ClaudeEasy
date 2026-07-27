@@ -266,14 +266,14 @@ $routeTokens = $null
 $routeParseErrors = $null
 $routeAst = [System.Management.Automation.Language.Parser]::ParseFile($routeVerifier, [ref]$routeTokens, [ref]$routeParseErrors)
 if ($routeParseErrors.Count -gt 0) { throw ($routeParseErrors | Out-String) }
-$routeAst.FindAll({
+$routeFunctionAsts = @($routeAst.FindAll({
     param($node)
-        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-        $node.Name -in @(
-            "Find-Group", "Test-SupportedRouteGroupType",
-            "Get-LiveChainProxy", "Test-SafeLiveChain", "Test-RouteChains"
-        )
-}, $true) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+}, $true))
+if ($routeFunctionAsts.Count -eq 0) { throw "route verifier has no functions" }
+$routeFunctionAsts | ForEach-Object {
+    . ([scriptblock]::Create($_.Extent.Text))
+}
 $uninstallTokens = $null
 $uninstallParseErrors = $null
 $uninstallAst = [System.Management.Automation.Language.Parser]::ParseFile($uninstaller, [ref]$uninstallTokens, [ref]$uninstallParseErrors)
@@ -1218,18 +1218,9 @@ try {
     ) "route verifier did not reject a blank group override consistently"
 
     $routeHarnessPath = Join-Path $sandbox "verify-route-observer.ps1"
-    $routeFunctionSources = $routeAst.FindAll({
-        param($node)
-            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -in @(
-                "Test-StrictIpv4LoopbackHost",
-                "Get-ValidatedControllerBaseUri",
-                "Find-Group",
-                "Test-SupportedRouteGroupType", "Test-UsableRouteGroupSelection",
-                "Get-LiveMainGroup",
-                "Get-LiveChainProxy", "Test-SafeLiveChain", "Test-RouteChains", "Observe-Route"
-            )
-    }, $true) | ForEach-Object { $_.Extent.Text }
+    $routeFunctionSources = $routeFunctionAsts | ForEach-Object {
+        $_.Extent.Text
+    }
     $routeHarnessMocks = @'
 $ErrorActionPreference = "Stop"
 $ObservationSeconds = 1
