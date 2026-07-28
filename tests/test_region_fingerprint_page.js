@@ -25,8 +25,8 @@ function scriptSource(id) {
   return match[1];
 }
 
-function detectorApi() {
-  const context = vm.createContext({ window: {} });
+function detectorApi(globals = {}) {
+  const context = vm.createContext({ window: {}, ...globals });
   vm.runInContext(scriptSource("claude-easy-region-core"), context, {
     filename: "claude-region-check-core.js",
   });
@@ -105,7 +105,7 @@ function uiHarness(detector) {
     ['[data-action="start"]', elements.start],
     ['[data-action="rescan"]', elements.rescan],
     ["[data-result-score]", elements.score],
-    ["[data-result-band]", elements.band],
+    ["[data-result-summary]", elements.band],
     ["[data-result-status]", elements.status],
   ]);
   const context = vm.createContext({
@@ -144,6 +144,28 @@ test("the detector is one self-contained offline HTML file", () => {
   assert.match(source, /data-contract-version="1"/);
   assert.match(source, /data-action="start"/);
   assert.match(source, /data-action="rescan"/);
+  const csp = source.match(
+    /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*>/i,
+  );
+  assert.ok(csp, "the offline page must enforce a Content Security Policy");
+  const cspEntries = csp[1].split(";").map((entry) => entry.trim()).filter(Boolean);
+  const cspDirectives = Object.fromEntries(cspEntries.map((entry) => {
+    const [name, ...values] = entry.split(/\s+/);
+    return [name, values.join(" ")];
+  }));
+  assert.equal(new Set(cspEntries.map((entry) => entry.split(/\s+/, 1)[0])).size, cspEntries.length);
+  assert.deepEqual(cspDirectives, {
+    "default-src": "'none'",
+    "script-src": "'unsafe-inline'",
+    "style-src": "'unsafe-inline'",
+    "connect-src": "'none'",
+    "img-src": "'none'",
+    "font-src": "'none'",
+    "object-src": "'none'",
+    "base-uri": "'none'",
+    "form-action": "'none'",
+    "navigate-to": "'none'",
+  });
   assert.match(
     source,
     /Copyright \(c\) 2026 LinXiaoTao \(https:\/\/github\.com\/LinXiaoTao\/FuckClaude\)/,
@@ -164,8 +186,12 @@ test("the detector is one self-contained offline HTML file", () => {
   );
   assert.doesNotMatch(
     source,
-    /\b(?:window\.open|document\.write|location\s*=)/i,
+    /\b(?:window\.open|document\.write|location\s*(?:=|\.|\[)|history\s*\.)/i,
   );
+  assert.doesNotMatch(source, /\bwindow\s*\[\s*["']location["']\s*\]/i);
+  assert.doesNotMatch(source, /(?:低|中|高)风险|风险分|风险档/);
+  assert.match(source, /只用于比较修改前后/);
+  assert.match(source, /不能作为 Claude 是否可用的通过条件/);
 });
 
 test("the public contract exposes exactly nine weighted signals totaling 100", () => {
@@ -207,7 +233,18 @@ test("the public contract exposes exactly nine weighted signals totaling 100", (
   });
   assert.equal(totalWeight, 100);
   assert.ok(api.signals.every((signal) => signal.weight > 0));
+  assert.equal(Object.isFrozen(api.signals), true);
+  assert.ok(api.signals.every((signal) => Object.isFrozen(signal)));
   assert.ok(!ids.includes("anthropicBaseUrl"));
+  assert.equal(
+    api.signals.find((signal) => signal.id === "fonts").name,
+    "浏览器可见中文字体",
+  );
+  assert.equal(
+    api.signals.find((signal) => signal.id === "emoji").name,
+    "Emoji 平台推断",
+  );
+  assert.equal(api.riskBand, undefined);
 });
 
 test("rejected high-entropy client hints fall back without aborting the scan", async () => {
@@ -247,7 +284,7 @@ test("the full UI renders success, rescan, and failure states", async () => {
   assert.equal(success.status.attributes.get("data-result-status"), "complete");
   assert.match(success.status.textContent, /检测完成/);
   assert.equal(success.score.textContent, String(result.total));
-  assert.equal(success.band.textContent, "低风险");
+  assert.equal(success.band.textContent, "命中 3 项");
   assert.equal(success.start.hidden, true);
   assert.equal(success.rescan.hidden, false);
   await success.rescan.click();
@@ -269,6 +306,223 @@ test("the full UI renders success, rescan, and failure states", async () => {
   assert.equal(failure.rescan.hidden, false);
 });
 
+test("a rescan clears stale signal values while running and after failure", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment());
+  let call = 0;
+  let releaseRescan;
+  const rescanResult = new Promise((resolve) => {
+    releaseRescan = resolve;
+  });
+  const ui = uiHarness({
+    signals: api.signals,
+    browserEnvironment: () => ({}),
+    detect: async () => {
+      call += 1;
+      if (call === 1) return result;
+      if (call === 2) return rescanResult;
+      throw new Error("rescan failed");
+    },
+  });
+
+  await ui.start.click();
+  const rows = ui.list.children;
+  const firstRow = rows[0];
+  assert.equal(
+    firstRow.querySelector("[data-signal-value]").textContent,
+    "Asia/Taipei",
+  );
+  assert.equal(
+    firstRow.querySelector("[data-signal-contribution]").textContent,
+    "+0",
+  );
+
+  const pendingRescan = ui.rescan.click();
+  assert.equal(ui.start.disabled, true);
+  assert.equal(ui.rescan.disabled, true);
+  for (const row of rows) {
+    assert.equal(
+      row.querySelector("[data-signal-value]").textContent,
+      "正在读取",
+    );
+    assert.equal(
+      row.querySelector("[data-signal-contribution]").textContent,
+      "—",
+    );
+    assert.equal(row.attributes.get("data-coverage"), "pending");
+    assert.equal(row.attributes.get("data-match"), "none");
+  }
+  releaseRescan(result);
+  await pendingRescan;
+  assert.equal(ui.start.disabled, false);
+  assert.equal(ui.rescan.disabled, false);
+
+  await ui.rescan.click();
+  for (const row of rows) {
+    assert.equal(
+      row.querySelector("[data-signal-value]").textContent,
+      "未验证",
+    );
+    assert.equal(
+      row.querySelector("[data-signal-contribution]").textContent,
+      "—",
+    );
+    assert.equal(row.attributes.get("data-coverage"), "unavailable");
+    assert.equal(row.attributes.get("data-match"), "none");
+  }
+  assert.equal(ui.start.disabled, false);
+  assert.equal(ui.rescan.disabled, false);
+});
+
+test("repeated clicks cannot start concurrent scans", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment());
+  let calls = 0;
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const ui = uiHarness({
+    signals: api.signals,
+    browserEnvironment: () => ({}),
+    detect: async () => {
+      calls += 1;
+      return pending;
+    },
+  });
+
+  const first = ui.start.click();
+  await ui.start.click();
+  assert.equal(calls, 1);
+  release(result);
+  await first;
+});
+
+test("the status reports the actual number of limited signals", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment());
+  const ui = uiHarness({
+    signals: api.signals,
+    browserEnvironment: () => ({}),
+    detect: async () => ({
+      ...result,
+      limitedCount: 2,
+      limitations: ["fonts", "deviceVendor"],
+    }),
+  });
+
+  await ui.start.click();
+  assert.match(ui.status.textContent, /2 项有限信息/);
+});
+
+test("browser environment survives unavailable canvas font detection", async () => {
+  const api = detectorApi({
+    document: {
+      createElement: () => {
+        throw new Error("canvas disabled");
+      },
+    },
+    navigator: {
+      language: "en-US",
+      languages: ["en-US"],
+      platform: "MacIntel",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+        "AppleWebKit/605.1.15 Safari/605.1.15",
+      userAgentData: undefined,
+    },
+  });
+  const environment = api.browserEnvironment();
+  const result = await api.detect(environment);
+  const fonts = result.signals.find((signal) => signal.id === "fonts");
+  const vendorFonts = result.signals.find(
+    (signal) => signal.id === "vendorFonts",
+  );
+
+  assert.equal(environment.hasFont("PingFang SC"), false);
+  assert.equal(result.status, "complete");
+  assert.equal(result.signals.length, 9);
+  assert.equal(fonts.coverage, "unavailable");
+  assert.equal(vendorFonts.coverage, "unavailable");
+  assert.equal(result.unavailableCount, 2);
+});
+
+test("browser environment tolerates restricted navigator getters", async () => {
+  const restrictedNavigator = {};
+  for (const property of [
+    "language",
+    "languages",
+    "platform",
+    "userAgent",
+    "userAgentData",
+  ]) {
+    Object.defineProperty(restrictedNavigator, property, {
+      get() {
+        throw new Error(`${property} is restricted`);
+      },
+    });
+  }
+  const api = detectorApi({
+    document: {
+      createElement: () => ({ getContext: () => null }),
+    },
+    navigator: restrictedNavigator,
+  });
+
+  const environment = api.browserEnvironment();
+  const result = await api.detect(environment);
+
+  assert.deepEqual(Array.from(environment.languages), []);
+  assert.equal(environment.userAgent, "");
+  assert.equal(environment.platform, "");
+  assert.equal(result.status, "complete");
+  assert.ok(result.unavailableCount >= 6);
+});
+
+test("font measurement failures stay unavailable instead of becoming no match", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment({
+    fontDetectionAvailable: true,
+    hasFont: () => {
+      throw new Error("font measurement blocked");
+    },
+  }));
+  const fonts = result.signals.find((signal) => signal.id === "fonts");
+  const vendorFonts = result.signals.find(
+    (signal) => signal.id === "vendorFonts",
+  );
+
+  assert.equal(fonts.raw, "无法读取");
+  assert.equal(fonts.coverage, "unavailable");
+  assert.equal(vendorFonts.raw, "无法读取");
+  assert.equal(vendorFonts.coverage, "unavailable");
+  assert.ok(result.unavailableCount >= 2);
+});
+
+test("unreadable browser values remain unknown instead of looking safe", async () => {
+  const api = detectorApi();
+  const result = await api.detect({
+    timeZone: "",
+    timezoneOffset: Number.NaN,
+    languages: [],
+    intlLocale: "",
+    userAgent: "",
+    platform: "",
+    userAgentData: undefined,
+    fontDetectionAvailable: false,
+    hasFont: () => false,
+  });
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.matchedCount, 0);
+  assert.ok(result.unavailableCount >= 7);
+  assert.ok(
+    result.signals
+      .filter((signal) => signal.raw === "无法读取")
+      .every((signal) => signal.coverage === "unavailable"),
+  );
+});
+
 test("Taiwan preferences score zero while mainland preferences score fully", () => {
   const api = detectorApi();
 
@@ -277,7 +531,10 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
   assert.equal(api.scoreLanguages(["zh-TW", "zh", "en-US"]), 0);
   assert.equal(api.scoreLanguages(["zh-CN", "zh", "en-US"]), 1);
   assert.equal(api.scoreIntlLocale("zh-TW"), 0);
+  assert.equal(api.scoreIntlLocale("zh-Hant-TW"), 0);
   assert.equal(api.scoreIntlLocale("zh-CN"), 1);
+  assert.equal(api.scoreIntlLocale("zh-Hans-CN"), 1);
+  assert.equal(api.scoreIntlLocale("zh-Hant-HK"), 0.5);
 });
 
 test("Safari completes through the UA fallback and labels device evidence as limited", async () => {
@@ -290,7 +547,8 @@ test("Safari completes through the UA fallback and labels device evidence as lim
   assert.equal(result.status, "complete");
   assert.equal(result.signals.length, 9);
   assert.equal(result.total, 7);
-  assert.equal(result.band, "low");
+  assert.equal(result.band, undefined);
+  assert.equal(result.matchedCount, 3);
   assert.equal(device.coverage, "limited");
   assert.equal(device.contribution, 0);
   assert.match(device.raw, /仅 User-Agent/);
@@ -343,15 +601,73 @@ test("Chrome and Edge use full client hints without changing the nine-signal con
   }
 });
 
-test("risk bands keep the documented 0-30, 31-60, and 61-100 boundaries", () => {
+test("high-entropy device models affect the device signal", async () => {
   const api = detectorApi();
+  let requestedHints;
+  const result = await api.detect(baseEnvironment({
+    userAgent:
+      "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+      "Chrome/140.0.0.0 Mobile Safari/537.36",
+    platform: "Linux armv8l",
+    userAgentData: {
+      brands: [{ brand: "Chromium", version: "140" }],
+      getHighEntropyValues: async (hints) => {
+        requestedHints = Array.from(hints);
+        return {
+          model: "HUAWEI NOH-AN00",
+          platform: "Android",
+          platformVersion: "14.0.0",
+        };
+      },
+    },
+    hasFont: () => false,
+  }));
+  const device = result.signals.find(
+    (signal) => signal.id === "deviceVendor",
+  );
 
-  assert.equal(api.riskBand(0), "low");
-  assert.equal(api.riskBand(30), "low");
-  assert.equal(api.riskBand(31), "medium");
-  assert.equal(api.riskBand(60), "medium");
-  assert.equal(api.riskBand(61), "high");
-  assert.equal(api.riskBand(100), "high");
+  assert.equal(device.coverage, "full");
+  assert.equal(device.raw, "Huawei / Honor");
+  assert.equal(device.contribution, 5);
+  assert.deepEqual(requestedHints, ["model", "platform", "platformVersion"]);
+});
+
+test("a full mainland timezone hit is always reported as a match", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment({
+    timeZone: "Asia/Shanghai",
+  }));
+  const timezone = result.signals.find(
+    (signal) => signal.id === "timezone",
+  );
+
+  assert.equal(timezone.score, 1);
+  assert.equal(timezone.contribution, 26);
+  assert.equal(timezone.match, "strong");
+  assert.ok(result.matchedCount >= 1);
+  assert.equal(result.band, undefined);
+});
+
+test("partial-match branches keep their documented contributions", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment({
+    timeZone: "Asia/Hong_Kong",
+    languages: ["zh-HK", "en-US"],
+    intlLocale: "zh-Hant-HK",
+    hasFont: (font) => ["PingFang TC", "MiSans"].includes(font),
+  }));
+  const signals = Object.fromEntries(
+    result.signals.map((signal) => [signal.id, signal]),
+  );
+
+  assert.equal(signals.timezone.contribution, 16);
+  assert.equal(signals.language.contribution, 10);
+  assert.equal(signals.fonts.contribution, 3);
+  assert.equal(signals.vendorFonts.contribution, 8);
+  assert.equal(signals.intlLocale.contribution, 3);
+  assert.equal(signals.timezoneOffset.contribution, 3);
+  assert.equal(signals.emoji.contribution, 1);
+  assert.equal(new Set(result.signals.map((signal) => signal.id)).size, 9);
 });
 
 test("every contribution is bounded and the displayed total is their exact sum", async () => {

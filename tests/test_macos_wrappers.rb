@@ -486,8 +486,31 @@ class MacosWrapperTest < Minitest::Test
   def test_production_probe_shared_wrapper_lock_prevents_uninstall_from_deleting_a_concurrent_install
     require_production_probe!
     patcher = <<~'RUBY'
+      require "fileutils"
+
+      backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
+      ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
+      preference = File.join(ENV.fetch("HOME"), "auto-update-state")
+      if ARGV.include?("--print-auto-update-ownership-state")
+        puts(File.exist?(ownership) ? "owned" : "not_owned")
+        exit 0
+      end
       if ARGV.include?("--print-core-status")
         puts "supported"
+        exit 0
+      end
+      if ARGV.include?("--disable-subscription-auto-update")
+        already_owned = File.exist?(ownership)
+        FileUtils.mkdir_p(backup_dir)
+        File.binwrite(preference, "disabled")
+        File.binwrite(ownership, "{}") unless already_owned
+        puts(already_owned ? "already_disabled_owned" : "disabled")
+        exit 0
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.binwrite(preference, "enabled")
+        File.delete(ownership) if File.exist?(ownership)
+        puts "restored"
         exit 0
       end
       exit 0
@@ -576,6 +599,13 @@ class MacosWrapperTest < Minitest::Test
             )
             assert saved_status.success?, saved_error
             assert_equal "2", saved_profile.strip
+            assert_equal "disabled", File.binread(File.join(home, "auto-update-state"))
+            assert File.file?(
+              File.join(
+                home, "Library", "Application Support", "ClaudeEasy", "backups",
+                "clashx-meta-kAutoUpdateEnable.state.json"
+              )
+            )
           end
         end
       end
@@ -597,9 +627,10 @@ class MacosWrapperTest < Minitest::Test
         exit 0
       end
       if ARGV.include?("--disable-subscription-auto-update")
+        already_owned = File.exist?(ownership)
         File.write(preference, "disabled")
         File.write(ownership, "{}") unless File.exist?(ownership)
-        puts "already_disabled_owned"
+        puts(already_owned ? "already_disabled_owned" : "disabled")
         exit 0
       end
       if ARGV.include?("--restore-owned-subscription-auto-update")
@@ -693,8 +724,8 @@ class MacosWrapperTest < Minitest::Test
           result = assert_json_result(stdout, status, command: "install")
           assert_equal "install_completed", result.fetch("code")
           refute File.exist?(staging), "installer left the interrupted uninstall pending"
-          refute File.exist?(ownership), "installer retained stale automatic-update ownership"
-          assert_equal "enabled", File.binread(preference)
+          assert File.exist?(ownership), "installer did not retain automatic-update ownership"
+          assert_equal "disabled", File.binread(preference)
           saved_profile, saved_error, saved_status = Open3.capture3(
             "/usr/bin/plutil", "-extract", "Profile", "raw", state
           )

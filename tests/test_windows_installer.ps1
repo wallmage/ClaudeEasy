@@ -4121,7 +4121,8 @@ try {
             "verge.yaml",
             "profiles.yaml",
             "profiles\Script.js",
-            "claude-easy-usage-profile.json"
+            "claude-easy-usage-profile.json",
+            "claude-easy-auto-update-state.json"
         ) | ForEach-Object { Join-Path $publicUninstallCrashHome $_ }
         $publicUninstallSnapshots = @{}
         foreach ($publicUninstallTarget in $publicUninstallTargets) {

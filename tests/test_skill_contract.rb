@@ -402,16 +402,20 @@ class SkillContractTest < Minitest::Test
     [readme, skill, policy, design].each do |document|
       assert_includes document, "assets/claude-region-check.html"
       assert_includes document, "离线"
+      assert_includes document, "CSP"
       assert_includes document, "Safari"
       assert_includes document, "Chrome"
       assert_includes document, "Windows"
-      assert_includes document, "绿色"
-      assert_includes document, "低风险"
-      assert_includes document, "0–30"
-      assert_includes document, "20 分"
       assert_includes document, "区域指纹"
       assert_includes document, "DNS、WebRTC"
-      assert_includes document, "估计"
+      assert_includes document, "参考分"
+      assert_includes document, "不能作为"
+      assert_includes document, "通过条件"
+      assert_includes document, "不得合成"
+      assert_includes document, "不得仅为降低参考分修改系统默认浏览器"
+      assert_includes document, "只有用户明确要求"
+      refute_includes document, "绿色“低风险”"
+      refute_includes document, "补测其余八项"
     end
 
     [skill, policy].each do |document|
@@ -420,19 +424,22 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不得使用 Codex 内置浏览器"
       assert_includes document, "开始检测"
       assert_includes document, "重新扫描"
-      assert_includes document, "修改后的系统默认浏览器"
+      assert_includes document, "实际用于 Claude"
       assert_includes document, "修改前基线"
-      assert_includes document, "不得写死"
       assert_includes document, "未验证"
       assert_includes document, "最多等待 60 秒"
       assert_includes document, "只刷新一次"
       assert_includes document, "有限信息"
       assert_includes document, "本地检测页不可用"
-      assert_includes document, "浏览器未暴露的信息不计分"
-      assert_includes document, "其他默认浏览器"
-      assert_includes document, "补测其余八项"
+      assert_includes document, "无法读取"
+      assert_includes document, "其他浏览器"
       assert_includes document, "兼容性限制"
-      assert_includes document, "重新计算总分和风险档"
+      assert_includes document, "不得借用"
+      assert_includes document, "实际检测结果"
+      assert_includes document, "修改前快照"
+      assert_includes document, "恢复"
+      assert_includes document, "当前值仍等于本轮写入值"
+      assert_includes document, "不得覆盖"
     end
 
     [readme, skill, policy, design].each do |document|
@@ -454,17 +461,18 @@ class SkillContractTest < Minitest::Test
         zh-TW
         en-US
         ANTHROPIC_BASE_URL
-        已安装中文字体
+        浏览器可见中文字体
         国产厂商字体
         国产浏览器
         国产品牌设备
         时区偏移
-        Emoji
+        Emoji 平台推断
       ].each { |term| assert_includes document, term }
       assert_includes document, "征得用户同意"
       assert_includes document, "浏览器语言与 Intl 区域设置"
       assert_includes document, "不得删除中文字体"
-      assert_includes document, "只说明当前用于检测的浏览器"
+      assert_includes document, "只说明当前用于 Claude 和检测的浏览器"
+      assert_includes document, "不得仅为降低参考分修改系统默认浏览器"
       assert_includes document, "不得伪装设备或 User-Agent"
       assert_includes document, "UTC+8"
       assert_includes document, "不会改变当前时间"
@@ -473,12 +481,20 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "完整 hostname"
       assert_includes document, "向下滚动"
       assert_includes document, "一次申请"
+      assert_includes document, "只降低参考分"
+      assert_includes document, "不保证改变 Claude 判定"
+      %w[默认端点 官方端点 自定义端点 端点配置异常].each do |category|
+        assert_includes document, category
+      end
+      assert_includes document, "默认 443 端口"
+      assert_includes document, "不得包含 userinfo"
+      assert_includes document, "非 HTTPS"
       assert_includes document, "只回复“同意”"
       assert_includes document, "默认使用繁体中文"
       assert_includes document, "台湾区域设置"
       assert_includes document, "明确要求英文"
       assert_includes document, "美国区域设置"
-      assert_includes document, "最终用于复测的浏览器"
+      assert_includes document, "实际用于 Claude 的同一浏览器"
       assert_includes document, "系统和其他应用"
       assert_includes document, "移除 `zh-CN`"
       assert_includes document, "`zh-Hans`"
@@ -2783,8 +2799,13 @@ class SkillContractTest < Minitest::Test
       windows-installer-powershell-7
     ].each do |job|
       assert jobs.key?(job), "missing CI job: #{job}"
-      assert_includes jobs.fetch(job), command,
-                      "offline fingerprint page is not tested in #{job}"
+      body = jobs.fetch(job)
+      step = body.match(
+        /^\s+- name: Offline region fingerprint page\n((?:\s{8}.+\n?)*)/m
+      )
+      assert step, "missing enabled fingerprint step in #{job}"
+      assert_match(/^\s+run: #{Regexp.escape(command)}\s*$/, step[1])
+      refute_match(/^\s+(?:if:\s*false|continue-on-error:\s*true)\s*$/i, step[1])
     end
   end
 
