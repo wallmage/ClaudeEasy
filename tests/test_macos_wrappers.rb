@@ -90,7 +90,14 @@ class MacosWrapperTest < Minitest::Test
       FileUtils.cp(OPERATION_LOCK, File.join(scripts, "macos", "operation_lock.rb"))
       File.write(
         File.join(scripts, "macos", "patch_profiles.rb"),
-        patcher_source || "if ARGV.include?('--print-core-status'); puts 'supported'; end\nexit 0\n"
+        patcher_source || <<~RUBY
+          if ARGV.include?("--print-core-status")
+            puts "supported"
+          elsif ARGV.include?("--disable-subscription-auto-update")
+            puts "already_disabled"
+          end
+          exit 0
+        RUBY
       )
       File.write(File.join(package, "references", "policy.json"), "{}\n")
       yield File.join(scripts, "install_macos.sh")
@@ -1287,6 +1294,10 @@ class MacosWrapperTest < Minitest::Test
         exit 0
       end
       exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        puts "already_disabled"
+        exit 0
+      end
       exit 1
     RUBY
     with_supported_mihomo_installer(patcher_source: failing_patcher) do |installer|
@@ -1651,7 +1662,7 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_profile_three_restores_auto_update_when_a_later_step_fails
+  def test_first_install_restores_auto_update_when_a_later_step_fails
     patcher = <<~RUBY
       File.open(File.join(ENV.fetch("HOME"), "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
       if ARGV.include?("--print-core-status")
@@ -1687,7 +1698,7 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_profile_three_transition_restores_auto_update_when_disable_exits_after_changing_it
+  def test_existing_profile_keeps_auto_update_disabled_when_disable_exits_after_changing_it
     patcher = <<~'RUBY'
       home = ENV.fetch("HOME")
       calls = File.join(home, "patcher-calls.log")
@@ -1722,14 +1733,14 @@ class MacosWrapperTest < Minitest::Test
           _stdout, _stderr, status = run_script(installer, "--profile", "3", home: home)
 
           assert_equal 9, status.exitstatus
-          assert_equal "enabled", File.read(File.join(home, "auto-update"))
-          refute File.exist?(File.join(home, "auto-update-owned"))
+          assert_equal "disabled", File.read(File.join(home, "auto-update"))
+          assert File.exist?(File.join(home, "auto-update-owned"))
           saved, error, read_status = Open3.capture3(
             "/usr/bin/plutil", "-extract", "Profile", "raw", state
           )
           assert read_status.success?, error
           assert_equal "1", saved.strip
-          assert_includes File.read(File.join(home, "patcher-calls.log")),
+          refute_includes File.read(File.join(home, "patcher-calls.log")),
                           "--restore-owned-subscription-auto-update"
         end
       end
@@ -1776,7 +1787,7 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_profile_three_transition_defers_a_signal_until_disable_can_be_recovered
+  def test_existing_profile_defers_a_signal_and_keeps_auto_update_disabled
     patcher = <<~'RUBY'
       home = ENV.fetch("HOME")
       File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
@@ -1814,14 +1825,14 @@ class MacosWrapperTest < Minitest::Test
           _stdout, _stderr, status = run_script(installer, "--profile", "3", home: home)
 
           assert_equal 143, status.exitstatus
-          assert_equal "enabled", File.read(File.join(home, "auto-update"))
-          refute File.exist?(File.join(home, "auto-update-owned"))
+          assert_equal "disabled", File.read(File.join(home, "auto-update"))
+          assert File.exist?(File.join(home, "auto-update-owned"))
           saved, error, read_status = Open3.capture3(
             "/usr/bin/plutil", "-extract", "Profile", "raw", state
           )
           assert read_status.success?, error
           assert_equal "1", saved.strip
-          assert_includes File.read(File.join(home, "patcher-calls.log")),
+          refute_includes File.read(File.join(home, "patcher-calls.log")),
                           "--restore-owned-subscription-auto-update"
         end
       end
@@ -1871,7 +1882,7 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_light_profile_reconciles_owned_auto_update_state_before_profile_work
+  def test_light_profiles_keep_auto_update_disabled_before_install_or_safe_update
     patcher = <<~'RUBY'
       home = ENV.fetch("HOME")
       calls = File.join(home, "patcher-calls.log")
@@ -1880,11 +1891,9 @@ class MacosWrapperTest < Minitest::Test
         puts "supported"
         exit 0
       end
-      if ARGV.include?("--restore-owned-subscription-auto-update")
-        File.delete(File.join(home, "Library", "Application Support", "ClaudeEasy",
-                              "backups", "clashx-meta-kAutoUpdateEnable.state.json"))
-        File.write(File.join(home, "auto-update"), "enabled")
-        puts "restored"
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "disabled")
+        puts "already_disabled_owned"
         exit 0
       end
       exit 0 if ARGV.include?("--snapshot-initial")
@@ -1892,7 +1901,7 @@ class MacosWrapperTest < Minitest::Test
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      [[], ["--safe-update"]].each do |arguments|
+      [1, 2].product([[], ["--safe-update"]]).each do |profile, arguments|
         Dir.mktmpdir do |home|
           with_supported_app(home) do
             state = usage_state_path(home)
@@ -1904,29 +1913,30 @@ class MacosWrapperTest < Minitest::Test
             FileUtils.mkdir_p(File.dirname(ownership))
             system("/usr/bin/plutil", "-create", "xml1", state)
             system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-            system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+            system("/usr/bin/plutil", "-insert", "Profile", "-integer", profile.to_s, state)
             File.write(ownership, "owned")
             File.write(File.join(home, "auto-update"), "disabled")
 
             _stdout, _stderr, status = run_script(installer, *arguments, home: home)
 
             assert status.success?
-            assert_equal "enabled", File.read(File.join(home, "auto-update"))
-            refute File.exist?(ownership)
+            assert_equal "disabled", File.read(File.join(home, "auto-update"))
+            assert File.exist?(ownership)
             assert File.exist?(File.join(home, "profile-work-ran"))
             calls = File.readlines(File.join(home, "patcher-calls.log")).map(&:strip)
-            restore_index = calls.index { |call| call.include?("--restore-owned-subscription-auto-update") }
-            snapshot_index = calls.index { |call| call.include?("--snapshot-initial") }
-            refute_nil restore_index
-            refute_nil snapshot_index
-            assert_operator restore_index, :<, snapshot_index
+            disable_index = calls.index { |call| call.include?("--disable-subscription-auto-update") }
+            work_index = calls.index { |call| call.include?("--policy") }
+            refute_nil disable_index
+            refute_nil work_index
+            assert_operator disable_index, :<, work_index
+            refute calls.any? { |call| call.include?("--restore-owned-subscription-auto-update") }
           end
         end
       end
     end
   end
 
-  def test_light_profile_stops_before_profile_work_when_auto_update_recovery_fails
+  def test_saved_light_profiles_stop_before_profile_work_when_disabling_auto_update_fails
     patcher = <<~'RUBY'
       home = ENV.fetch("HOME")
       File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
@@ -1934,37 +1944,35 @@ class MacosWrapperTest < Minitest::Test
         puts "supported"
         exit 0
       end
-      exit 1 if ARGV.include?("--restore-owned-subscription-auto-update")
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update"), "disabled")
+        exit 1
+      end
       File.write(File.join(home, "profile-work-ran"), "unexpected")
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      [[], ["--safe-update"]].each do |arguments|
+      [1, 2].product([[], ["--safe-update"]]).each do |profile, arguments|
         Dir.mktmpdir do |home|
           with_supported_app(home) do
             state = usage_state_path(home)
-            ownership = File.join(
-              home, "Library", "Application Support", "ClaudeEasy", "backups",
-              "clashx-meta-kAutoUpdateEnable.state.json"
-            )
             FileUtils.mkdir_p(File.dirname(state))
-            FileUtils.mkdir_p(File.dirname(ownership))
             system("/usr/bin/plutil", "-create", "xml1", state)
             system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-            system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
-            File.write(ownership, "owned")
+            system("/usr/bin/plutil", "-insert", "Profile", "-integer", profile.to_s, state)
 
             stdout, stderr, status = run_script(
               installer, *arguments, "--json", home: home
             )
 
-            assert_equal 1, status.exitstatus
+            assert_equal 9, status.exitstatus
             assert_empty stderr
             result = assert_json_result(stdout, status, command: "install")
             assert_equal "partial", result.fetch("status")
             assert_equal "auto_update_recovery_pending", result.fetch("code")
             refute File.exist?(File.join(home, "profile-work-ran"))
-            assert File.exist?(ownership)
+            assert_equal "disabled", File.read(File.join(home, "auto-update"))
           end
         end
       end
@@ -2074,6 +2082,10 @@ class MacosWrapperTest < Minitest::Test
         exit 0
       end
       exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        puts "already_disabled"
+        exit 0
+      end
       if ARGV.include?("--safe-update-all")
         puts JSON.generate(
           "status" => "partial",

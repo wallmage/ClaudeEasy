@@ -91,12 +91,12 @@ unexpected_exit() {
         /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$OPERATION" --ok false --status partial \
           --code auto_update_restore_failed --exit-code "$unexpected_status" \
-          --summary "安装流程意外中止；已保留档位 3，但订阅自动更新仍需重试恢复。"
+          --summary "安装流程意外中止；已保留当前档位，但订阅自动更新仍需重试恢复。"
       elif [ "$AUTO_UPDATE_RECOVERY_PENDING" -eq 1 ]; then
         /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$OPERATION" --ok false --status partial \
           --code auto_update_recovery_pending --exit-code "$unexpected_status" \
-          --summary "订阅自动更新尚未达到档位 3 的完整状态；已保留恢复记录，请按档位 3 重试。"
+          --summary "订阅自动更新尚未达到当前档位的完整状态；已保留恢复记录，请按当前档位重试。"
       elif [ "$profile_restore_failed" -eq 1 ]; then
         /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$OPERATION" --ok false --status partial \
@@ -115,9 +115,9 @@ unexpected_exit() {
     elif [ "$profile_restore_failed" -eq 1 ] && [ "$auto_update_restore_failed" -eq 1 ]; then
       /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止，且旧用途档位与订阅自动更新均未能完整恢复。"
     elif [ "$auto_update_restore_failed" -eq 1 ]; then
-      /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止；已保留档位 3，但订阅自动更新仍需重试恢复。"
+      /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止；已保留当前档位，但订阅自动更新仍需重试恢复。"
     elif [ "$AUTO_UPDATE_RECOVERY_PENDING" -eq 1 ]; then
-      /usr/bin/printf '%s\n' "[ClaudeEasy] 订阅自动更新尚未达到档位 3 的完整状态；已保留恢复记录，请按档位 3 重试。"
+      /usr/bin/printf '%s\n' "[ClaudeEasy] 订阅自动更新尚未达到当前档位的完整状态；已保留恢复记录，请按当前档位重试。"
     elif [ "$profile_restore_failed" -eq 1 ]; then
       /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止，且旧用途档位未能恢复。"
     else
@@ -161,11 +161,11 @@ finish() {
     if [ "$auto_update_restore_failed" -eq 1 ]; then
       finish_status=partial
       finish_code=auto_update_restore_failed
-      finish_summary="操作失败；已保留档位 3，但订阅自动更新仍需重试恢复。"
+      finish_summary="操作失败；已保留当前档位，但订阅自动更新仍需重试恢复。"
     elif [ "$AUTO_UPDATE_RECOVERY_PENDING" -eq 1 ]; then
       finish_status=partial
       finish_code=auto_update_recovery_pending
-      finish_summary="订阅自动更新尚未达到档位 3 的完整状态；已保留恢复记录，请按档位 3 重试。"
+      finish_summary="订阅自动更新尚未达到当前档位的完整状态；已保留恢复记录，请按当前档位重试。"
     fi
   fi
   if [ "$JSON_OUTPUT" -eq 1 ]; then
@@ -241,24 +241,6 @@ run_subscription_auto_update_disable() {
     exit "$AUTO_UPDATE_OPERATION_SIGNAL"
   fi
   return "$auto_update_status"
-}
-
-reconcile_auto_update_for_light_profile() {
-  [ "$USAGE_PROFILE" != "3" ] || return 0
-  if [ ! -e "$AUTO_UPDATE_OWNERSHIP_PATH" ] && [ ! -L "$AUTO_UPDATE_OWNERSHIP_PATH" ]; then
-    return 0
-  fi
-  reconciliation_result=$(/usr/bin/ruby "$PATCHER_SOURCE" \
-    --backup-dir "$BACKUP_DIR" --restore-owned-subscription-auto-update 2>&1) ||
-    finish 1 partial auto_update_recovery_pending \
-      "检测到未完成的订阅自动更新恢复；恢复失败，未处理任何订阅文件。" install
-  case "$reconciliation_result" in
-    restored|already_restored|not_owned) ;;
-    *)
-      finish 1 partial auto_update_recovery_pending \
-        "订阅自动更新恢复结果无法确认；未处理任何订阅文件。" install
-      ;;
-  esac
 }
 
 finish_json_child_failure() {
@@ -750,8 +732,6 @@ fi
 /bin/mkdir -p "$BACKUP_DIR"
 /bin/chmod 700 "$INSTALL_DIR" "$BACKUP_DIR"
 
-reconcile_auto_update_for_light_profile
-
 if [ -n "$CUSTOM_PROFILE_DIR" ]; then
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if ! child_json=$(/usr/bin/ruby "$PATCHER_SOURCE" --profile-dir "$CUSTOM_PROFILE_DIR" --backup-dir "$BACKUP_DIR" --snapshot-initial --json 2>/dev/null); then
@@ -774,30 +754,28 @@ fi
 
 stage_profile_selection
 
-if [ "$USAGE_PROFILE" -eq 3 ]; then
-  if [ "$PREVIOUS_PROFILE" != "3" ]; then
-    AUTO_UPDATE_RECOVERY_REQUIRED=1
+if [ -z "$PREVIOUS_PROFILE" ]; then
+  AUTO_UPDATE_RECOVERY_REQUIRED=1
+fi
+if ! run_subscription_auto_update_disable; then
+  if [ -n "$PREVIOUS_PROFILE" ]; then
+    AUTO_UPDATE_RECOVERY_PENDING=1
   fi
-  if ! run_subscription_auto_update_disable; then
-    if [ "$PREVIOUS_PROFILE" = "3" ]; then
+  say "无法完成 ClashX Meta 的订阅自动更新设置；未继续处理订阅文件，请按当前档位重试。"
+  finish 9 failed auto_update_failed "无法完成订阅自动更新设置；未继续处理订阅文件。" install
+fi
+case "$auto_update_result" in
+  disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;
+  already_disabled) AUTO_UPDATE_RECOVERY_REQUIRED=0; say "订阅自动更新已经关闭。" ;;
+  already_disabled_owned) say "订阅自动更新已经由 ClaudeEasy 关闭。" ;;
+  *)
+    if [ -n "$PREVIOUS_PROFILE" ]; then
       AUTO_UPDATE_RECOVERY_PENDING=1
     fi
-    say "无法完成 ClashX Meta 的订阅自动更新设置；未继续处理订阅文件，请按档位 3 重试。"
-    finish 9 failed auto_update_failed "无法完成订阅自动更新设置；未继续处理订阅文件。" install
-  fi
-  case "$auto_update_result" in
-    disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;
-    already_disabled) AUTO_UPDATE_RECOVERY_REQUIRED=0; say "订阅自动更新已经关闭。" ;;
-    already_disabled_owned) say "订阅自动更新已经由 ClaudeEasy 关闭。" ;;
-    *)
-      if [ "$PREVIOUS_PROFILE" = "3" ]; then
-        AUTO_UPDATE_RECOVERY_PENDING=1
-      fi
-      say "订阅自动更新回读结果异常；未继续处理订阅文件，请按档位 3 重试。"
-      finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未继续处理订阅文件。" install
-      ;;
-  esac
-fi
+    say "订阅自动更新回读结果异常；未继续处理订阅文件，请按当前档位重试。"
+    finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未继续处理订阅文件。" install
+    ;;
+esac
 
 if [ "$SAFE_UPDATE" -eq 1 ]; then
   if [ -n "$CUSTOM_PROFILE_DIR" ]; then
@@ -828,7 +806,23 @@ if [ "$SAFE_UPDATE" -eq 1 ]; then
       fi
     fi
   fi
+  if ! run_subscription_auto_update_disable; then
+    AUTO_UPDATE_RECOVERY_PENDING=1
+    finish 9 partial auto_update_recheck_failed \
+      "订阅已经更新并重新应用当前档位补丁，但无法再次确认自动更新关闭；请按当前档位重试。" \
+      safe_update
+  fi
+  case "$auto_update_result" in
+    disabled|already_disabled|already_disabled_owned) ;;
+    *)
+      AUTO_UPDATE_RECOVERY_PENDING=1
+      finish 9 partial auto_update_recheck_failed \
+        "订阅已经更新并重新应用当前档位补丁，但自动更新回读结果异常；请按当前档位重试。" \
+        safe_update
+      ;;
+  esac
   say "安全更新已完成：当前存储位置中的全部远程订阅已一起更新。"
+  say "已再次确认订阅自动更新关闭。"
   finish 0 ok safe_update_completed "安全更新已完成。" safe_update
 fi
 

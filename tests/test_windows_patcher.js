@@ -1076,7 +1076,7 @@ test('Windows installation fails closed and preserves exact restore state', () =
   assert.match(installer, /Mihomo 1\.19\.27/);
   assert.match(installer, /Join-Path \(Join-Path \$env:LOCALAPPDATA "Clash Verge"\) "verge-mihomo\.exe"/);
   assert.match(installer, /function Test-ClashVergeRunning/);
-  assert.match(installer, /if \(\$resolvedUsageProfile -eq 3 -and \$clientRunning\)[\s\S]*client_running_profile_three_deferred/);
+  assert.match(installer, /if \(\$clientRunning\)[\s\S]*client_running_profile_three_deferred[\s\S]*client_running_auto_update_deferred/);
   assert.doesNotMatch(installer, /installed_running_client/);
   assert.match(installer, /WaitForExit\(\$TimeoutSeconds \* 1000\)/);
   assert.match(installer, /\$process\.Kill\(\)/);
@@ -1084,6 +1084,8 @@ test('Windows installation fails closed and preserves exact restore state', () =
   assert.match(installer, /function Write-BytesAtomic/);
   assert.match(installer, /function Set-RemoteSubscriptionAutoUpdateDisabled/);
   assert.match(installer, /function Assert-RemoteSubscriptionAutoUpdateDisabled/);
+  assert.match(installer, /Assert-RemoteSubscriptionAutoUpdateDisabled \$indexText \| Out-Null/);
+  assert.doesNotMatch(installer, /if \(\$savedProfile -eq 3\) \{ Assert-RemoteSubscriptionAutoUpdateDisabled/);
   assert.match(installer, /allow_auto_update/);
   assert.match(installer, /profiles\.yaml/);
   assert.match(installer, /OriginalBytes/);

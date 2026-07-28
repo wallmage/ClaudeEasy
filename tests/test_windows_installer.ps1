@@ -5297,6 +5297,18 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
     Assert-True ($postUninstallLight.ExitCode -eq 0) "safe uninstall did not permit a documented profile 3 to profile 1 downgrade; $(Get-TestOutputDiagnostic $postUninstallLight.Output)"
     $postUninstallProfile = Get-Content -LiteralPath (Join-Path $nullCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$postUninstallProfile.Profile -eq 1) "post-uninstall downgrade did not save profile 1"
+    Assert-True (
+        (Get-Content -LiteralPath (Join-Path $nullCase "profiles.yaml") -Raw) -match
+        '(?m)^\s+allow_auto_update:\s+false\s*$'
+    ) "profile 1 did not disable remote subscription auto-update"
+    Assert-True (
+        Test-Path -LiteralPath (Join-Path $nullCase "claude-easy-auto-update-state.json") -PathType Leaf
+    ) "profile 1 did not preserve auto-update restore ownership"
+    Invoke-Uninstaller $nullCase
+    Assert-True (
+        (Get-Content -LiteralPath (Join-Path $nullCase "profiles.yaml") -Raw) -match
+        '(?m)^\s+allow_auto_update:\s+true\s*$'
+    ) "profile 1 uninstall did not restore remote subscription auto-update"
     if ($onWindows) {
         $mihomoArguments = Get-Content -LiteralPath (Join-Path $sandbox "mihomo-arguments.log") -Raw
         Assert-True ($mihomoArguments -match '(?m)(^| )-t( |$)') "installer never asked Mihomo to test a generated candidate"
@@ -5485,6 +5497,21 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
             Assert-True (
                 (Get-TreeContentSnapshot $runningCase) -ceq $runningBefore
             ) "deferred running profile 3 install changed AppHome"
+
+            $runningLightResult = Invoke-TestPowerShell $installer @(
+                "-AppHome", $runningCase,
+                "-UsageProfile", "1",
+                "-MihomoPath", $fakeCore,
+                "-Json"
+            )
+            $runningLightJson = Assert-JsonResult $runningLightResult "install" 1
+            Assert-True (
+                $runningLightJson.status -eq "partial" -and
+                $runningLightJson.code -eq "client_running_auto_update_deferred"
+            ) "running profile 1 install changed files without synchronizing the client's auto-update state"
+            Assert-True (
+                (Get-TreeContentSnapshot $runningCase) -ceq $runningBefore
+            ) "deferred running profile 1 install changed AppHome"
         } finally {
             if (-not $runningClient.HasExited) { Stop-Process -Id $runningClient.Id -Force }
         }

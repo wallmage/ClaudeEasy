@@ -281,7 +281,7 @@ if ($VerifySafeUpdate) {
                 throw
             }
         }
-        if ($savedProfile -eq 3) { Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null }
+        Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
         $versionGuards = @()
         try {
             foreach ($entry in @($validated | Sort-Object { $_.Target.Path })) {
@@ -512,13 +512,18 @@ try {
     if ($savedUsageProfile -eq 3 -and $resolvedUsageProfile -ne 3 -and $profileSource -ne "saved") {
         throw "从档位 3 改为轻量档位前，必须先运行安全卸载。"
     }
-    if ($resolvedUsageProfile -eq 3 -and $clientRunning) {
+    if ($clientRunning) {
+        $runningCode = if ($resolvedUsageProfile -eq 3) {
+            "client_running_profile_three_deferred"
+        } else {
+            "client_running_auto_update_deferred"
+        }
         if (-not $Json) {
             [Console]::Error.WriteLine(
-                "[ClaudeEasy] Clash Verge Rev 正在运行；为避免客户端内存状态覆盖 profiles.yaml，本次未修改用途档位、所有权、脚本或客户端配置。请在客户端未运行时重试档位 3。"
+                "[ClaudeEasy] Clash Verge Rev 正在运行；为避免客户端内存状态覆盖 profiles.yaml，本次未修改用途档位、自动更新所有权、脚本或客户端配置。请在客户端未运行时按当前档位重试。"
             )
         }
-        Complete-InstallResult 1 "partial" "client_running_profile_three_deferred" "客户端正在运行；本次未修改用途档位、所有权、脚本或客户端配置，请在客户端未运行时重试档位 3。"
+        Complete-InstallResult 1 "partial" $runningCode "客户端正在运行；本次未修改用途档位、自动更新所有权、脚本或客户端配置，请在客户端未运行时按当前档位重试。"
     }
     $usageProfileTarget = $null
     if ($profileSource -ne "saved") {
@@ -534,29 +539,6 @@ try {
             OriginalBytes = $usageProfileSnapshot.Bytes
             OriginalIdentity = $usageProfileSnapshot.Identity
         }
-    }
-    if ($resolvedUsageProfile -ne 3) {
-        $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "Script.js"
-        $scriptExisted = [bool]$scriptSnapshot.Exists
-        $scriptOriginalBytes = $scriptSnapshot.Bytes
-        $scriptCurrentText = if ($scriptExisted) { $strictUtf8.GetString($scriptOriginalBytes) } else { $null }
-        $scriptOutput = Build-GlobalScript $enginePath $targetScript $resolvedUsageProfile $scriptCurrentText
-        $scriptBytes = ConvertTo-Utf8Bytes $scriptOutput
-        $scriptTarget = [pscustomobject]@{
-            Path = $targetScript
-            Bytes = $scriptBytes
-            Existed = $scriptExisted
-            OriginalBytes = $scriptOriginalBytes
-            OriginalIdentity = $scriptSnapshot.Identity
-        }
-        Backup-InitialOnce $scriptTarget.Path $backupRoot | Out-Null
-        Backup-Versioned $scriptTarget.Path $backupRoot "prewrite" | Out-Null
-        $lightTargets = @($scriptTarget)
-        if ($null -ne $usageProfileTarget) { $lightTargets += $usageProfileTarget }
-        Invoke-VerifiedFileTransaction $lightTargets
-        if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
-        Write-Info "已为全部订阅安装共享国内域名直连规则；未修改 TUN、IPv6 或订阅自动更新。"
-        Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则。" @("global_script", "cn_domain_baseline")
     }
     $profilesIndexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"
     if (-not $profilesIndexSnapshot.Exists) {
@@ -600,6 +582,46 @@ try {
     $profilesIndexOutput = Set-RemoteSubscriptionAutoUpdateDisabled $profilesIndexInput
     Assert-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput | Out-Null
     $profilesIndexBytes = ConvertTo-Utf8Bytes $profilesIndexOutput
+
+    if ($resolvedUsageProfile -ne 3) {
+        $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "Script.js"
+        $scriptExisted = [bool]$scriptSnapshot.Exists
+        $scriptOriginalBytes = $scriptSnapshot.Bytes
+        $scriptCurrentText = if ($scriptExisted) { $strictUtf8.GetString($scriptOriginalBytes) } else { $null }
+        $scriptOutput = Build-GlobalScript $enginePath $targetScript $resolvedUsageProfile $scriptCurrentText
+        $scriptBytes = ConvertTo-Utf8Bytes $scriptOutput
+        $scriptTarget = [pscustomobject]@{
+            Path = $targetScript
+            Bytes = $scriptBytes
+            Existed = $scriptExisted
+            OriginalBytes = $scriptOriginalBytes
+            OriginalIdentity = $scriptSnapshot.Identity
+        }
+        $lightTargets = @(
+            $scriptTarget,
+            [pscustomobject]@{
+                Path = $profilesIndexPath
+                Bytes = $profilesIndexBytes
+                Existed = $true
+                OriginalBytes = $profilesIndexOriginalBytes
+                OriginalIdentity = $profilesIndexSnapshot.Identity
+            }
+        )
+        if ($null -ne $autoUpdateStateTarget) { $lightTargets += $autoUpdateStateTarget }
+        if ($null -ne $usageProfileTarget) { $lightTargets += $usageProfileTarget }
+        foreach ($target in $lightTargets) {
+            if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
+            Backup-InitialOnce $target.Path $backupRoot | Out-Null
+            Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
+        }
+        $lightCommitted = Invoke-VerifiedFileTransaction $lightTargets $clientStoppedPreCommit
+        if (-not $lightCommitted) {
+            throw "检测到 Clash Verge Rev 在安装期间启动；已撤销本次文件修改。"
+        }
+        if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
+        Write-Info "已为全部订阅安装共享国内域名直连规则，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
+        Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则，并关闭订阅自动更新。" @("global_script", "cn_domain_baseline", "auto_update")
+    }
 
     $installState = $null
     $stateSnapshot = Get-OptionalFileSnapshot $statePath "安装状态"

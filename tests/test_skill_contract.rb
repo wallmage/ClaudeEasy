@@ -481,7 +481,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "uninstall_macos.sh"
     assert_includes skill, "uninstall_windows.cmd"
     assert_includes policy, "旧订阅增强仍可能保留"
-    assert_includes policy, "只有档位 3"
+    assert_includes policy, "三个档位都会关闭订阅自动更新"
     assert_includes mac_installer, '--usage-profile "$USAGE_PROFILE"'
     assert_includes windows_installer, 'if ($resolvedUsageProfile -ne 3)'
     assert_includes windows_installer, '$savedUsageProfile -eq 3'
@@ -897,8 +897,11 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "安全更新"
       assert_includes document, "全部远程订阅"
       assert_includes document, "全部保持原样"
-      assert_includes document, "档位 3"
+      assert_includes document, "三个档位"
       assert_includes document, "关闭自动更新"
+      assert_includes document, "请帮我安全更新全部订阅"
+      assert_includes document, "数月"
+      assert_includes document, "再次确认自动更新关闭"
     end
     assert_includes installer, "--safe-update"
     assert_includes patcher, "--safe-update-all"
@@ -1562,13 +1565,14 @@ class SkillContractTest < Minitest::Test
     assert_includes mac_tests, 'puts "already_disabled_owned"'
 
     running_gate = windows_installer.index(
-      'if ($resolvedUsageProfile -eq 3 -and $clientRunning) {'
+      'if ($clientRunning) {'
     )
     first_install_target = windows_installer.index('$usageProfileTarget = $null')
     refute_nil running_gate
     refute_nil first_install_target
     assert_operator running_gate, :<, first_install_target
     assert_includes windows_installer, '"client_running_profile_three_deferred"'
+    assert_includes windows_installer, '"client_running_auto_update_deferred"'
     refute_includes windows_installer, "installed_running_client"
     assert_includes windows_tests, 'Get-TreeContentSnapshot $runningCase'
     assert_includes windows_tests, "client_running_profile_three_deferred"

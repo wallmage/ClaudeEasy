@@ -8225,23 +8225,26 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_uninstall_recovery_profile_requires_the_fixed_complete_tier_three_stage
+  def test_uninstall_recovery_profile_accepts_every_managed_tier
     Dir.mktmpdir do |directory|
       state_path = File.join(directory, "usage-profile.plist")
       staging = File.join(directory, ".claude-easy-uninstall-staging")
       usage = File.join(staging, "usage")
       backup_root = File.join(directory, "backups")
       FileUtils.mkdir_p(staging)
-      system("/usr/bin/plutil", "-create", "xml1", usage)
-      system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", usage)
-      system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", usage)
-      File.chmod(0o600, usage)
       %w[READY AUTO_UPDATE_WAS_OWNED].each do |name|
         File.binwrite(File.join(staging, name), "")
       end
 
       ClaudeEasy.stub(:usage_profile_state_path, state_path) do
-        assert ClaudeEasy.valid_uninstall_recovery_profile?(usage)
+        [1, 2, 3].each do |profile|
+          system("/usr/bin/plutil", "-create", "xml1", usage)
+          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", usage)
+          system("/usr/bin/plutil", "-insert", "Profile", "-integer", profile.to_s, usage)
+          File.chmod(0o600, usage)
+          assert ClaudeEasy.valid_uninstall_recovery_profile?(usage),
+                 "档位 #{profile} 的卸载恢复凭据被拒绝"
+        end
         refute ClaudeEasy.valid_uninstall_recovery_profile?(File.join(directory, "usage"))
         File.unlink(File.join(staging, "READY"))
         refute ClaudeEasy.valid_uninstall_recovery_profile?(usage)

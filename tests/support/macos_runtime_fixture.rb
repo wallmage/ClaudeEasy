@@ -14,13 +14,24 @@ module MacosRuntimeFixture
       module Open3
         class << self
           alias claude_easy_fixture_capture3 capture3
+          @claude_easy_auto_update_enabled = true
 
           def capture3(*arguments, **options)
             if arguments[0] == "/usr/bin/defaults" &&
                arguments[1] == "export" &&
                arguments[2] == "com.metacubex.ClashX.meta"
-              plist = "<plist><dict><key>selectConfigName</key><string>#{selected}</string></dict></plist>"
+              auto_update = @claude_easy_auto_update_enabled ? "<true/>" : "<false/>"
+              plist = "<plist><dict><key>selectConfigName</key><string>#{selected}</string><key>kAutoUpdateEnable</key>\#{auto_update}</dict></plist>"
               return [plist, "", ClaudeEasyFixtureStatus.new(true)]
+            end
+            if arguments[0] == "/usr/bin/defaults" &&
+               arguments[1] == "write" &&
+               arguments[2] == "com.metacubex.ClashX.meta" &&
+               arguments[3] == "kAutoUpdateEnable" &&
+               arguments[4] == "-bool" &&
+               arguments[5] == "false"
+              @claude_easy_auto_update_enabled = false
+              return ["", "", ClaudeEasyFixtureStatus.new(true)]
             end
             if arguments[0] == "/usr/bin/plutil" &&
                arguments[1] == "-convert" &&

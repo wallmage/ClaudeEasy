@@ -85,7 +85,7 @@ module ClaudeEasy
       marker = File.join(staging, name)
       stat = File.lstat(marker)
       stat.file? && !stat.symlink? && stat.nlink == 1
-    end && saved_usage_profile(path: expanded) == 3
+    end && [1, 2, 3].include?(saved_usage_profile(path: expanded))
   rescue InvalidConfigError, SystemCallError, IOError
     false
   end
@@ -410,9 +410,9 @@ module ClaudeEasy
         return emit_cli_result(
           operation: "disable_subscription_auto_update", exit_code: 64,
           status: "invalid_request", code: "usage_profile_required",
-          summary_zh: "关闭订阅自动更新必须显式指定用途档位 3。"
+          summary_zh: "关闭订阅自动更新必须显式指定用途档位。"
         ) if options[:json]
-        warn "关闭订阅自动更新必须显式指定用途档位 3。"
+        warn "关闭订阅自动更新必须显式指定用途档位。"
         return 64
       end
       if options[:uninstall_recovery_state]
@@ -426,7 +426,8 @@ module ClaudeEasy
           return 10
         end
       elsif (rejected = reject_unapproved_usage_profile(
-        options, operation: "disable_subscription_auto_update", expected: 3
+        options, operation: "disable_subscription_auto_update",
+        expected: options[:usage_profile]
       ))
         return rejected
       end

@@ -1138,12 +1138,12 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_running_profile_three_guard_mutation_is_killed
+  def test_windows_running_all_profiles_guard_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/install_windows.ps1",
-        "    if ($resolvedUsageProfile -eq 3 -and $clientRunning) {\n",
+        "    if ($clientRunning) {\n",
         "    if ($false) {\n"
       )
 
@@ -2046,16 +2046,16 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        "  if [ \"$PREVIOUS_PROFILE\" != \"3\" ]; then\n" \
-          "    AUTO_UPDATE_RECOVERY_REQUIRED=1\n" \
-          "  fi\n",
-        "  AUTO_UPDATE_RECOVERY_REQUIRED=0\n"
+        "if [ -z \"$PREVIOUS_PROFILE\" ]; then\n" \
+          "  AUTO_UPDATE_RECOVERY_REQUIRED=1\n" \
+          "fi\n",
+        "AUTO_UPDATE_RECOVERY_REQUIRED=0\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_wrappers.rb",
-        "--name", "test_profile_three_restores_auto_update_when_a_later_step_fails"
+        "--name", "test_first_install_restores_auto_update_when_a_later_step_fails"
       )
     end
   end
