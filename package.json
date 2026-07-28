@@ -1,0 +1,10 @@
+{
+  "name": "claude-easy-tests",
+  "private": true,
+  "scripts": {
+    "test:region-browser": "node tests/test_region_fingerprint_browser.js"
+  },
+  "devDependencies": {
+    "playwright": "1.62.0"
+  }
+}

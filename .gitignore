@@ -6,6 +6,7 @@ docs/superpowers/*
 docs/superpowers/specs/*
 !docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md
 dist/
+node_modules/
 *.zip
 *.log
 *.bak

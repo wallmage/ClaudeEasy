@@ -30,6 +30,9 @@ ruby tests/test_macos_wrappers.rb
 ruby tests/test_skill_contract.rb
 ruby tests/test_mutation_safety.rb
 node --test tests/test_region_fingerprint_page.js
+npm ci
+npx playwright install webkit
+node tests/test_region_fingerprint_browser.js
 node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
 ruby tests/generate_windows_policy.rb --check
 ruby -c claude-easy/scripts/macos/patch_profiles.rb

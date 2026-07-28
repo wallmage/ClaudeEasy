@@ -27,7 +27,7 @@ SOFTWARE.
     <meta charset="utf-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
@@ -47,7 +47,7 @@ SOFTWARE.
         --clear-soft: #e4f2e9;
         --match: #ad3d35;
         --match-soft: #f8dfdd;
-        --notice: #996713;
+        --notice: #85540f;
         --notice-soft: #f7ecd0;
         --limited: #6f5a91;
         --limited-soft: #eee8f7;
@@ -121,6 +121,17 @@ SOFTWARE.
         border-radius: 50%;
         background: var(--clear);
         content: "";
+      }
+
+      .noscript-warning {
+        margin: 18px 0 0;
+        padding: 12px 14px;
+        border: 1px solid var(--notice);
+        border-radius: 12px;
+        background: var(--notice-soft);
+        color: var(--notice);
+        font-size: 14px;
+        font-weight: 700;
       }
 
       .panel {
@@ -221,7 +232,7 @@ SOFTWARE.
       }
 
       button:focus-visible {
-        outline: 3px solid rgba(169, 81, 55, 0.24);
+        outline: 3px solid #a95137;
         outline-offset: 3px;
       }
 
@@ -314,6 +325,10 @@ SOFTWARE.
         color: var(--notice);
       }
 
+      .signal[data-match="unknown"] .contribution {
+        color: var(--limited);
+      }
+
       .signal[data-match="strong"] .contribution {
         color: var(--match);
       }
@@ -385,9 +400,15 @@ SOFTWARE.
       <h1>Claude 区域指纹检测</h1>
       <p class="intro">
         检查当前浏览器可见的九项区域环境信号。参考分只用于比较修改前后，
-        不代表 Claude 的官方判定，也不能作为 Claude 是否可用的通过条件。
+        分数越高表示大陆关联信号越多；它不代表 Claude 的官方判定，
+        也不能作为 Claude 是否可用的通过条件。
       </p>
       <div class="privacy">页面完全离线运行，不发送检测结果</div>
+      <noscript>
+        <p class="noscript-warning" role="alert">
+          无法运行检测：当前浏览器禁用了 JavaScript。请启用后重新打开本地页面。
+        </p>
+      </noscript>
 
       <section class="panel" aria-label="区域指纹检测器">
         <div class="score-card">
@@ -401,7 +422,7 @@ SOFTWARE.
           </div>
           <div>
             <div class="actions">
-              <button type="button" data-action="start">开始检测</button>
+              <button type="button" data-action="start" disabled>开始检测</button>
               <button type="button" data-action="rescan" hidden>重新扫描</button>
             </div>
             <p
@@ -413,13 +434,18 @@ SOFTWARE.
           </div>
         </div>
 
-        <ol class="signals" data-signal-list aria-label="九项检测结果"></ol>
+        <ol
+          class="signals"
+          data-signal-list
+          role="list"
+          aria-label="九项检测结果"
+        ></ol>
       </section>
 
       <section class="explain" aria-label="结果说明">
         <article class="note">
           <h2>怎样看结果</h2>
-          <p>任何非零项都会单独列出。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
+          <p>分数越高表示大陆关联信号越多。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
@@ -521,6 +547,7 @@ SOFTWARE.
           [/360se|360ee|qihoobrowser|\bqhbrowser\b/i, "360 Browser"],
           [/2345explorer|2345browser/i, "2345"],
           [/lbbrowser/i, "Liebao"],
+          [/theworld/i, "TheWorld"],
           [/aweme|bytedancewebview|newsarticle|toutiaomicroapp/i, "Douyin / Toutiao"],
           [/alipayclient/i, "Alipay"],
           [/dingtalk/i, "DingTalk"],
@@ -642,7 +669,7 @@ SOFTWARE.
 
         function signalMatch(score) {
           if (score >= 0.6) return "strong";
-          if (score > 0) return "weak";
+          if (score >= 0.25) return "weak";
           return "none";
         }
 
@@ -659,6 +686,19 @@ SOFTWARE.
         }
 
         function outcome(definition, raw, score, coverage) {
+          var resolvedCoverage = coverage || "full";
+          if (resolvedCoverage === "unavailable") {
+            return {
+              id: definition.id,
+              name: definition.name,
+              weight: definition.weight,
+              raw: raw,
+              score: null,
+              contribution: null,
+              coverage: resolvedCoverage,
+              match: "unknown"
+            };
+          }
           var bounded = clampScore(score);
           return {
             id: definition.id,
@@ -667,7 +707,7 @@ SOFTWARE.
             raw: raw,
             score: bounded,
             contribution: Math.round(bounded * definition.weight),
-            coverage: coverage || "full",
+            coverage: resolvedCoverage,
             match: signalMatch(bounded)
           };
         }
@@ -767,20 +807,26 @@ SOFTWARE.
 
           var extraDevice = "";
           var deviceCoverage = "limited";
+          var deviceLimitation = "仅 User-Agent";
           if (userAgentData &&
               typeof userAgentData.getHighEntropyValues === "function") {
             try {
               var highEntropy = await userAgentData.getHighEntropyValues([
-                "model",
-                "platform",
-                "platformVersion"
+                "model"
               ]);
-              extraDevice = " " +
-                String(highEntropy.model || "") + " " +
-                String(highEntropy.platform || "");
-              deviceCoverage = "full";
+              var model = String(
+                highEntropy && highEntropy.model || ""
+              ).trim();
+              if (model) {
+                extraDevice = " " + model;
+                deviceCoverage = "full";
+                deviceLimitation = "";
+              } else {
+                deviceLimitation = "浏览器未提供设备型号";
+              }
             } catch (_error) {
               deviceCoverage = "limited";
+              deviceLimitation = "仅 User-Agent";
             }
           }
           var deviceMatch = matchPattern(
@@ -792,7 +838,7 @@ SOFTWARE.
             deviceRaw = "无法读取";
             deviceCoverage = "unavailable";
           } else if (deviceCoverage === "limited") {
-            deviceRaw += "（有限信息：仅 User-Agent）";
+            deviceRaw += "（有限信息：" + deviceLimitation + "）";
           }
           results.push(outcome(
             definitions.deviceVendor,
@@ -833,11 +879,15 @@ SOFTWARE.
             environment.platform || userAgent ? "full" : "unavailable"
           ));
 
-          var total = Math.min(100, results.reduce(function (sum, signal) {
-            return sum + signal.contribution;
+          var knownTotal = Math.min(100, results.reduce(function (sum, signal) {
+            return sum + (
+              typeof signal.contribution === "number"
+                ? signal.contribution
+                : 0
+            );
           }, 0));
           var matchedCount = results.filter(function (signal) {
-            return signal.contribution > 0;
+            return typeof signal.score === "number" && signal.score >= 0.25;
           }).length;
           var limitedCount = results.filter(function (signal) {
             return signal.coverage === "limited";
@@ -845,9 +895,16 @@ SOFTWARE.
           var unavailableCount = results.filter(function (signal) {
             return signal.coverage === "unavailable";
           }).length;
+          var unknownWeight = results.reduce(function (sum, signal) {
+            return sum + (
+              signal.coverage === "unavailable" ? signal.weight : 0
+            );
+          }, 0);
           return {
             status: "complete",
-            total: total,
+            total: unavailableCount > 0 ? null : knownTotal,
+            knownTotal: knownTotal,
+            unknownWeight: unknownWeight,
             matchedCount: matchedCount,
             limitedCount: limitedCount,
             unavailableCount: unavailableCount,
@@ -1024,7 +1081,9 @@ SOFTWARE.
         }
 
         function render(result) {
-          score.textContent = String(result.total);
+          score.textContent = result.total === null
+            ? "—"
+            : String(result.total);
           var summaryState = result.unavailableCount > 0
             ? "partial"
             : result.matchedCount > 0
@@ -1046,18 +1105,22 @@ SOFTWARE.
               signal.coverage === "unavailable" ? "无法读取" : "有限信息";
             row.querySelector("[data-signal-value]").textContent = signal.raw;
             row.querySelector("[data-signal-contribution]").textContent =
-              "+" + signal.contribution;
+              signal.contribution === null
+                ? "未知"
+                : "+" + signal.contribution;
           });
           status.setAttribute("data-result-status", "complete");
-          status.textContent =
-            "检测完成｜参考分 " + result.total + " / 100｜命中 " +
-            result.matchedCount + " 项" +
-            (result.limitedCount > 0
-              ? "｜" + result.limitedCount + " 项有限信息"
-              : "") +
-            (result.unavailableCount > 0
-              ? "｜" + result.unavailableCount + " 项无法读取"
-              : "");
+          status.textContent = result.unavailableCount > 0
+            ? "检测完成｜结果不完整｜已知项合计 " +
+              result.knownTotal + " / 100｜已知命中 " +
+              result.matchedCount + " 项｜" +
+              result.unavailableCount + " 项无法读取（权重 " +
+              result.unknownWeight + "）"
+            : "检测完成｜参考分 " + result.total + " / 100｜命中 " +
+              result.matchedCount + " 项" +
+              (result.limitedCount > 0
+                ? "｜" + result.limitedCount + " 项有限信息"
+                : "");
           start.hidden = true;
           rescan.hidden = false;
         }
@@ -1065,6 +1128,7 @@ SOFTWARE.
         async function run() {
           if (running) return;
           running = true;
+          var moveFocusToRescan = false;
           setBusy(true);
           status.setAttribute("data-result-status", "running");
           status.textContent = "正在读取当前浏览器环境…";
@@ -1075,6 +1139,7 @@ SOFTWARE.
           try {
             var result = await detector.detect(detector.browserEnvironment());
             render(result);
+            moveFocusToRescan = true;
           } catch (_error) {
             status.setAttribute("data-result-status", "failed");
             status.textContent = "检测失败。请重新扫描；仍失败时记为未验证。";
@@ -1084,13 +1149,16 @@ SOFTWARE.
             start.hidden = true;
             rescan.hidden = false;
             resetRows("未验证", "unavailable");
+            moveFocusToRescan = true;
           } finally {
             running = false;
             setBusy(false);
+            if (moveFocusToRescan) rescan.focus();
           }
         }
 
         createRows();
+        start.disabled = false;
         start.addEventListener("click", run);
         rescan.addEventListener("click", run);
       }());
