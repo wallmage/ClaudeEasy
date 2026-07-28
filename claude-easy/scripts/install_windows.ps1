@@ -105,8 +105,8 @@ try {
     $mutationLock = Enter-AppHomeMutationLock $AppHome
 } catch {
     $lockMessage = $_.Exception.Message
-    if ($lockMessage -eq "客户端保持运行；中断的当前配置事务等待恢复。") {
-        Complete-InstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的当前配置事务仍在等待安全恢复，请稍后重试。"
+    if ($lockMessage -eq "客户端保持运行；中断的客户端敏感事务等待恢复。") {
+        Complete-InstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的客户端敏感事务仍在等待安全恢复，请稍后重试。"
     }
     if ($lockMessage -eq "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。") {
         Complete-InstallResult 1 "failed" "operation_in_progress" $lockMessage
@@ -168,7 +168,7 @@ if ($SnapshotProfiles) {
                 OriginalBytes = $null
                 OriginalIdentity = $null
             }
-        )
+        ) -InterruptedRecoveryPolicy "safe_update_running_client"
     } finally {
         if ($null -ne $snapshotContext) {
             foreach ($guard in @($snapshotContext.Guards)) { $guard.Dispose() }
@@ -316,7 +316,7 @@ if ($VerifySafeUpdate) {
             if ((Get-BytesSha256 (Get-StreamBytes $scriptGuard)) -ne (Get-BytesSha256 $scriptSnapshot.Bytes)) {
                 throw "全局扩展脚本在验收期间发生变化。"
             }
-            Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes $manifestSnapshot.Identity
+            Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes $manifestSnapshot.Identity "safe_update_running_client"
         } finally {
             foreach ($guard in $versionGuards) { $guard.Dispose() }
         }

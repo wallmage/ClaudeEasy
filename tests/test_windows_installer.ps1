@@ -4217,6 +4217,68 @@ try {
         Assert-True (
             $publicUninstallMissingBeforeRecovery.Count -gt 0
         ) "public uninstall crash fixture did not leave a missing target"
+        $publicUninstallInterruptedProfiles = Join-Path $publicUninstallCrashHome "profiles.yaml"
+        $publicUninstallInterruptedUsage = Join-Path $publicUninstallCrashHome "claude-easy-usage-profile.json"
+        $publicUninstallJournal = Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json"
+        $publicUninstallInterruptedProfilesBytes = [System.IO.File]::ReadAllBytes(
+            $publicUninstallInterruptedProfiles
+        )
+        Assert-True (
+            Test-Path -LiteralPath $publicUninstallInterruptedUsage -PathType Leaf
+        ) "public uninstall crash fixture removed usage state before the recovery guard probe"
+        $publicUninstallInterruptedUsageBytes = [System.IO.File]::ReadAllBytes(
+            $publicUninstallInterruptedUsage
+        )
+        $publicUninstallJournalBytes = [System.IO.File]::ReadAllBytes(
+            $publicUninstallJournal
+        )
+        $publicUninstallRunningClientPath = Join-Path $publicUninstallCrashHome "clash-verge.exe"
+        Copy-Item -LiteralPath (
+            Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe"
+        ) -Destination $publicUninstallRunningClientPath
+        $publicUninstallRunningClient = Start-Process `
+            -FilePath $publicUninstallRunningClientPath `
+            -ArgumentList @("-n", "20", "127.0.0.1") `
+            -PassThru
+        try {
+            Start-Sleep -Milliseconds 100
+            $blockedPublicUninstallRecovery = Invoke-TestPowerShell $publicCrashInstaller @(
+                "-AppHome", $publicUninstallCrashHome,
+                "-ShowUsageProfile",
+                "-Json"
+            )
+            $blockedPublicUninstallJson = Assert-JsonResult `
+                $blockedPublicUninstallRecovery "install" 1
+            Assert-True (
+                $blockedPublicUninstallJson.status -eq "partial" -and
+                $blockedPublicUninstallJson.code -eq "transaction_recovery_pending"
+            ) "running client did not defer interrupted client-sensitive recovery"
+            Assert-True (
+                [Convert]::ToBase64String(
+                    [System.IO.File]::ReadAllBytes($publicUninstallInterruptedProfiles)
+                ) -eq [Convert]::ToBase64String(
+                    $publicUninstallInterruptedProfilesBytes
+                )
+            ) "running client changed an interrupted profiles.yaml target"
+            Assert-True (
+                (Test-Path -LiteralPath $publicUninstallInterruptedUsage -PathType Leaf) -and
+                [Convert]::ToBase64String(
+                    [System.IO.File]::ReadAllBytes($publicUninstallInterruptedUsage)
+                ) -eq [Convert]::ToBase64String(
+                    $publicUninstallInterruptedUsageBytes
+                )
+            ) "running client changed an interrupted usage-profile state"
+            Assert-True (
+                [Convert]::ToBase64String(
+                    [System.IO.File]::ReadAllBytes($publicUninstallJournal)
+                ) -eq [Convert]::ToBase64String($publicUninstallJournalBytes)
+            ) "running client consumed an interrupted client-sensitive journal"
+        } finally {
+            if (-not $publicUninstallRunningClient.HasExited) {
+                Stop-Process -Id $publicUninstallRunningClient.Id -Force
+            }
+            $publicUninstallRunningClient.WaitForExit()
+        }
         $env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY = $publicUninstallRecoveryCrashReady
         $publicUninstallRecoveryCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
             "-NoLogo", "-NoProfile", "-File", $publicCrashInstaller,
@@ -4318,7 +4380,8 @@ try {
             )
 
             $publicRestoreHome = Join-Path $sandbox "public-restore-crash-home"
-            $publicRestoreTarget = Join-Path $publicRestoreHome "config.yaml"
+            $publicRestoreProfiles = Join-Path $publicRestoreHome "profiles"
+            $publicRestoreTarget = Join-Path $publicRestoreProfiles "R-public-restore.yaml"
             $publicRestoreBackupRoot = Join-Path $publicRestoreHome "claude-easy-backups"
             $publicRestoreReady = Join-Path $sandbox "public-restore-crash.ready"
             $publicRestoreBackupBytes = [System.Text.Encoding]::UTF8.GetBytes(
@@ -4330,7 +4393,7 @@ try {
             Assert-True (
                 $publicRestoreBackupBytes.Length -lt $publicRestoreCurrentBytes.Length
             ) "public restore crash fixture must replace a longer file with shorter bytes"
-            New-Item -ItemType Directory -Path $publicRestoreHome -Force | Out-Null
+            New-Item -ItemType Directory -Path $publicRestoreProfiles -Force | Out-Null
             [System.IO.File]::WriteAllBytes($publicRestoreTarget, $publicRestoreBackupBytes)
             $publicRestoreLock = Enter-AppHomeMutationLock $publicRestoreHome
             try {
@@ -4363,6 +4426,12 @@ try {
             }
             $publicRestoreJournal = Join-Path $publicRestoreHome ".claude-easy-transaction.json"
             Assert-True (Test-Path -LiteralPath $publicRestoreJournal -PathType Leaf) "interrupted public restore did not leave a recovery journal"
+            $publicRestoreJournalRecord = Get-Content -LiteralPath $publicRestoreJournal -Raw |
+                ConvertFrom-Json
+            Assert-True (
+                [int]$publicRestoreJournalRecord.Version -eq 2 -and
+                [string]$publicRestoreJournalRecord.RecoveryPolicy -eq "client_stopped"
+            ) "ordinary remote-profile restore did not persist its stopped-client recovery policy"
             $publicRestoreInterruptedBytes = [System.IO.File]::ReadAllBytes($publicRestoreTarget)
             $publicRestoreRunningClientPath = Join-Path $publicRestoreHome "clash-verge.exe"
             Copy-Item -LiteralPath (
@@ -4389,10 +4458,10 @@ try {
                     [Convert]::ToBase64String(
                         [System.IO.File]::ReadAllBytes($publicRestoreTarget)
                     ) -eq [Convert]::ToBase64String($publicRestoreInterruptedBytes)
-                ) "running client changed an interrupted current-config target"
+                ) "running client changed an interrupted remote-profile restore target"
                 Assert-True (
                     Test-Path -LiteralPath $publicRestoreJournal -PathType Leaf
-                ) "running client consumed an interrupted current-config journal"
+                ) "running client consumed an interrupted remote-profile restore journal"
             } finally {
                 if (-not $publicRestoreRunningClient.HasExited) {
                     Stop-Process -Id $publicRestoreRunningClient.Id -Force
@@ -4425,7 +4494,7 @@ try {
             $publicPreJournalFunctionOffset = $publicPreJournalTransactionText.IndexOf(
                 "function Invoke-VerifiedPathTransaction("
             )
-            $publicPreJournalNeedle = '        $journalBytes = Write-FileTransactionJournal $opened'
+            $publicPreJournalNeedle = '        $journalBytes = Write-FileTransactionJournal $opened $InterruptedRecoveryPolicy'
             $publicPreJournalOffset = $publicPreJournalTransactionText.IndexOf(
                 $publicPreJournalNeedle,
                 $publicPreJournalFunctionOffset
@@ -4841,7 +4910,7 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
             $publicHandoffFunctionOffset = $publicHandoffTransactionText.IndexOf(
                 "function Invoke-VerifiedPathTransaction("
             )
-            $publicHandoffNeedle = '        $journalBytes = Write-FileTransactionJournal $opened'
+            $publicHandoffNeedle = '        $journalBytes = Write-FileTransactionJournal $opened $InterruptedRecoveryPolicy'
             $publicHandoffOffset = $publicHandoffTransactionText.IndexOf(
                 $publicHandoffNeedle,
                 $publicHandoffFunctionOffset
@@ -5537,6 +5606,61 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
         Invoke-Uninstaller $runningCase
         Assert-True ((Get-Content -LiteralPath (Join-Path $runningCase "profiles.yaml") -Raw) -match '(?m)^\s+allow_auto_update:\s+true\s*$') "stopped-client retry could not later restore auto-update"
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $runningCase "claude-easy-auto-update-state.json"))) "stopped-client retry uninstall retained auto-update ownership"
+
+        $runningLightUninstallCase = Join-Path $sandbox "running-light-uninstall-case"
+        $runningLightProfiles = Join-Path $runningLightUninstallCase "profiles"
+        New-Item -ItemType Directory -Path $runningLightProfiles -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runningLightUninstallCase "profiles.yaml"),
+            "items:`n- uid: R-light`n  type: remote`n  option:`n    allow_auto_update: true`n"
+        )
+        $runningLightInstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runningLightUninstallCase,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        )
+        Assert-JsonResult $runningLightInstall "install" 0 | Out-Null
+        $runningLightProtectedPaths = @(
+            (Join-Path $runningLightProfiles "Script.js"),
+            (Join-Path $runningLightUninstallCase "profiles.yaml"),
+            (Join-Path $runningLightUninstallCase "claude-easy-auto-update-state.json"),
+            (Join-Path $runningLightUninstallCase "claude-easy-usage-profile.json")
+        )
+        $runningLightProtectedBefore = @{}
+        foreach ($protectedPath in $runningLightProtectedPaths) {
+            $runningLightProtectedBefore[$protectedPath] =
+                [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($protectedPath))
+        }
+        $runningLightClient = Start-Process -FilePath $runningClientPath -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
+        try {
+            Start-Sleep -Milliseconds 100
+            $runningLightUninstall = Invoke-TestPowerShell $uninstaller @(
+                "-AppHome", $runningLightUninstallCase,
+                "-Json"
+            )
+            $runningLightUninstallJson = Assert-JsonResult $runningLightUninstall "uninstall" 1
+            Assert-True (
+                $runningLightUninstallJson.status -eq "partial" -and
+                $runningLightUninstallJson.code -eq "client_running"
+            ) "running profile 1 uninstall reported success while Clash Verge Rev could still rewrite its in-memory profiles state"
+            foreach ($protectedPath in $runningLightProtectedPaths) {
+                Assert-True (
+                    [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($protectedPath)) -eq
+                    $runningLightProtectedBefore[$protectedPath]
+                ) "running profile 1 uninstall changed a protected target: $protectedPath"
+            }
+        } finally {
+            if (-not $runningLightClient.HasExited) { Stop-Process -Id $runningLightClient.Id -Force }
+        }
+        Invoke-Uninstaller $runningLightUninstallCase
+        Assert-True (
+            (Get-Content -LiteralPath (Join-Path $runningLightUninstallCase "profiles.yaml") -Raw) -match
+            '(?m)^\s+allow_auto_update:\s+true\s*$'
+        ) "stopped profile 1 uninstall did not restore subscription auto-update"
+        Assert-True (
+            -not (Test-Path -LiteralPath (Join-Path $runningLightUninstallCase "claude-easy-auto-update-state.json"))
+        ) "stopped profile 1 uninstall retained auto-update ownership"
 
         $deferredUninstallCase = Join-Path $sandbox "deferred-running-uninstall-case"
         New-Item -ItemType Directory -Path $deferredUninstallCase -Force | Out-Null

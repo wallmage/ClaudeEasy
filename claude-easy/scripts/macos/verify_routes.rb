@@ -244,12 +244,8 @@ module ClashRouteVerifier
       ai: proxies.dig(ai_group, "now").to_s
     }
 
-    main_selection = selections.fetch(:main)
-    main_selection = "动态选择" if main_selection.empty?
-    ai_selection = selections.fetch(:ai)
-    ai_selection = "动态选择" if ai_selection.empty?
-    output.puts "主代理组：#{ClaudeEasy.safe_label(main_group)} → #{ClaudeEasy.safe_label(main_selection)}"
-    output.puts "AI 分组：#{ClaudeEasy.safe_label(ai_group)} → #{ClaudeEasy.safe_label(ai_selection)}"
+    output.puts "主代理组：已识别；当前选择已隐藏"
+    output.puts "AI 分组：已识别；当前选择已隐藏"
 
     checks = TARGETS.map do |label, url, kind, host_pattern|
       connection = observe_connection(
@@ -262,8 +258,7 @@ module ClashRouteVerifier
         kind: kind, expected_group: expected.fetch(kind),
         expected_selection: selections.fetch(kind), ai_group: ai_group
       )
-      selected = chains.first
-      output.puts "#{label}：#{ok ? '通过' : '失败'}（#{ClaudeEasy.safe_label(selected)}）"
+      output.puts "#{label}：#{ok ? '通过' : '失败'}"
       status = if connection.nil?
                  "not_observed"
                else

@@ -9794,26 +9794,36 @@ class MacosPatcherTest < Minitest::Test
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "friend.yaml")
       File.write(profile, YAML.dump(base_config))
+      main_group = "Private Main Group"
+      ai_group = "Private AI Group"
+      main_node = "203.0.113.7:443"
+      ai_node = "private-node.example:8443"
       proxies = { "proxies" => {
-        "Main" => { "type" => "Selector", "now" => "Taiwan" },
-        "AI" => { "type" => "Selector", "now" => "Japan" },
-        "Taiwan" => { "type" => "Shadowsocks" },
-        "Japan" => { "type" => "Shadowsocks" }
+        main_group => { "type" => "Selector", "now" => main_node },
+        ai_group => { "type" => "Selector", "now" => ai_node },
+        main_node => { "type" => "Shadowsocks" },
+        ai_node => { "type" => "Shadowsocks" }
       } }
       observations = [
-        { "chains" => ["Taiwan", "Main"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] }
+        { "chains" => [main_node, main_group] },
+        { "chains" => [ai_node, ai_group] },
+        { "chains" => [ai_node, ai_group] },
+        { "chains" => [ai_node, ai_group] }
       ]
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
-          ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
+          ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies, main_group: main_group)) do
             ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
               output = StringIO.new
               assert ClashRouteVerifier.run(output: output)
+              assert_includes output.string, "主代理组：已识别；当前选择已隐藏"
+              assert_includes output.string, "AI 分组：已识别；当前选择已隐藏"
               assert_includes output.string, "Google：通过"
               assert_includes output.string, "Claude：通过"
+              refute_includes output.string, main_node
+              refute_includes output.string, ai_node
+              refute_includes output.string, main_group
+              refute_includes output.string, ai_group
             end
           end
         end

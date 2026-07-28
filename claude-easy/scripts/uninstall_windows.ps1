@@ -157,8 +157,8 @@ try {
     $mutationLock = Enter-AppHomeMutationLock $AppHome
 } catch {
     $lockMessage = $_.Exception.Message
-    if ($lockMessage -eq "客户端保持运行；中断的当前配置事务等待恢复。") {
-        Complete-UninstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的当前配置事务仍在等待安全恢复，请稍后重试。"
+    if ($lockMessage -eq "客户端保持运行；中断的客户端敏感事务等待恢复。") {
+        Complete-UninstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的客户端敏感事务仍在等待安全恢复，请稍后重试。"
     }
     if ($lockMessage -eq "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。") {
         Complete-UninstallResult 1 "failed" "operation_in_progress" $lockMessage
@@ -210,7 +210,11 @@ try {
         }
         Assert-UsageProfileState $usageState
     }
-    if ($clientRunning -and $null -ne $state) {
+    if ($clientRunning -and (
+        $null -ne $state -or
+        $autoUpdateStateExists -or
+        [bool]$usageStateSnapshot.Exists
+    )) {
         Complete-RunningClientUninstall
     }
 
@@ -334,7 +338,8 @@ try {
     if ($null -ne $autoUpdatePlan) { $filePlans += $autoUpdatePlan }
     if ($null -ne $scriptPlan) { $filePlans += $scriptPlan }
     $filePlans += @($settingPlans | Where-Object { $_.Changed })
-    if ($null -ne $state -and (Test-ClashVergeRunning)) {
+    $uninstallHasProtectedChanges = ($filePlans.Count -gt 0 -or $null -ne $state -or $autoUpdateStateExists -or $usageStateExists)
+    if ($uninstallHasProtectedChanges -and (Test-ClashVergeRunning)) {
         Complete-RunningClientUninstall
     }
     foreach ($filePlan in $filePlans) {
@@ -384,7 +389,7 @@ try {
         }
     })
     $clientStoppedPreCommit = $null
-    if ($null -ne $state) {
+    if ($uninstallHasProtectedChanges) {
         $clientStoppedPreCommit = {
             return (-not (Test-ClashVergeRunning))
         }

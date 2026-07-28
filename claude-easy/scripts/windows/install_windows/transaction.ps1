@@ -373,7 +373,8 @@ function Get-OptionalFileSnapshot([string]$Path, [string]$Label) {
 function Remove-VerifiedOwnedFile(
     [string]$Path,
     [byte[]]$ExpectedBytes,
-    [string]$ExpectedIdentity = ""
+    [string]$ExpectedIdentity = "",
+    [string]$InterruptedRecoveryPolicy = "client_stopped"
 ) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $snapshot = Get-OptionalFileSnapshot $Path "待删除文件"
@@ -388,7 +389,7 @@ function Remove-VerifiedOwnedFile(
             OriginalBytes = $snapshot.Bytes
             OriginalIdentity = $snapshot.Identity
         }
-    )
+    ) -InterruptedRecoveryPolicy $InterruptedRecoveryPolicy
 }
 
 function Write-LockedStreamBytes(
@@ -745,7 +746,10 @@ function Set-VerifiedDeleteDisposition([System.IO.FileStream]$Stream, [bool]$Del
     [ClaudeEasy.VerifiedDeleteNative]::SetDeleteDisposition($Stream.SafeFileHandle, $DeleteFile)
 }
 
-function Write-FileTransactionPreparation([object[]]$Actions) {
+function Write-FileTransactionPreparation(
+    [object[]]$Actions,
+    [string]$InterruptedRecoveryPolicy = "client_stopped"
+) {
     $path = [string]$script:ClaudeEasyTransactionPreparationPath
     $createdActions = @($Actions | Where-Object { $_.CreateNew })
     if ([string]::IsNullOrWhiteSpace($path) -or $createdActions.Count -eq 0) {
@@ -757,9 +761,14 @@ function Write-FileTransactionPreparation([object[]]$Actions) {
     $relativePaths = @($createdActions | Sort-Object Path | ForEach-Object {
         Get-AppHomeRelativePath ([string]$_.Path)
     })
+    $targetPaths = @($Actions | Sort-Object Path | ForEach-Object {
+        Get-AppHomeRelativePath ([string]$_.Path)
+    })
     $record = [ordered]@{
-        Version = 1
+        Version = 2
         Paths = $relativePaths
+        Targets = $targetPaths
+        RecoveryPolicy = $InterruptedRecoveryPolicy
     }
     $bytes = ConvertTo-Utf8Bytes (($record | ConvertTo-Json -Depth 3) + "`r`n")
     $temporary = Join-Path $script:ClaudeEasyMutationRoot (
@@ -790,37 +799,85 @@ function Write-FileTransactionPreparation([object[]]$Actions) {
     }
 }
 
-function Get-ValidatedFileTransactionPreparation([object]$Record) {
-    if ($null -eq $Record) { throw "新建文件准备记录无效。" }
-    $properties = @($Record.PSObject.Properties.Name | Sort-Object)
-    if (($properties -join ",") -cne "Paths,Version" -or
-        -not ($Record.Version -is [int] -or $Record.Version -is [long]) -or
-        [long]$Record.Version -ne 1) {
-        throw "新建文件准备记录无效。"
-    }
-    $relativePaths = @($Record.Paths)
-    if ($relativePaths.Count -eq 0) { throw "新建文件准备记录没有目标。" }
+function Get-ValidatedFileTransactionPaths(
+    [object[]]$RelativePaths,
+    [string]$Label
+) {
+    if (@($RelativePaths).Count -eq 0) { throw "$Label 没有目标。" }
     $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $validated = @()
-    foreach ($relativeValue in $relativePaths) {
-        if (-not ($relativeValue -is [string])) { throw "新建文件准备记录路径无效。" }
+    foreach ($relativeValue in @($RelativePaths)) {
+        if (-not ($relativeValue -is [string])) { throw "$Label 路径无效。" }
         $relative = [string]$relativeValue
         if ([string]::IsNullOrWhiteSpace($relative) -or
             [System.IO.Path]::IsPathRooted($relative) -or
             $relative -eq "." -or
             @($relative.Split("\") | Where-Object { $_ -eq ".." }).Count -gt 0) {
-            throw "新建文件准备记录路径无效。"
+            throw "$Label 路径无效。"
         }
         $absolute = [System.IO.Path]::GetFullPath((Join-Path $script:ClaudeEasyMutationRoot $relative))
         if ((Get-AppHomeRelativePath $absolute) -cne $relative.Replace(
             [System.IO.Path]::AltDirectorySeparatorChar,
             [System.IO.Path]::DirectorySeparatorChar
         ) -or -not $paths.Add($absolute)) {
-            throw "新建文件准备记录路径无效。"
+            throw "$Label 路径无效。"
         }
         $validated += $absolute
     }
     return $validated
+}
+
+function Get-InterruptedRecoveryPolicy([object]$Record) {
+    if ([long]$Record.Version -eq 1) { return "client_stopped" }
+    $policy = $Record.RecoveryPolicy
+    if (-not ($policy -is [string]) -or
+        [string]$policy -notin @("client_stopped", "safe_update_running_client")) {
+        throw "事务恢复权限无效。"
+    }
+    return [string]$policy
+}
+
+function Get-ValidatedFileTransactionPreparation([object]$Record) {
+    if ($null -eq $Record) { throw "新建文件准备记录无效。" }
+    $properties = @($Record.PSObject.Properties.Name | Sort-Object)
+    $numericVersion = $Record.Version -is [int] -or $Record.Version -is [long]
+    $version = if ($numericVersion) { [long]$Record.Version } else { 0 }
+    $expectedProperties = if ($version -eq 1) {
+        "Paths,Version"
+    } elseif ($version -eq 2) {
+        "Paths,RecoveryPolicy,Targets,Version"
+    } else {
+        ""
+    }
+    if (-not $numericVersion -or
+        [string]::IsNullOrWhiteSpace($expectedProperties) -or
+        ($properties -join ",") -cne $expectedProperties) {
+        throw "新建文件准备记录无效。"
+    }
+    Get-InterruptedRecoveryPolicy $Record | Out-Null
+    $validated = @(
+        Get-ValidatedFileTransactionPaths @($Record.Paths) "新建文件准备记录"
+    )
+    if ($version -eq 2) {
+        $targets = @(
+            Get-ValidatedFileTransactionPaths @($Record.Targets) "事务恢复目标"
+        )
+        foreach ($path in $validated) {
+            if ($path -notin $targets) { throw "新建文件准备记录目标不完整。" }
+        }
+    }
+    return $validated
+}
+
+function Get-ValidatedFileTransactionPreparationTargets([object]$Record) {
+    if ([long]$Record.Version -eq 1) {
+        return @(
+            Get-ValidatedFileTransactionPaths @($Record.Paths) "新建文件准备记录"
+        )
+    }
+    return @(
+        Get-ValidatedFileTransactionPaths @($Record.Targets) "事务恢复目标"
+    )
 }
 
 function Remove-FileTransactionPreparation([byte[]]$ExpectedBytes) {
@@ -854,28 +911,49 @@ function Remove-FileTransactionPreparation([byte[]]$ExpectedBytes) {
     }
 }
 
-function Test-CurrentConfigRecoveryRequiresStoppedClient([string[]]$Paths) {
-    $currentConfigPaths = @(
-        (ConvertTo-NormalizedWindowsPath (
-            Join-Path $script:ClaudeEasyMutationRoot "config.yaml"
-        )),
-        (ConvertTo-NormalizedWindowsPath (
-            Join-Path $script:ClaudeEasyMutationRoot "verge.yaml"
-        ))
+function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
+    $manifestPath = ConvertTo-NormalizedWindowsPath (
+        Join-Path $script:ClaudeEasyMutationRoot "claude-easy-safe-update.json"
     )
+    $profilesRoot = ConvertTo-NormalizedWindowsPath (
+        Join-Path $script:ClaudeEasyMutationRoot "profiles"
+    )
+    $manifestSeen = $false
     foreach ($path in $Paths) {
         $targetPath = ConvertTo-NormalizedWindowsPath $path
-        foreach ($currentConfigPath in $currentConfigPaths) {
-            if ([string]::Equals(
-                $targetPath,
-                $currentConfigPath,
-                [StringComparison]::OrdinalIgnoreCase
-            )) {
-                return $true
-            }
+        if ([string]::Equals(
+            $targetPath,
+            $manifestPath,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            $manifestSeen = $true
+            continue
+        }
+        $parent = ConvertTo-NormalizedWindowsPath (
+            [System.IO.Path]::GetDirectoryName($targetPath)
+        )
+        $extension = [System.IO.Path]::GetExtension($targetPath)
+        if (-not [string]::Equals(
+            $parent,
+            $profilesRoot,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or $extension -notin @(".yaml", ".yml")) {
+            return $false
         }
     }
-    return $false
+    return $manifestSeen
+}
+
+function Test-InterruptedRecoveryRequiresStoppedClient(
+    [string]$InterruptedRecoveryPolicy,
+    [string[]]$Paths
+) {
+    if ($InterruptedRecoveryPolicy -eq "client_stopped") { return $true }
+    if ($InterruptedRecoveryPolicy -eq "safe_update_running_client" -and
+        (Test-SafeUpdateRunningRecoveryTargets $Paths)) {
+        return $false
+    }
+    throw "事务恢复权限与目标不匹配。"
 }
 
 function Test-InterruptedRecoveryCommitCondition([scriptblock]$PreCommitCondition) {
@@ -895,11 +973,17 @@ function Repair-InterruptedFilePreparation {
     try {
         $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($snapshot.Bytes)
         if ([regex]::Matches($text, '(?i)"Version"\s*:').Count -ne 1 -or
-            [regex]::Matches($text, '(?i)"Paths"\s*:').Count -ne 1) {
+            [regex]::Matches($text, '(?i)"Paths"\s*:').Count -ne 1 -or
+            [regex]::Matches($text, '(?i)"Targets"\s*:').Count -gt 1 -or
+            [regex]::Matches($text, '(?i)"RecoveryPolicy"\s*:').Count -gt 1) {
             throw "字段重复或缺失。"
         }
         $record = $text | ConvertFrom-Json
         $paths = @(Get-ValidatedFileTransactionPreparation $record)
+        $recoveryTargets = @(
+            Get-ValidatedFileTransactionPreparationTargets $record
+        )
+        $recoveryPolicy = Get-InterruptedRecoveryPolicy $record
     } catch {
         throw "新建文件准备记录损坏，无法安全恢复。"
     }
@@ -912,12 +996,11 @@ function Repair-InterruptedFilePreparation {
         }
         $targets += $target
     }
-    $targetPaths = @()
-    foreach ($target in $targets) { $targetPaths += [string]$target.Path }
     $preCommitCondition = $null
-    if (Test-CurrentConfigRecoveryRequiresStoppedClient $targetPaths) {
+    if (Test-InterruptedRecoveryRequiresStoppedClient `
+        $recoveryPolicy $recoveryTargets) {
         if (Test-ClashVergeRunning) {
-            throw "客户端保持运行；中断的当前配置事务等待恢复。"
+            throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
         }
         $preCommitCondition = { -not (Test-ClashVergeRunning) }
     }
@@ -982,12 +1065,15 @@ function Repair-InterruptedFilePreparation {
     }
     if ($null -ne $operationFailure) { throw $operationFailure }
     if ($preCommitRejected) {
-        throw "客户端保持运行；中断的当前配置事务等待恢复。"
+        throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
     }
     Remove-FileTransactionPreparation $snapshot.Bytes
 }
 
-function Write-FileTransactionJournal([object[]]$Entries) {
+function Write-FileTransactionJournal(
+    [object[]]$Entries,
+    [string]$InterruptedRecoveryPolicy = "client_stopped"
+) {
     if ([string]::IsNullOrWhiteSpace([string]$script:ClaudeEasyTransactionJournalPath) -or
         @($Entries).Count -eq 0) {
         return $null
@@ -1013,8 +1099,9 @@ function Write-FileTransactionJournal([object[]]$Entries) {
         }
     }
     $journal = [ordered]@{
-        Version = 1
+        Version = 2
         Actions = $journalActions
+        RecoveryPolicy = $InterruptedRecoveryPolicy
     }
     $bytes = ConvertTo-Utf8Bytes (($journal | ConvertTo-Json -Depth 5) + "`r`n")
     $temporary = Join-Path $script:ClaudeEasyMutationRoot (
@@ -1079,11 +1166,21 @@ function Remove-FileTransactionJournal([byte[]]$ExpectedBytes) {
 function Get-ValidatedFileTransactionJournal([object]$Journal) {
     if ($null -eq $Journal) { throw "文件事务记录无效。" }
     $properties = @($Journal.PSObject.Properties.Name | Sort-Object)
-    if (($properties -join ",") -cne "Actions,Version" -or
-        -not ($Journal.Version -is [int] -or $Journal.Version -is [long]) -or
-        [long]$Journal.Version -ne 1) {
+    $numericVersion = $Journal.Version -is [int] -or $Journal.Version -is [long]
+    $version = if ($numericVersion) { [long]$Journal.Version } else { 0 }
+    $expectedProperties = if ($version -eq 1) {
+        "Actions,Version"
+    } elseif ($version -eq 2) {
+        "Actions,RecoveryPolicy,Version"
+    } else {
+        ""
+    }
+    if (-not $numericVersion -or
+        [string]::IsNullOrWhiteSpace($expectedProperties) -or
+        ($properties -join ",") -cne $expectedProperties) {
         throw "文件事务记录无效。"
     }
+    Get-InterruptedRecoveryPolicy $Journal | Out-Null
     $actions = @($Journal.Actions)
     if ($actions.Count -eq 0) { throw "文件事务记录没有操作项。" }
     $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
@@ -1491,27 +1588,30 @@ function Repair-InterruptedFileTransaction {
     try {
         $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($snapshot.Bytes)
         if ([regex]::Matches($text, '(?i)"Version"\s*:').Count -ne 1 -or
-            [regex]::Matches($text, '(?i)"Actions"\s*:').Count -ne 1) {
+            [regex]::Matches($text, '(?i)"Actions"\s*:').Count -ne 1 -or
+            [regex]::Matches($text, '(?i)"RecoveryPolicy"\s*:').Count -gt 1) {
             throw "字段重复或缺失。"
         }
         $journal = $text | ConvertFrom-Json
         $actions = @(Get-ValidatedFileTransactionJournal $journal)
+        $recoveryPolicy = Get-InterruptedRecoveryPolicy $journal
     } catch {
         throw "文件事务记录损坏，无法安全恢复。"
     }
     $plan = @(Get-InterruptedTransactionRecoveryPlan $actions)
-    $planPaths = @()
-    foreach ($item in $plan) { $planPaths += [string]$item.Action.Path }
+    $actionPaths = @()
+    foreach ($action in $actions) { $actionPaths += [string]$action.Path }
     $preCommitCondition = $null
-    if (Test-CurrentConfigRecoveryRequiresStoppedClient $planPaths) {
+    if (Test-InterruptedRecoveryRequiresStoppedClient `
+        $recoveryPolicy $actionPaths) {
         if (Test-ClashVergeRunning) {
-            throw "客户端保持运行；中断的当前配置事务等待恢复。"
+            throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
         }
         $preCommitCondition = { -not (Test-ClashVergeRunning) }
     }
     $recovered = Invoke-InterruptedTransactionRecovery $plan $preCommitCondition
     if (-not $recovered) {
-        throw "客户端保持运行；中断的当前配置事务等待恢复。"
+        throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
     }
     Assert-InterruptedTransactionRecovered $actions
     Remove-FileTransactionJournal $snapshot.Bytes
@@ -1520,7 +1620,8 @@ function Repair-InterruptedFileTransaction {
 function Invoke-VerifiedPathTransaction(
     [object[]]$WriteTargets,
     [object[]]$DeleteTargets,
-    [scriptblock]$PreCommitCondition = $null
+    [scriptblock]$PreCommitCondition = $null,
+    [string]$InterruptedRecoveryPolicy = "client_stopped"
 ) {
     $writePathKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $actions = @()
@@ -1555,6 +1656,10 @@ function Invoke-VerifiedPathTransaction(
     foreach ($action in $actions) {
         Assert-NoReparsePointPath $action.Path "事务目标"
     }
+    $actionPaths = @()
+    foreach ($action in $actions) { $actionPaths += [string]$action.Path }
+    Test-InterruptedRecoveryRequiresStoppedClient `
+        $InterruptedRecoveryPolicy $actionPaths | Out-Null
     Initialize-VerifiedFileNative
     $opened = @()
     $directoryHandles = @()
@@ -1575,7 +1680,7 @@ function Invoke-VerifiedPathTransaction(
                 throw "事务目标在候选生成后消失或不再是文件：$($action.Path)"
             }
         }
-        $preparationBytes = Write-FileTransactionPreparation $actions
+        $preparationBytes = Write-FileTransactionPreparation $actions $InterruptedRecoveryPolicy
         foreach ($action in @($actions | Sort-Object Path)) {
             $directory = Split-Path -Parent $action.Path
             $directoryHandles += @(Open-VerifiedDirectoryChain $directory)
@@ -1638,7 +1743,7 @@ function Invoke-VerifiedPathTransaction(
             $preCommitRejected = -not [bool]$preCommitResults[0]
         }
         if (-not $preCommitRejected) {
-            $journalBytes = Write-FileTransactionJournal $opened
+            $journalBytes = Write-FileTransactionJournal $opened $InterruptedRecoveryPolicy
             if ($null -ne $preparationBytes) {
                 Remove-FileTransactionPreparation $preparationBytes
             }
@@ -1739,9 +1844,10 @@ function Invoke-VerifiedPathTransaction(
 
 function Invoke-VerifiedFileTransaction(
     [object[]]$Targets,
-    [scriptblock]$PreCommitCondition = $null
+    [scriptblock]$PreCommitCondition = $null,
+    [string]$InterruptedRecoveryPolicy = "client_stopped"
 ) {
-    $committed = Invoke-VerifiedPathTransaction $Targets @() $PreCommitCondition
+    $committed = Invoke-VerifiedPathTransaction $Targets @() $PreCommitCondition $InterruptedRecoveryPolicy
     if ($null -ne $PreCommitCondition) {
         return [bool]$committed
     }
@@ -1750,9 +1856,10 @@ function Invoke-VerifiedFileTransaction(
 function Invoke-VerifiedWriteDeleteTransaction(
     [object[]]$WriteTargets,
     [object[]]$DeleteTargets,
-    [scriptblock]$PreCommitCondition = $null
+    [scriptblock]$PreCommitCondition = $null,
+    [string]$InterruptedRecoveryPolicy = "client_stopped"
 ) {
-    $committed = Invoke-VerifiedPathTransaction $WriteTargets $DeleteTargets $PreCommitCondition
+    $committed = Invoke-VerifiedPathTransaction $WriteTargets $DeleteTargets $PreCommitCondition $InterruptedRecoveryPolicy
     if ($null -ne $PreCommitCondition) {
         return [bool]$committed
     }

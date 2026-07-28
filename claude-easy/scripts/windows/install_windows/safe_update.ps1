@@ -485,7 +485,8 @@ function Restore-SafeUpdateFiles(
                 OriginalBytes = $ManifestSnapshot.Bytes
                 OriginalIdentity = $ManifestSnapshot.Identity
             }
-            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget)
+            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget) `
+                -InterruptedRecoveryPolicy "safe_update_running_client"
         } catch {
             $failures = @($RecoveryItems | ForEach-Object { $_.File })
         }

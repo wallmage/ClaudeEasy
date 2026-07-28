@@ -1530,7 +1530,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/safe_update.ps1",
-        "            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget)\n",
+        "            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget) `\n" \
+        "                -InterruptedRecoveryPolicy \"safe_update_running_client\"\n",
         "            Invoke-VerifiedFileTransaction $targets\n"
       )
 
@@ -1579,7 +1580,7 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_interrupted_current_config_recovery_guard_mutation_is_killed
+  def test_windows_interrupted_client_sensitive_recovery_guard_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
@@ -1592,12 +1593,30 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
         "--name",
-        "test_windows_interrupted_current_config_recovery_waits_for_the_client"
+        "test_windows_interrupted_client_sensitive_recovery_waits_for_the_client"
       )
     end
   end
 
-  def test_windows_interrupted_current_config_preparation_guard_mutation_is_killed
+  def test_windows_legacy_interrupted_recovery_policy_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
+        '    if ([long]$Record.Version -eq 1) { return "client_stopped" }',
+        '    if ([long]$Record.Version -eq 1) { return "safe_update_running_client" }'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_interrupted_client_sensitive_recovery_waits_for_the_client"
+      )
+    end
+  end
+
+  def test_windows_interrupted_client_sensitive_preparation_guard_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
@@ -1610,7 +1629,7 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
         "--name",
-        "test_windows_interrupted_current_config_recovery_waits_for_the_client"
+        "test_windows_interrupted_client_sensitive_recovery_waits_for_the_client"
       )
     end
   end
@@ -1633,13 +1652,35 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_windows_light_profile_uninstall_client_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/uninstall_windows.ps1",
+        "$uninstallHasProtectedChanges = " \
+        "($filePlans.Count -gt 0 -or $null -ne $state -or " \
+        "$autoUpdateStateExists -or $usageStateExists)",
+        "$uninstallHasProtectedChanges = ($null -ne $state)"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_uninstall_rechecks_client_after_transaction_targets_are_locked"
+      )
+    end
+  end
+
   def test_windows_single_write_precommit_forwarding_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/transaction.ps1",
-        "    $committed = Invoke-VerifiedPathTransaction $Targets @() $PreCommitCondition\n",
-        "    $committed = Invoke-VerifiedPathTransaction $Targets @() $null\n"
+        "    $committed = Invoke-VerifiedPathTransaction $Targets @() " \
+        "$PreCommitCondition $InterruptedRecoveryPolicy\n",
+        "    $committed = Invoke-VerifiedPathTransaction $Targets @() " \
+        "$null $InterruptedRecoveryPolicy\n"
       )
 
       assert_mutation_is_killed(

@@ -1824,7 +1824,7 @@ class SkillContractTest < Minitest::Test
     assert_includes recovery, 'if (-not $target.Exists) { continue }'
   end
 
-  def test_windows_interrupted_current_config_recovery_waits_for_the_client
+  def test_windows_interrupted_client_sensitive_recovery_waits_for_the_client
     transaction = File.binread(
       File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
     ).force_encoding("UTF-8")
@@ -1834,12 +1834,30 @@ class SkillContractTest < Minitest::Test
     uninstaller = File.binread(
       File.join(SKILL, "scripts/uninstall_windows.ps1")
     ).force_encoding("UTF-8")
+    safe_update = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    ).force_encoding("UTF-8")
     windows_tests = File.binread(
       File.join(ROOT, "tests/test_windows_installer.ps1")
     ).force_encoding("UTF-8")
 
     assert_includes transaction,
-                    "function Test-CurrentConfigRecoveryRequiresStoppedClient("
+                    "function Test-InterruptedRecoveryRequiresStoppedClient("
+    assert_includes transaction, '"client_stopped"'
+    assert_includes transaction, '"safe_update_running_client"'
+    assert_includes transaction, "RecoveryPolicy = $InterruptedRecoveryPolicy"
+    assert_includes transaction, "function Get-InterruptedRecoveryPolicy("
+    assert_includes transaction,
+                    'if ([long]$Record.Version -eq 1) { return "client_stopped" }'
+    assert_includes transaction,
+                    '$InterruptedRecoveryPolicy = "client_stopped"'
+    assert_includes safe_update,
+                    '-InterruptedRecoveryPolicy "safe_update_running_client"'
+    assert_equal 2, installer.scan('"safe_update_running_client"').length
+    assert_includes transaction,
+                    "function Test-SafeUpdateRunningRecoveryTargets("
+    assert_includes transaction, '"claude-easy-safe-update.json"'
+    assert_includes transaction, '@(".yaml", ".yml")'
     assert_includes transaction,
                     "function Test-InterruptedRecoveryCommitCondition("
     assert_includes transaction,
@@ -1848,7 +1866,7 @@ class SkillContractTest < Minitest::Test
     assert_includes transaction,
                     "Test-InterruptedRecoveryCommitCondition $preCommitCondition"
     assert_includes transaction,
-                    'throw "客户端保持运行；中断的当前配置事务等待恢复。"'
+                    'throw "客户端保持运行；中断的客户端敏感事务等待恢复。"'
 
     journal_start = transaction.index("function Invoke-InterruptedTransactionRecovery(")
     journal_end = transaction.index(
@@ -1904,10 +1922,6 @@ class SkillContractTest < Minitest::Test
       assert_includes entrypoint, '"transaction_recovery_pending"'
     end
     assert_includes windows_tests,
-                    "running client changed an interrupted current-config target"
-    assert_includes windows_tests,
-                    "running client consumed an interrupted current-config journal"
-    assert_includes windows_tests,
                     "running client changed a prepared current-config target"
     assert_includes windows_tests,
                     "running client consumed a current-config preparation record"
@@ -1917,6 +1931,18 @@ class SkillContractTest < Minitest::Test
                     "newly started client allowed interrupted journal recovery"
     assert_includes windows_tests,
                     "newly started client allowed prepared current-config targets"
+    assert_includes windows_tests,
+                    "running client changed an interrupted profiles.yaml target"
+    assert_includes windows_tests,
+                    "running client consumed an interrupted client-sensitive journal"
+    assert_includes windows_tests,
+                    "running client changed an interrupted usage-profile state"
+    assert_includes windows_tests,
+                    "running client changed an interrupted remote-profile restore target"
+    assert_includes windows_tests,
+                    "running client consumed an interrupted remote-profile restore journal"
+    assert_includes windows_tests,
+                    "ordinary remote-profile restore did not persist its stopped-client recovery policy"
 
     documents = [
       File.read(File.join(ROOT, "README.md")),
@@ -1928,10 +1954,11 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
     documents.each do |document|
-      assert_includes document, "中断的当前配置事务"
+      assert_includes document, "中断的客户端敏感事务"
       assert_includes document, "transaction_recovery_pending"
       assert_includes document, "锁定并核对全部恢复目标"
       assert_includes document, "再次检查"
+      assert_includes document, "恢复权限"
     end
   end
 
@@ -1961,7 +1988,8 @@ class SkillContractTest < Minitest::Test
       "$preCommitResults = @(& $PreCommitCondition)"
     )
     journal_write = transaction_body.index(
-      "$journalBytes = Write-FileTransactionJournal $opened"
+      "$journalBytes = Write-FileTransactionJournal " \
+      "$opened $InterruptedRecoveryPolicy"
     )
     refute_nil identity_check
     refute_nil precommit_check
@@ -1971,17 +1999,30 @@ class SkillContractTest < Minitest::Test
 
     assert_includes transaction, "[scriptblock]$PreCommitCondition = $null"
     assert_includes transaction,
-                    "Invoke-VerifiedPathTransaction $WriteTargets $DeleteTargets $PreCommitCondition"
+                    "Invoke-VerifiedPathTransaction $WriteTargets " \
+                    "$DeleteTargets $PreCommitCondition $InterruptedRecoveryPolicy"
     assert_includes transaction, "elseif ($mutationStarted)"
     assert_includes uninstaller, "$transactionCommitted = Invoke-VerifiedWriteDeleteTransaction"
     assert_includes uninstaller,
                     "$writeTargets $deletePlans $clientStoppedPreCommit"
     assert_includes uninstaller,
                     "if ($null -ne $clientStoppedPreCommit -and -not $transactionCommitted)"
+    assert_includes uninstaller,
+                    "$uninstallHasProtectedChanges = " \
+                    "($filePlans.Count -gt 0 -or $null -ne $state -or " \
+                    "$autoUpdateStateExists -or $usageStateExists)"
+    assert_includes uninstaller,
+                    "if ($uninstallHasProtectedChanges -and (Test-ClashVergeRunning))"
+    assert_includes uninstaller,
+                    "if ($uninstallHasProtectedChanges) {\n" \
+                    "        $clientStoppedPreCommit = {\n" \
+                    "            return (-not (Test-ClashVergeRunning))"
     assert_includes windows_tests,
                     "client-start race changed a protected uninstall target"
     assert_includes windows_tests,
                     "client-start abort rewrote an existing transaction target"
+    assert_includes windows_tests,
+                    "running profile 1 uninstall changed a protected target"
 
     documents = [
       File.read(File.join(ROOT, "README.md")),
@@ -2009,10 +2050,12 @@ class SkillContractTest < Minitest::Test
     assert_includes transaction,
                     "function Invoke-VerifiedFileTransaction(\n" \
                     "    [object[]]$Targets,\n" \
-                    "    [scriptblock]$PreCommitCondition = $null\n" \
+                    "    [scriptblock]$PreCommitCondition = $null,\n" \
+                    "    [string]$InterruptedRecoveryPolicy = \"client_stopped\"\n" \
                     ")"
     assert_includes transaction,
-                    "Invoke-VerifiedPathTransaction $Targets @() $PreCommitCondition"
+                    "Invoke-VerifiedPathTransaction $Targets @() " \
+                    "$PreCommitCondition $InterruptedRecoveryPolicy"
     assert_includes installer,
                     "$restoreCommitted = Invoke-VerifiedFileTransaction"
     assert_includes installer,

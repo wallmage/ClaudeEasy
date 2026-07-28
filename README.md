@@ -195,7 +195,7 @@ bash claude-easy/scripts/install_macos.sh --profile N
 - macOS 安装器：`--profile N`（保存并执行档位）、`--show-profile`（读取已保存档位，未保存时输出 `unset`）、`--safe-update`（安全更新全部远程订阅）、`--json`。
 - macOS 补丁程序 `scripts/macos/patch_profiles.rb`：`--usage-profile N`、`--dry-run`（只预览不写入）、`--no-reload`（只更新文件不刷新）、`--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`、`--snapshot-initial`、`--print-core-status`、`--print-tun-state` 等；完整列表见 `--help`。普通 Patch 和安全更新必须显式指定档位，并在任何下载、备份或配置写入前与固定位置中已保存的档位一致；`--dry-run` 也必须显式指定档位，但不写状态。所有变更型 Ruby 入口会先取得同一把外层操作锁；自动更新修改命令只供已持有并可验证该锁的安装、卸载和恢复流程使用。
 - Windows 安装器：`-UsageProfile N`、`-ShowUsageProfile`、`-SnapshotProfiles`、`-VerifySafeUpdate`、`-ListBackups`、`-CompareBackup ID`、`-RestoreBackup ID -ExpectedCurrentSha256 SHA256`、`-AppHome`（指定应用目录）、`-MihomoPath`（指定内核路径）、`-Json`。
-- 分流验证：macOS 运行 `ruby claude-easy/scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows `-ControllerUrl` 只接受本机回环 HTTP/HTTPS；有控制器密钥时，用 `Read-Host -AsSecureString` 读取后仅经标准输入传给 `-SecretStdin`。非空 `-Secret` 会被拒绝，请求不使用代理也不跟随重定向，密钥不会进入命令行、环境变量、输出或日志。
+- 分流验证：macOS 运行 `ruby claude-easy/scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。两端的中文输出只说明代理组已识别及各目标通过、失败或未观察到，不显示代理组名称、当前节点或连接链节点。Windows `-ControllerUrl` 只接受本机回环 HTTP/HTTPS；有控制器密钥时，用 `Read-Host -AsSecureString` 读取后仅经标准输入传给 `-SecretStdin`。非空 `-Secret` 会被拒绝，请求不使用代理也不跟随重定向，密钥不会进入命令行、环境变量、输出或日志。
 
 ### JSON v1 机器输出
 
@@ -222,7 +222,7 @@ ClaudeEasy 的公开入口固定在 `claude-easy/`，参数在后续版本中保
 
 - 三个档位都会安装全局扩展脚本并写入数字档位，让每份订阅加载时使用共同国内域名直连基线；同时修改 Clash Verge Rev 的 `profiles.yaml`，把每个远程订阅的 `option.allow_auto_update` 设为 `false`。档位 1、2 只运行共同基线；档位 3 再追加完整增强。
 - 补丁通过全局扩展脚本 `profiles/Script.js` 生效：之后每次加载或刷新订阅，客户端都会运行它并应用与 macOS 相同的策略（含二次转换一致性检查，不一致时返回原配置）。已有同步 `main` 的脚本会先改名保留；私有 setup 先捕获受管引擎、真实全局以及内置对象和原型的描述符，旧脚本随后仍在 Clash 的真实 `try`/Script 顶层执行，不包进回调，因此顶层 `var`、函数、`globalThis`、`this` 和开头 `"use strict"` 字符串都保持客户端直接加载时的行为。旧顶层结束后先恢复内置对象，再把全局 `main` 封闭为不可配置的受管访问器；受管入口每次先调用旧 `main`，并在 `finally` 中再次恢复内置对象，旧函数正常返回后才应用补丁。模板字符串的表达式会按代码检查；检测到异步或递归 `main`、唯一入口声明之外的任何裸 `main` 引用（包括属性访问、别名和对象简写）、额外绑定、补丁保留标识符、`eval`、`Function`、点号函数构造器或值为 `constructor` 的计算属性字符串时，安装器会在写文件前拒绝组合。
-- 三个档位都必须同时关闭当前会话内存中的订阅自动更新。客户端正在运行时，单改磁盘上的 `profiles.yaml` 可能继续自动刷新或在客户端退出时被旧内存覆盖，因此三个档位都不改用途档位、所有权、脚本或客户端配置，等客户端未运行时重试；档位 3 返回 `client_running_profile_three_deferred`，档位 1、2 返回 `client_running_auto_update_deferred`。
+- 三个档位都必须同时关闭当前会话内存中的订阅自动更新。客户端正在运行时，单改磁盘上的 `profiles.yaml` 可能继续自动刷新或在客户端退出时被旧内存覆盖，因此三个档位都不改用途档位、所有权、脚本或客户端配置，等客户端未运行时重试；档位 3 返回 `client_running_profile_three_deferred`，档位 1、2 返回 `client_running_auto_update_deferred`。三个档位的安全卸载也遵守同一边界：只要需要恢复 `profiles.yaml`、移除全局脚本或删除用途档位与所有权状态，客户端运行时就返回 `partial/client_running` 并保持整批文件不变，停止后重试才执行。
 - 档位 3 且客户端原本没有运行时，安装程序才事务式更新应用级设置：`verge.yaml` 的 `enable_tun_mode` 设为 `true`、`enable_dns_settings` 设为 `false`，`config.yaml` 关闭 `ipv6` 并写入托管 TUN 块（保留非托管的 TUN 设置和行内注释）；同时把两份文件的原始字节和安装后哈希写入本地安装状态文件，供卸载核对。同一应用目录用目录内独占锁文件互斥，路径大小写、扩展路径和目录改名不能绕过；操作期间持有配置目录与目标父目录句柄，目录联接、符号链接、重解析点和硬链接目标都会被拒绝。全部目标先备份，再持有禁止外部读取、写入、改名或替换的句柄，确认仍与候选生成时完全一致后统一写入或删除；任一失败整体恢复。进程在批量修改中被强制结束时，下次公开操作会先按持久事务记录恢复原状态，不能在半完成状态上继续。
 - Windows 在已锁定的原文件句柄内写入替换内容或恢复原内容时，先把文件截为零长度，再写入完整目标字节并同步。即使较短内容覆盖较长文件期间被强制结束，磁盘上也只会留下空文件或目标内容的前缀；下次公开操作可据事务记录恢复精确原字节，不会因旧文件尾部残留而失去自动恢复能力。删除事务恢复时，目标缺失就先在同目录创建私有临时文件，完整写入原字节并执行 `Flush(true)`，再次确认目标仍缺失后才原子发布；工具中断不会把空文件或原文前缀暴露在目标路径。目标已换成不同文件身份时，只有内容恰好等于完整原字节才确认完成且不改写；空内容、原文前缀或其他内容都保留目标与事务并停止。
 - 事务需要创建原本不存在的文件时，会在任何最终路径出现前先发布私有准备记录。若进程在主事务记录发布前被强制结束，下次公开操作只清理记录中仍为空的新目标；目标已经包含内容、变成链接或身份在检查期间变化时停止，不能把外部文件当成本工具的残留。主事务发布后先移除准备记录，再开始写入。
@@ -289,7 +289,7 @@ Windows 安全卸载把“客户端仍未运行”作为整批文件事务的提
 
 Windows 三个档位安装、备份恢复和卸载中会改写当前配置的事务，都把“客户端仍未运行”作为提交条件：全部目标已锁定并核对原字节后、发布事务记录前再次检查。客户端在此期间启动时不写入受保护目标，并清理新建文件、准备记录和事务记录；客户端以后未运行时可安全重试。
 
-Windows 中断的当前配置事务恢复前也会检查客户端。恢复计划需要修改根目录 `config.yaml` 或 `verge.yaml` 时，先独占锁定并核对全部恢复目标，再次检查客户端，确认仍未运行后才批量恢复；客户端已运行或在恢复提交前启动时返回 `partial/transaction_recovery_pending`，保持中断字节、事务记录和新建文件准备记录不变。以后再次运行任一公开命令时继续恢复。只涉及脚本或状态文件的事务不受此限制。
+Windows 中断的客户端敏感事务恢复前也会检查客户端。事务记录和新建文件准备记录会持久保存恢复权限；普通安装、卸载、备份恢复及旧版记录默认要求客户端停止，不能只凭文件路径推断用途。恢复时先独占锁定并核对全部恢复目标，再次检查客户端，确认仍未运行后才批量恢复；客户端已运行或在恢复提交前启动时返回 `partial/transaction_recovery_pending`，保持中断字节和记录不变。以后再次运行任一公开命令时继续恢复。只有用户明确触发的安全更新会标记运行中恢复权限，而且目标必须严格限定为 `profiles` 目录中的 `.yaml`/`.yml` 远程订阅和本次验收清单，否则拒绝该权限。
 
 Windows 存在尚未验收的安全更新清单时，安全卸载返回 `safe_update_pending`，整批不改并保留全局脚本、用途档位、所有权状态、订阅文件、备份和清单。先完成 `-VerifySafeUpdate` 的验收或恢复，再重试卸载，避免留下无法继续验收的清单或把旧订阅误当成新结果。
 
