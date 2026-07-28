@@ -1942,6 +1942,10 @@ public static class FakeCurl {
     $lightVerge = "enable_tun_mode: false`n"
     [System.IO.File]::WriteAllText((Join-Path $lightCase "config.yaml"), $lightConfig)
     [System.IO.File]::WriteAllText((Join-Path $lightCase "verge.yaml"), $lightVerge)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $lightCase "profiles.yaml"),
+        "items:`n- uid: R-light`n  type: remote`n  option:`n    allow_auto_update: true`n"
+    )
     $profileOne = Invoke-TestPowerShell $installer @("-AppHome", $lightCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore)
     Assert-True ($profileOne.ExitCode -eq 0) "profile 1 installer failed; $(Get-TestOutputDiagnostic $profileOne.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "config.yaml") -Raw) -eq $lightConfig) "profile 1 modified config.yaml"
@@ -1951,6 +1955,13 @@ public static class FakeCurl {
     $profileOneScript = Read-TestUtf8Text $lightScript
     Assert-True ($profileOneScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 1;")) "profile 1 script has the wrong usage profile"
     Assert-True ($profileOneScript.Contains("cnDomainProvider")) "profile 1 script omitted the China-domain provider"
+    Assert-True (
+        (Get-Content -LiteralPath (Join-Path $lightCase "profiles.yaml") -Raw) -match
+        '(?m)^\s+allow_auto_update:\s+false\s*$'
+    ) "profile 1 did not disable remote subscription auto-update"
+    Assert-True (
+        Test-Path -LiteralPath (Join-Path $lightCase "claude-easy-auto-update-state.json") -PathType Leaf
+    ) "profile 1 did not preserve auto-update restore ownership"
     $savedProfileOne = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$savedProfileOne.Profile -eq 1) "profile 1 was not saved"
     $profileTwo = Invoke-TestPowerShell $installer @("-AppHome", $lightCase, "-UsageProfile", "2", "-MihomoPath", $fakeCore)
@@ -1960,6 +1971,10 @@ public static class FakeCurl {
     $profileTwoScript = Read-TestUtf8Text $lightScript
     Assert-True ($profileTwoScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 2;")) "profile 2 script has the wrong usage profile"
     Assert-True ($profileTwoScript.Contains("cnDomainProvider")) "profile 2 script omitted the China-domain provider"
+    Assert-True (
+        (Get-Content -LiteralPath (Join-Path $lightCase "profiles.yaml") -Raw) -match
+        '(?m)^\s+allow_auto_update:\s+false\s*$'
+    ) "profile 2 re-enabled remote subscription auto-update"
     $savedProfileTwo = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$savedProfileTwo.Profile -eq 2) "profile 2 was not saved"
 

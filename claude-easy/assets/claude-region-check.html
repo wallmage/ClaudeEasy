@@ -1,0 +1,982 @@
+<!doctype html>
+<!--
+MIT License
+
+Copyright (c) 2026 LinXiaoTao (https://github.com/LinXiaoTao/FuckClaude)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>ClaudeEasy 区域指纹检测</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f1ea;
+        --surface: #fffdf8;
+        --surface-strong: #ffffff;
+        --text: #1e2420;
+        --muted: #626a64;
+        --line: #dedbd2;
+        --accent: #a95137;
+        --accent-soft: #f4e3dc;
+        --low: #2f7650;
+        --low-soft: #e4f2e9;
+        --medium: #996713;
+        --medium-soft: #f7ecd0;
+        --high: #ad3d35;
+        --high-soft: #f8dfdd;
+        --limited: #6f5a91;
+        --limited-soft: #eee8f7;
+        --shadow: 0 18px 48px rgba(50, 44, 34, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 8% 0%, rgba(169, 81, 55, 0.12), transparent 34rem),
+          radial-gradient(circle at 92% 8%, rgba(47, 118, 80, 0.1), transparent 30rem),
+          var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        line-height: 1.5;
+      }
+
+      main {
+        width: min(1040px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 44px 0 56px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 0;
+        font-size: clamp(32px, 5vw, 56px);
+        letter-spacing: -0.045em;
+        line-height: 1.05;
+      }
+
+      .intro {
+        max-width: 720px;
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .privacy {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 18px;
+        padding: 7px 11px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 253, 248, 0.76);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .privacy::before {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--low);
+        content: "";
+      }
+
+      .panel {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.7fr);
+        gap: 24px;
+        margin-top: 30px;
+        padding: 24px;
+        border: 1px solid rgba(222, 219, 210, 0.9);
+        border-radius: 26px;
+        background: rgba(255, 253, 248, 0.92);
+        box-shadow: var(--shadow);
+      }
+
+      .score-card {
+        display: flex;
+        min-height: 252px;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 22px;
+        border-radius: 20px;
+        background: var(--surface-strong);
+        border: 1px solid var(--line);
+      }
+
+      .score-label {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .score {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        margin: 8px 0 0;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .score strong {
+        font-size: clamp(56px, 8vw, 82px);
+        letter-spacing: -0.06em;
+        line-height: 1;
+      }
+
+      .score span {
+        color: var(--muted);
+        font-size: 16px;
+      }
+
+      .risk-badge {
+        width: fit-content;
+        margin-top: 14px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #eceae4;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 750;
+      }
+
+      .risk-badge[data-band="low"] {
+        background: var(--low-soft);
+        color: var(--low);
+      }
+
+      .risk-badge[data-band="medium"] {
+        background: var(--medium-soft);
+        color: var(--medium);
+      }
+
+      .risk-badge[data-band="high"] {
+        background: var(--high-soft);
+        color: var(--high);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 22px;
+      }
+
+      button {
+        min-height: 44px;
+        padding: 0 17px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 750;
+      }
+
+      button:hover {
+        filter: brightness(0.94);
+      }
+
+      button:focus-visible {
+        outline: 3px solid rgba(169, 81, 55, 0.24);
+        outline-offset: 3px;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+
+      button[hidden] {
+        display: none;
+      }
+
+      .status {
+        min-height: 24px;
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .signals {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .signal {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .signal:first-child {
+        padding-top: 2px;
+      }
+
+      .signal:last-child {
+        padding-bottom: 2px;
+        border-bottom: 0;
+      }
+
+      .signal-name {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-weight: 750;
+      }
+
+      .weight,
+      .coverage {
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: #eceae4;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .coverage {
+        display: none;
+      }
+
+      .signal[data-coverage="limited"] .coverage {
+        display: inline-block;
+        background: var(--limited-soft);
+        color: var(--limited);
+      }
+
+      .signal-value {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+        word-break: break-word;
+      }
+
+      .contribution {
+        align-self: center;
+        min-width: 44px;
+        color: var(--muted);
+        font-size: 15px;
+        font-weight: 800;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .signal[data-verdict="medium"] .contribution {
+        color: var(--medium);
+      }
+
+      .signal[data-verdict="high"] .contribution {
+        color: var(--high);
+      }
+
+      .explain {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 20px;
+      }
+
+      .note {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 253, 248, 0.74);
+      }
+
+      .note h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .note p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      footer {
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 12px;
+        text-align: center;
+      }
+
+      @media (max-width: 760px) {
+        main {
+          padding-top: 28px;
+        }
+
+        .panel {
+          grid-template-columns: 1fr;
+          padding: 16px;
+        }
+
+        .score-card {
+          min-height: 220px;
+        }
+
+        .explain {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body data-contract-version="1">
+    <main>
+      <p class="eyebrow">ClaudeEasy · 本地检测</p>
+      <h1>Claude 区域指纹检测</h1>
+      <p class="intro">
+        检查当前浏览器可见的九项区域环境信号。分数只是参考，不代表 Claude
+        的官方判定，也不替代 DNS、WebRTC、路由和联网验证。
+      </p>
+      <div class="privacy">页面完全离线运行，不发送检测结果</div>
+
+      <section class="panel" aria-label="区域指纹检测器">
+        <div class="score-card">
+          <div>
+            <div class="score-label">区域指纹风险分</div>
+            <div class="score">
+              <strong data-result-score>—</strong>
+              <span>/ 100</span>
+            </div>
+            <div class="risk-badge" data-result-band>等待检测</div>
+          </div>
+          <div>
+            <div class="actions">
+              <button type="button" data-action="start">开始检测</button>
+              <button type="button" data-action="rescan" hidden>重新扫描</button>
+            </div>
+            <p
+              class="status"
+              data-result-status="idle"
+              role="status"
+              aria-live="polite"
+            >尚未读取浏览器环境。</p>
+          </div>
+        </div>
+
+        <ol class="signals" data-signal-list aria-label="九项检测结果"></ol>
+      </section>
+
+      <section class="explain" aria-label="结果说明">
+        <article class="note">
+          <h2>怎样看结果</h2>
+          <p>0–30 为低风险，31–60 为中风险，61–100 为高风险。每行右侧显示该项贡献分。</p>
+        </article>
+        <article class="note">
+          <h2>浏览器兼容</h2>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。</p>
+        </article>
+      </section>
+
+      <footer>
+        ClaudeEasy 本地版本 · 检测逻辑改编自 LinXiaoTao/FuckClaude · MIT License
+      </footer>
+    </main>
+
+    <script id="claude-easy-region-core">
+      (function (root) {
+        "use strict";
+
+        var SIGNALS = [
+          { id: "timezone", name: "系统时区", weight: 26 },
+          { id: "language", name: "浏览器语言", weight: 20 },
+          { id: "fonts", name: "已安装中文字体", weight: 16 },
+          { id: "vendorFonts", name: "国产厂商字体", weight: 10 },
+          { id: "cnBrowser", name: "国产浏览器 / WebView", weight: 8 },
+          { id: "deviceVendor", name: "国产品牌设备", weight: 6 },
+          { id: "intlLocale", name: "Intl 区域设置", weight: 6 },
+          { id: "timezoneOffset", name: "UTC+8 时区偏移", weight: 4 },
+          { id: "emoji", name: "Emoji 渲染风格", weight: 4 }
+        ];
+
+        var MAINLAND_TIMEZONES = [
+          "Asia/Shanghai",
+          "Asia/Urumqi",
+          "Asia/Chongqing",
+          "Asia/Chungking",
+          "Asia/Harbin",
+          "Asia/Kashgar"
+        ];
+        var RESTRICTED_TIMEZONES = ["Asia/Hong_Kong", "Asia/Macau"];
+        var SIMPLIFIED_FONTS = [
+          "Microsoft YaHei",
+          "Microsoft YaHei UI",
+          "SimSun",
+          "NSimSun",
+          "SimHei",
+          "KaiTi",
+          "FangSong",
+          "DengXian",
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "STHeiti",
+          "STSong",
+          "Songti SC",
+          "Source Han Sans CN",
+          "Source Han Sans SC",
+          "Noto Sans CJK SC",
+          "Noto Serif CJK SC",
+          "WenQuanYi Micro Hei",
+          "WenQuanYi Zen Hei"
+        ];
+        var TRADITIONAL_FONTS = [
+          "Microsoft JhengHei",
+          "PMingLiU",
+          "MingLiU",
+          "DFKai-SB",
+          "PingFang TC",
+          "PingFang HK",
+          "Source Han Sans TW",
+          "Noto Sans CJK TC"
+        ];
+        var VENDOR_FONTS = [
+          "MiSans",
+          "MIUI",
+          "HarmonyOS Sans SC",
+          "HarmonyOS Sans",
+          "HONOR Sans",
+          "OPPO Sans",
+          "vivo Sans",
+          "Alibaba PuHuiTi",
+          "Alibaba Sans",
+          "DingTalk JinBuTi",
+          "Douyin Sans",
+          "HYQiHei",
+          "FZShuSong-Z01S",
+          "FZKai-Z03S",
+          "FZHei-B01S",
+          "FZFangSong-Z02S"
+        ];
+        var CN_BROWSER_PATTERNS = [
+          [/micromessenger|wxwork/i, "WeChat"],
+          [/mqqbrowser|qqbrowser|\bqq\//i, "QQ Browser"],
+          [/quark/i, "Quark"],
+          [/ucbrowser|ucweb/i, "UC Browser"],
+          [/baiduboxapp|bidubrowser|baidubrowser/i, "Baidu"],
+          [/miuibrowser|xiaomi\/|mibrowser/i, "Mi Browser"],
+          [/huaweibrowser/i, "Huawei Browser"],
+          [/heytapbrowser|oppobrowser/i, "HeyTap (OPPO)"],
+          [/vivobrowser/i, "vivo Browser"],
+          [/sogoumobilebrowser|\bmetasr\b|\bse 2\.x\b/i, "Sogou"],
+          [/maxthon/i, "Maxthon"],
+          [/360se|360ee|qihoobrowser|\bqhbrowser\b/i, "360 Browser"],
+          [/2345explorer|2345browser/i, "2345"],
+          [/lbbrowser/i, "Liebao"],
+          [/aweme|bytedancewebview|newsarticle|toutiaomicroapp/i, "Douyin / Toutiao"],
+          [/alipayclient/i, "Alipay"],
+          [/dingtalk/i, "DingTalk"],
+          [/weibo/i, "Weibo"],
+          [/xiaohongshu|xhsminiapp/i, "Xiaohongshu"],
+          [/\bbilibili\b/i, "Bilibili"]
+        ];
+        var CN_DEVICE_PATTERNS = [
+          [/harmonyos|openharmony/i, "HarmonyOS", 1],
+          [/huawei|\bhonor\b/i, "Huawei / Honor", 0.8],
+          [/meizu/i, "Meizu", 0.8],
+          [/nubia|\bzte\b/i, "ZTE / nubia", 0.7],
+          [/xiaomi|redmi|\bpoco\b|\bm2\d{3}[a-z0-9]+\b/i, "Xiaomi", 0.6],
+          [/oppo|\bpd[a-z]m\d{2}\b/i, "OPPO", 0.6],
+          [/vivo|\bv2\d{3}[a-z]{1,2}\b/i, "vivo", 0.6],
+          [/realme|\brmx\d{4}\b/i, "realme", 0.6],
+          [/oneplus/i, "OnePlus", 0.6],
+          [/\blenovo\b|\bzuk\b/i, "Lenovo", 0.5]
+        ];
+
+        function clampScore(score) {
+          return Math.max(0, Math.min(1, Number(score) || 0));
+        }
+
+        function scoreTimezone(timeZone) {
+          if (MAINLAND_TIMEZONES.indexOf(timeZone) !== -1) return 1;
+          if (RESTRICTED_TIMEZONES.indexOf(timeZone) !== -1) return 0.6;
+          return 0;
+        }
+
+        function scoreLanguages(languages) {
+          var list = (languages || [])
+            .map(function (language) {
+              return String(language || "").toLowerCase();
+            })
+            .filter(Boolean);
+          var isTaiwan = function (language) {
+            return language.indexOf("zh-tw") === 0 ||
+              (language.indexOf("hant") !== -1 && language.indexOf("tw") !== -1);
+          };
+          var isHongKongOrMacau = function (language) {
+            return language.indexOf("zh-hk") === 0 || language.indexOf("zh-mo") === 0;
+          };
+          var isTraditional = function (language) {
+            return isTaiwan(language) ||
+              isHongKongOrMacau(language) ||
+              language.indexOf("hant") !== -1;
+          };
+          var firstTraditional = list.findIndex(isTraditional);
+          var isSimplified = function (language, index) {
+            return language.indexOf("zh-cn") === 0 ||
+              language.indexOf("hans") !== -1 ||
+              (language === "zh" && (firstTraditional === -1 || index < firstTraditional));
+          };
+          var kept = list
+            .map(function (language, index) {
+              return { language: language, index: index };
+            })
+            .filter(function (entry) {
+              return !isTaiwan(entry.language) &&
+                !(entry.language === "zh" &&
+                  firstTraditional !== -1 &&
+                  entry.index > firstTraditional);
+            });
+          var primary = kept[0];
+          if (!primary) return 0;
+          if (isSimplified(primary.language, primary.index)) return 1;
+          if (isHongKongOrMacau(primary.language) ||
+              primary.language.indexOf("hant") !== -1) return 0.5;
+          if (kept.some(function (entry) {
+            return isSimplified(entry.language, entry.index);
+          })) return 0.7;
+          if (kept.some(function (entry) {
+            return entry.language.indexOf("zh") === 0;
+          })) return 0.4;
+          return 0;
+        }
+
+        function scoreIntlLocale(locale) {
+          var value = String(locale || "").toLowerCase();
+          if (value.indexOf("zh-cn") === 0 ||
+              value.indexOf("hans") !== -1 ||
+              value === "zh") return 1;
+          if (value.indexOf("zh") === 0 &&
+              value.indexOf("zh-tw") !== 0) return 0.5;
+          return 0;
+        }
+
+        function matchPattern(probe, patterns) {
+          for (var index = 0; index < patterns.length; index += 1) {
+            if (patterns[index][0].test(probe)) {
+              return {
+                name: patterns[index][1],
+                score: patterns[index][2] === undefined ? 1 : patterns[index][2]
+              };
+            }
+          }
+          return { name: null, score: 0 };
+        }
+
+        function scoreEmojiVendor(probe) {
+          var value = String(probe || "").toLowerCase();
+          var vendor = "未知";
+          if (/iphone|ipad|ipod|mac/.test(value)) vendor = "Apple";
+          else if (/android/.test(value)) vendor = "Google";
+          else if (/win/.test(value)) vendor = "Microsoft";
+          else if (/cros/.test(value)) vendor = "Google";
+          else if (/linux/.test(value)) vendor = "Linux / Other";
+          var scores = {
+            Apple: 0.25,
+            Microsoft: 0.4,
+            Google: 0.35,
+            "Linux / Other": 0.5,
+            "未知": 0.4
+          };
+          return { vendor: vendor, score: scores[vendor] };
+        }
+
+        function riskBand(total) {
+          if (total <= 30) return "low";
+          if (total <= 60) return "medium";
+          return "high";
+        }
+
+        function signalVerdict(score) {
+          if (score >= 0.6) return "high";
+          if (score >= 0.25) return "medium";
+          return "low";
+        }
+
+        function fontResult(environment, fonts) {
+          return fonts.filter(function (font) {
+            try {
+              return Boolean(environment.hasFont(font));
+            } catch (_error) {
+              return false;
+            }
+          });
+        }
+
+        function outcome(definition, raw, score, coverage) {
+          var bounded = clampScore(score);
+          return {
+            id: definition.id,
+            name: definition.name,
+            weight: definition.weight,
+            raw: raw,
+            score: bounded,
+            contribution: Math.round(bounded * definition.weight),
+            coverage: coverage || "full",
+            verdict: signalVerdict(bounded)
+          };
+        }
+
+        async function detect(environment) {
+          var definitions = Object.create(null);
+          SIGNALS.forEach(function (signal) {
+            definitions[signal.id] = signal;
+          });
+          var results = [];
+          var timeZone = String(environment.timeZone || "");
+          results.push(outcome(
+            definitions.timezone,
+            timeZone || "无法读取",
+            scoreTimezone(timeZone)
+          ));
+
+          var languages = Array.isArray(environment.languages)
+            ? environment.languages.map(String)
+            : [];
+          results.push(outcome(
+            definitions.language,
+            languages.join(", ") || "无法读取",
+            scoreLanguages(languages)
+          ));
+
+          var simplified = fontResult(environment, SIMPLIFIED_FONTS);
+          var traditional = fontResult(environment, TRADITIONAL_FONTS);
+          var fontScore = 0;
+          if (simplified.length > 0) {
+            fontScore = Math.min(1, 0.75 + 0.08 * simplified.length);
+          } else if (traditional.length > 0) {
+            fontScore = 0.2;
+          }
+          var fontHits = simplified.concat(traditional);
+          results.push(outcome(
+            definitions.fonts,
+            fontHits.length > 0 ? fontHits.slice(0, 4).join(", ") : "未发现",
+            fontScore
+          ));
+
+          var vendorFonts = fontResult(environment, VENDOR_FONTS);
+          results.push(outcome(
+            definitions.vendorFonts,
+            vendorFonts.length > 0 ? vendorFonts.slice(0, 3).join(", ") : "未发现",
+            vendorFonts.length >= 2 ? 1 : vendorFonts.length === 1 ? 0.8 : 0
+          ));
+
+          var userAgentData = environment.userAgentData;
+          var brands = userAgentData && Array.isArray(userAgentData.brands)
+            ? userAgentData.brands.map(function (entry) {
+              return String(entry.brand || "");
+            }).join(" ")
+            : "";
+          var userAgent = String(environment.userAgent || "");
+          var browserMatch = matchPattern(
+            userAgent + " " + brands,
+            CN_BROWSER_PATTERNS
+          );
+          results.push(outcome(
+            definitions.cnBrowser,
+            browserMatch.name || "未发现",
+            browserMatch.score
+          ));
+
+          var extraDevice = "";
+          var deviceCoverage = "limited";
+          if (userAgentData &&
+              typeof userAgentData.getHighEntropyValues === "function") {
+            try {
+              var highEntropy = await userAgentData.getHighEntropyValues([
+                "model",
+                "platform",
+                "platformVersion"
+              ]);
+              extraDevice = " " +
+                String(highEntropy.model || "") + " " +
+                String(highEntropy.platform || "");
+              deviceCoverage = "full";
+            } catch (_error) {
+              deviceCoverage = "limited";
+            }
+          }
+          var deviceMatch = matchPattern(
+            userAgent + extraDevice,
+            CN_DEVICE_PATTERNS
+          );
+          var deviceRaw = deviceMatch.name || "未发现";
+          if (deviceCoverage === "limited") {
+            deviceRaw += "（有限信息：仅 User-Agent）";
+          }
+          results.push(outcome(
+            definitions.deviceVendor,
+            deviceRaw,
+            deviceMatch.score,
+            deviceCoverage
+          ));
+
+          var locale = String(environment.intlLocale || "");
+          results.push(outcome(
+            definitions.intlLocale,
+            locale || "无法读取",
+            scoreIntlLocale(locale)
+          ));
+
+          var offset = Number(environment.timezoneOffset);
+          var utcHours = Number.isFinite(offset) ? -offset / 60 : 0;
+          var offsetRaw = Number.isFinite(offset)
+            ? "UTC" + (utcHours >= 0 ? "+" : "-") + Math.abs(utcHours)
+            : "无法读取";
+          results.push(outcome(
+            definitions.timezoneOffset,
+            offsetRaw,
+            offset === -480 ? 0.7 : 0
+          ));
+
+          var emoji = scoreEmojiVendor(
+            String(environment.platform || "") + " " + userAgent
+          );
+          results.push(outcome(
+            definitions.emoji,
+            emoji.vendor + " 风格",
+            emoji.score
+          ));
+
+          var total = Math.min(100, results.reduce(function (sum, signal) {
+            return sum + signal.contribution;
+          }, 0));
+          return {
+            status: "complete",
+            total: total,
+            band: riskBand(total),
+            limitations: results
+              .filter(function (signal) {
+                return signal.coverage === "limited";
+              })
+              .map(function (signal) {
+                return signal.id;
+              }),
+            signals: results
+          };
+        }
+
+        function browserEnvironment() {
+          var dateTimeOptions = {};
+          try {
+            dateTimeOptions = Intl.DateTimeFormat().resolvedOptions();
+          } catch (_error) {
+            dateTimeOptions = {};
+          }
+          var canvas = document.createElement("canvas");
+          var context = canvas.getContext("2d");
+          return {
+            timeZone: dateTimeOptions.timeZone || "",
+            timezoneOffset: new Date().getTimezoneOffset(),
+            languages: navigator.languages && navigator.languages.length
+              ? Array.prototype.slice.call(navigator.languages)
+              : [navigator.language],
+            intlLocale: dateTimeOptions.locale || "",
+            userAgent: navigator.userAgent || "",
+            platform: navigator.platform || "",
+            userAgentData: navigator.userAgentData,
+            hasFont: function (font) {
+              if (!context) return false;
+              var sample = "中文字体检测ABCabc012";
+              var bases = ["monospace", "sans-serif", "serif"];
+              return bases.some(function (base) {
+                context.font = "72px " + base;
+                var baseWidth = context.measureText(sample).width;
+                context.font = '72px "' + font + '", ' + base;
+                var fontWidth = context.measureText(sample).width;
+                return Math.abs(fontWidth - baseWidth) > 0.5;
+              });
+            }
+          };
+        }
+
+        root.ClaudeEasyRegionCheck = Object.freeze({
+          version: 1,
+          signals: SIGNALS.map(function (signal) {
+            return Object.freeze({
+              id: signal.id,
+              name: signal.name,
+              weight: signal.weight
+            });
+          }),
+          detect: detect,
+          browserEnvironment: browserEnvironment,
+          riskBand: riskBand,
+          scoreTimezone: scoreTimezone,
+          scoreLanguages: scoreLanguages,
+          scoreIntlLocale: scoreIntlLocale
+        });
+      }(window));
+    </script>
+
+    <script id="claude-easy-region-ui">
+      (function () {
+        "use strict";
+
+        var detector = window.ClaudeEasyRegionCheck;
+        var list = document.querySelector("[data-signal-list]");
+        var start = document.querySelector('[data-action="start"]');
+        var rescan = document.querySelector('[data-action="rescan"]');
+        var score = document.querySelector("[data-result-score]");
+        var band = document.querySelector("[data-result-band]");
+        var status = document.querySelector("[data-result-status]");
+        var bandLabels = {
+          low: "低风险",
+          medium: "中风险",
+          high: "高风险"
+        };
+
+        function createRows() {
+          list.textContent = "";
+          detector.signals.forEach(function (signal) {
+            var row = document.createElement("li");
+            row.className = "signal";
+            row.setAttribute("data-signal-key", signal.id);
+            row.setAttribute("data-coverage", "pending");
+            row.setAttribute("data-verdict", "low");
+
+            var copy = document.createElement("div");
+            var title = document.createElement("div");
+            title.className = "signal-name";
+            title.textContent = signal.name;
+
+            var weight = document.createElement("span");
+            weight.className = "weight";
+            weight.textContent = "权重 " + signal.weight;
+            title.appendChild(weight);
+
+            var coverage = document.createElement("span");
+            coverage.className = "coverage";
+            coverage.textContent = "有限信息";
+            title.appendChild(coverage);
+
+            var value = document.createElement("div");
+            value.className = "signal-value";
+            value.setAttribute("data-signal-value", "");
+            value.textContent = "等待检测";
+            copy.appendChild(title);
+            copy.appendChild(value);
+
+            var contribution = document.createElement("div");
+            contribution.className = "contribution";
+            contribution.setAttribute("data-signal-contribution", "");
+            contribution.textContent = "—";
+
+            row.appendChild(copy);
+            row.appendChild(contribution);
+            list.appendChild(row);
+          });
+        }
+
+        function setBusy(busy) {
+          start.disabled = busy;
+          rescan.disabled = busy;
+        }
+
+        function render(result) {
+          score.textContent = String(result.total);
+          band.textContent = bandLabels[result.band];
+          band.setAttribute("data-band", result.band);
+          result.signals.forEach(function (signal) {
+            var row = list.querySelector(
+              '[data-signal-key="' + signal.id + '"]'
+            );
+            row.setAttribute("data-coverage", signal.coverage);
+            row.setAttribute("data-verdict", signal.verdict);
+            row.querySelector("[data-signal-value]").textContent = signal.raw;
+            row.querySelector("[data-signal-contribution]").textContent =
+              "+" + signal.contribution;
+          });
+          status.setAttribute("data-result-status", "complete");
+          status.textContent =
+            "检测完成｜" + result.total + " / 100｜" +
+            bandLabels[result.band] +
+            (result.limitations.length > 0
+              ? "｜1 项使用兼容降级"
+              : "");
+          start.hidden = true;
+          rescan.hidden = false;
+        }
+
+        async function run() {
+          setBusy(true);
+          status.setAttribute("data-result-status", "running");
+          status.textContent = "正在读取当前浏览器环境…";
+          score.textContent = "…";
+          band.textContent = "检测中";
+          band.removeAttribute("data-band");
+          try {
+            var result = await detector.detect(detector.browserEnvironment());
+            render(result);
+          } catch (_error) {
+            status.setAttribute("data-result-status", "failed");
+            status.textContent = "检测失败。请重新扫描；仍失败时记为未验证。";
+            score.textContent = "—";
+            band.textContent = "未验证";
+            start.hidden = true;
+            rescan.hidden = false;
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        createRows();
+        start.addEventListener("click", run);
+        rescan.addEventListener("click", run);
+      }());
+    </script>
+  </body>
+</html>

@@ -17,6 +17,7 @@ class SkillContractTest < Minitest::Test
     README.md
     claude-easy/SKILL.md
     claude-easy/agents/openai.yaml
+    claude-easy/assets/claude-region-check.html
     claude-easy/references/patch-policy.md
     claude-easy/references/policy.json
     claude-easy/references/result-contract.json
@@ -57,6 +58,7 @@ class SkillContractTest < Minitest::Test
     tests/test_macos_patcher.rb
     tests/test_macos_wrappers.rb
     tests/test_mutation_safety.rb
+    tests/test_region_fingerprint_page.js
     tests/test_skill_contract.rb
     tests/test_windows_installer.ps1
     tests/test_windows_patcher.js
@@ -398,7 +400,11 @@ class SkillContractTest < Minitest::Test
     design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     [readme, skill, policy, design].each do |document|
-      assert_includes document, "https://fuck-claude.vercel.app/zh/"
+      assert_includes document, "assets/claude-region-check.html"
+      assert_includes document, "离线"
+      assert_includes document, "Safari"
+      assert_includes document, "Chrome"
+      assert_includes document, "Windows"
       assert_includes document, "绿色"
       assert_includes document, "低风险"
       assert_includes document, "0–30"
@@ -420,6 +426,18 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "未验证"
       assert_includes document, "最多等待 60 秒"
       assert_includes document, "只刷新一次"
+      assert_includes document, "有限信息"
+      assert_includes document, "本地检测页不可用"
+      assert_includes document, "浏览器未暴露的信息不计分"
+      assert_includes document, "其他默认浏览器"
+      assert_includes document, "补测其余八项"
+      assert_includes document, "兼容性限制"
+      assert_includes document, "重新计算总分和风险档"
+    end
+
+    [readme, skill, policy, design].each do |document|
+      refute_includes document, "https://fuck-claude.vercel.app/zh/"
+      refute_includes document, "Google Analytics"
     end
 
     assert_operator skill.index("修改前基线"), :<, skill.index("运行平台安装程序")
@@ -2749,6 +2767,24 @@ class SkillContractTest < Minitest::Test
     refute_empty entrypoints
     entrypoints.each do |path|
       assert_includes workflow, File.basename(path), "test entrypoint is not executed by CI: #{path}"
+    end
+  end
+
+  def test_region_fingerprint_page_runs_on_macos_and_both_windows_runtimes
+    workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
+    jobs = workflow.scan(
+      /^  ([a-z0-9-]+):\n(.*?)(?=^  [a-z0-9-]+:\n|\z)/m
+    ).to_h
+    command = "node --test tests/test_region_fingerprint_page.js"
+
+    %w[
+      macos
+      windows-installer-powershell-5
+      windows-installer-powershell-7
+    ].each do |job|
+      assert jobs.key?(job), "missing CI job: #{job}"
+      assert_includes jobs.fetch(job), command,
+                      "offline fingerprint page is not tested in #{job}"
     end
   end
 

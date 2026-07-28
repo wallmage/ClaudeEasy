@@ -26,6 +26,8 @@ jobs:
         run: ruby tests/coverage_ruby.rb
       - name: Ruby 3.3 skill contract suite
         run: ruby tests/test_skill_contract.rb
+      - name: Offline region fingerprint page
+        run: node --test tests/test_region_fingerprint_page.js
       - name: Safety mutation checks
         run: ruby tests/test_mutation_safety.rb
       - name: macOS command wrapper behavior
@@ -137,6 +139,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+      - name: Offline region fingerprint page
+        run: node --test tests/test_region_fingerprint_page.js
       - name: PowerShell 5.1 installer, uninstaller, and route regressions
         shell: powershell
         run: |
@@ -159,6 +163,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+      - name: Offline region fingerprint page
+        run: node --test tests/test_region_fingerprint_page.js
       - name: PowerShell 7 installer, uninstaller, and route regressions
         shell: pwsh
         run: |
