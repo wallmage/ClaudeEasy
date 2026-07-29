@@ -402,26 +402,12 @@ function claudeEasyGroupCannotReachDirect(config, target, visiting) {
   const group = (config["proxy-groups"] || []).find(function (item) { return item && item.name === target; });
   if (!group) return false;
 
-  let members = Array.isArray(group.proxies) ? group.proxies.slice() : [];
   if (Array.isArray(group.use) && group.use.length) return false;
   if (group["include-all"] === true || group["include-all-proxies"] === true || group["include-all-providers"] === true) return false;
-  const exclusion = String(group["exclude-filter"] || "");
-  if (exclusion) {
-    let pattern = exclusion;
-    let flags = "";
-    if (pattern.indexOf("(?i)") === 0) {
-      pattern = pattern.slice(4);
-      flags = "i";
-    }
-    if (/\(\?/.test(pattern) || /\\[1-9]/.test(pattern)) return false;
-    let matcher;
-    try {
-      matcher = new RegExp(pattern, flags);
-    } catch (_error) {
-      return false;
-    }
-    members = members.filter(function (member) { return !matcher.test(String(member)); });
-  }
+  const exclusion = group["exclude-filter"];
+  if (exclusion !== undefined && exclusion !== null && exclusion !== "") return false;
+
+  const members = Array.isArray(group.proxies) ? group.proxies.slice() : [];
   if (!members.length) return claudeEasySafeProxyTarget(config, group["empty-fallback"]);
   return members.every(function (member) {
     return claudeEasySafeProxyTarget(config, member) || claudeEasyGroupCannotReachDirect(config, member, visiting.concat([target]));

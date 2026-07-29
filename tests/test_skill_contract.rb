@@ -1356,6 +1356,27 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "/cache/dns/flush"
   end
 
+  def test_product_documents_never_execute_subscription_dns_filters
+    [
+      File.join(ROOT, "README.md"),
+      File.join(SKILL, "SKILL.md"),
+      File.join(SKILL, "references/patch-policy.md"),
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"),
+      File.join(ROOT, "tests/baseline.md")
+    ].each do |path|
+      assert_includes File.read(path), "不执行订阅提供的 `exclude-filter`", path
+    end
+  end
+
+  def test_windows_recovery_race_fixture_targets_current_commit_condition
+    fixture = File.read(File.join(ROOT, "tests/test_windows_installer.ps1"))
+    transaction = File.read(File.join(SKILL, "scripts/windows/install_windows/transaction.ps1"))
+    needle = %q{$recoveryRacePreparationNeedle = '            $preCommitRejected = -not ('}
+
+    assert_includes fixture, needle
+    assert_includes transaction, "            $preCommitRejected = -not (\n"
+  end
+
   def test_macos_installer_is_one_shot
     path = File.join(SKILL, "scripts/install_macos.sh")
     skip unless File.file?(path)

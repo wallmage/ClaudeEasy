@@ -4646,16 +4646,11 @@ try {
             $recoveryRaceJournalFunction = $recoveryRaceText.IndexOf(
                 "function Repair-InterruptedFileTransaction"
             )
-            $recoveryRacePreparationNeedle = '    foreach ($target in $targets) {'
+            $recoveryRacePreparationNeedle = '            $preCommitRejected = -not ('
             $recoveryRaceJournalNeedle = 'Invoke-InterruptedTransactionRecovery $plan'
-            $recoveryRacePreparationFirstOffset = $recoveryRaceText.IndexOf(
-                $recoveryRacePreparationNeedle,
-                $recoveryRacePreparationFunction
-            )
             $recoveryRacePreparationOffset = $recoveryRaceText.IndexOf(
                 $recoveryRacePreparationNeedle,
-                $recoveryRacePreparationFirstOffset +
-                    $recoveryRacePreparationNeedle.Length
+                $recoveryRacePreparationFunction
             )
             $recoveryRaceJournalCallOffset = $recoveryRaceText.IndexOf(
                 $recoveryRaceJournalNeedle,
@@ -4673,7 +4668,6 @@ try {
             Assert-True (
                 $recoveryRacePreparationFunction -ge 0 -and
                 $recoveryRaceJournalFunction -ge 0 -and
-                $recoveryRacePreparationFirstOffset -ge 0 -and
                 $recoveryRacePreparationOffset -ge 0 -and
                 $recoveryRaceJournalCallOffset -ge 0 -and
                 $recoveryRaceJournalLineBreak -ge 0
@@ -4712,7 +4706,7 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
             )
             $recoveryRacePreparationOffset += $recoveryRaceHelper.Length
             $recoveryRaceJournalOffset += $recoveryRaceHelper.Length
-            $recoveryRacePreparationHook = '    Start-ClaudeEasyRecoveryRaceClient "preparation"' + [Environment]::NewLine
+            $recoveryRacePreparationHook = '            Start-ClaudeEasyRecoveryRaceClient "preparation"' + [Environment]::NewLine
             $recoveryRaceText = $recoveryRaceText.Insert(
                 $recoveryRacePreparationOffset,
                 $recoveryRacePreparationHook

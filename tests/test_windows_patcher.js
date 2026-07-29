@@ -772,7 +772,7 @@ test('DNS policy rejects plaintext and dynamic group targets', { skip: !availabl
   }
 });
 
-test('DNS policy accounts for exclusion, empty fallback, and DNS outbounds', { skip: !available }, () => {
+test('DNS policy refuses subscription-filtered groups and DNS outbounds', { skip: !available }, () => {
   const config = baseConfig();
   const originalMain = structuredClone(config['proxy-groups'].find((group) => group.name === 'Main'));
   config.proxies.push({ name: 'InternalDNS', type: 'dns' });
@@ -796,12 +796,12 @@ test('DNS policy accounts for exclusion, empty fallback, and DNS outbounds', { s
   const safeSuffix = `#${safeName}`;
   const mainGroup = patched['proxy-groups'].find((group) => group.name === safeName);
   assert.ok(policies['+.compatible.example'].every((endpoint) => endpoint.endsWith(safeSuffix)));
-  assert.deepEqual(policies['+.fallback.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#FilteredToSafeProxy`));
+  assert.ok(policies['+.fallback.example'].every((endpoint) => endpoint.endsWith(safeSuffix)));
   assert.ok(policies['+.dns-out.example'].every((endpoint) => endpoint.endsWith(safeSuffix)));
   assert.deepEqual(mainGroup, originalMain);
 });
 
-test('DNS policy rejects unsafe group filters and honors case-insensitive exclusions', { skip: !available }, () => {
+test('DNS policy rejects every subscription-controlled group filter', { skip: !available }, () => {
   const config = baseConfig();
   config.proxies.push(
     { name: 'Taiwan Backup', type: 'ss', server: 'tw-backup.example', password: 'fixture-secret' },
@@ -818,13 +818,29 @@ test('DNS policy rejects unsafe group filters and honors case-insensitive exclus
 
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const routeGroup = engine.claudeEasyRouteGroupName(patched);
-  assert.deepEqual(
-    patched.dns['nameserver-policy']['+.case-filtered.example'],
-    engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#CaseFiltered`)
+  for (const pattern of ['+.case-filtered.example', '+.invalid-filter.example']) {
+    assert.ok(patched.dns['nameserver-policy'][pattern].every((endpoint) => endpoint.endsWith(`#${routeGroup}`)), pattern);
+  }
+});
+
+test('DNS policy never executes subscription-controlled catastrophic group filters', { skip: !available }, () => {
+  const config = baseConfig();
+  const nearMiss = `${'a'.repeat(18)}!`;
+  config.proxies.push({ name: nearMiss, type: 'ss', server: 'safe.example', password: 'fixture-secret' });
+  config['proxy-groups'].push(
+    { name: 'NestedQuantifier', type: 'select', proxies: [nearMiss], 'exclude-filter': '(a+)+$' },
+    { name: 'OverlappingAlternation', type: 'select', proxies: [nearMiss], 'exclude-filter': '(a|aa)+$' }
   );
-  assert.ok(patched.dns['nameserver-policy']['+.invalid-filter.example'].every((endpoint) => {
-    return endpoint.endsWith(`#${routeGroup}`);
-  }));
+  config.dns['nameserver-policy'] = {
+    '+.nested.example': ['https://1.1.1.1/dns-query#NestedQuantifier'],
+    '+.overlap.example': ['https://1.1.1.1/dns-query#OverlappingAlternation']
+  };
+
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const safeSuffix = `#${engine.claudeEasyRouteGroupName(patched)}`;
+  for (const pattern of ['+.nested.example', '+.overlap.example']) {
+    assert.ok(patched.dns['nameserver-policy'][pattern].every((endpoint) => endpoint.endsWith(safeSuffix)), pattern);
+  }
 });
 
 test('nested rules and the legacy QUIC guard are handled without weakening user rules', { skip: !available }, () => {

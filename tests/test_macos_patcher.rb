@@ -5972,7 +5972,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_dns_policy_accounts_for_exclusion_empty_fallback_and_dns_outbounds
+  def test_dns_policy_refuses_subscription_filtered_groups_and_dns_outbounds
     config = base_config
     original_main = Marshal.load(Marshal.dump(config.fetch("proxy-groups").find { |group| group["name"] == "Main" }))
     config["proxies"] << { "name" => "InternalDNS", "type" => "dns" }
@@ -5999,7 +5999,7 @@ class MacosPatcherTest < Minitest::Test
     main_group = result.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == result.fetch(:route_group) }
 
     assert policies.fetch("+.compatible.example").all? { |endpoint| endpoint.end_with?(safe_suffix) }
-    assert_equal @policy.fetch("resolvers").map { |resolver| "#{resolver}#FilteredToSafeProxy" }, policies.fetch("+.fallback.example")
+    assert policies.fetch("+.fallback.example").all? { |endpoint| endpoint.end_with?(safe_suffix) }
     assert policies.fetch("+.dns-out.example").all? { |endpoint| endpoint.end_with?(safe_suffix) }
     assert_equal original_main, main_group
   end
@@ -6771,13 +6771,27 @@ class MacosPatcherTest < Minitest::Test
     assert_equal "Reject", info.fetch(:target)
   end
 
-  def test_group_safety_rejects_invalid_or_unsupported_member_filters
+  def test_group_safety_rejects_every_subscription_controlled_member_filter
     config = base_config
     config["proxy-groups"] << { "name" => "Filtered", "type" => "select", "proxies" => ["台湾家宽 01"], "exclude-filter" => "[" }
     refute ClaudeEasy.group_cannot_reach_direct?(config, "Filtered")
 
     config["proxy-groups"].last["exclude-filter"] = "(?=台湾)"
     refute ClaudeEasy.group_cannot_reach_direct?(config, "Filtered")
+  end
+
+  def test_group_safety_never_executes_subscription_controlled_catastrophic_filters
+    config = base_config
+    near_miss = "#{"a" * 18}!"
+    config["proxies"] << { "name" => near_miss, "type" => "ss", "server" => "safe.example", "password" => "fixture-secret" }
+
+    ["(a+)+$", "(a|aa)+$"].each do |filter|
+      config["proxy-groups"] << {
+        "name" => "Catastrophic", "type" => "select", "proxies" => [near_miss], "exclude-filter" => filter
+      }
+      refute ClaudeEasy.group_cannot_reach_direct?(config, "Catastrophic"), filter
+      config["proxy-groups"].pop
+    end
   end
 
   def test_group_safety_accepts_an_explicit_safe_empty_fallback

@@ -416,22 +416,9 @@ module ClaudeEasy
 
     return false unless Array(group["use"]).empty?
     return false if group["include-all"] == true || group["include-all-proxies"] == true || group["include-all-providers"] == true
+    return false unless group["exclude-filter"].to_s.empty?
 
     members = Array(group["proxies"])
-    exclusion = group["exclude-filter"].to_s
-    unless exclusion.empty?
-      # Mihomo applies exclude-filter to explicit members too. Accept only the
-      # common RE2-compatible subset so a runtime regex cannot remove every
-      # safe member while our check still sees one.
-      return false if exclusion.match?(/\(\?(?!i\))/) || exclusion.match?(/\\[1-9]/)
-
-      begin
-        matcher = Regexp.new(exclusion)
-      rescue RegexpError
-        return false
-      end
-      members = members.reject { |member| matcher.match?(member.to_s) }
-    end
 
     if members.empty?
       # Mihomo defaults an empty group to COMPATIBLE. Only an explicitly named

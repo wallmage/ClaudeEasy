@@ -1787,6 +1787,41 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_ruby_subscription_filter_fail_closed_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/transform.rb",
+        "    return false unless group[\"exclude-filter\"].to_s.empty?\n",
+        "    group[\"exclude-filter\"].to_s.empty?\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_group_safety_never_executes_subscription_controlled_catastrophic_filters"
+      )
+    end
+  end
+
+  def test_windows_subscription_filter_fail_closed_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/clash_verge_global.js",
+        "  if (exclusion !== undefined && exclusion !== null && exclusion !== \"\") return false;\n",
+        "  exclusion !== undefined && exclusion !== null && exclusion !== \"\";\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        "node", "--test",
+        "--test-name-pattern=catastrophic group filters",
+        "tests/test_windows_patcher.js"
+      )
+    end
+  end
+
   def test_ruby_last_resort_route_group_mutation_is_killed
     with_repo_copy do |root|
       replace_once(

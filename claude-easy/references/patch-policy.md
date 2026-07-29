@@ -335,7 +335,7 @@ dns:
 
 `direct-nameserver` 不保留原值，统一写成策略文件中的大陆 IP DoH；同时把 `direct-nameserver-follow-policy` 设为 `false`。`nameserver-policy` 中的 `geosite:cn` 也必须覆盖为同一组解析器，避免 Fake-IP 初次解析先落到代理侧。这样不会让用户原有的 `system`、明文 DNS 或代理 DNS 使国内域名继续泄露或获得境外 CDN。直连 DoH 会让阿里或 DNSPod 看到国内域名查询，但本地运营商只能看到加密的 HTTPS 连接；这属于受管的分流，不是意外泄露。
 
-如 `nameserver-policy` 把多个域名写在同一个逗号分隔键中，拆成独立键。只有当解析器片段指向已知的非直连节点，或指向依赖关系中无法到达 `DIRECT` 的静态代理组时，才保留这个分流目标；解析器地址统一换成策略文件中的三个 IP DoH。这样不会因为 `dns.google`、`cloudflare-dns.com` 等解析器域名被错误解析而让所有新域名一起失败，也不会继续依赖某些节点会拒绝的 `8.8.8.8`、`1.1.1.1`。判断代理组时必须应用 `exclude-filter`；筛选后为空时，只接受明确指向安全内联代理的 `empty-fallback`，默认的 `COMPATIBLE` 不合格。带 `use`、`include-all` 或其他动态成员的组无法静态证明，改为受管 DoH。Mihomo 的 `exclude-type` 只作用于自动纳入的节点，这些动态组本来就不保留。
+如 `nameserver-policy` 把多个域名写在同一个逗号分隔键中，拆成独立键。只有当解析器片段指向已知的非直连节点，或指向依赖关系中无法到达 `DIRECT` 的静态代理组时，才保留这个分流目标；解析器地址统一换成策略文件中的三个 IP DoH。这样不会因为 `dns.google`、`cloudflare-dns.com` 等解析器域名被错误解析而让所有新域名一起失败，也不会继续依赖某些节点会拒绝的 `8.8.8.8`、`1.1.1.1`。DNS 静态安全判断不执行订阅提供的 `exclude-filter`；只要过滤器非空，该组就无法静态证明，解析器改用受管 DoH。带 `use`、`include-all` 或其他动态成员的组同样改用受管 DoH。只有不带过滤器的空静态组，才接受明确指向安全内联代理的 `empty-fallback`；默认的 `COMPATIBLE` 不合格。Mihomo 的 `exclude-type` 只作用于自动纳入的节点，这些动态组本来就不保留。
 
 `#h3=true` 可以保留。除受管的 `direct-nameserver` 外，`#en0`、`#RULES`、未知名称、明文 DNS、`DIRECT`、`DNS` 出站和没有代理组标签的查询都改为代理侧受管 DoH。带 `skip-cert-verify=true` 的解析器跳过证书校验；带 `ecs` 或 `ecs-override` 的解析器会发送客户端子网信息。这三类参数也改为受管 DoH。
 
