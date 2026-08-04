@@ -250,6 +250,10 @@ test("the public contract exposes exactly nine weighted signals totaling 100", (
     "浏览器可见中文字体",
   );
   assert.equal(
+    api.signals.find((signal) => signal.id === "language").name,
+    "简体中文浏览器语言",
+  );
+  assert.equal(
     api.signals.find((signal) => signal.id === "emoji").name,
     "Emoji 平台推断",
   );
@@ -648,6 +652,35 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
   assert.equal(api.scoreIntlLocale("zh-Hant-HK"), 0.5);
 });
 
+test("browser language score only recognizes explicit simplified Chinese tags", () => {
+  const api = detectorApi();
+
+  assert.equal(api.scoreLanguages(["en-US", "en"]), 0);
+  assert.equal(
+    api.scoreLanguages(["zh-TW", "zh-Hant", "zh-HK", "zh-MO"]),
+    0,
+  );
+  assert.equal(api.scoreLanguages(["en-US", "en", "zh-TW", "zh"]), 0);
+  assert.equal(api.scoreLanguages(["zh-HK", "zh-Hant", "en-US"]), 0);
+  assert.equal(
+    api.scoreLanguages(["en-US", "en", "zh", "zh-CN", "zh-TW"]),
+    1,
+  );
+  assert.equal(api.scoreLanguages(["zh-TW", "en-US", "zh-Hans"]), 1);
+});
+
+test("language signal preserves the raw list while only simplified Chinese scores", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment({
+    languages: ["en-US", "en", "zh", "zh-CN", "zh-TW"],
+  }));
+  const language = result.signals.find((signal) => signal.id === "language");
+
+  assert.equal(language.raw, "en-US, en, zh, zh-CN, zh-TW");
+  assert.equal(language.score, 1);
+  assert.equal(language.contribution, 20);
+});
+
 test("match count uses the upstream 0.25 threshold", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment());
@@ -806,7 +839,7 @@ test("partial-match branches keep their documented contributions", async () => {
   );
 
   assert.equal(signals.timezone.contribution, 16);
-  assert.equal(signals.language.contribution, 10);
+  assert.equal(signals.language.contribution, 0);
   assert.equal(signals.fonts.contribution, 3);
   assert.equal(signals.vendorFonts.contribution, 8);
   assert.equal(signals.intlLocale.contribution, 3);
