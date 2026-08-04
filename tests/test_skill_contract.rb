@@ -1006,6 +1006,24 @@ class SkillContractTest < Minitest::Test
     refute_includes skill, "订阅以后刷新时，请再次运行"
   end
 
+  def test_safe_update_never_checks_provider_switch_before_the_first_attempt
+    documents = [
+      File.read(File.join(ROOT, "README.md")),
+      File.read(File.join(SKILL, "SKILL.md")),
+      File.read(File.join(SKILL, "references/patch-policy.md")),
+      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+    ]
+
+    documents.each do |document|
+      assert_includes document, "立即执行安全更新"
+      assert_includes document, "不得检查或操作服务商后台"
+      assert_includes document, "Chrome、Browser 或 Computer Use"
+      assert_includes document, "逐一报告哪些订阅下载与校验成功、哪些失败"
+      assert_includes document, "开关关闭时无法更新"
+      assert_includes document, "登录服务商网站"
+    end
+  end
+
   def test_macos_backup_recovery_includes_the_active_runtime
     documents = [
       File.read(File.join(ROOT, "README.md")),

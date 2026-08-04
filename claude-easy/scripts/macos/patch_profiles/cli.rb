@@ -688,10 +688,28 @@ module ClaudeEasy
         warn "安全更新失败；订阅文件已恢复，但运行内核恢复失败。"
         return 1
       end
+      item_results = result.fetch(:items, [])
+      switch_warning = "服务商可能设置了订阅开关。请登录服务商网站，在控制面板找到订阅开关并打开；开关关闭时无法更新。打开后请立即重试安全更新。"
+      json_items = item_results.map do |item|
+        output = { "status" => item.fetch(:status) == :ready ? "pending" : item.fetch(:status).to_s }
+        output["reason"] = item.fetch(:reason).to_s if item[:reason]
+        output
+      end
+      warnings = item_results.any? { |item| item[:subscription_switch_possible] } ? [switch_warning] : []
       return emit_cli_result(
         operation: "safe_update", exit_code: 1, status: "rolled_back", code: "safe_update_failed",
-        summary_zh: "安全更新失败，订阅已保持原样。", profile: options[:usage_profile]
+        summary_zh: "安全更新失败，订阅已保持原样。", profile: options[:usage_profile],
+        items: json_items, warnings: warnings
       ) if options[:json]
+      item_results.each do |item|
+        label = safe_label(item.fetch(:name))
+        if item.fetch(:status) == :ready
+          warn "下载与校验成功但未写入：#{label}"
+        else
+          warn "更新失败：#{label}"
+        end
+      end
+      warn switch_warning unless warnings.empty?
       warn "安全更新失败；全部订阅保持原样。"
       return 1
     end

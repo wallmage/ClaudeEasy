@@ -1,6 +1,16 @@
 module ClaudeEasy
   module_function
 
+  class SafeUpdateCandidateError < InvalidConfigError
+    attr_reader :reason, :subscription_switch_possible
+
+    def initialize(message, reason:, subscription_switch_possible: false)
+      super(message)
+      @reason = reason
+      @subscription_switch_possible = subscription_switch_possible
+    end
+  end
+
   AUTO_UPDATE_OWNERSHIP_BASENAME = "clashx-meta-kAutoUpdateEnable.state.json".freeze
   AUTO_UPDATE_DOMAINS = %w[com.metacubex.ClashX.meta com.MetaCubeX.ClashX.meta].freeze
 
@@ -471,6 +481,7 @@ module ClaudeEasy
       show-error
       fail
       location
+      user-agent = "ClashX Meta"
       proto = "=https"
       max-time = #{Integer(timeout_seconds)}
     CURL
@@ -487,17 +498,47 @@ module ClaudeEasy
   def build_update_candidate(target, source, policy, usage_profile, validator)
     bytes = source.to_s.b
     text = bytes.dup.force_encoding(Encoding::UTF_8)
-    raise InvalidConfigError, "远程订阅内容不是有效 UTF-8" unless text.valid_encoding?
+    unless text.valid_encoding?
+      raise SafeUpdateCandidateError.new(
+        "远程订阅内容不是有效 UTF-8", reason: :invalid_content,
+        subscription_switch_possible: true
+      )
+    end
 
-    config = load_yaml(text, target.fetch(:name))
-    raise InvalidConfigError, "远程订阅内容无效" unless usable_config?(config)
+    config = begin
+      load_yaml(text, target.fetch(:name))
+    rescue InvalidConfigError, KeyError, Psych::Exception
+      raise SafeUpdateCandidateError.new(
+        "远程订阅内容无效", reason: :invalid_content,
+        subscription_switch_possible: true
+      )
+    end
+    unless usable_config?(config)
+      raise SafeUpdateCandidateError.new(
+        "远程订阅内容无效", reason: :invalid_content,
+        subscription_switch_possible: true
+      )
+    end
     patched = patch(config, policy, usage_profile: usage_profile)
-    raise InvalidConfigError, "远程订阅无法应用共享补丁" unless %i[updated unchanged].include?(patched.fetch(:status))
+    unless %i[updated unchanged].include?(patched.fetch(:status))
+      raise SafeUpdateCandidateError.new(
+        "远程订阅无法应用共享补丁", reason: :patch_failed
+      )
+    end
     candidate = patched.fetch(:config)
     output = dump_config(candidate).b
-    reparsed = load_yaml(output.dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
-    second = patch(reparsed, policy, usage_profile: usage_profile)
-    raise InvalidConfigError, "远程订阅二次转换不一致" if second.fetch(:changed) || dump_config(second.fetch(:config)).b != output
+    begin
+      reparsed = load_yaml(output.dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
+      second = patch(reparsed, policy, usage_profile: usage_profile)
+      consistent = !second.fetch(:changed) && dump_config(second.fetch(:config)).b == output
+    rescue StandardError
+      consistent = false
+    end
+    unless consistent
+      raise SafeUpdateCandidateError.new(
+        "远程订阅二次转换不一致", reason: :patch_inconsistent
+      )
+    end
 
     Tempfile.create([".claude-easy-update-", ".yaml"], File.dirname(File.realpath(target.fetch(:path)))) do |temporary|
       temporary.binmode
@@ -505,8 +546,16 @@ module ClaudeEasy
       temporary.flush
       temporary.fsync
       validation = validator.call(temporary.path)
-      raise InvalidConfigError, "远程订阅校验超时" if validation == :timeout
-      raise InvalidConfigError, "远程订阅未通过 Mihomo 校验" unless validation == true
+      if validation == :timeout
+        raise SafeUpdateCandidateError.new(
+          "远程订阅校验超时", reason: :validation_timeout
+        )
+      end
+      unless validation == true
+        raise SafeUpdateCandidateError.new(
+          "远程订阅未通过 Mihomo 校验", reason: :validation_failed
+        )
+      end
     end
     output
   end
@@ -675,14 +724,46 @@ module ClaudeEasy
       end
     end
 
-    items = targets.map do |target|
-      path = target.fetch(:path)
-      original = File.binread(File.realpath(path))
-      source = fetcher.call(target)
-      candidate = build_update_candidate(target, source, policy, usage_profile, validator)
-      { name: target.fetch(:name), path: path, original: original, candidate: candidate }
-    rescue StandardError
-      return { status: :aborted, failed_profile: target[:name].to_s, reason: :download_or_validation_failed }
+    items = []
+    item_results = []
+    targets.each do |target|
+      name = target[:name].to_s
+      begin
+        path = target.fetch(:path)
+        original = File.binread(File.realpath(path))
+      rescue StandardError
+        item_results << { name: name, status: :failed, reason: :local_profile_failed }
+        next
+      end
+      begin
+        source = fetcher.call(target)
+      rescue StandardError
+        item_results << {
+          name: name, status: :failed, reason: :download_failed,
+          subscription_switch_possible: true
+        }
+        next
+      end
+      begin
+        candidate = build_update_candidate(target, source, policy, usage_profile, validator)
+      rescue SafeUpdateCandidateError => error
+        failure = { name: name, status: :failed, reason: error.reason }
+        failure[:subscription_switch_possible] = true if error.subscription_switch_possible
+        item_results << failure
+        next
+      rescue StandardError
+        item_results << { name: name, status: :failed, reason: :validation_failed }
+        next
+      end
+      items << { name: name, path: path, original: original, candidate: candidate }
+      item_results << { name: name, status: :ready }
+    end
+    if item_results.any? { |item| item.fetch(:status) == :failed }
+      failed = item_results.find { |item| item.fetch(:status) == :failed }
+      return {
+        status: :aborted, failed_profile: failed.fetch(:name),
+        reason: :download_or_validation_failed, items: item_results
+      }
     end
     operation_lock ||= profile_operation_lock(backup_root)
     recover_profile_transaction(backup_root, roots: roots)
