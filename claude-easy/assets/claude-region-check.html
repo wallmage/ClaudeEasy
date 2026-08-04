@@ -27,7 +27,7 @@ SOFTWARE.
     <meta charset="utf-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://cloudflare.com; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
@@ -43,11 +43,12 @@ SOFTWARE.
         --line: #dedbd2;
         --accent: #a95137;
         --accent-soft: #f4e3dc;
-        --clear: #2f7650;
+        --clear: #5e8c61;
         --clear-soft: #e4f2e9;
-        --match: #ad3d35;
+        --match: #bf4d3d;
         --match-soft: #f8dfdd;
-        --notice: #85540f;
+        --notice: #b58121;
+        --notice-text: #85540f;
         --notice-soft: #f7ecd0;
         --limited: #6f5a91;
         --limited-soft: #eee8f7;
@@ -129,7 +130,7 @@ SOFTWARE.
         border: 1px solid var(--notice);
         border-radius: 12px;
         background: var(--notice-soft);
-        color: var(--notice);
+        color: var(--notice-text);
         font-size: 14px;
         font-weight: 700;
       }
@@ -200,7 +201,7 @@ SOFTWARE.
 
       .result-badge[data-state="partial"] {
         background: var(--notice-soft);
-        color: var(--notice);
+        color: var(--notice-text);
       }
 
       .result-badge[data-state="medium"] {
@@ -408,7 +409,7 @@ SOFTWARE.
         分数越高表示大陆关联信号越多；它不代表 Claude 的官方判定，
         也不能作为 Claude 是否可用的通过条件。
       </p>
-      <div class="privacy">不上传检测结果；WebRTC 项会通过 STUN 探测浏览器可见的公网 IP</div>
+      <div class="privacy">不上传检测结果；WebRTC 项会通过 STUN 与 Cloudflare 比较网页公网出口</div>
       <noscript>
         <p class="noscript-warning" role="alert">
           无法运行检测：当前浏览器禁用了 JavaScript。请启用后重新打开本地页面。
@@ -450,11 +451,11 @@ SOFTWARE.
       <section class="explain" aria-label="结果说明">
         <article class="note">
           <h2>怎样看结果</h2>
-          <p>分数越高表示大陆关联信号越多。0–30 分为低风险，31–60 分为中风险，61–100 分为高风险。浏览器语言是中国大陆简体中文（zh-CN、zh-Hans 或 zh-Hans-CN）时计分；英文、繁体中文、新加坡中文和其他语言不计分。检测结果只显示一个浏览器语言。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
+          <p>分数越高表示大陆关联信号越多。0–30 分为低风险，31–60 分为中等风险，61–100 分为高风险。语言项读取浏览器提供的完整语言列表，并按 FuckClaude 当前规则计算主语言与后续中文偏好。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
-          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项沿用上游规则：发现任何数字 IP 候选即计 0.5，但候选 IP 不等于真实 IP 泄露，仍需与代理出口核对。</p>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项比较 STUN 暴露地址与同协议族的网页公网出口：一致或没有暴露时为 0 分，不一致或暴露本地网络地址时为 10 分；无法取得网页出口或协议族无法对应时显示“无法读取”，不会误计为安全或泄露。</p>
         </article>
       </section>
 
@@ -584,22 +585,58 @@ SOFTWARE.
           return 0;
         }
 
-        function scoreLanguage(language) {
-          var value = String(language || "")
-            .trim()
-            .replace(/_/g, "-")
-            .toLowerCase();
-          return value === "zh-cn" ||
-            /^zh-cn-/.test(value) ||
-            value === "zh-hans" ||
-            /^zh-hans-cn(?:-|$)/.test(value)
-            ? 1
-            : 0;
+        function scoreLanguages(languages) {
+          var list = Array.isArray(languages)
+            ? languages.map(function (language) {
+              return String(language || "").toLowerCase();
+            }).filter(Boolean)
+            : [];
+          function isTaiwan(language) {
+            return language.indexOf("zh-tw") === 0 ||
+              (language.indexOf("hant") !== -1 &&
+                language.indexOf("tw") !== -1);
+          }
+          function isHongKongOrMacau(language) {
+            return language.indexOf("zh-hk") === 0 ||
+              language.indexOf("zh-mo") === 0;
+          }
+          function isTraditional(language) {
+            return isTaiwan(language) ||
+              isHongKongOrMacau(language) ||
+              language.indexOf("hant") !== -1;
+          }
+          var firstTraditional = list.findIndex(isTraditional);
+          function isSimplifiedMainland(language, index) {
+            return language.indexOf("zh-cn") === 0 ||
+              language.indexOf("hans") !== -1 ||
+              (language === "zh" &&
+                (firstTraditional === -1 || index < firstTraditional));
+          }
+          var kept = list.map(function (language, index) {
+            return { language: language, index: index };
+          }).filter(function (entry) {
+            return !isTaiwan(entry.language) && !(
+              entry.language === "zh" &&
+              firstTraditional !== -1 &&
+              entry.index > firstTraditional
+            );
+          });
+          var primary = kept[0];
+          if (!primary) return 0;
+          if (isSimplifiedMainland(primary.language, primary.index)) return 1;
+          if (isHongKongOrMacau(primary.language) ||
+              primary.language.indexOf("hant") !== -1) return 0.5;
+          if (kept.some(function (entry) {
+            return isSimplifiedMainland(entry.language, entry.index);
+          })) return 0.7;
+          if (kept.some(function (entry) {
+            return entry.language.indexOf("zh") === 0;
+          })) return 0.4;
+          return 0;
         }
 
         function scoreIntlLocale(locale) {
           var value = String(locale || "").toLowerCase();
-          if (/^zh(?:-[a-z]{4})?-tw(?:-|$)/.test(value)) return 0;
           if (value.indexOf("zh-cn") === 0 ||
               value.indexOf("hans") !== -1 ||
               value === "zh") return 1;
@@ -650,61 +687,212 @@ SOFTWARE.
           return "high";
         }
 
-        function detectWebrtcLeak(PeerConnection, schedule) {
-          return new Promise(function (resolve) {
-            var Constructor = PeerConnection === undefined
-              ? root.RTCPeerConnection
-              : PeerConnection;
-            var setDelay = schedule || root.setTimeout;
+        function normalizeIp(ip) {
+          var value = String(ip || "").trim().toLowerCase()
+            .replace(/^\[|\]$/g, "").split("%", 1)[0];
+          var ipv4 = value.split(".");
+          if (ipv4.length === 4 && ipv4.every(function (part) {
+            return /^\d{1,3}$/.test(part) && Number(part) <= 255;
+          })) {
+            return ipv4.map(Number).join(".");
+          }
+          if (value.indexOf(":") === -1 || !/^[0-9a-f:.]+$/.test(value)) {
+            return "";
+          }
+          var halves = value.split("::");
+          if (halves.length > 2) return "";
+          function groups(side) {
+            if (!side) return [];
+            var parts = side.split(":");
+            var last = parts[parts.length - 1];
+            if (last && last.indexOf(".") !== -1) {
+              var normalizedV4 = normalizeIp(last);
+              if (!normalizedV4 || normalizedV4.indexOf(":") !== -1) return [];
+              var octets = normalizedV4.split(".").map(Number);
+              parts.splice(parts.length - 1, 1,
+                ((octets[0] << 8) | octets[1]).toString(16),
+                ((octets[2] << 8) | octets[3]).toString(16));
+            }
+            return parts;
+          }
+          var left = groups(halves[0]);
+          var right = halves.length === 2 ? groups(halves[1]) : [];
+          if (left.concat(right).some(function (part) {
+            return !/^[0-9a-f]{1,4}$/.test(part);
+          })) return "";
+          var missing = 8 - left.length - right.length;
+          if ((halves.length === 1 && missing !== 0) ||
+              (halves.length === 2 && missing < 1)) return "";
+          var expanded = left.concat(
+            Array(missing).fill("0"),
+            right
+          );
+          return expanded.map(function (part) {
+            return ("0000" + parseInt(part, 16).toString(16)).slice(-4);
+          }).join(":");
+        }
+
+        function isPrivateIp(ip) {
+          var normalized = normalizeIp(ip);
+          if (!normalized) return false;
+          if (normalized.indexOf(".") !== -1) {
+            var octets = normalized.split(".").map(Number);
+            return octets[0] === 0 || octets[0] === 10 ||
+              octets[0] === 127 ||
+              (octets[0] === 169 && octets[1] === 254) ||
+              (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+              (octets[0] === 192 && octets[1] === 168) ||
+              (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) ||
+              (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19));
+          }
+          var first = parseInt(normalized.slice(0, 4), 16);
+          return normalized === "0000:0000:0000:0000:0000:0000:0000:0000" ||
+            normalized === "0000:0000:0000:0000:0000:0000:0000:0001" ||
+            (first & 0xfe00) === 0xfc00 ||
+            (first & 0xffc0) === 0xfe80;
+        }
+
+        function candidateRecord(candidate) {
+          if (!candidate) return null;
+          var line = String(candidate.candidate || "");
+          var parts = line.split(/\s+/);
+          var typeIndex = parts.indexOf("typ");
+          var ip = normalizeIp(candidate.address || parts[4] || "");
+          var type = String(candidate.type ||
+            (typeIndex === -1 ? "" : parts[typeIndex + 1]) || "").toLowerCase();
+          return ip ? { ip: ip, type: type } : null;
+        }
+
+        function classifyWebrtc(publicIp, candidates) {
+          var unique = [];
+          (candidates || []).forEach(function (candidate) {
+            var ip = normalizeIp(candidate.ip);
+            var type = String(candidate.type || "").toLowerCase();
+            if (!ip || type === "relay") return;
+            if (!unique.some(function (entry) {
+              return entry.ip === ip && entry.type === type;
+            })) unique.push({ ip: ip, type: type });
+          });
+          if (unique.some(function (candidate) {
+            return candidate.type === "host" && isPrivateIp(candidate.ip);
+          })) {
+            return { raw: "检测到 WebRTC 暴露本地网络地址", score: 1 };
+          }
+          var publicCandidates = unique.filter(function (candidate) {
+            return !isPrivateIp(candidate.ip);
+          });
+          if (publicCandidates.length === 0) {
+            return { raw: "未发现 WebRTC IP 泄露", score: 0 };
+          }
+          var reference = normalizeIp(publicIp);
+          if (!reference) throw new Error("无法取得网页公网出口");
+          var referenceIsV4 = reference.indexOf(".") !== -1;
+          if (publicCandidates.some(function (candidate) {
+            return (candidate.ip.indexOf(".") !== -1) !== referenceIsV4;
+          })) {
+            throw new Error("无法取得同协议族的网页公网出口");
+          }
+          var mismatch = publicCandidates.some(function (candidate) {
+            return candidate.ip !== reference;
+          });
+          return mismatch
+            ? { raw: "检测到 WebRTC 出口与网页公网出口不一致", score: 1 }
+            : { raw: "WebRTC 出口与网页公网出口一致", score: 0 };
+        }
+
+        async function fetchBrowserPublicIp() {
+          if (typeof root.fetch !== "function") {
+            throw new Error("无法取得网页公网出口");
+          }
+          var controller = typeof root.AbortController === "function"
+            ? new root.AbortController()
+            : null;
+          var timer = typeof root.setTimeout === "function"
+            ? root.setTimeout(function () {
+              if (controller) controller.abort();
+            }, 5000)
+            : null;
+          try {
+            var response = await root.fetch(
+              "https://cloudflare.com/cdn-cgi/trace",
+              {
+                cache: "no-store",
+                signal: controller ? controller.signal : undefined
+              }
+            );
+            if (!response.ok) throw new Error("无法取得网页公网出口");
+            var body = await response.text();
+            var match = body.match(/(?:^|\n)ip=([^\n]+)/);
+            var ip = normalizeIp(match && match[1]);
+            if (!ip) throw new Error("无法取得网页公网出口");
+            return ip;
+          } finally {
+            if (timer !== null && typeof root.clearTimeout === "function") {
+              root.clearTimeout(timer);
+            }
+          }
+        }
+
+        function detectWebrtcLeak(options) {
+          var settings = options || {};
+          var Constructor = Object.prototype.hasOwnProperty.call(
+            settings,
+            "PeerConnection"
+          ) ? settings.PeerConnection : root.RTCPeerConnection;
+          var fetchPublicIp = settings.fetchPublicIp || fetchBrowserPublicIp;
+          var schedule = settings.schedule || root.setTimeout;
+          return new Promise(function (resolve, reject) {
             if (typeof Constructor !== "function") {
-              resolve({ raw: "未发现 WebRTC IP 候选", score: 0 });
+              resolve({ raw: "未发现 WebRTC IP 泄露", score: 0 });
               return;
             }
 
-            var resolved = false;
-            var ips = [];
+            var finished = false;
+            var candidates = [];
             var connection = null;
             function finish() {
-              if (resolved) return;
-              resolved = true;
+              if (finished) return;
+              finished = true;
               try {
                 if (connection) connection.close();
               } catch (_error) {
-                // The score is already determined by collected candidates.
+                // Continue with candidates already collected.
               }
-              resolve(ips.length === 0
-                ? { raw: "未发现 WebRTC IP 候选", score: 0 }
-                : {
-                  raw: "检测到候选 IP：" + ips.slice(0, 2).join(", ") +
-                    "（不等于真实 IP 泄露）",
-                  score: 0.5
-                });
+              var needsReference = candidates.some(function (candidate) {
+                return candidate.type !== "relay" && !isPrivateIp(candidate.ip);
+              });
+              Promise.resolve(needsReference ? fetchPublicIp() : "")
+                .then(function (publicIp) {
+                  resolve(classifyWebrtc(publicIp, candidates));
+                }).catch(reject);
             }
 
             try {
               connection = new Constructor({
-                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+                iceServers: [
+                  { urls: "stun:stun.l.google.com:19302" },
+                  { urls: "stun:stun.cloudflare.com:3478" },
+                  { urls: "stun:stun1.l.google.com:19302" }
+                ]
               });
               connection.onicecandidate = function (event) {
-                var candidate = event.candidate && event.candidate.candidate;
-                if (!candidate) {
+                if (!event.candidate) {
                   finish();
                   return;
                 }
-                var match = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{1,4}){7})/i.exec(candidate);
-                if (match && match[1] && ips.indexOf(match[1]) === -1) {
-                  ips.push(match[1]);
-                }
+                var record = candidateRecord(event.candidate);
+                if (record) candidates.push(record);
               };
               connection.createDataChannel("");
               connection.createOffer().then(function (description) {
                 return connection && connection.setLocalDescription(description);
-              }).catch(finish);
-            } catch (_error) {
-              finish();
+              }).catch(reject);
+            } catch (error) {
+              reject(error);
+              return;
             }
 
-            if (typeof setDelay === "function") setDelay(finish, 1000);
+            if (typeof schedule === "function") schedule(finish, 6000);
             else finish();
           });
         }
@@ -762,12 +950,16 @@ SOFTWARE.
             timeZone ? "full" : "unavailable"
           ));
 
-          var language = String(environment.language || "");
+          var languages = Array.isArray(environment.languages)
+            ? environment.languages.map(function (language) {
+              return String(language || "").toLowerCase();
+            }).filter(Boolean)
+            : [];
           results.push(outcome(
             definitions.language,
-            language || "无法读取",
-            scoreLanguage(language),
-            language ? "full" : "unavailable"
+            languages.join(", ") || "无法读取",
+            scoreLanguages(languages),
+            languages.length > 0 ? "full" : "unavailable"
           ));
 
           var simplifiedResult = fontResult(environment, SIMPLIFIED_FONTS);
@@ -872,13 +1064,18 @@ SOFTWARE.
               typeof userAgentData.getHighEntropyValues === "function") {
             try {
               var highEntropy = await userAgentData.getHighEntropyValues([
-                "model"
+                "model",
+                "platform",
+                "platformVersion"
               ]);
               var model = String(
                 highEntropy && highEntropy.model || ""
               ).trim();
+              var highEntropyPlatform = String(
+                highEntropy && highEntropy.platform || ""
+              ).trim();
+              extraDevice = " " + model + " " + highEntropyPlatform;
               if (model) {
-                extraDevice = " " + model;
                 deviceCoverage = "full";
                 deviceLimitation = "";
               } else {
@@ -999,16 +1196,22 @@ SOFTWARE.
           } catch (_error) {
             context = null;
           }
-          var language = safeRead(function () {
-            return navigator.language;
-          }, "");
+          var languages = safeRead(function () {
+            return navigator.languages;
+          }, []);
+          if (!Array.isArray(languages) || languages.length === 0) {
+            var language = safeRead(function () {
+              return navigator.language;
+            }, "");
+            languages = language ? [language] : [];
+          }
           var fontDetectionAvailable = Boolean(
             context && typeof context.measureText === "function"
           );
           return {
             timeZone: dateTimeOptions.timeZone || "",
             timezoneOffset: new Date().getTimezoneOffset(),
-            language: language,
+            languages: languages.slice(),
             intlLocale: dateTimeOptions.locale || "",
             userAgent: safeRead(function () {
               return navigator.userAgent;
@@ -1050,9 +1253,10 @@ SOFTWARE.
           detect: detect,
           browserEnvironment: browserEnvironment,
           detectWebrtcLeak: detectWebrtcLeak,
+          classifyWebrtc: classifyWebrtc,
           riskBand: riskBand,
           scoreTimezone: scoreTimezone,
-          scoreLanguage: scoreLanguage,
+          scoreLanguages: scoreLanguages,
           scoreIntlLocale: scoreIntlLocale
         });
       }(window));
@@ -1146,7 +1350,7 @@ SOFTWARE.
             : detector.riskBand(result.total);
           var riskLabels = {
             low: "低风险",
-            medium: "中风险",
+            medium: "中等风险",
             high: "高风险"
           };
           summary.textContent = result.unavailableCount > 0

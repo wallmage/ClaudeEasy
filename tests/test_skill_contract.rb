@@ -416,7 +416,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "只有用户明确要求"
       assert_includes document, "十项"
       assert_includes document, "低风险"
-      assert_includes document, "中风险"
+      assert_includes document, "中等风险"
       assert_includes document, "高风险"
       assert_includes document, "0–30"
       assert_includes document, "31–60"
@@ -502,10 +502,11 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "美国区域设置"
       assert_includes document, "实际用于 Claude 的同一浏览器"
       assert_includes document, "系统和其他应用"
-      assert_includes document, "浏览器语言只有一个检测结果"
-      assert_includes document, "中国大陆简体中文"
-      assert_includes document, "新加坡中文"
-      assert_includes document, "`zh-Hans`"
+      assert_includes document, "`navigator.languages` 完整列表"
+      assert_includes document, "大陆简体主语言计 1"
+      assert_includes document, "后续出现大陆简体计 0.7"
+      assert_includes document, "台湾语言"
+      assert_includes document, "通用 `zh` 回退不计分"
     end
   end
 

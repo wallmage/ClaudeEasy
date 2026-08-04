@@ -11,6 +11,7 @@ const PAGE_URL = pathToFileURL(path.join(
   "assets",
   "claude-region-check.html",
 )).href;
+const PUBLIC_IP_URL = "https://cloudflare.com/cdn-cgi/trace";
 
 const TARGETS = {
   chrome: { browserType: chromium, launch: { channel: "chrome" } },
@@ -106,8 +107,13 @@ for (const targetName of requestedTargets()) {
     await page.route("**/*", async (route) => {
       if (route.request().url().startsWith("file:")) {
         await route.continue();
+      } else if (route.request().url() === PUBLIC_IP_URL) {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: "ip=198.51.100.7\n",
+        });
       } else {
-        externalRequests.push(route.request().url());
         await route.abort();
       }
     });
@@ -202,7 +208,7 @@ for (const targetName of requestedTargets()) {
       assert.equal(result.summary, "结果不完整");
     } else {
       assert.match(result.score, /^\d+$/);
-      assert.match(result.summary, /^(?:低|中|高)风险$/);
+      assert.match(result.summary, /^(?:低风险|中等风险|高风险)$/);
     }
 
     await page.keyboard.press("Enter");
@@ -225,7 +231,7 @@ for (const targetName of requestedTargets()) {
     const colors = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
       return {
-        foreground: style.getPropertyValue("--notice").trim(),
+        foreground: style.getPropertyValue("--notice-text").trim(),
         background: style.getPropertyValue("--notice-soft").trim(),
       };
     });
@@ -235,7 +241,10 @@ for (const targetName of requestedTargets()) {
     );
     assert.deepEqual(consoleProblems, []);
     assert.deepEqual(pageErrors, []);
-    assert.deepEqual(externalRequests, []);
+    assert.ok(
+      externalRequests.every((url) => url === PUBLIC_IP_URL),
+      `unexpected external requests: ${JSON.stringify(externalRequests)}`,
+    );
     assert.deepEqual(websockets, []);
   });
 

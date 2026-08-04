@@ -139,7 +139,7 @@ function baseEnvironment(overrides = {}) {
   return {
     timeZone: "Asia/Taipei",
     timezoneOffset: -480,
-    language: "zh-TW",
+    languages: ["zh-TW", "zh", "en"],
     intlLocale: "zh-TW",
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
@@ -155,7 +155,7 @@ function baseEnvironment(overrides = {}) {
   };
 }
 
-test("the detector is one self-contained HTML file with only the disclosed STUN probe", () => {
+test("the detector is one self-contained HTML file with only the disclosed WebRTC probes", () => {
   const source = pageSource();
   const executableSource = source.replace(/<!--[\s\S]*?-->/g, "");
 
@@ -176,7 +176,7 @@ test("the detector is one self-contained HTML file with only the disclosed STUN 
     "default-src": "'none'",
     "script-src": "'unsafe-inline'",
     "style-src": "'unsafe-inline'",
-    "connect-src": "'none'",
+    "connect-src": "https://cloudflare.com",
     "img-src": "'none'",
     "font-src": "'none'",
     "object-src": "'none'",
@@ -190,10 +190,14 @@ test("the detector is one self-contained HTML file with only the disclosed STUN 
   );
   assert.match(source, /MIT License/);
   assert.doesNotMatch(source, /\b(?:src|href)\s*=/i);
-  assert.doesNotMatch(executableSource, /https?:\/\//i);
+  assert.deepEqual(
+    Array.from(executableSource.matchAll(/https?:\/\/[^'"\s<]+/g), (match) => match[0]),
+    ["https://cloudflare.com;", "https://cloudflare.com/cdn-cgi/trace"],
+  );
+  assert.match(source, /\bfetch\b/);
   assert.doesNotMatch(
     source,
-    /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|serviceWorker)\b/,
+    /\b(?:XMLHttpRequest|WebSocket|EventSource|sendBeacon|serviceWorker)\b/,
   );
   assert.doesNotMatch(source, /\bimport\s*\(/);
   assert.doesNotMatch(source, /\b(?:analytics|adsense|googletagmanager)\b/i);
@@ -207,15 +211,21 @@ test("the detector is one self-contained HTML file with only the disclosed STUN 
     /\b(?:window\.open|document\.write|location\s*(?:=|\.|\[)|history\s*\.)/i,
   );
   assert.doesNotMatch(source, /\bwindow\s*\[\s*["']location["']\s*\]/i);
-  assert.match(source, /stun:stun\.l\.google\.com:19302/);
-  assert.equal(
-    source.match(/stun:stun\.l\.google\.com:19302/g).length,
-    1,
+  assert.deepEqual(
+    Array.from(source.matchAll(/stun:[a-z0-9.-]+:\d+/g), (match) => match[0]),
+    [
+      "stun:stun.l.google.com:19302",
+      "stun:stun.cloudflare.com:3478",
+      "stun:stun1.l.google.com:19302",
+    ],
   );
-  assert.match(source, /WebRTC.*STUN.*公网 IP/);
+  assert.match(source, /WebRTC.*STUN.*网页公网出口/);
   assert.match(source, /低风险/);
-  assert.match(source, /中风险/);
+  assert.match(source, /中等风险/);
   assert.match(source, /高风险/);
+  assert.match(source, /--clear:\s*#5e8c61/);
+  assert.match(source, /--notice:\s*#b58121/);
+  assert.match(source, /--match:\s*#bf4d3d/);
   assert.match(source, /只用于比较修改前后/);
   assert.match(source, /不能作为 Claude 是否可用的通过条件/);
   assert.match(source, /达到 0\.25 才计为“命中”/);
@@ -292,23 +302,71 @@ test("the public contract exposes the upstream ten signals and weights", () => {
   assert.equal(api.riskBand(100), "high");
 });
 
-test("WebRTC follows the upstream candidate rule without calling it a confirmed leak", async () => {
+test("WebRTC contributes ten only for a confirmed exit mismatch", async () => {
   const api = detectorApi();
   const candidate = await api.detect(baseEnvironment({
     detectWebrtcLeak: async () => ({
-      raw: "检测到候选 IP：198.51.100.7（不等于真实 IP 泄露）",
-      score: 0.5,
+      raw: "检测到 WebRTC 出口与网页公网出口不一致",
+      score: 1,
     }),
   }));
   const signal = candidate.signals.find((entry) => entry.id === "webrtcLeak");
 
-  assert.equal(signal.score, 0.5);
-  assert.equal(signal.contribution, 5);
-  assert.equal(signal.match, "weak");
-  assert.match(signal.raw, /不等于真实 IP 泄露/);
+  assert.equal(signal.score, 1);
+  assert.equal(signal.contribution, 10);
+  assert.equal(signal.match, "strong");
+  assert.match(signal.raw, /出口.*不一致/);
 });
 
-test("the WebRTC probe uses the upstream STUN candidate detector", async () => {
+test("WebRTC classification compares public STUN and browser HTTP exits", () => {
+  const api = detectorApi();
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "198.51.100.7", type: "srflx" },
+    ]) },
+    { raw: "WebRTC 出口与网页公网出口一致", score: 0 },
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "203.0.113.9", type: "srflx" },
+    ]) },
+    { raw: "检测到 WebRTC 出口与网页公网出口不一致", score: 1 },
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "192.168.1.7", type: "host" },
+    ]) },
+    { raw: "检测到 WebRTC 暴露本地网络地址", score: 1 },
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "203.0.113.9", type: "relay" },
+    ]) },
+    { raw: "未发现 WebRTC IP 泄露", score: 0 },
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", []) },
+    { raw: "未发现 WebRTC IP 泄露", score: 0 },
+  );
+  assert.throws(
+    () => api.classifyWebrtc("", [{ ip: "203.0.113.9", type: "srflx" }]),
+    /网页公网出口/,
+  );
+  assert.throws(
+    () => api.classifyWebrtc("2001:db8::7", [
+      { ip: "203.0.113.9", type: "srflx" },
+    ]),
+    /同协议族/,
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("2001:db8::7", [
+      { ip: "2001:0db8:0:0:0:0:0:7", type: "srflx" },
+    ]) },
+    { raw: "WebRTC 出口与网页公网出口一致", score: 0 },
+  );
+});
+
+test("the WebRTC probe uses three STUN servers and the HTTP exit reference", async () => {
   const api = detectorApi();
   let configuration;
   class FakePeerConnection {
@@ -331,16 +389,23 @@ test("the WebRTC probe uses the upstream STUN candidate detector", async () => {
     close() {}
   }
 
-  const result = await api.detectWebrtcLeak(FakePeerConnection, () => {});
+  const result = await api.detectWebrtcLeak({
+    PeerConnection: FakePeerConnection,
+    fetchPublicIp: async () => "198.51.100.7",
+    schedule: () => {},
+  });
   assert.equal(
     JSON.stringify(configuration),
     JSON.stringify({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun.cloudflare.com:3478" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
     }),
   );
-  assert.equal(result.score, 0.5);
-  assert.match(result.raw, /198\.51\.100\.7/);
-  assert.match(result.raw, /不等于真实 IP 泄露/);
+  assert.equal(result.score, 0);
+  assert.equal(result.raw, "WebRTC 出口与网页公网出口一致");
 });
 
 test("a failed WebRTC probe stays unknown without aborting the other signals", async () => {
@@ -635,7 +700,7 @@ test("browser environment detects fonts from measured canvas width changes", () 
   assert.equal(environment.hasFont("Definitely Missing"), false);
 });
 
-test("browser environment reads only navigator.language", () => {
+test("browser environment reads navigator.languages like upstream", () => {
   let languagesReads = 0;
   const navigator = {
     language: "en-US",
@@ -658,9 +723,9 @@ test("browser environment reads only navigator.language", () => {
 
   const environment = api.browserEnvironment();
 
-  assert.equal(environment.language, "en-US");
-  assert.equal(languagesReads, 0);
-  assert.equal(Object.hasOwn(environment, "languages"), false);
+  assert.equal(JSON.stringify(environment.languages), JSON.stringify(["en-US", "zh-CN"]));
+  assert.equal(languagesReads, 1);
+  assert.equal(Object.hasOwn(environment, "language"), false);
 });
 
 test("browser environment tolerates restricted navigator getters", async () => {
@@ -688,7 +753,7 @@ test("browser environment tolerates restricted navigator getters", async () => {
   const environment = api.browserEnvironment();
   const result = await api.detect(environment);
 
-  assert.equal(environment.language, "");
+  assert.equal(JSON.stringify(environment.languages), JSON.stringify([]));
   assert.equal(environment.userAgent, "");
   assert.equal(environment.platform, "");
   assert.equal(result.status, "complete");
@@ -770,49 +835,44 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
 
   assert.equal(api.scoreTimezone("Asia/Taipei"), 0);
   assert.equal(api.scoreTimezone("Asia/Shanghai"), 1);
-  assert.equal(api.scoreLanguage("zh-TW"), 0);
-  assert.equal(api.scoreLanguage("zh-CN"), 1);
+  assert.equal(api.scoreLanguages(["zh-TW", "zh", "en"]), 0);
+  assert.equal(api.scoreLanguages(["zh-CN", "zh", "en"]), 1);
   assert.equal(api.scoreIntlLocale("zh-TW"), 0);
-  assert.equal(api.scoreIntlLocale("zh-Hant-TW"), 0);
+  assert.equal(api.scoreIntlLocale("zh-Hant-TW"), 0.5);
   assert.equal(api.scoreIntlLocale("zh-CN"), 1);
   assert.equal(api.scoreIntlLocale("zh-Hans-CN"), 1);
   assert.equal(api.scoreIntlLocale("zh-Hant-HK"), 0.5);
 });
 
-test("browser language score only recognizes explicit simplified Chinese", () => {
+test("browser language score exactly follows the upstream language-list rules", () => {
   const api = detectorApi();
 
-  for (const language of ["zh-CN", "zh-Hans", "zh-Hans-CN"]) {
-    assert.equal(api.scoreLanguage(language), 1, language);
-  }
-  for (const language of [
-    "en-US",
-    "zh-SG",
-    "zh-Hans-SG",
-    "zh-MY",
-    "zh-TW",
-    "zh-Hans-TW",
-    "zh-Hant",
-    "zh-Hant-CN",
-    "zh-HK",
-    "zh-MO",
-    "zh",
-    "",
-  ]) {
-    assert.equal(api.scoreLanguage(language), 0, language);
+  const cases = [
+    [["zh-CN", "zh", "en"], 1],
+    [["zh-Hans", "en"], 1],
+    [["zh-TW", "zh", "en"], 0],
+    [["zh-HK", "zh", "en"], 0.5],
+    [["en-US", "zh-CN"], 0.7],
+    [["en-US", "zh-HK"], 0.4],
+    [["zh-SG", "en"], 0.4],
+    [["en-US", "en"], 0],
+    [[], 0],
+  ];
+  for (const [languages, expected] of cases) {
+    assert.equal(api.scoreLanguages(languages), expected, languages.join(","));
   }
 });
 
-test("language signal scores and displays the browser interface language", async () => {
+test("language signal scores and displays the browser language list", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
-    language: "en-US",
+    languages: ["en-US", "zh-CN"],
   }));
   const language = result.signals.find((signal) => signal.id === "language");
 
-  assert.equal(language.raw, "en-US");
-  assert.equal(language.score, 0);
-  assert.equal(language.contribution, 0);
+  assert.equal(language.raw, "en-us, zh-cn");
+  assert.equal(language.score, 0.7);
+  assert.equal(language.contribution, 13);
 });
 
 test("match count uses the upstream 0.25 threshold", async () => {
@@ -925,7 +985,28 @@ test("high-entropy device models affect the device signal", async () => {
   assert.equal(device.coverage, "full");
   assert.equal(device.raw, "Huawei / Honor");
   assert.equal(device.contribution, 5);
-  assert.deepEqual(requestedHints, ["model"]);
+  assert.deepEqual(requestedHints, ["model", "platform", "platformVersion"]);
+});
+
+test("high-entropy platform evidence affects device scoring like upstream", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment({
+    userAgent: "Mozilla/5.0",
+    platform: "",
+    userAgentData: {
+      brands: [{ brand: "Chromium", version: "140" }],
+      getHighEntropyValues: async () => ({
+        model: "",
+        platform: "HarmonyOS",
+        platformVersion: "6.0",
+      }),
+    },
+    hasFont: () => false,
+  }));
+  const device = result.signals.find((signal) => signal.id === "deviceVendor");
+
+  assert.equal(device.raw, "HarmonyOS（有限信息：浏览器未提供设备型号）");
+  assert.equal(device.contribution, 6);
 });
 
 test("TheWorld browser remains covered by the upstream browser rules", async () => {
@@ -964,7 +1045,7 @@ test("partial-match branches keep their documented contributions", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
     timeZone: "Asia/Hong_Kong",
-    language: "zh-HK",
+    languages: ["zh-HK", "zh", "en"],
     intlLocale: "zh-Hant-HK",
     hasFont: (font) => ["PingFang TC", "MiSans"].includes(font),
   }));
@@ -973,7 +1054,7 @@ test("partial-match branches keep their documented contributions", async () => {
   );
 
   assert.equal(signals.timezone.contribution, 14);
-  assert.equal(signals.language.contribution, 0);
+  assert.equal(signals.language.contribution, 9);
   assert.equal(signals.fonts.contribution, 3);
   assert.equal(signals.vendorFonts.contribution, 8);
   assert.equal(signals.intlLocale.contribution, 2);
@@ -987,7 +1068,7 @@ test("every contribution is bounded and the displayed total is their exact sum",
   const result = await api.detect(
     baseEnvironment({
       timeZone: "Asia/Shanghai",
-      language: "zh-CN",
+      languages: ["zh-CN", "zh", "en"],
       intlLocale: "zh-CN",
       userAgent:
         "Mozilla/5.0 (Linux; Android 14; HUAWEI) " +
