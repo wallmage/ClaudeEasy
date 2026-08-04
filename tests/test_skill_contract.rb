@@ -818,6 +818,38 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "解释全部已知现象"
   end
 
+  def test_diagnostics_requires_a_causal_gate_before_naming_a_main_cause
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+
+    [skill, policy, design].each do |document|
+      assert_includes document, "因果判定门槛"
+      assert_includes document, "时间方向"
+      assert_includes document, "候选事件命中率"
+      assert_includes document, "故障覆盖率"
+      assert_includes document, "有候选事件但没有故障"
+      assert_includes document, "没有候选事件却发生故障"
+      assert_includes document, "单变量干预"
+    end
+
+    assert_includes skill, "全部门槛"
+    assert_includes skill, "主要原因"
+    assert_includes policy, "原始事件"
+    assert_includes policy, "引用、摘要或诊断文本"
+    assert_includes policy, "同一个下游现象"
+    assert_includes policy, "不能算两种独立证据"
+    assert_includes policy, "机制解释只能说明为什么可能发生"
+    assert_includes policy, "不能补足实测证据"
+    assert_includes skill, "结论措辞"
+    assert_includes skill, "已确认的主要原因"
+    assert_includes skill, "下一项验证"
+    assert_includes skill, "尚缺门槛"
+    assert_includes policy, "最可能的主因"
+    assert_includes policy, "首要原因"
+    assert_includes policy, "不是 X 而是 Y"
+  end
+
   def test_diagnostics_has_reproduction_scope_and_reset_gates
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
