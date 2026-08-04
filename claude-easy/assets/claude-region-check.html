@@ -445,7 +445,7 @@ SOFTWARE.
       <section class="explain" aria-label="结果说明">
         <article class="note">
           <h2>怎样看结果</h2>
-          <p>分数越高表示大陆关联信号越多。浏览器语言只对明确的 zh-CN 或 zh-Hans 计分；英文、繁体中文和通用 zh 仅展示，不计分。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
+          <p>分数越高表示大陆关联信号越多。浏览器语言是中国大陆简体中文（zh-CN、zh-Hans 或 zh-Hans-CN）时计分；英文、繁体中文、新加坡中文和其他语言不计分。检测结果只显示一个浏览器语言。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
@@ -464,7 +464,7 @@ SOFTWARE.
 
         var SIGNALS = [
           { id: "timezone", name: "系统时区", weight: 26 },
-          { id: "language", name: "简体中文浏览器语言", weight: 20 },
+          { id: "language", name: "浏览器语言", weight: 20 },
           { id: "fonts", name: "浏览器可见中文字体", weight: 16 },
           { id: "vendorFonts", name: "国产厂商字体", weight: 10 },
           { id: "cnBrowser", name: "国产浏览器 / WebView", weight: 8 },
@@ -578,11 +578,17 @@ SOFTWARE.
           return 0;
         }
 
-        function scoreLanguages(languages) {
-          return (languages || []).some(function (language) {
-            var value = String(language || "").toLowerCase();
-            return /^zh-(?:cn|hans)(?:-|$)/.test(value);
-          }) ? 1 : 0;
+        function scoreLanguage(language) {
+          var value = String(language || "")
+            .trim()
+            .replace(/_/g, "-")
+            .toLowerCase();
+          return value === "zh-cn" ||
+            /^zh-cn-/.test(value) ||
+            value === "zh-hans" ||
+            /^zh-hans-cn(?:-|$)/.test(value)
+            ? 1
+            : 0;
         }
 
         function scoreIntlLocale(locale) {
@@ -685,14 +691,12 @@ SOFTWARE.
             timeZone ? "full" : "unavailable"
           ));
 
-          var languages = Array.isArray(environment.languages)
-            ? environment.languages.map(String)
-            : [];
+          var language = String(environment.language || "");
           results.push(outcome(
             definitions.language,
-            languages.join(", ") || "无法读取",
-            scoreLanguages(languages),
-            languages.length > 0 ? "full" : "unavailable"
+            language || "无法读取",
+            scoreLanguage(language),
+            language ? "full" : "unavailable"
           ));
 
           var simplifiedResult = fontResult(environment, SIMPLIFIED_FONTS);
@@ -898,24 +902,16 @@ SOFTWARE.
           } catch (_error) {
             context = null;
           }
-          var languages = safeRead(function () {
-            return navigator.languages && navigator.languages.length
-              ? Array.prototype.slice.call(navigator.languages)
-              : [];
-          }, []);
-          if (languages.length === 0) {
-            var language = safeRead(function () {
-              return navigator.language;
-            }, "");
-            if (language) languages = [language];
-          }
+          var language = safeRead(function () {
+            return navigator.language;
+          }, "");
           var fontDetectionAvailable = Boolean(
             context && typeof context.measureText === "function"
           );
           return {
             timeZone: dateTimeOptions.timeZone || "",
             timezoneOffset: new Date().getTimezoneOffset(),
-            languages: languages,
+            language: language,
             intlLocale: dateTimeOptions.locale || "",
             userAgent: safeRead(function () {
               return navigator.userAgent;
@@ -954,7 +950,7 @@ SOFTWARE.
           detect: detect,
           browserEnvironment: browserEnvironment,
           scoreTimezone: scoreTimezone,
-          scoreLanguages: scoreLanguages,
+          scoreLanguage: scoreLanguage,
           scoreIntlLocale: scoreIntlLocale
         });
       }(window));

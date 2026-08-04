@@ -130,7 +130,7 @@ function baseEnvironment(overrides = {}) {
   return {
     timeZone: "Asia/Taipei",
     timezoneOffset: -480,
-    languages: ["zh-TW", "zh", "en-US"],
+    language: "zh-TW",
     intlLocale: "zh-TW",
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
@@ -251,7 +251,7 @@ test("the public contract exposes exactly nine weighted signals totaling 100", (
   );
   assert.equal(
     api.signals.find((signal) => signal.id === "language").name,
-    "简体中文浏览器语言",
+    "浏览器语言",
   );
   assert.equal(
     api.signals.find((signal) => signal.id === "emoji").name,
@@ -536,6 +536,34 @@ test("browser environment detects fonts from measured canvas width changes", () 
   assert.equal(environment.hasFont("Definitely Missing"), false);
 });
 
+test("browser environment reads only navigator.language", () => {
+  let languagesReads = 0;
+  const navigator = {
+    language: "en-US",
+    platform: "MacIntel",
+    userAgent: "Mozilla/5.0",
+    userAgentData: undefined,
+  };
+  Object.defineProperty(navigator, "languages", {
+    get() {
+      languagesReads += 1;
+      return ["en-US", "zh-CN"];
+    },
+  });
+  const api = detectorApi({
+    document: {
+      createElement: () => ({ getContext: () => null }),
+    },
+    navigator,
+  });
+
+  const environment = api.browserEnvironment();
+
+  assert.equal(environment.language, "en-US");
+  assert.equal(languagesReads, 0);
+  assert.equal(Object.hasOwn(environment, "languages"), false);
+});
+
 test("browser environment tolerates restricted navigator getters", async () => {
   const restrictedNavigator = {};
   for (const property of [
@@ -561,7 +589,7 @@ test("browser environment tolerates restricted navigator getters", async () => {
   const environment = api.browserEnvironment();
   const result = await api.detect(environment);
 
-  assert.deepEqual(Array.from(environment.languages), []);
+  assert.equal(environment.language, "");
   assert.equal(environment.userAgent, "");
   assert.equal(environment.platform, "");
   assert.equal(result.status, "complete");
@@ -643,8 +671,8 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
 
   assert.equal(api.scoreTimezone("Asia/Taipei"), 0);
   assert.equal(api.scoreTimezone("Asia/Shanghai"), 1);
-  assert.equal(api.scoreLanguages(["zh-TW", "zh", "en-US"]), 0);
-  assert.equal(api.scoreLanguages(["zh-CN", "zh", "en-US"]), 1);
+  assert.equal(api.scoreLanguage("zh-TW"), 0);
+  assert.equal(api.scoreLanguage("zh-CN"), 1);
   assert.equal(api.scoreIntlLocale("zh-TW"), 0);
   assert.equal(api.scoreIntlLocale("zh-Hant-TW"), 0);
   assert.equal(api.scoreIntlLocale("zh-CN"), 1);
@@ -652,33 +680,40 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
   assert.equal(api.scoreIntlLocale("zh-Hant-HK"), 0.5);
 });
 
-test("browser language score only recognizes explicit simplified Chinese tags", () => {
+test("browser language score only recognizes explicit simplified Chinese", () => {
   const api = detectorApi();
 
-  assert.equal(api.scoreLanguages(["en-US", "en"]), 0);
-  assert.equal(
-    api.scoreLanguages(["zh-TW", "zh-Hant", "zh-HK", "zh-MO"]),
-    0,
-  );
-  assert.equal(api.scoreLanguages(["en-US", "en", "zh-TW", "zh"]), 0);
-  assert.equal(api.scoreLanguages(["zh-HK", "zh-Hant", "en-US"]), 0);
-  assert.equal(
-    api.scoreLanguages(["en-US", "en", "zh", "zh-CN", "zh-TW"]),
-    1,
-  );
-  assert.equal(api.scoreLanguages(["zh-TW", "en-US", "zh-Hans"]), 1);
+  for (const language of ["zh-CN", "zh-Hans", "zh-Hans-CN"]) {
+    assert.equal(api.scoreLanguage(language), 1, language);
+  }
+  for (const language of [
+    "en-US",
+    "zh-SG",
+    "zh-Hans-SG",
+    "zh-MY",
+    "zh-TW",
+    "zh-Hans-TW",
+    "zh-Hant",
+    "zh-Hant-CN",
+    "zh-HK",
+    "zh-MO",
+    "zh",
+    "",
+  ]) {
+    assert.equal(api.scoreLanguage(language), 0, language);
+  }
 });
 
-test("language signal preserves the raw list while only simplified Chinese scores", async () => {
+test("language signal scores and displays the browser interface language", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
-    languages: ["en-US", "en", "zh", "zh-CN", "zh-TW"],
+    language: "en-US",
   }));
   const language = result.signals.find((signal) => signal.id === "language");
 
-  assert.equal(language.raw, "en-US, en, zh, zh-CN, zh-TW");
-  assert.equal(language.score, 1);
-  assert.equal(language.contribution, 20);
+  assert.equal(language.raw, "en-US");
+  assert.equal(language.score, 0);
+  assert.equal(language.contribution, 0);
 });
 
 test("match count uses the upstream 0.25 threshold", async () => {
@@ -830,7 +865,7 @@ test("partial-match branches keep their documented contributions", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
     timeZone: "Asia/Hong_Kong",
-    languages: ["zh-HK", "en-US"],
+    language: "zh-HK",
     intlLocale: "zh-Hant-HK",
     hasFont: (font) => ["PingFang TC", "MiSans"].includes(font),
   }));
@@ -853,7 +888,7 @@ test("every contribution is bounded and the displayed total is their exact sum",
   const result = await api.detect(
     baseEnvironment({
       timeZone: "Asia/Shanghai",
-      languages: ["zh-CN", "zh"],
+      language: "zh-CN",
       intlLocale: "zh-CN",
       userAgent:
         "Mozilla/5.0 (Linux; Android 14; HUAWEI) " +

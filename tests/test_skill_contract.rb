@@ -496,7 +496,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "美国区域设置"
       assert_includes document, "实际用于 Claude 的同一浏览器"
       assert_includes document, "系统和其他应用"
-      assert_includes document, "移除 `zh-CN`"
+      assert_includes document, "浏览器语言只有一个检测结果"
+      assert_includes document, "中国大陆简体中文"
+      assert_includes document, "新加坡中文"
       assert_includes document, "`zh-Hans`"
     end
   end
