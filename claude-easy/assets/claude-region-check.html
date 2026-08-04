@@ -193,7 +193,7 @@ SOFTWARE.
         font-weight: 750;
       }
 
-      .result-badge[data-state="complete"] {
+      .result-badge[data-state="low"] {
         background: var(--clear-soft);
         color: var(--clear);
       }
@@ -203,7 +203,12 @@ SOFTWARE.
         color: var(--notice);
       }
 
-      .result-badge[data-state="matched"] {
+      .result-badge[data-state="medium"] {
+        background: var(--notice-soft);
+        color: var(--notice);
+      }
+
+      .result-badge[data-state="high"] {
         background: var(--match-soft);
         color: var(--match);
       }
@@ -399,11 +404,11 @@ SOFTWARE.
       <p class="eyebrow">ClaudeEasy · 本地检测</p>
       <h1>Claude 区域指纹检测</h1>
       <p class="intro">
-        检查当前浏览器可见的九项区域环境信号。参考分只用于比较修改前后，
+        检查当前浏览器可见的十项区域环境信号。参考分只用于比较修改前后，
         分数越高表示大陆关联信号越多；它不代表 Claude 的官方判定，
         也不能作为 Claude 是否可用的通过条件。
       </p>
-      <div class="privacy">页面完全离线运行，不发送检测结果</div>
+      <div class="privacy">不上传检测结果；WebRTC 项会通过 STUN 探测浏览器可见的公网 IP</div>
       <noscript>
         <p class="noscript-warning" role="alert">
           无法运行检测：当前浏览器禁用了 JavaScript。请启用后重新打开本地页面。
@@ -438,18 +443,18 @@ SOFTWARE.
           class="signals"
           data-signal-list
           role="list"
-          aria-label="九项检测结果"
+          aria-label="十项检测结果"
         ></ol>
       </section>
 
       <section class="explain" aria-label="结果说明">
         <article class="note">
           <h2>怎样看结果</h2>
-          <p>分数越高表示大陆关联信号越多。浏览器语言是中国大陆简体中文（zh-CN、zh-Hans 或 zh-Hans-CN）时计分；英文、繁体中文、新加坡中文和其他语言不计分。检测结果只显示一个浏览器语言。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
+          <p>分数越高表示大陆关联信号越多。0–30 分为低风险，31–60 分为中风险，61–100 分为高风险。浏览器语言是中国大陆简体中文（zh-CN、zh-Hans 或 zh-Hans-CN）时计分；英文、繁体中文、新加坡中文和其他语言不计分。检测结果只显示一个浏览器语言。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
-          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。</p>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项沿用上游规则：发现任何数字 IP 候选即计 0.5，但候选 IP 不等于真实 IP 泄露，仍需与代理出口核对。</p>
         </article>
       </section>
 
@@ -463,15 +468,16 @@ SOFTWARE.
         "use strict";
 
         var SIGNALS = [
-          { id: "timezone", name: "系统时区", weight: 26 },
-          { id: "language", name: "浏览器语言", weight: 20 },
-          { id: "fonts", name: "浏览器可见中文字体", weight: 16 },
+          { id: "timezone", name: "系统时区", weight: 24 },
+          { id: "language", name: "浏览器语言", weight: 18 },
+          { id: "fonts", name: "浏览器可见中文字体", weight: 14 },
           { id: "vendorFonts", name: "国产厂商字体", weight: 10 },
+          { id: "webrtcLeak", name: "WebRTC IP 泄露", weight: 10 },
           { id: "cnBrowser", name: "国产浏览器 / WebView", weight: 8 },
           { id: "deviceVendor", name: "国产品牌设备", weight: 6 },
-          { id: "intlLocale", name: "Intl 区域设置", weight: 6 },
-          { id: "timezoneOffset", name: "UTC+8 时区偏移", weight: 4 },
-          { id: "emoji", name: "Emoji 平台推断", weight: 4 }
+          { id: "intlLocale", name: "Intl 区域设置", weight: 4 },
+          { id: "timezoneOffset", name: "UTC+8 时区偏移", weight: 3 },
+          { id: "emoji", name: "Emoji 平台推断", weight: 3 }
         ];
 
         var MAINLAND_TIMEZONES = [
@@ -638,6 +644,71 @@ SOFTWARE.
           return "none";
         }
 
+        function riskBand(total) {
+          if (total <= 30) return "low";
+          if (total <= 60) return "medium";
+          return "high";
+        }
+
+        function detectWebrtcLeak(PeerConnection, schedule) {
+          return new Promise(function (resolve) {
+            var Constructor = PeerConnection === undefined
+              ? root.RTCPeerConnection
+              : PeerConnection;
+            var setDelay = schedule || root.setTimeout;
+            if (typeof Constructor !== "function") {
+              resolve({ raw: "未发现 WebRTC IP 候选", score: 0 });
+              return;
+            }
+
+            var resolved = false;
+            var ips = [];
+            var connection = null;
+            function finish() {
+              if (resolved) return;
+              resolved = true;
+              try {
+                if (connection) connection.close();
+              } catch (_error) {
+                // The score is already determined by collected candidates.
+              }
+              resolve(ips.length === 0
+                ? { raw: "未发现 WebRTC IP 候选", score: 0 }
+                : {
+                  raw: "检测到候选 IP：" + ips.slice(0, 2).join(", ") +
+                    "（不等于真实 IP 泄露）",
+                  score: 0.5
+                });
+            }
+
+            try {
+              connection = new Constructor({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+              });
+              connection.onicecandidate = function (event) {
+                var candidate = event.candidate && event.candidate.candidate;
+                if (!candidate) {
+                  finish();
+                  return;
+                }
+                var match = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{1,4}){7})/i.exec(candidate);
+                if (match && match[1] && ips.indexOf(match[1]) === -1) {
+                  ips.push(match[1]);
+                }
+              };
+              connection.createDataChannel("");
+              connection.createOffer().then(function (description) {
+                return connection && connection.setLocalDescription(description);
+              }).catch(finish);
+            } catch (_error) {
+              finish();
+            }
+
+            if (typeof setDelay === "function") setDelay(finish, 1000);
+            else finish();
+          });
+        }
+
         function fontResult(environment, fonts) {
           var hits = [];
           for (var index = 0; index < fonts.length; index += 1) {
@@ -747,6 +818,32 @@ SOFTWARE.
               ? "unavailable"
               : "full"
           ));
+
+          if (typeof environment.detectWebrtcLeak === "function") {
+            try {
+              var webRtc = await environment.detectWebrtcLeak();
+              results.push(outcome(
+                definitions.webrtcLeak,
+                String(webRtc && webRtc.raw || "未发现 WebRTC IP 候选"),
+                Number(webRtc && webRtc.score || 0),
+                "full"
+              ));
+            } catch (_error) {
+              results.push(outcome(
+                definitions.webrtcLeak,
+                "无法读取",
+                0,
+                "unavailable"
+              ));
+            }
+          } else {
+            results.push(outcome(
+              definitions.webrtcLeak,
+              "无法读取",
+              0,
+              "unavailable"
+            ));
+          }
 
           var userAgentData = environment.userAgentData;
           var brands = userAgentData && Array.isArray(userAgentData.brands)
@@ -922,6 +1019,9 @@ SOFTWARE.
             userAgentData: safeRead(function () {
               return navigator.userAgentData;
             }, undefined),
+            detectWebrtcLeak: function () {
+              return detectWebrtcLeak();
+            },
             fontDetectionAvailable: fontDetectionAvailable,
             hasFont: function (font) {
               if (!fontDetectionAvailable) return false;
@@ -949,6 +1049,8 @@ SOFTWARE.
           })),
           detect: detect,
           browserEnvironment: browserEnvironment,
+          detectWebrtcLeak: detectWebrtcLeak,
+          riskBand: riskBand,
           scoreTimezone: scoreTimezone,
           scoreLanguage: scoreLanguage,
           scoreIntlLocale: scoreIntlLocale
@@ -1041,14 +1143,15 @@ SOFTWARE.
             : String(result.total);
           var summaryState = result.unavailableCount > 0
             ? "partial"
-            : result.matchedCount > 0
-              ? "matched"
-              : "complete";
+            : detector.riskBand(result.total);
+          var riskLabels = {
+            low: "低风险",
+            medium: "中风险",
+            high: "高风险"
+          };
           summary.textContent = result.unavailableCount > 0
             ? "结果不完整"
-            : result.matchedCount > 0
-              ? "命中 " + result.matchedCount + " 项"
-              : "未发现命中";
+            : riskLabels[summaryState];
           summary.setAttribute("data-state", summaryState);
           result.signals.forEach(function (signal) {
             var row = list.querySelector(

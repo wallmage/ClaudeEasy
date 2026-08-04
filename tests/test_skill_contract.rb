@@ -401,7 +401,7 @@ class SkillContractTest < Minitest::Test
 
     [readme, skill, policy, design].each do |document|
       assert_includes document, "assets/claude-region-check.html"
-      assert_includes document, "离线"
+      assert_includes document, "STUN"
       assert_includes document, "CSP"
       assert_includes document, "Safari"
       assert_includes document, "Chrome"
@@ -414,7 +414,13 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不得合成"
       assert_includes document, "不得仅为降低参考分修改系统默认浏览器"
       assert_includes document, "只有用户明确要求"
-      refute_includes document, "绿色“低风险”"
+      assert_includes document, "十项"
+      assert_includes document, "低风险"
+      assert_includes document, "中风险"
+      assert_includes document, "高风险"
+      assert_includes document, "0–30"
+      assert_includes document, "31–60"
+      assert_includes document, "61–100"
       refute_includes document, "补测其余八项"
     end
 

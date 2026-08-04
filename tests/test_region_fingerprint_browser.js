@@ -75,7 +75,7 @@ for (const targetName of requestedTargets()) {
   const target = TARGETS[targetName];
   if (!target) throw new Error(`unsupported browser target: ${targetName}`);
 
-  test(`the real offline page completes in ${targetName}`, {
+  test(`the real local page completes in ${targetName}`, {
     timeout: 60_000,
   }, async (t) => {
     const browser = await target.browserType.launch({
@@ -84,7 +84,6 @@ for (const targetName of requestedTargets()) {
     });
     t.after(() => browser.close());
     const context = await browser.newContext({
-      offline: targetName !== "webkit",
       viewport: { width: 1280, height: 900 },
     });
     const page = await context.newPage();
@@ -116,7 +115,7 @@ for (const targetName of requestedTargets()) {
     await page.goto(PAGE_URL);
     assert.equal(
       await page.locator("[data-signal-list] .signal").count(),
-      9,
+      10,
     );
     assert.equal(
       await page.locator("[data-result-status]").getAttribute("role"),
@@ -188,7 +187,7 @@ for (const targetName of requestedTargets()) {
           row.querySelector("[data-signal-contribution]").textContent,
       })),
     }));
-    assert.equal(result.rows.length, 9);
+    assert.equal(result.rows.length, 10);
     for (const row of result.rows) {
       assert.notEqual(row.value, "等待检测");
       assert.notEqual(row.value, "正在读取");
@@ -203,6 +202,7 @@ for (const targetName of requestedTargets()) {
       assert.equal(result.summary, "结果不完整");
     } else {
       assert.match(result.score, /^\d+$/);
+      assert.match(result.summary, /^(?:低|中|高)风险$/);
     }
 
     await page.keyboard.press("Enter");
@@ -249,7 +249,6 @@ for (const targetName of requestedTargets()) {
     t.after(() => browser.close());
     const context = await browser.newContext({
       javaScriptEnabled: false,
-      offline: targetName !== "webkit",
     });
     const page = await context.newPage();
 

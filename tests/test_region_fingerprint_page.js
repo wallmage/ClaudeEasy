@@ -114,7 +114,16 @@ function uiHarness(detector) {
     ["[data-result-status]", elements.status],
   ]);
   const context = vm.createContext({
-    window: { ClaudeEasyRegionCheck: detector },
+    window: {
+      ClaudeEasyRegionCheck: {
+        riskBand: (total) => total <= 30
+          ? "low"
+          : total <= 60
+            ? "medium"
+            : "high",
+        ...detector,
+      },
+    },
     document: {
       createElement: () => new FakeElement(),
       querySelector: (selector) => selectors.get(selector),
@@ -138,11 +147,15 @@ function baseEnvironment(overrides = {}) {
     platform: "MacIntel",
     userAgentData: undefined,
     hasFont: (font) => font === "PingFang TC",
+    detectWebrtcLeak: async () => ({
+      raw: "未发现 WebRTC IP 候选",
+      score: 0,
+    }),
     ...overrides,
   };
 }
 
-test("the detector is one self-contained offline HTML file", () => {
+test("the detector is one self-contained HTML file with only the disclosed STUN probe", () => {
   const source = pageSource();
   const executableSource = source.replace(/<!--[\s\S]*?-->/g, "");
 
@@ -194,7 +207,15 @@ test("the detector is one self-contained offline HTML file", () => {
     /\b(?:window\.open|document\.write|location\s*(?:=|\.|\[)|history\s*\.)/i,
   );
   assert.doesNotMatch(source, /\bwindow\s*\[\s*["']location["']\s*\]/i);
-  assert.doesNotMatch(source, /(?:低|中|高)风险|风险分|风险档/);
+  assert.match(source, /stun:stun\.l\.google\.com:19302/);
+  assert.equal(
+    source.match(/stun:stun\.l\.google\.com:19302/g).length,
+    1,
+  );
+  assert.match(source, /WebRTC.*STUN.*公网 IP/);
+  assert.match(source, /低风险/);
+  assert.match(source, /中风险/);
+  assert.match(source, /高风险/);
   assert.match(source, /只用于比较修改前后/);
   assert.match(source, /不能作为 Claude 是否可用的通过条件/);
   assert.match(source, /达到 0\.25 才计为“命中”/);
@@ -203,7 +224,7 @@ test("the detector is one self-contained offline HTML file", () => {
   assert.match(source, /<ol[^>]+role="list"/);
 });
 
-test("the public contract exposes exactly nine weighted signals totaling 100", () => {
+test("the public contract exposes the upstream ten signals and weights", () => {
   const api = detectorApi();
   const ids = Array.from(api.signals, (signal) => signal.id);
   const weights = Object.fromEntries(
@@ -221,6 +242,7 @@ test("the public contract exposes exactly nine weighted signals totaling 100", (
       "language",
       "fonts",
       "vendorFonts",
+      "webrtcLeak",
       "cnBrowser",
       "deviceVendor",
       "intlLocale",
@@ -228,17 +250,18 @@ test("the public contract exposes exactly nine weighted signals totaling 100", (
       "emoji",
     ],
   );
-  assert.equal(new Set(ids).size, 9);
+  assert.equal(new Set(ids).size, 10);
   assert.deepEqual(weights, {
-    timezone: 26,
-    language: 20,
-    fonts: 16,
+    timezone: 24,
+    language: 18,
+    fonts: 14,
     vendorFonts: 10,
+    webrtcLeak: 10,
     cnBrowser: 8,
     deviceVendor: 6,
-    intlLocale: 6,
-    timezoneOffset: 4,
-    emoji: 4,
+    intlLocale: 4,
+    timezoneOffset: 3,
+    emoji: 3,
   });
   assert.equal(totalWeight, 100);
   assert.ok(api.signals.every((signal) => signal.weight > 0));
@@ -257,7 +280,82 @@ test("the public contract exposes exactly nine weighted signals totaling 100", (
     api.signals.find((signal) => signal.id === "emoji").name,
     "Emoji 平台推断",
   );
-  assert.equal(api.riskBand, undefined);
+  assert.equal(
+    api.signals.find((signal) => signal.id === "webrtcLeak").name,
+    "WebRTC IP 泄露",
+  );
+  assert.equal(api.riskBand(0), "low");
+  assert.equal(api.riskBand(30), "low");
+  assert.equal(api.riskBand(31), "medium");
+  assert.equal(api.riskBand(60), "medium");
+  assert.equal(api.riskBand(61), "high");
+  assert.equal(api.riskBand(100), "high");
+});
+
+test("WebRTC follows the upstream candidate rule without calling it a confirmed leak", async () => {
+  const api = detectorApi();
+  const candidate = await api.detect(baseEnvironment({
+    detectWebrtcLeak: async () => ({
+      raw: "检测到候选 IP：198.51.100.7（不等于真实 IP 泄露）",
+      score: 0.5,
+    }),
+  }));
+  const signal = candidate.signals.find((entry) => entry.id === "webrtcLeak");
+
+  assert.equal(signal.score, 0.5);
+  assert.equal(signal.contribution, 5);
+  assert.equal(signal.match, "weak");
+  assert.match(signal.raw, /不等于真实 IP 泄露/);
+});
+
+test("the WebRTC probe uses the upstream STUN candidate detector", async () => {
+  const api = detectorApi();
+  let configuration;
+  class FakePeerConnection {
+    constructor(value) {
+      configuration = value;
+    }
+    createDataChannel() {}
+    createOffer() {
+      this.onicecandidate({
+        candidate: {
+          candidate: "candidate:1 1 udp 1 198.51.100.7 54321 typ srflx",
+        },
+      });
+      this.onicecandidate({ candidate: null });
+      return Promise.resolve({ type: "offer", sdp: "" });
+    }
+    setLocalDescription() {
+      return Promise.resolve();
+    }
+    close() {}
+  }
+
+  const result = await api.detectWebrtcLeak(FakePeerConnection, () => {});
+  assert.equal(
+    JSON.stringify(configuration),
+    JSON.stringify({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    }),
+  );
+  assert.equal(result.score, 0.5);
+  assert.match(result.raw, /198\.51\.100\.7/);
+  assert.match(result.raw, /不等于真实 IP 泄露/);
+});
+
+test("a failed WebRTC probe stays unknown without aborting the other signals", async () => {
+  const api = detectorApi();
+  const result = await api.detect(baseEnvironment({
+    detectWebrtcLeak: async () => {
+      throw new Error("STUN unavailable");
+    },
+  }));
+  const signal = result.signals.find((entry) => entry.id === "webrtcLeak");
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.total, null);
+  assert.equal(signal.coverage, "unavailable");
+  assert.equal(signal.contribution, null);
 });
 
 test("rejected high-entropy client hints fall back without aborting the scan", async () => {
@@ -292,12 +390,13 @@ test("the full UI renders success, rescan, and failure states", async () => {
     },
   });
 
-  assert.equal(success.list.children.length, 9);
+  assert.equal(success.list.children.length, 10);
   await success.start.click();
   assert.equal(success.status.attributes.get("data-result-status"), "complete");
   assert.match(success.status.textContent, /检测完成/);
   assert.equal(success.score.textContent, String(result.total));
-  assert.equal(success.band.textContent, "命中 2 项");
+  assert.equal(success.band.textContent, "低风险");
+  assert.equal(success.band.attributes.get("data-state"), "low");
   assert.equal(success.start.hidden, true);
   assert.equal(success.rescan.hidden, false);
   assert.equal(success.rescan.focused, true);
@@ -493,7 +592,7 @@ test("browser environment survives unavailable canvas font detection", async () 
 
   assert.equal(environment.hasFont("PingFang SC"), false);
   assert.equal(result.status, "complete");
-  assert.equal(result.signals.length, 9);
+  assert.equal(result.signals.length, 10);
   assert.equal(fonts.coverage, "unavailable");
   assert.equal(vendorFonts.coverage, "unavailable");
   assert.equal(result.unavailableCount, 2);
@@ -635,7 +734,7 @@ test("unreadable browser values remain unknown instead of looking safe", async (
   assert.equal(result.knownTotal, 0);
   assert.equal(result.unknownWeight, 100);
   assert.equal(result.matchedCount, 0);
-  assert.equal(result.unavailableCount, 9);
+  assert.equal(result.unavailableCount, 10);
   assert.ok(
     result.signals
       .filter((signal) => signal.raw === "无法读取")
@@ -657,7 +756,7 @@ test("unreadable browser values remain unknown instead of looking safe", async (
   assert.match(ui.status.textContent, /已知项合计 0 \/ 100/);
   assert.match(ui.status.textContent, /已知命中 0 项/);
   assert.doesNotMatch(ui.status.textContent, /已知非零/);
-  assert.match(ui.status.textContent, /9 项无法读取/);
+  assert.match(ui.status.textContent, /10 项无法读取/);
   for (const row of ui.list.children) {
     assert.equal(
       row.querySelector("[data-signal-contribution]").textContent,
@@ -741,8 +840,8 @@ test("Safari completes through the UA fallback and labels device evidence as lim
   );
 
   assert.equal(result.status, "complete");
-  assert.equal(result.signals.length, 9);
-  assert.equal(result.total, 7);
+  assert.equal(result.signals.length, 10);
+  assert.equal(result.total, 6);
   assert.equal(result.band, undefined);
   assert.equal(result.matchedCount, 2);
   assert.equal(device.coverage, "limited");
@@ -792,7 +891,7 @@ test("Chrome and Edge keep desktop device evidence limited when no model is expo
     );
 
     assert.equal(result.status, "complete", browser.name);
-    assert.equal(result.signals.length, 9, browser.name);
+    assert.equal(result.signals.length, 10, browser.name);
     assert.equal(device.coverage, "limited", browser.name);
     assert.match(device.raw, /未提供设备型号/, browser.name);
   }
@@ -855,7 +954,7 @@ test("a full mainland timezone hit is always reported as a match", async () => {
   );
 
   assert.equal(timezone.score, 1);
-  assert.equal(timezone.contribution, 26);
+  assert.equal(timezone.contribution, 24);
   assert.equal(timezone.match, "strong");
   assert.ok(result.matchedCount >= 1);
   assert.equal(result.band, undefined);
@@ -873,14 +972,14 @@ test("partial-match branches keep their documented contributions", async () => {
     result.signals.map((signal) => [signal.id, signal]),
   );
 
-  assert.equal(signals.timezone.contribution, 16);
+  assert.equal(signals.timezone.contribution, 14);
   assert.equal(signals.language.contribution, 0);
   assert.equal(signals.fonts.contribution, 3);
   assert.equal(signals.vendorFonts.contribution, 8);
-  assert.equal(signals.intlLocale.contribution, 3);
-  assert.equal(signals.timezoneOffset.contribution, 3);
+  assert.equal(signals.intlLocale.contribution, 2);
+  assert.equal(signals.timezoneOffset.contribution, 2);
   assert.equal(signals.emoji.contribution, 1);
-  assert.equal(new Set(result.signals.map((signal) => signal.id)).size, 9);
+  assert.equal(new Set(result.signals.map((signal) => signal.id)).size, 10);
 });
 
 test("every contribution is bounded and the displayed total is their exact sum", async () => {
@@ -909,8 +1008,8 @@ test("every contribution is bounded and the displayed total is their exact sum",
     0,
   );
 
-  assert.equal(result.total, 95);
-  assert.equal(sum, 95);
+  assert.equal(result.total, 86);
+  assert.equal(sum, 86);
   for (const signal of result.signals) {
     assert.ok(signal.contribution >= 0);
     assert.ok(signal.contribution <= signal.weight);
