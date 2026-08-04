@@ -16,7 +16,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 
 ## 安全原则
 
-**绝对不要退出、停止或重启 Clash 客户端。** 中国用户通常依靠 Clash 连接 AI 助手；客户端退出后，修复可能中断。所有脚本和流程都遵守这一原则，也不会建议或要求你这样做。
+**绝对不要退出、停止或重启 Clash 客户端。** 中国用户通常依靠 Clash 连接 AI 助手；客户端退出后，修复可能中断。所有脚本和流程都遵守这一原则，也不会建议或要求你这样做。Windows 的受保护写入只能等客户端本来就未运行时执行；检测到它正在运行会整批延期，不会要求你关闭它。
 
 ClaudeEasy 也不会为了读取版本或状态而启动 ClashX Meta。它不会运行应用主程序或向主程序传 `--version`，客户端版本改读 `Info.plist`，内核版本只检查 Mihomo；ClashX Meta 没有运行时会保持原状。
 
@@ -27,7 +27,7 @@ ClaudeEasy 也不会为了读取版本或状态而启动 ClashX Meta。它不会
 - 每份候选配置都必须通过 YAML 重读、二次转换一致性检查和 Mihomo 校验（最长 30 秒）；任何一步失败都保留原文件。
 - 不安装永久监听、LaunchAgent、`WatchPaths`、计划任务或后台服务。
 - 一切输出都不包含订阅地址、密码、UUID、私钥、控制器密钥或完整节点地址。
-- macOS 修改当前订阅后会通过本地控制器自动刷新并检查运行状态，失败时恢复修改前的内容。
+- macOS 修改当前订阅后会通过本地控制器自动刷新并检查运行状态；档位 3 即使文件无需修改，也会沿 AI 分组的实时选择及代理提供者确认最终都是代理。直连、拒绝、缺失目标、循环选择，或恢复的备份缺少当前策略的完整档位 3 规则时都不会报成功。
 
 ## 两个模块
 
@@ -154,7 +154,7 @@ Diagnostics 按下面的闭环工作，每一步都受当前档位约束：
 - 历史证据不足时，自动建立有开始时间、结束时间和采样间隔的观察窗口，不让用户决定该查哪个日志；问题再次出现后按时间线关联证据并关闭观察。
 - 多个无关目标都在内容开始传输前出现相同等待时，只盘点当前档位允许的接管层（档位 1 不检查 VPN/TUN）；用时间线和单变量切换证明重叠接管后做职责分层，同一流量层只保留一个透明接管者；无改善立即恢复原设置。
 - 预计超过 10 分钟且存在彼此独立的只读证据来源时，可以让多个 Sub Agent 并行取证；Sub Agent 只返回带时间戳的脱敏事实，所有写入、更新、恢复和最终判断仍由主代理串行完成。
-- 单项 Clash 配置修复留在 Diagnostics，只复用 Patch 的备份、候选校验、刷新和失败恢复机制；完整补丁只属于档位 3，不会伪装成单项修复。Windows 客户端正在运行时不修改当前运行配置，此类修改只能报告“已更新，尚未生效”，等待客户端以后正常加载或刷新。
+- 单项 Clash 配置修复留在 Diagnostics，只复用 Patch 的备份、候选校验、刷新和失败恢复机制；完整补丁只属于档位 3，不会伪装成单项修复。Windows 客户端正在运行时，涉及 Clash 受保护状态的修改整批延期且不得报告“已更新”；只有客户端本来就未运行时才写入。
 - AI 服务连接故障先完成官方状态检查；其他本机无法修复的问题，按已确认的问题类别在线搜索当前官方或第一方资料，并整理成可以直接照做的方案。
 
 最终用简体中文说明：发生了什么、证据、为什么会这样、做了什么、复测结果和仍未确认之处。
@@ -191,12 +191,12 @@ bash claude-easy/scripts/install_macos.sh --profile N
 .\claude-easy\scripts\install_windows.cmd -UsageProfile N
 ```
 
-前置条件：两个平台都必须让 Clash 保持运行。macOS 请用当前登录用户直接运行（不要 sudo 或 root），需要系统 Ruby 和已安装的 ClashX Meta；Windows 需要安装并打开过 Clash Verge Rev。不带参数再次运行安装程序时，按已保存的档位执行。
+前置条件：macOS 必须让 ClashX Meta 保持运行，并用当前登录用户直接运行（不要 sudo 或 root），同时需要系统 Ruby。Windows 需要安装并至少打开过一次 Clash Verge Rev；Windows 安装只在客户端本来就未运行时执行写入，检测到正在运行就整批零改动并延期到以后本来就未运行的时机，不会要求你关闭客户端。不带参数再次运行安装程序时，按已保存的档位执行。
 
 ### 公开命令
 
 - macOS 安装器：`--profile N`（保存并执行档位）、`--show-profile`（读取已保存档位，未保存时输出 `unset`）、`--safe-update`（安全更新全部远程订阅）、`--json`。
-- macOS 补丁程序 `scripts/macos/patch_profiles.rb`：`--usage-profile N`、`--dry-run`（只预览不写入）、`--no-reload`（只更新文件不刷新）、`--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`、`--snapshot-initial`、`--print-core-status`、`--print-tun-state` 等；完整列表见 `--help`。默认列表每行输出创建时间和 `ce-backup-v1-…` 公开 ID，初始快照输出公开 ID，都不显示真实备份文件名。JSON 列表的每个 `items` 对象包含 `id` 与 `created_at`，比较结果同时返回该 ID、备份哈希和恢复所需的当前哈希。普通 Patch 和安全更新必须显式指定档位，并在任何下载、备份或配置写入前与固定位置中已保存的档位一致；`--dry-run` 也必须显式指定档位，但不写状态。所有变更型 Ruby 入口会先取得同一把外层操作锁；自动更新修改命令只供已持有并可验证该锁的安装、卸载和恢复流程使用。
+- macOS 补丁程序 `scripts/macos/patch_profiles.rb`：`--usage-profile N`、`--dry-run`（只预览不写入）、`--no-reload`（只更新文件不刷新）、`--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`、`--snapshot-initial`、`--print-core-status`、`--print-tun-state` 等；完整列表见 `--help`。`--dry-run` 与 `--no-reload` 只用于普通 Patch，不能和备份恢复、安全更新、事务恢复或其他独立操作组合；一次也不能指定多个独立操作，冲突时在写入前拒绝。默认列表每行输出创建时间和 `ce-backup-v1-…` 公开 ID，初始快照输出公开 ID，都不显示真实备份文件名。JSON 列表的每个 `items` 对象包含 `id` 与 `created_at`，比较结果同时返回该 ID、备份哈希和恢复所需的当前哈希。普通 Patch 和安全更新必须显式指定档位，并在任何下载、备份或配置写入前与固定位置中已保存的档位一致；`--dry-run` 也必须显式指定档位，但不写状态。所有变更型 Ruby 入口会先取得同一把外层操作锁；自动更新修改命令只供已持有并可验证该锁的安装、卸载和恢复流程使用。
 - Windows 安装器：`-UsageProfile N`、`-ShowUsageProfile`、`-SnapshotProfiles`、`-VerifySafeUpdate`、`-ListBackups`、`-CompareBackup ID`、`-RestoreBackup ID -ExpectedCurrentSha256 SHA256`、`-AppHome`（指定应用目录）、`-MihomoPath`（指定内核路径）、`-Json`。直接运行 `.cmd` 时若同包主 `.ps1` 缺失，也统一返回 `6/incomplete_package`；JSON 模式仍只输出一个对象。
 - 分流验证：macOS 运行 `ruby claude-easy/scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。两端的中文输出只说明代理组已识别及各目标通过、失败或未观察到，不显示代理组名称、当前节点或连接链节点。Windows `-ControllerUrl` 只接受本机回环 HTTP/HTTPS；有控制器密钥时，用 `Read-Host -AsSecureString` 读取后仅经标准输入传给 `-SecretStdin`。非空 `-Secret` 会被拒绝，请求不使用代理也不跟随重定向，密钥不会进入命令行、环境变量、输出或日志。
 
@@ -255,6 +255,8 @@ ClaudeEasy 的公开入口固定在 `claude-easy/`，参数在后续版本中保
 只有配置差异与现场证据相符时才恢复。恢复（`--restore-backup ID --expected-current-sha256 SHA256` / `-RestoreBackup ID -ExpectedCurrentSha256 SHA256`）前先校验备份内容、确认当前文件仍与比较时相同，并再备份一次当前版本；恢复后回到原应用和原操作复测，没有改善或验收失败时恢复回滚前版本。内部安装、用途档位、自动更新所有权和安全更新状态不能通过普通单文件备份接口恢复，避免状态与实际配置错代。macOS 恢复当前订阅后会通过本地控制器重新加载，并确认 TUN 开关、代理组选择、DNS 与连接状态；检查失败时恢复回滚前版本，文件恢复但运行内核未恢复时会明确报错。恢复其他订阅不会切换当前订阅。Windows 客户端正在运行时不会为了回滚而结束它，只完成安全比较并说明当前不能自动恢复。
 
 macOS 恢复备份前若发现未完成的 Patch，会先恢复原文件和原运行配置；运行恢复失败时保留事务并停止，不进入备份校验。备份写入本身也使用持久事务，并把恢复后的真实路径和文件身份传给运行检查与失败回退；外部以相同字节替换文件也不会被回退覆盖。即使文件已经与备份相同，当前订阅的事务也要等重新加载和运行检查完成后才提交。进程在文件替换后被强制结束时，下一次 Patch 会恢复备份操作前的文件与运行配置。
+
+macOS 执行备份恢复前必须先读取有效的已保存用途档位；档位缺失或损坏时不写入。
 
 ## 第三档验证
 

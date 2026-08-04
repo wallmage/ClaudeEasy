@@ -2374,6 +2374,36 @@ items:
   updated: 200
   option: null
 '@
+    $unsafeTypeInputs = @(
+        "items:`n- uid: R-anchor-type`n  type: &kind remote`n",
+        "items:`n- uid: R-tagged-type`n  type: !!str remote`n",
+        "items:`n- uid: R-alias-type`n  kind: &kind remote`n  type: *kind`n",
+        "items:`n- uid: R-flow-type`n  type: [remote]`n",
+        ('items:' + "`n- uid: R-escaped-type`n" + '  type: "remo\u0074e"' + "`n")
+    )
+    foreach ($unsafeTypeInput in $unsafeTypeInputs) {
+        $unsafeTypeRejected = $false
+        try { Get-RemoteSubscriptionProfileItems @(Split-YamlLines $unsafeTypeInput) | Out-Null } catch { $unsafeTypeRejected = $true }
+        Assert-True $unsafeTypeRejected "complex YAML type scalar was not rejected"
+    }
+    foreach ($quotedType in @("'remote'", '"remote"')) {
+        $quotedTypeInput = "items:`n- uid: R-quoted-type`n  type: $quotedType`n"
+        $quotedTypeOutput = Set-RemoteSubscriptionAutoUpdateDisabled $quotedTypeInput
+        Assert-RemoteSubscriptionAutoUpdateDisabled $quotedTypeOutput
+    }
+    $unsafeKeyInputs = @(
+        ('items:' + "`n- uid: R-escaped-option`n  type: remote`n" + '  "op\u0074ion":' + "`n    update_interval: 1440`n    allow_auto_update: true`n"),
+        ('items:' + "`n- uid: R-escaped-auto-update`n  type: remote`n  option:`n" + '    "allow_auto_\u0075pdate": true' + "`n"),
+        ('items:' + "`n" + '- "op\u0074ion":' + "`n    update_interval: 1440`n    allow_auto_update: true`n  uid: R-escaped-first-option`n  type: remote`n")
+    )
+    foreach ($unsafeKeyInput in $unsafeKeyInputs) {
+        $unsafeKeyRejected = $false
+        try { Set-RemoteSubscriptionAutoUpdateDisabled $unsafeKeyInput | Out-Null } catch { $unsafeKeyRejected = $true }
+        Assert-True $unsafeKeyRejected "complex YAML mapping key was not rejected"
+        $unsafeStateKeyRejected = $false
+        try { Get-RemoteSubscriptionAutoUpdateStateRecords $unsafeKeyInput | Out-Null } catch { $unsafeStateKeyRejected = $true }
+        Assert-True $unsafeStateKeyRejected "state reader ignored a complex YAML mapping key"
+    }
     $profilesIndexOutput = Set-RemoteSubscriptionAutoUpdateDisabled $profilesIndexInput
     Assert-True ([regex]::Matches($profilesIndexOutput, '(?m)^\s+allow_auto_update:\s+false\s*$').Count -eq 2) "not every remote subscription was disabled"
     Assert-True ($profilesIndexOutput.Contains("type: local")) "local profile was removed"
@@ -2609,6 +2639,16 @@ items:
     $flowProfilesRejected = $false
     try { Set-RemoteSubscriptionAutoUpdateDisabled "items: [{ type: remote }]`n" | Out-Null } catch { $flowProfilesRejected = $true }
     Assert-True $flowProfilesRejected "inline profiles list was modified instead of rejected"
+
+    $bareItemProfiles = "items:`n-`n  uid: R-bare-item`n  type: remote`n  option:`n    allow_auto_update: true`n"
+    $bareItemRejected = $false
+    try { Set-RemoteSubscriptionAutoUpdateDisabled $bareItemProfiles | Out-Null } catch { $bareItemRejected = $true }
+    Assert-True $bareItemRejected "bare YAML list item was silently omitted"
+    Assert-True ($bareItemProfiles -ceq "items:`n-`n  uid: R-bare-item`n  type: remote`n  option:`n    allow_auto_update: true`n") "bare YAML list rejection changed the input"
+    $flowListProfiles = "items:`n  [`n    { uid: R-flow-list, type: remote, option: { allow_auto_update: true } }`n  ]`n"
+    $flowListRejected = $false
+    try { Set-RemoteSubscriptionAutoUpdateDisabled $flowListProfiles | Out-Null } catch { $flowListRejected = $true }
+    Assert-True $flowListRejected "multiline flow YAML list was silently omitted"
 
     $safeUpdateCase = Join-Path $sandbox "safe-update-case"
     $safeUpdateProfiles = Join-Path $safeUpdateCase "profiles"

@@ -18,7 +18,7 @@ module ClaudeEasyResult
     text = text.gsub(/\e\][^\a]*(?:\a|\e\\)/, "")
     text = text.gsub(/\e\[[0-?]*[ -\/]?[@-~]/, "")
     text = text.gsub(/[\p{Cc}\p{Cf}]/, "")
-    text = text.gsub(/(?<![A-Za-z0-9])Bearer\s+\S+/i, "Bearer [已隐藏]")
+    text = text.gsub(/(?<![A-Za-z0-9])Bearer\s+\S+/i, "[已隐藏]")
     text = text.gsub(/(?<![A-Za-z0-9])(?:password|passwd|token|secret|uuid|private[-_ ]?key|controller[-_ ]?key)\s*[=:]\s*\S+/i, "[已隐藏]")
     text = text.gsub(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i, "[已隐藏]")
     text = text.gsub(%r{(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9+.-]*://\S+}, "[已隐藏]")

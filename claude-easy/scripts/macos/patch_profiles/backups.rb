@@ -312,7 +312,10 @@ module ClaudeEasy
       return result
     end
     if %i[updated no_change reload_failed_rolled_back].include?(result.fetch(:status))
-      remove_profile_transaction(transaction)
+      remove_profile_transaction(
+        transaction,
+        state_uncertain_on_sync_failure: %i[updated no_change].include?(result.fetch(:status))
+      )
     end
     result
   end
@@ -438,6 +441,8 @@ module ClaudeEasy
     )
   rescue Psych::Exception, InvalidConfigError, SystemStackError
     { status: :invalid_backup }
+  rescue ProfileCommitStateUncertainError
+    raise
   rescue SystemCallError, IOError
     { status: :io_error }
   ensure

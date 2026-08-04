@@ -39,8 +39,25 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
             $candidateStarts += [pscustomobject]@{ Index = $i; Indent = $Matches[1].Length; Inline = $Matches[2] }
         }
     }
-    if ($candidateStarts.Count -eq 0) { return @() }
+    $contentIndexes = @()
+    for ($i = $itemsStart + 1; $i -lt $itemsEnd; $i++) {
+        if (-not [string]::IsNullOrWhiteSpace($Lines[$i]) -and
+            -not $Lines[$i].TrimStart().StartsWith("#")) {
+            $contentIndexes += $i
+        }
+    }
+    if ($candidateStarts.Count -eq 0) {
+        if ($contentIndexes.Count -gt 0) { throw "profiles.yaml 的 items 包含不受支持的清单结构。" }
+        return @()
+    }
     $itemIndent = ($candidateStarts | Measure-Object -Property Indent -Minimum).Minimum
+    foreach ($index in $contentIndexes) {
+        $indent = Get-YamlIndent $Lines[$index]
+        if ($indent -lt $itemIndent -or
+            ($indent -eq $itemIndent -and $Lines[$index] -notmatch '^( *)-\s+(.+)$')) {
+            throw "profiles.yaml 的 items 包含不受支持的清单结构。"
+        }
+    }
     $starts = @($candidateStarts | Where-Object { $_.Indent -eq $itemIndent })
     $items = @()
     for ($position = 0; $position -lt $starts.Count; $position++) {
@@ -50,15 +67,14 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
         $fieldValues = @{}
         $optionIndexes = @()
         $inlineEntry = Get-RemoteSubscriptionItemMappingEntry $Lines[$start.Index] $true
-        if ($null -ne $inlineEntry) {
-            $fieldValues[[string]$inlineEntry.Key] = @([string]$inlineEntry.Value)
-            if ($inlineEntry.Key -eq "option") { $optionIndexes += $start.Index }
-        }
+        if ($null -eq $inlineEntry) { throw "profiles.yaml 的订阅项目首字段包含复杂或转义键。" }
+        $fieldValues[[string]$inlineEntry.Key] = @([string]$inlineEntry.Value)
+        if ($inlineEntry.Key -eq "option") { $optionIndexes += $start.Index }
         for ($i = $start.Index + 1; $i -lt $finish; $i++) {
             if ([string]::IsNullOrWhiteSpace($Lines[$i]) -or $Lines[$i].TrimStart().StartsWith("#")) { continue }
             if ((Get-YamlIndent $Lines[$i]) -ne $fieldIndent) { continue }
             $entry = Get-YamlMappingEntry $Lines[$i]
-            if ($null -eq $entry) { continue }
+            if ($null -eq $entry) { throw "profiles.yaml 的订阅项目包含复杂或转义键。" }
             if (-not $fieldValues.ContainsKey([string]$entry.Key)) { $fieldValues[[string]$entry.Key] = @() }
             $fieldValues[[string]$entry.Key] += [string]$entry.Value
             if ($entry.Key -eq "option") { $optionIndexes += $i }
@@ -66,7 +82,17 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
         $typeValues = @($fieldValues["type"])
         if ($typeValues.Count -ne 1) { throw "profiles.yaml 的订阅项目缺少唯一 type。" }
         if ($optionIndexes.Count -gt 1) { throw "profiles.yaml 的订阅项目存在重复 option。" }
-        $typeValue = (($typeValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"")
+        $typeRawValue = (($typeValues[0] -replace '\s+#.*$', '').Trim())
+        $typeValue = ""
+        if ($typeRawValue -match '^([A-Za-z0-9_-]+)$') {
+            $typeValue = $Matches[1]
+        } elseif ($typeRawValue -match "^'([A-Za-z0-9_-]+)'$") {
+            $typeValue = $Matches[1]
+        } elseif ($typeRawValue -match '^"([A-Za-z0-9_-]+)"$') {
+            $typeValue = $Matches[1]
+        } else {
+            throw "profiles.yaml 的 type 使用了 YAML 锚点、标签、别名、转义或复杂标量。"
+        }
         $uidValues = @($fieldValues["uid"])
         $nameValues = @($fieldValues["name"])
         $updatedValues = @($fieldValues["updated"])
@@ -147,6 +173,7 @@ function Get-RemoteSubscriptionAutoUpdateStateRecords([string]$Text) {
                     if ($childIndent -lt 0) { $childIndent = $indent }
                     if ($indent -ne $childIndent) { continue }
                     $entry = Get-YamlMappingEntry $lines[$i]
+                    if ($null -eq $entry) { throw "profiles.yaml 的 option 包含复杂或转义键。" }
                     if ($null -ne $entry -and $entry.Key -eq "allow_auto_update") { $allowIndexes += $i }
                 }
                 if ($allowIndexes.Count -gt 1) { throw "profiles.yaml 的 option 存在重复 allow_auto_update。" }
@@ -472,6 +499,7 @@ function Set-RemoteSubscriptionAutoUpdateDisabled([string]$Text) {
             }
             if ($indent -ne $childIndent) { continue }
             $entry = Get-YamlMappingEntry $lines[$i]
+            if ($null -eq $entry) { throw "profiles.yaml 的 option 包含复杂或转义键。" }
             if ($null -ne $entry -and $entry.Key -eq "allow_auto_update") { $allowIndexes += $i }
         }
         if ($allowIndexes.Count -gt 1) { throw "profiles.yaml 的 option 存在重复 allow_auto_update。" }
@@ -509,6 +537,7 @@ function Assert-RemoteSubscriptionAutoUpdateDisabled([string]$Text) {
             if ($childIndent -lt 0) { $childIndent = $indent }
             if ($indent -ne $childIndent) { continue }
             $entry = Get-YamlMappingEntry $lines[$i]
+            if ($null -eq $entry) { throw "profiles.yaml 的 option 包含复杂或转义键。" }
             if ($null -ne $entry -and $entry.Key -eq "allow_auto_update") {
                 $value = ($entry.Value -replace '\s+#.*$', '').Trim()
                 if ($value -ne "false") { throw "远程订阅仍允许自动更新。" }

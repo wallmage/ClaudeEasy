@@ -673,7 +673,8 @@ module ClaudeEasy
     }
     activate_updated_profile(
       result, require_tun: usage_profile >= 2,
-      precommit_condition: precommit_condition
+      precommit_condition: precommit_condition,
+      require_safe_ai: usage_profile == 3
     )
   end
 
@@ -1000,8 +1001,10 @@ module ClaudeEasy
       return { status: :aborted, failed_profile: "", reason: :rollback_superseded }
     end
 
-    remove_profile_transaction(transaction)
+    remove_profile_transaction(transaction, state_uncertain_on_sync_failure: true)
     { status: :updated, count: items.length, profiles: items.map { |item| item.fetch(:name) } }
+  rescue ProfileCommitStateUncertainError
+    raise
   rescue InvalidConfigError
     raise
   rescue StandardError

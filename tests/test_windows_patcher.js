@@ -1174,6 +1174,17 @@ test('PowerShell installer structurally edits YAML and rolls back failed transac
   assert.match(source, /BackupSnapshot/);
   assert.doesNotMatch(source, /Get-FileHash -LiteralPath \$resolved\.BackupPath|ReadAllBytes\(\$resolved\.BackupPath\)/);
   assert.match(source, /Assert-RemoteSubscriptionAutoUpdateDisabled \$output \| Out-Null/);
+  assert.match(source, /type 使用了 YAML 锚点、标签、别名、转义或复杂标量/);
+  assert.match(source, /profiles\.yaml 的 items 包含不受支持的清单结构/);
+  const fixture = fs.readFileSync(windowsInstallerTestPath, 'utf8');
+  assert.match(fixture, /type: &kind remote/);
+  assert.match(fixture, /type: !!str remote/);
+  assert.match(fixture, /remo\\u0074e/);
+  assert.match(fixture, /R-bare-item/);
+  assert.match(fixture, /R-flow-list/);
+  assert.match(fixture, /op\\u0074ion/);
+  assert.match(fixture, /allow_auto_\\u0075pdate/);
+  assert.match(fixture, /R-escaped-first-option/);
   assert.match(source, /ComputeHash\(\$[Bb]ytes,\s*0,\s*\$[Bb]ytes\.Length\)/);
   assert.doesNotMatch(source, /ComputeHash\(\$[Bb]ytes\)/);
   assert.doesNotMatch(source, /function Set-TunBlock/);

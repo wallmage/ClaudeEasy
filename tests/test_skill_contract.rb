@@ -1194,12 +1194,11 @@ class SkillContractTest < Minitest::Test
   def test_windows_diagnostics_does_not_claim_an_instant_runtime_patch
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
 
-    assert_includes policy, "Windows 客户端运行时不得修改当前配置"
-    assert_includes policy, "不能写成已立即生效"
-    assert_includes policy, "不得为了复测而触发订阅切换、节点切换"
-    assert_includes policy, "代理组切换或 TUN 切换"
-    assert_includes policy, "更不得重启客户端"
-    assert_includes policy, "已更新，尚未生效"
+    assert_includes policy, "Windows 客户端运行时不得修改 `verge.yaml`"
+    assert_includes policy, "安装器整批延期"
+    assert_includes policy, "不得要求用户退出、停止或重启客户端"
+    assert_includes policy, "不得为了复测触发订阅、节点、代理组或 TUN 切换"
+    assert_includes policy, "当前会话只能完成只读验证"
   end
 
   def test_diagnostics_does_not_bake_in_the_reference_incident
@@ -1563,6 +1562,8 @@ class SkillContractTest < Minitest::Test
     assert_includes installer, "operation_committed_result_failed"
     assert_includes installer, "operation_result_unknown_recovery_intent"
     assert_includes cli, "WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT = 75"
+    assert_includes cli, "PROFILE_COMMIT_STATE_UNCERTAIN_EXIT = 77"
+    assert_includes installer, '[ "$PROFILE_OPERATION_CHILD_STATUS" -eq 77 ]'
     assert_includes cli, "wrapper_commit_receipt_failed"
     assert_includes cli, "def validate_wrapper_commit_receipt(options)"
     assert_includes cli, "def mark_wrapper_commit_receipt(options)"
@@ -1720,6 +1721,9 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_p1_recovery_and_refresh_guards_are_documented_and_exercised
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill_document = File.read(File.join(SKILL, "SKILL.md"))
+    patch_policy = File.read(File.join(SKILL, "references/patch-policy.md"))
     mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows_installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
     windows_profiles = File.read(
@@ -1749,6 +1753,14 @@ class SkillContractTest < Minitest::Test
     refute_includes windows_installer, "installed_running_client"
     assert_includes windows_tests, 'Get-TreeContentSnapshot $runningCase'
     assert_includes windows_tests, "client_running_profile_three_deferred"
+    refute_includes readme, "两个平台都必须让 Clash 保持运行"
+    refute_includes readme, "已更新，尚未生效"
+    assert_includes readme, "Windows 安装只在客户端本来就未运行时执行写入"
+    assert_includes readme, "修改整批延期且不得报告“已更新”"
+    refute_includes skill_document, "两个平台都保持 Clash 运行"
+    assert_includes skill_document, "只有客户端本来就未运行时才写入"
+    refute_includes patch_policy, "安装器可以更新全局脚本"
+    assert_includes patch_policy, "安装器整批延期"
 
     assert_includes windows_profiles, 'Updated = $updatedValue'
     assert_includes windows_profiles,
@@ -1866,9 +1878,9 @@ class SkillContractTest < Minitest::Test
     assert_operator lock_setup, :<, lock_baseline
 
     documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      File.read(File.join(SKILL, "references/patch-policy.md")),
+      readme,
+      skill_document,
+      patch_policy,
       File.read(
         File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
       ),

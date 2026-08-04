@@ -2,6 +2,7 @@ module ClaudeEasy
   module_function
 
   WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT = 75
+  PROFILE_COMMIT_STATE_UNCERTAIN_EXIT = 77
   class WrapperCommitReceiptError < StandardError; end
 
   def usage_profile_state_path
@@ -149,6 +150,7 @@ module ClaudeEasy
     when :reload_failed_rolled_back then "#{name}：自动刷新失败，已恢复原配置"
     when :reload_failed_restore_pending then "#{name}：自动刷新失败；文件已恢复，运行内核恢复失败"
     when :reload_failed_rollback_conflict then "#{name}：自动刷新失败；订阅同时发生变化，未覆盖新内容"
+    when :runtime_check_failed then "#{name}：运行中的 AI 分组未通过检查"
     when :error then "#{name}：已跳过：处理失败"
     else "#{name}：已跳过：订阅内容无效"
     end
@@ -169,7 +171,7 @@ module ClaudeEasy
     text = text.gsub(/\e\][^\a]*(?:\a|\e\\)/, "")
     text = text.gsub(/\e\[[0-?]*[ -\/]?[@-~]/, "")
     text = text.gsub(/[\p{Cc}\p{Cf}]/, "")
-    text = text.gsub(/(?<![A-Za-z0-9])Bearer\s+\S+/i, "Bearer [已隐藏]")
+    text = text.gsub(/(?<![A-Za-z0-9])Bearer\s+\S+/i, "[已隐藏]")
     text = text.gsub(/(?<![A-Za-z0-9])(?:password|passwd|token|secret|uuid|private[-_ ]?key|controller[-_ ]?key)\s*[=:]\s*\S+/i, "[已隐藏]")
     text = text.gsub(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i, "[已隐藏]")
     text = text.gsub(%r{(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9+.-]*://\S+}, "[已隐藏]")
@@ -341,6 +343,26 @@ module ClaudeEasy
       return 0
     end
 
+    explicit_operations = [
+      options[:print_tun_state], options[:print_core_status],
+      options[:print_subscription_auto_update_state], options[:print_auto_update_ownership_state],
+      options[:disable_subscription_auto_update], options[:enable_subscription_auto_update],
+      options[:restore_owned_subscription_auto_update], options[:snapshot_initial],
+      options[:list_backups], options[:compare_backup], options[:restore_backup],
+      options[:safe_update_all], options[:recover_profile_transaction]
+    ].compact.reject { |value| value == false }
+    incompatible_options = explicit_operations.length > 1 ||
+                           (!explicit_operations.empty? &&
+                            (options[:dry_run] || !options[:auto_reload]))
+    if incompatible_options
+      return emit_cli_result(
+        operation: "options", exit_code: 64, status: "invalid_request",
+        code: "incompatible_options", summary_zh: "命令选项不能组合；未执行任何修改。"
+      ) if options[:json]
+      warn "命令选项不能组合；未执行任何修改。"
+      return 64
+    end
+
     if options[:print_core_status]
       status = mihomo_core_status
       exit_code = status == :supported ? 0 : 1
@@ -509,31 +531,19 @@ module ClaudeEasy
     guard_storage = options[:profile_dirs].empty?
     expected_storage = storage_mode if guard_storage
     directories = guard_storage ? default_profile_directories : options[:profile_dirs]
-    if directories.empty?
-      return emit_cli_result(
-        operation: "patch_profiles", exit_code: 2, status: "failed", code: "profile_directory_missing",
-        summary_zh: "没有找到 ClashX Meta 配置目录。"
-      ) if options[:json]
-      warn "没有找到 ClashX Meta 配置目录。"
-      return 2
-    end
-
-    if options[:snapshot_initial]
-      snapshots = snapshot_initial_profiles(directories, options[:backup_root])
-      return emit_cli_result(
-        operation: "snapshot_initial", exit_code: 0, status: snapshots.empty? ? "no_change" : "ok",
-        code: snapshots.empty? ? "snapshot_exists" : "snapshot_created", summary_zh: "初始快照处理完成。",
-        changes: snapshots.empty? ? [] : ["initial_snapshot"]
-      ) if options[:json]
-      snapshots.each { |path| puts public_backup_id(File.basename(path)) }
-      return 0
-    end
-
     if options[:recover_profile_transaction]
       result = recover_pending_profile_transaction(
         options[:backup_root], directories: directories,
         guard_storage: guard_storage, expected_storage: expected_storage
       )
+      if result == :profile_directory_missing
+        return emit_cli_result(
+          operation: "recover_profile_transaction", exit_code: 2, status: "failed",
+          code: "profile_directory_missing", summary_zh: "没有找到 ClashX Meta 配置目录。"
+        ) if options[:json]
+        warn "没有找到 ClashX Meta 配置目录。"
+        return 2
+      end
       if result == :runtime_restore_pending
         return emit_cli_result(
           operation: "recover_profile_transaction", exit_code: 1, status: "partial",
@@ -554,6 +564,26 @@ module ClaudeEasy
       return 0
     end
 
+    if directories.empty?
+      return emit_cli_result(
+        operation: "patch_profiles", exit_code: 2, status: "failed", code: "profile_directory_missing",
+        summary_zh: "没有找到 ClashX Meta 配置目录。"
+      ) if options[:json]
+      warn "没有找到 ClashX Meta 配置目录。"
+      return 2
+    end
+
+    if options[:snapshot_initial]
+      snapshots = snapshot_initial_profiles(directories, options[:backup_root])
+      return emit_cli_result(
+        operation: "snapshot_initial", exit_code: 0, status: snapshots.empty? ? "no_change" : "ok",
+        code: snapshots.empty? ? "snapshot_exists" : "snapshot_created", summary_zh: "初始快照处理完成。",
+        changes: snapshots.empty? ? [] : ["initial_snapshot"]
+      ) if options[:json]
+      snapshots.each { |path| puts public_backup_id(File.basename(path)) }
+      return 0
+    end
+
     if options[:compare_backup]
       comparison = compare_backup(options[:compare_backup], directories: directories, backup_root: options[:backup_root])
       return emit_cli_result(
@@ -571,6 +601,23 @@ module ClaudeEasy
     end
 
     if options[:restore_backup]
+      begin
+        restore_usage_profile = saved_usage_profile
+        profile_rejection = unless restore_usage_profile
+                              ["usage_profile_unset", "尚未保存用途档位，未恢复备份。"]
+                            end
+      rescue InvalidConfigError
+        profile_rejection = ["usage_profile_invalid", "已保存的用途档位状态无效，未恢复备份。"]
+      end
+      if profile_rejection
+        code, summary = profile_rejection
+        return emit_cli_result(
+          operation: "restore_backup", exit_code: 10, status: "invalid_request",
+          code: code, summary_zh: summary
+        ) if options[:json]
+        warn summary
+        return 10
+      end
       runtime_context = capture_runtime_profile_context(
         directories, guard_storage: guard_storage,
         expected_storage: expected_storage
@@ -606,15 +653,20 @@ module ClaudeEasy
         if active
           activate_updated_profile(
             restore_result, require_tun: :preserve,
-            precommit_condition: precommit_condition
+            precommit_condition: precommit_condition,
+            require_safe_ai: restore_usage_profile == 3
           )
         else
           restore_result
         end
       end
+      restore_policy = JSON.parse(File.read(options[:policy], encoding: "UTF-8"))
       result = restore_backup(
         options[:restore_backup], directories: directories, backup_root: options[:backup_root],
-        expected_current_sha256: options[:expected_current_sha256], validator: method(:validate_with_mihomo),
+        expected_current_sha256: options[:expected_current_sha256],
+        validator: ->(path) {
+          restore_candidate_valid?(path, restore_usage_profile, policy: restore_policy)
+        },
         selected_name: selected, activation: activation,
         precommit_condition: precommit_condition
       )
@@ -831,6 +883,23 @@ module ClaudeEasy
       nil
     end
     WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT
+  rescue ProfileCommitStateUncertainError
+    operation = if options[:restore_backup]
+                  "restore_backup"
+                elsif options[:safe_update_all]
+                  "safe_update"
+                else
+                  "patch_profiles"
+                end
+    return emit_cli_result(
+      operation: operation,
+      exit_code: PROFILE_COMMIT_STATE_UNCERTAIN_EXIT,
+      status: "partial", code: "profile_commit_state_uncertain",
+      summary_zh: "配置提交状态无法确认；必须保留当前档位并在下次运行时恢复。",
+      profile: options[:usage_profile]
+    ) if json_mode
+    warn "配置提交状态无法确认；必须保留当前档位并在下次运行时恢复。"
+    PROFILE_COMMIT_STATE_UNCERTAIN_EXIT
   rescue StandardError => error
     return emit_cli_result(
       operation: "patch_profiles", exit_code: 1, status: "failed", code: "unexpected_error",

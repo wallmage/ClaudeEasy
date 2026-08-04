@@ -2008,6 +2008,8 @@ class MacosWrapperTest < Minitest::Test
         exit 1
       when "publish-failed"
         exit 75
+      when "commit-uncertain"
+        exit 77
       when "killed"
         Process.kill("KILL", Process.pid)
       else
@@ -2017,6 +2019,7 @@ class MacosWrapperTest < Minitest::Test
     expected_codes = {
       "invalid" => "operation_result_unknown_recovery_intent",
       "publish-failed" => "operation_committed_result_failed",
+      "commit-uncertain" => "operation_result_unknown_recovery_intent",
       "killed" => "operation_result_unknown_recovery_intent"
     }
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
@@ -2057,6 +2060,49 @@ class MacosWrapperTest < Minitest::Test
               end
             end
           end
+        end
+      end
+    end
+  end
+
+  def test_child_lock_failure_exit_does_not_preserve_an_uncommitted_profile
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update-owned"), "disabled")
+        puts "disabled"
+        exit 0
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.delete(File.join(home, "auto-update-owned")) if File.exist?(File.join(home, "auto-update-owned"))
+        puts "restored"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      exit 76
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
+          system("/usr/bin/plutil", "-create", "xml1", state)
+          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+
+          stdout, stderr, status = run_script(installer, "--profile", "3", "--json", home: home)
+
+          refute status.success?, "#{stdout}\n#{stderr}"
+          assert_equal "patch_failed", assert_json_result(stdout, status, command: "install").fetch("code")
+          saved = Open3.capture2(
+            "/usr/bin/plutil", "-extract", "Profile", "raw", state
+          ).first.strip
+          assert_equal "1", saved
         end
       end
     end

@@ -892,9 +892,30 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "      File.unlink(path)\n" \
+        "      File.unlink(path) if [current.dev, current.ino] == committed.fetch(:identity)\n" \
           "      fsync_parent_directory(path)\n",
-        "      File.unlink(path)\n"
+        "      File.unlink(path) if [current.dev, current.ino] == committed.fetch(:identity)\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_profile_transaction_fsyncs_the_journal_directory_after_publish_and_remove"
+      )
+    end
+  end
+
+  def test_profile_transaction_committed_marker_directory_sync_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "          File.rename(temporary.path, path)\n" \
+          "          begin\n" \
+          "            fsync_parent_directory(path)\n",
+        "          File.rename(temporary.path, path)\n" \
+          "          begin\n" \
+          "            true\n"
       )
 
       assert_mutation_is_killed(
@@ -2258,8 +2279,33 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        "    PROFILE_OPERATION_RESULT_UNKNOWN=1\n",
-        "    PROFILE_OPERATION_RESULT_UNKNOWN=0\n"
+        "  elif [ \"\$PROFILE_OPERATION_RECEIPT_INVALID\" -eq 1 ] ||\n" \
+          "       [ \"\$PROFILE_OPERATION_CHILD_STATUS\" -ge 128 ]; then\n" \
+          "    preserve_profile_operation_state\n" \
+          "    PROFILE_OPERATION_RECOVERY_INTENT=1\n" \
+          "    PROFILE_OPERATION_RESULT_UNKNOWN=1\n",
+        "  elif [ \"\$PROFILE_OPERATION_RECEIPT_INVALID\" -eq 1 ] ||\n" \
+          "       [ \"\$PROFILE_OPERATION_CHILD_STATUS\" -ge 128 ]; then\n" \
+          "    preserve_profile_operation_state\n" \
+          "    PROFILE_OPERATION_RECOVERY_INTENT=1\n" \
+          "    PROFILE_OPERATION_RESULT_UNKNOWN=0\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name", "test_uncertain_or_unpublished_commit_receipt_preserves_outer_profile_state"
+      )
+    end
+  end
+
+  def test_macos_uncertain_profile_commit_exit_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_macos.sh",
+        '  elif [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 77 ]; then',
+        '  elif [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 78 ]; then'
       )
 
       assert_mutation_is_killed(

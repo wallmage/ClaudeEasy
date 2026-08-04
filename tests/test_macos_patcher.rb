@@ -1412,6 +1412,8 @@ class MacosPatcherTest < Minitest::Test
 
     refute_includes output, "private"
     refute_includes output, "secret.invalid"
+    refute_match(/Bearer\s+/i, output)
+    refute_match(/token\s*[:=]/i, output)
   end
 
   def test_patcher_json_mode_emits_one_redacted_contract_object
@@ -2804,6 +2806,89 @@ class MacosPatcherTest < Minitest::Test
       assert_equal :updated, result.fetch(:status)
       assert_equal true, result.fetch(:reloaded)
       refute File.exist?(transaction_path)
+    end
+  end
+
+  def test_restore_backup_propagates_uncertain_commit_publication
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      backup_root = File.join(directory, "backups")
+      current = YAML.dump(base_config.merge("subscription-marker" => "current"))
+      older = YAML.dump(base_config.merge("subscription-marker" => "older"))
+      File.binwrite(profile, current)
+      backup = ClaudeEasy.create_versioned_backup(
+        profile, backup_root, content: older, reason: "prewrite"
+      )
+      journal_path = ClaudeEasy.profile_transaction_path(backup_root)
+      real_sync = ClaudeEasy.method(:fsync_parent_directory)
+      injected_sync = lambda do |path|
+        if path == journal_path && File.binread(path) == ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES
+          raise IOError, "injected committed marker directory sync failure"
+        end
+        real_sync.call(path)
+      end
+
+      assert_raises(ClaudeEasy::ProfileCommitStateUncertainError) do
+        ClaudeEasy.stub(:fsync_parent_directory, injected_sync) do
+          ClaudeEasy.restore_backup(
+            File.basename(backup), directories: [directory], backup_root: backup_root,
+            expected_current_sha256: Digest::SHA256.hexdigest(current.b),
+            validator: ->(_candidate) { true }
+          )
+        end
+      end
+      assert_equal older.b, File.binread(profile)
+      assert_equal ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES, File.binread(journal_path)
+    end
+  end
+
+  def test_restore_backup_rolls_back_when_profile_three_rules_are_missing
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      backup_root = File.join(directory, "backups")
+      current = YAML.dump(base_config.merge("subscription-marker" => "current"))
+      restored = YAML.dump(base_config.merge("subscription-marker" => "restored"))
+      File.binwrite(profile, current)
+      backup = ClaudeEasy.create_versioned_backup(
+        profile, backup_root, content: restored, reason: "prewrite"
+      )
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "台湾家宽 01" },
+            "台湾家宽 01" => { "type" => "Shadowsocks" },
+            "AI" => { "type" => "Selector", "now" => "DIRECT" },
+            "DIRECT" => { "type" => "Direct" }
+          })]
+        when ["PUT", "/configs?force=true"], ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        else
+          if method == "GET" && endpoint.start_with?("/dns/query?")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          else
+            [404, ""]
+          end
+        end
+      end
+      activation = lambda do |result|
+        ClaudeEasy.activate_updated_profile(
+          result, requester: requester, connectivity_checker: -> { true },
+          require_tun: :preserve, require_safe_ai: true
+        )
+      end
+
+      result = ClaudeEasy.restore_backup(
+        File.basename(backup), directories: [directory], backup_root: backup_root,
+        expected_current_sha256: Digest::SHA256.hexdigest(current.b),
+        validator: ->(_candidate) { true }, activation: activation
+      )
+
+      assert_equal :reload_failed_rolled_back, result.fetch(:status)
+      assert_equal current.b, File.binread(profile)
+      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -4891,6 +4976,36 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_safe_update_propagates_uncertain_commit_publication
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "ordinary.yaml")
+      backup_root = File.join(directory, "backups")
+      File.write(profile, YAML.dump(base_config))
+      journal_path = ClaudeEasy.profile_transaction_path(backup_root)
+      real_sync = ClaudeEasy.method(:fsync_parent_directory)
+      injected_sync = lambda do |path|
+        if path == journal_path && File.binread(path) == ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES
+          raise IOError, "injected committed marker directory sync failure"
+        end
+        real_sync.call(path)
+      end
+
+      assert_raises(ClaudeEasy::ProfileCommitStateUncertainError) do
+        ClaudeEasy.stub(:fsync_parent_directory, injected_sync) do
+          ClaudeEasy.safe_update_all(
+            targets: [{ name: "ordinary", path: profile, url: "https://subscriptions.invalid/ordinary" }],
+            policy: @policy, backup_root: backup_root, usage_profile: 2,
+            fetcher: ->(_target) { YAML.dump(base_config.merge("subscription-marker" => "fresh")) },
+            validator: ->(_path) { true }, activation: ->(_items) { true },
+            selected_name: "ordinary"
+          )
+        end
+      end
+      assert_equal "fresh", ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
+      assert_equal ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES, File.binread(journal_path)
+    end
+  end
+
   def test_safe_update_all_rolls_back_every_profile_when_runtime_activation_fails
     Dir.mktmpdir do |directory|
       targets = %w[first second].map do |name|
@@ -5939,6 +6054,7 @@ class MacosPatcherTest < Minitest::Test
     assert_includes ClaudeEasy.chinese_status(base.merge(active: false)), "已更新，选择该订阅时生效"
     assert_includes ClaudeEasy.chinese_status(base.merge(status: :reload_failed_rolled_back)), "自动刷新失败，已恢复原配置"
     assert_includes ClaudeEasy.chinese_status(base.merge(status: :unchanged)), "无需修改"
+    assert_includes ClaudeEasy.chinese_status(base.merge(status: :runtime_check_failed)), "AI 分组未通过检查"
   end
 
   def test_run_automatically_reloads_and_checks_the_active_profile
@@ -5949,12 +6065,14 @@ class MacosPatcherTest < Minitest::Test
       requests = []
       proxy_body = JSON.generate("proxies" => {
         "Main" => { "type" => "Selector", "now" => "台湾家宽 01" },
-        "AI" => { "type" => "Selector", "now" => "台湾家宽 01" }
+        "AI" => { "type" => "Selector", "now" => "台湾家宽 01" },
+        "台湾家宽 01" => { "type" => "Shadowsocks" }
       })
       requester = lambda do |method, endpoint, body|
         requests << [method, endpoint, body]
         case [method, endpoint]
         when ["GET", "/proxies"] then [200, proxy_body]
+        when ["GET", "/providers/proxies"] then [200, JSON.generate("providers" => {})]
         when ["PUT", "/configs?force=true"] then [204, ""]
         when ["POST", "/cache/fakeip/flush"] then [204, ""]
         when ["POST", "/cache/dns/flush"] then [204, ""]
@@ -6439,6 +6557,256 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_profile_three_rolls_back_when_the_ai_group_resolves_to_direct
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      backup_root = File.join(directory, "backups")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+      requester = lambda do |method, endpoint, _body|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "台湾家宽 01" },
+            "台湾家宽 01" => { "type" => "Shadowsocks" },
+            "AI" => { "type" => "Selector", "now" => "DIRECT" },
+            "DIRECT" => { "type" => "Direct" }
+          })]
+        when ["PUT", "/configs?force=true"], ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        else
+          if method == "GET" && endpoint.start_with?("/dns/query?")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          else
+            [404, ""]
+          end
+        end
+      end
+
+      result = ClaudeEasy.run(
+        directory: directory, policy_path: POLICY_PATH, backup_root: backup_root,
+        selected_name: "friend", validator: ->(_path) { true },
+        auto_reload: true, requester: requester,
+        connectivity_checker: -> { true }, usage_profile: 3
+      ).first
+
+      assert_equal :reload_failed_rolled_back, result.fetch(:status)
+      assert_equal original.b, File.binread(profile)
+      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_profile_three_checks_the_ai_path_when_the_active_file_is_unchanged
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      patched = ClaudeEasy.patch(base_config, @policy, usage_profile: 3).fetch(:config)
+      File.write(profile, YAML.dump(patched))
+      requests = []
+      requester = lambda do |method, endpoint, _body = nil|
+        requests << [method, endpoint]
+        if [method, endpoint] == ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "AI" => { "type" => "Selector", "now" => "DIRECT" },
+            "DIRECT" => { "type" => "Direct" }
+          })]
+        else
+          [404, ""]
+        end
+      end
+
+      result = ClaudeEasy.run(
+        directory: directory, policy_path: POLICY_PATH, backup_root: File.join(directory, "backups"),
+        selected_name: "friend", validator: ->(_path) { true }, auto_reload: true,
+        requester: requester, connectivity_checker: -> { true }, usage_profile: 3
+      ).first
+
+      assert_equal :runtime_check_failed, result.fetch(:status)
+      refute requests.any? { |method, endpoint| method == "PUT" && endpoint == "/configs?force=true" }
+
+      requests.clear
+      result = ClaudeEasy.run(
+        directory: directory, policy_path: POLICY_PATH, backup_root: File.join(directory, "backups"),
+        selected_name: "friend", validator: ->(_path) { true }, auto_reload: false,
+        requester: requester, connectivity_checker: -> { true }, usage_profile: 3
+      ).first
+
+      assert_equal :runtime_check_failed, result.fetch(:status)
+      assert requests.any? { |method, endpoint| method == "GET" && endpoint == "/proxies" }
+      refute requests.any? { |method, endpoint| method == "PUT" && endpoint == "/configs?force=true" }
+
+      ClaudeEasy.stub(:controller_socket, nil) do
+        checked = ClaudeEasy.verify_unchanged_profile_runtime(
+          { path: profile, status: :unchanged }, require_safe_ai: true
+        )
+        assert_equal :runtime_check_failed, checked.fetch(:status)
+      end
+      ClaudeEasy.stub(:controller_socket, "socket") do
+        ClaudeEasy.stub(:controller_request, ->(_socket, method, endpoint, body) {
+          requester.call(method, endpoint, body)
+        }) do
+          checked = ClaudeEasy.verify_unchanged_profile_runtime(
+            { path: profile, status: :unchanged }, require_safe_ai: true
+          )
+          assert_equal :runtime_check_failed, checked.fetch(:status)
+        end
+      end
+      checked = ClaudeEasy.verify_unchanged_profile_runtime(
+        { status: :unchanged }, require_safe_ai: true
+      )
+      assert_equal :runtime_check_failed, checked.fetch(:status)
+    end
+  end
+
+  def test_runtime_ai_path_rejects_nested_non_proxy_cycles_and_unsafe_load_balance_members
+    safe_node = { "type" => "Shadowsocks" }
+    nested_direct = {
+      "AI" => { "type" => "Selector", "now" => "Nested" },
+      "Nested" => { "type" => "Fallback", "now" => "Local" },
+      "Local" => { "type" => "Direct" }
+    }
+    cycle = {
+      "AI" => { "type" => "Selector", "now" => "Nested" },
+      "Nested" => { "type" => "URLTest", "now" => "AI" }
+    }
+    safe_balance = {
+      "AI" => { "type" => "LoadBalance", "all" => %w[node-a node-b] },
+      "node-a" => safe_node,
+      "node-b" => { "type" => "Vmess" }
+    }
+    unsafe_balance = safe_balance.merge(
+      "AI" => { "type" => "LoadBalance", "all" => %w[node-a local] },
+      "local" => { "type" => "Direct" }
+    )
+    relay = {
+      "AI" => { "type" => "Selector", "now" => "Relay" },
+      "Relay" => { "type" => "Relay", "all" => ["DIRECT"] },
+      "DIRECT" => { "type" => "Direct" }
+    }
+    unknown_group = {
+      "AI" => { "type" => "Selector", "now" => "FutureGroup" },
+      "FutureGroup" => { "type" => "FutureGroup", "all" => ["safe-node"] },
+      "safe-node" => safe_node
+    }
+
+    refute ClaudeEasy.runtime_proxy_path_safe?(nested_direct, "AI")
+    refute ClaudeEasy.runtime_proxy_path_safe?(cycle, "AI")
+    assert ClaudeEasy.runtime_proxy_path_safe?(safe_balance, "AI")
+    refute ClaudeEasy.runtime_proxy_path_safe?(unsafe_balance, "AI")
+    refute ClaudeEasy.runtime_proxy_path_safe?(relay, "AI")
+    refute ClaudeEasy.runtime_proxy_path_safe?(unknown_group, "AI")
+    refute ClaudeEasy.runtime_proxy_candidates_safe?(
+      { "AI" => { "type" => "Selector", "now" => "shared" } },
+      { "shared" => [{ "name" => "shared", "type" => "Relay", "all" => ["DIRECT"] }] },
+      "shared", { "AI" => true }
+    )
+
+    Dir.mktmpdir do |directory|
+      assert_nil ClaudeEasy.profile_ai_runtime_group(File.join(directory, "missing.yaml"))
+      direct = base_config
+      direct["rules"] = ["NETWORK,UDP,DIRECT", "NETWORK,UDP,REJECT"]
+      path = File.join(directory, "direct.yaml")
+      File.write(path, YAML.dump(direct))
+      assert_nil ClaudeEasy.profile_ai_runtime_group(path)
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 2, validator: ->(_candidate) { raise "validator failed" }
+      )
+
+      incomplete = base_config
+      incomplete["proxy-groups"] << {
+        "name" => "AI", "type" => "select", "proxies" => ["Taiwan"]
+      }
+      incomplete["rules"] = ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT", "MATCH,DIRECT"]
+      File.write(path, YAML.dump(incomplete))
+      assert_equal "AI", ClaudeEasy.profile_ai_runtime_group(path)
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+
+      complete = ClaudeEasy.render_ai_rules(@policy, "AI")
+      incomplete["rules"] = ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT"] + complete + ["MATCH,DIRECT"]
+      File.write(path, YAML.dump(incomplete))
+      assert ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+      incomplete["rules"] = ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT", "MATCH,DIRECT"] + complete
+      File.write(path, YAML.dump(incomplete))
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+    end
+  end
+
+  def test_runtime_ai_path_accepts_a_proxy_only_exposed_by_its_provider
+    requester = lambda do |method, endpoint, _body = nil|
+      case [method, endpoint]
+      when ["GET", "/proxies"]
+        [200, JSON.generate("proxies" => {
+          "AI" => { "type" => "Selector", "now" => "Provider Node" }
+        })]
+      when ["GET", "/providers/proxies"]
+        [200, JSON.generate("providers" => {
+          "remote" => { "proxies" => [{ "name" => "Provider Node", "type" => "Vmess" }] }
+        })]
+      when ["GET", "/configs"]
+        [200, JSON.generate("tun" => { "enable" => true })]
+      when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+        [204, ""]
+      else
+        if method == "GET" && endpoint.start_with?("/dns/query?")
+          [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+        else
+          [404, ""]
+        end
+      end
+    end
+
+    assert ClaudeEasy.runtime_health_healthy?(
+      requester, selections: { "AI" => "Provider Node" }, expected_tun: :enabled,
+      connectivity_checker: -> { true }, required_proxy_group: "AI"
+    )
+
+    collision_requester = lambda do |method, endpoint, body = nil|
+      if [method, endpoint] == ["GET", "/proxies"]
+        [200, JSON.generate("proxies" => {
+          "AI" => { "type" => "Selector", "now" => "Provider Node" },
+          "Provider Node" => { "type" => "Shadowsocks" }
+        })]
+      elsif [method, endpoint] == ["GET", "/providers/proxies"]
+        [200, JSON.generate("providers" => {
+          "remote" => { "proxies" => [{ "name" => "Provider Node", "type" => "Direct" }] }
+        })]
+      else
+        requester.call(method, endpoint, body)
+      end
+    end
+    refute ClaudeEasy.runtime_health_healthy?(
+      collision_requester, selections: { "AI" => "Provider Node" }, expected_tun: :enabled,
+      connectivity_checker: -> { true }, required_proxy_group: "AI"
+    )
+
+    load_balance_requester = lambda do |method, endpoint, body = nil|
+      if [method, endpoint] == ["GET", "/proxies"]
+        [200, JSON.generate("proxies" => {
+          "AI" => { "type" => "LoadBalance", "all" => ["Provider Node"] }
+        })]
+      else
+        requester.call(method, endpoint, body)
+      end
+    end
+    assert ClaudeEasy.runtime_proxy_group_safe?(load_balance_requester, "AI")
+    assert_nil ClaudeEasy.runtime_provider_proxies(
+      ->(_method, _endpoint, _body) { [200, "{"] }
+    )
+    refute ClaudeEasy.runtime_proxy_group_safe?(
+      ->(_method, _endpoint, _body) { raise "controller failed" }, "AI"
+    )
+  end
+
   def test_active_reload_allows_a_removed_legacy_managed_selector
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "friend.yaml")
@@ -6463,10 +6831,13 @@ class MacosPatcherTest < Minitest::Test
           proxy_reads += 1
           proxies = {
             "Main" => { "type" => "Selector", "now" => "台湾家宽 01" },
-            "AI" => { "type" => "Selector", "now" => "Main" }
+            "AI" => { "type" => "Selector", "now" => "Main" },
+            "台湾家宽 01" => { "type" => "Shadowsocks" }
           }
           proxies[safe_group] = { "type" => "Selector", "now" => "台湾家宽 01" } if proxy_reads == 1
           [200, JSON.generate("proxies" => proxies)]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
         when ["PUT", "/configs?force=true"], ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
           [204, ""]
         when ["GET", "/configs"]
@@ -6864,6 +7235,8 @@ class MacosPatcherTest < Minitest::Test
 
     refute_includes output, "private"
     refute_includes output, "secret.invalid"
+    refute_match(/Bearer\s+/i, output)
+    refute_match(/password\s*[:=]/i, output)
   end
 
   def test_backup_directory_and_files_use_private_permissions
@@ -8453,13 +8826,165 @@ class MacosPatcherTest < Minitest::Test
 
       removal_syncs = []
       ClaudeEasy.stub(:fsync_parent_directory, lambda { |path|
-        refute File.exist?(path)
-        removal_syncs << path
+        removal_syncs << if File.exist?(path)
+                           assert_equal ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES,
+                                        File.binread(path)
+                           :marker_published
+                         else
+                           :marker_removed
+                         end
         true
       }) do
         ClaudeEasy.remove_profile_transaction(snapshot)
       end
-      assert_equal [journal_path], removal_syncs
+      assert_equal %i[marker_published marker_removed], removal_syncs
+    end
+  end
+
+  def test_profile_transaction_remove_sync_failure_keeps_the_commit_successful
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+      journal_path = ClaudeEasy.profile_transaction_path(backup_root)
+      real_sync = ClaudeEasy.method(:fsync_parent_directory)
+      injected_sync = lambda do |path|
+        if path == journal_path && !File.exist?(path)
+          raise IOError, "injected removal directory sync failure"
+        end
+
+        real_sync.call(path)
+      end
+
+      results = ClaudeEasy.stub(:fsync_parent_directory, injected_sync) do
+        ClaudeEasy.run(
+          directory: directory, policy_path: POLICY_PATH, backup_root: backup_root,
+          selected_name: "friend", validator: ->(_path) { true }, usage_profile: 1
+        )
+      end
+
+      assert_equal :updated, results.first.fetch(:status)
+      refute_equal original.b, File.binread(profile)
+      refute File.exist?(journal_path)
+    end
+  end
+
+  def test_profile_transaction_committed_marker_never_rolls_back_the_candidate
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      File.binwrite(profile, "candidate")
+      File.binwrite(transaction.fetch(:path), ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES)
+
+      result = ClaudeEasy.resume_profile_transaction(
+        backup_root, roots: [directory],
+        work_items: [{ path: profile, active: true }], reload_runtime: true,
+        require_tun: true,
+        requester: ->(*_arguments) { flunk "committed marker triggered runtime rollback" }
+      )
+
+      assert_equal :recovered, result
+      assert_equal "candidate", File.binread(profile)
+      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_profile_transaction_commit_publication_never_truncates_the_pending_journal
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      pending_bytes = File.binread(transaction.fetch(:path))
+      real_rename = File.method(:rename)
+      reject_commit = lambda do |source, destination|
+        raise IOError, "injected commit publication failure" if destination == transaction.fetch(:path)
+
+        real_rename.call(source, destination)
+      end
+
+      File.stub(:rename, reject_commit) do
+        assert_raises(IOError) { ClaudeEasy.remove_profile_transaction(transaction) }
+      end
+
+      assert_equal pending_bytes, File.binread(transaction.fetch(:path))
+      ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      refute File.exist?(transaction.fetch(:path))
+    end
+  end
+
+  def test_profile_transaction_commit_directory_sync_failure_reports_uncertain_state
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      journal_path = transaction.fetch(:path)
+      real_sync = ClaudeEasy.method(:fsync_parent_directory)
+      fail_committed_sync = lambda do |path|
+        if path == journal_path && File.binread(path) == ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES
+          raise IOError, "injected committed marker directory sync failure"
+        end
+
+        real_sync.call(path)
+      end
+
+      error = assert_raises(ClaudeEasy::ProfileCommitStateUncertainError) do
+        ClaudeEasy.stub(:fsync_parent_directory, fail_committed_sync) do
+          ClaudeEasy.remove_profile_transaction(
+            transaction, state_uncertain_on_sync_failure: true
+          )
+        end
+      end
+
+      assert_includes error.message, "无法确认"
+      assert_equal ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES, File.binread(journal_path)
+      assert_equal :committed, ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      refute File.exist?(journal_path)
+
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      error = assert_raises(IOError) do
+        ClaudeEasy.stub(:fsync_parent_directory, fail_committed_sync) do
+          ClaudeEasy.remove_profile_transaction(transaction)
+        end
+      end
+      refute_kind_of ClaudeEasy::ProfileCommitStateUncertainError, error
+      assert_equal ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES, File.binread(journal_path)
+    end
+  end
+
+  def test_pending_recovery_cleans_a_committed_marker_without_runtime_context_or_profiles
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      ClaudeEasy.secure_backup_root!(backup_root)
+      journal_path = ClaudeEasy.profile_transaction_path(backup_root)
+      File.binwrite(journal_path, ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES)
+
+      result = ClaudeEasy.stub(:capture_runtime_profile_context, ->(*_arguments) {
+        flunk "committed marker requested runtime context"
+      }) do
+        ClaudeEasy.recover_pending_profile_transaction(
+          backup_root, directories: []
+        )
+      end
+
+      assert_equal :recovered, result
+      refute File.exist?(journal_path)
     end
   end
 
@@ -9199,6 +9724,43 @@ class MacosPatcherTest < Minitest::Test
         assert_empty error
         assert_equal "profile_transaction_runtime_pending", JSON.parse(output).fetch("code")
       end
+      ClaudeEasy.stub(:recover_pending_profile_transaction, :profile_directory_missing) do
+        output, error = capture_io do
+          assert_equal 2, ClaudeEasy.cli([
+            "--json", "--backup-dir", backup_root, "--recover-profile-transaction"
+          ])
+        end
+        assert_empty error
+        assert_equal "profile_directory_missing", JSON.parse(output).fetch("code")
+      end
+      ClaudeEasy.stub(:recover_pending_profile_transaction, :profile_directory_missing) do
+        _output, error = capture_io do
+          assert_equal 2, ClaudeEasy.cli([
+            "--backup-dir", backup_root, "--recover-profile-transaction"
+          ])
+        end
+        assert_includes error, "没有找到"
+      end
+    end
+  end
+
+  def test_cli_cleans_a_committed_transaction_when_profile_directories_are_missing
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      ClaudeEasy.secure_backup_root!(backup_root)
+      journal_path = ClaudeEasy.profile_transaction_path(backup_root)
+      File.binwrite(journal_path, ClaudeEasy::PROFILE_TRANSACTION_COMMITTED_BYTES)
+
+      ClaudeEasy.stub(:default_profile_directories, []) do
+        output, error = capture_io do
+          assert_equal 0, ClaudeEasy.cli([
+            "--json", "--backup-dir", backup_root, "--recover-profile-transaction"
+          ])
+        end
+        assert_empty error
+        assert_equal "profile_transaction_recovered", JSON.parse(output).fetch("code")
+      end
+      refute File.exist?(journal_path)
     end
   end
 
@@ -10043,9 +10605,10 @@ class MacosPatcherTest < Minitest::Test
         patched_digest: Digest::SHA256.hexdigest("restored")
       }
       activated = false
-      activation = lambda do |result, require_tun:, **_keywords|
+      activation = lambda do |result, require_tun:, require_safe_ai:, **_keywords|
         activated = true
         assert_equal :preserve, require_tun
+        assert_equal true, require_safe_ai
         result.merge(reloaded: true)
       end
 
@@ -10056,11 +10619,13 @@ class MacosPatcherTest < Minitest::Test
         ClaudeEasy.stub(:selected_profile_name, "friend") do
           ClaudeEasy.stub(:active_profile_root, directory) do
             ClaudeEasy.stub(:activate_updated_profile, activation) do
-              output, error = capture_io do
-                assert_equal 0, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
-                  "--expected-current-sha256", "0" * 64
-                ])
+              output, error = ClaudeEasy.stub(:saved_usage_profile, 3) do
+                capture_io do
+                  assert_equal 0, ClaudeEasy.cli([
+                    "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                    "--expected-current-sha256", "0" * 64
+                  ])
+                end
               end
               assert_empty error
               assert_equal "ok", JSON.parse(output).fetch("status")
@@ -10070,6 +10635,77 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert activated
+    end
+  end
+
+  def test_cli_restore_backup_requires_a_valid_saved_usage_profile_before_work
+    Dir.mktmpdir do |directory|
+      File.write(File.join(directory, "friend.yaml"), YAML.dump(base_config))
+      forbidden = lambda do |*_arguments, **_keywords|
+        flunk "restore ran without a valid saved usage profile"
+      end
+      [
+        [nil, "usage_profile_unset"],
+        [-> { raise ClaudeEasy::InvalidConfigError }, "usage_profile_invalid"]
+      ].each do |saved, expected_code|
+        output, error = ClaudeEasy.stub(:saved_usage_profile, saved) do
+          ClaudeEasy.stub(:restore_backup, forbidden) do
+            capture_io do
+              assert_equal 10, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                "--expected-current-sha256", "0" * 64
+              ])
+            end
+          end
+        end
+        assert_empty error
+        result = JSON.parse(output)
+        assert_equal "restore_backup", result.fetch("operation")
+        assert_equal expected_code, result.fetch("code")
+      end
+
+      _output, error = ClaudeEasy.stub(:saved_usage_profile, nil) do
+        ClaudeEasy.stub(:restore_backup, forbidden) do
+          capture_io do
+            assert_equal 10, ClaudeEasy.cli([
+              "--profile-dir", directory, "--restore-backup", "backup-id",
+              "--expected-current-sha256", "0" * 64
+            ])
+          end
+        end
+      end
+      assert_includes error, "尚未保存用途档位"
+    end
+  end
+
+  def test_cli_restore_backup_labels_an_uncertain_commit_as_restore
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      File.write(profile, YAML.dump(base_config))
+      context = {
+        selected: "friend", active_path: File.realpath(profile),
+        storage: nil, roots: [File.realpath(directory)]
+      }
+      uncertain = lambda do |*_arguments, **_keywords|
+        raise ClaudeEasy::ProfileCommitStateUncertainError, "injected uncertain restore"
+      end
+
+      output, error = ClaudeEasy.stub(:saved_usage_profile, 1) do
+        ClaudeEasy.stub(:capture_runtime_profile_context, context) do
+          ClaudeEasy.stub(:restore_backup, uncertain) do
+            capture_io do
+              assert_equal ClaudeEasy::PROFILE_COMMIT_STATE_UNCERTAIN_EXIT, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                "--expected-current-sha256", "0" * 64
+              ])
+            end
+          end
+        end
+      end
+      assert_empty error
+      result = JSON.parse(output)
+      assert_equal "restore_backup", result.fetch("operation")
+      assert_equal "profile_commit_state_uncertain", result.fetch("code")
     end
   end
 
@@ -10129,6 +10765,54 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_cli_restore_backup_applies_the_saved_profile_to_inactive_candidates
+    Dir.mktmpdir do |directory|
+      friend = File.join(directory, "friend.yaml")
+      other = File.join(directory, "other.yaml")
+      backup_root = File.join(directory, "backups")
+      current = YAML.dump(base_config.merge("subscription-marker" => "current"))
+      restored = YAML.dump(base_config.merge("subscription-marker" => "restored"))
+      File.binwrite(friend, current)
+      File.binwrite(other, YAML.dump(base_config))
+      backup = ClaudeEasy.create_versioned_backup(
+        friend, backup_root, content: restored, reason: "prewrite"
+      )
+      arguments = [
+        "--json", "--profile-dir", directory, "--backup-dir", backup_root,
+        "--restore-backup", File.basename(backup),
+        "--expected-current-sha256", Digest::SHA256.hexdigest(current.b)
+      ]
+
+      ClaudeEasy.stub(:selected_profile_name, "other") do
+        ClaudeEasy.stub(:validate_with_mihomo, :timeout) do
+          [2, 3].each do |usage_profile|
+            output, error = ClaudeEasy.stub(:saved_usage_profile, usage_profile) do
+              capture_io { assert_equal 1, ClaudeEasy.cli(arguments.dup) }
+            end
+            assert_empty error
+            assert_equal "validation_timeout", JSON.parse(output).fetch("code")
+            assert_equal current.b, File.binread(friend)
+          end
+        end
+        ClaudeEasy.stub(:validate_with_mihomo, true) do
+          output, error = ClaudeEasy.stub(:saved_usage_profile, 3) do
+            capture_io { assert_equal 1, ClaudeEasy.cli(arguments.dup) }
+          end
+          assert_empty error
+          assert_equal "validation_failed", JSON.parse(output).fetch("code")
+          assert_equal current.b, File.binread(friend)
+
+          output, error = ClaudeEasy.stub(:saved_usage_profile, 2) do
+            capture_io { assert_equal 0, ClaudeEasy.cli(arguments.dup) }
+          end
+          assert_empty error
+          assert_equal "updated", JSON.parse(output).fetch("code")
+          assert_equal restored.b, File.binread(friend)
+        end
+      end
+    end
+  end
+
   def test_cli_restore_backup_rolls_back_if_the_user_enters_the_target_during_validation
     Dir.mktmpdir do |directory|
       friend = File.join(directory, "friend.yaml")
@@ -10150,13 +10834,15 @@ class MacosPatcherTest < Minitest::Test
 
       ClaudeEasy.stub(:selected_profile_name, -> { selected }) do
         ClaudeEasy.stub(:validate_with_mihomo, validator) do
-          output, error = capture_io do
-            assert_equal 1, ClaudeEasy.cli([
-              "--json", "--profile-dir", directory,
-              "--backup-dir", backup_root,
-              "--restore-backup", File.basename(backup),
-              "--expected-current-sha256", Digest::SHA256.hexdigest(current.b)
-            ])
+          output, error = ClaudeEasy.stub(:saved_usage_profile, 2) do
+            capture_io do
+              assert_equal 1, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory,
+                "--backup-dir", backup_root,
+                "--restore-backup", File.basename(backup),
+                "--expected-current-sha256", Digest::SHA256.hexdigest(current.b)
+              ])
+            end
           end
           assert_empty error
         end
@@ -10192,13 +10878,15 @@ class MacosPatcherTest < Minitest::Test
       ClaudeEasy.stub(:selected_profile_name, "other") do
         ClaudeEasy.stub(:validate_with_mihomo, true) do
           ClaudeEasy.stub(:runtime_profile_context_current?, context_check) do
-            output, error = capture_io do
-              assert_equal 1, ClaudeEasy.cli([
-                "--json", "--profile-dir", directory,
-                "--backup-dir", backup_root,
-                "--restore-backup", File.basename(backup),
-                "--expected-current-sha256", Digest::SHA256.hexdigest(current.b)
-              ])
+            output, error = ClaudeEasy.stub(:saved_usage_profile, 2) do
+              capture_io do
+                assert_equal 1, ClaudeEasy.cli([
+                  "--json", "--profile-dir", directory,
+                  "--backup-dir", backup_root,
+                  "--restore-backup", File.basename(backup),
+                  "--expected-current-sha256", Digest::SHA256.hexdigest(current.b)
+                ])
+              end
             end
             assert_empty error
           end
@@ -10612,6 +11300,71 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_cli_reports_uncertain_profile_commit_with_recovery_exit
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profiles = File.join(directory, "profiles")
+      FileUtils.mkdir_p(backup_root)
+      FileUtils.mkdir_p(profiles)
+      nonce = "d" * 32
+      receipt = File.join(backup_root, ".profile-operation-receipt.test")
+      File.binwrite(receipt, ClaudeEasy.wrapper_commit_receipt_bytes(nonce, false))
+      File.chmod(0o600, receipt)
+      arguments = [
+        "--json", "--profile-dir", profiles, "--backup-dir", backup_root,
+        "--usage-profile", "3", "--wrapper-commit-receipt", receipt,
+        "--wrapper-commit-nonce", nonce
+      ]
+      text_arguments = arguments.reject { |argument| argument == "--json" }
+      uncertain = lambda do |**_arguments|
+        raise ClaudeEasy::ProfileCommitStateUncertainError, "injected uncertain commit"
+      end
+
+      output = StringIO.new
+      original = $stdout
+      $stdout = output
+      begin
+        exit_code = ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:run, uncertain) { ClaudeEasy.cli(arguments) }
+        end
+      ensure
+        $stdout = original
+      end
+
+      assert_equal ClaudeEasy::PROFILE_COMMIT_STATE_UNCERTAIN_EXIT, exit_code
+      result = JSON.parse(output.string)
+      assert_equal "partial", result.fetch("status")
+      assert_equal "profile_commit_state_uncertain", result.fetch("code")
+      assert_equal exit_code, result.fetch("exit_code")
+      assert_equal ClaudeEasy.wrapper_commit_receipt_bytes(nonce, false), File.binread(receipt)
+
+      _output, error = capture_io do
+        exit_code = ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:run, uncertain) { ClaudeEasy.cli(text_arguments) }
+        end
+        assert_equal ClaudeEasy::PROFILE_COMMIT_STATE_UNCERTAIN_EXIT, exit_code
+      end
+      assert_includes error, "提交状态无法确认"
+
+      safe_output, safe_error = ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:remote_subscription_targets, []) do
+          ClaudeEasy.stub(:safe_update_all, uncertain) do
+            capture_io do
+              assert_equal ClaudeEasy::PROFILE_COMMIT_STATE_UNCERTAIN_EXIT, ClaudeEasy.cli([
+                "--json", "--profile-dir", profiles, "--backup-dir", backup_root,
+                "--policy", POLICY_PATH, "--usage-profile", "3", "--safe-update-all"
+              ])
+            end
+          end
+        end
+      end
+      assert_empty safe_error
+      safe_result = JSON.parse(safe_output)
+      assert_equal "safe_update", safe_result.fetch("operation")
+      assert_equal "profile_commit_state_uncertain", safe_result.fetch("code")
+    end
+  end
+
   def test_cli_returns_failure_when_any_profile_was_not_applied
     results = [
       { path: "/private/current.yaml", status: :reload_failed_rolled_back },
@@ -10739,6 +11492,47 @@ class MacosPatcherTest < Minitest::Test
       end
       assert_includes output, "friend.yaml"
       assert_empty error
+    end
+  end
+
+  def test_cli_rejects_safety_modifiers_that_an_explicit_operation_would_ignore
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+      operations = [
+        ["--snapshot-initial"], ["--restore-backup", "backup-id"],
+        ["--safe-update-all"], ["--recover-profile-transaction"]
+      ]
+
+      %w[--dry-run --no-reload].each do |modifier|
+        operations.each do |operation|
+          arguments = ["--json", "--profile-dir", directory, modifier, *operation]
+          output, error = capture_io { assert_equal 64, ClaudeEasy.cli(arguments) }
+          assert_empty error
+          assert_equal "incompatible_options", JSON.parse(output).fetch("code")
+          assert_equal original.b, File.binread(profile)
+        end
+      end
+
+      output, error = capture_io do
+        assert_equal 64, ClaudeEasy.cli([
+          "--json", "--profile-dir", directory,
+          "--restore-backup", "backup-id", "--safe-update-all"
+        ])
+      end
+      assert_empty error
+      assert_equal "incompatible_options", JSON.parse(output).fetch("code")
+      assert_equal original.b, File.binread(profile)
+
+      output, error = capture_io do
+        assert_equal 64, ClaudeEasy.cli([
+          "--profile-dir", directory, "--dry-run", "--restore-backup", "backup-id"
+        ])
+      end
+      assert_empty output
+      assert_includes error, "命令选项不能组合"
+      assert_equal original.b, File.binread(profile)
     end
   end
 

@@ -1,6 +1,14 @@
 module ClaudeEasy
   module_function
 
+  RUNTIME_NON_PROXY_NAMES = %w[
+    DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
+  ].freeze
+  RUNTIME_NON_PROXY_TYPES = %w[
+    Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay
+  ].freeze
+  RUNTIME_PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
+
   CURL_ISOLATED_ENVIRONMENT = {
     "http_proxy" => nil, "https_proxy" => nil, "all_proxy" => nil,
     "HTTP_PROXY" => nil, "HTTPS_PROXY" => nil, "ALL_PROXY" => nil,
@@ -68,13 +76,20 @@ module ClaudeEasy
     :unknown
   end
 
-  def runtime_selections(requester)
+  def runtime_proxies(requester)
     status, body = requester.call("GET", "/proxies", nil)
     return nil unless status == 200
 
     payload = JSON.parse(body)
     proxies = payload["proxies"]
-    return nil unless proxies.is_a?(Hash)
+    proxies if proxies.is_a?(Hash)
+  rescue JSON::ParserError
+    nil
+  end
+
+  def runtime_selections(requester)
+    proxies = runtime_proxies(requester)
+    return nil unless proxies
 
     proxies.each_with_object({}) do |(name, proxy), selections|
       next unless proxy.is_a?(Hash) && proxy["now"].is_a?(String)
@@ -82,8 +97,156 @@ module ClaudeEasy
 
       selections[name] = proxy["now"]
     end
+  end
+
+  def runtime_provider_proxies(requester)
+    status, body = requester.call("GET", "/providers/proxies", nil)
+    return nil unless status == 200
+
+    providers = JSON.parse(body)["providers"]
+    return nil unless providers.is_a?(Hash)
+
+    providers.each_value.each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |provider, proxies|
+      next unless provider.is_a?(Hash)
+
+      Array(provider["proxies"]).each do |proxy|
+        next unless proxy.is_a?(Hash) && !proxy["name"].to_s.empty?
+
+        proxies[proxy["name"]] << proxy
+      end
+    end
   rescue JSON::ParserError
     nil
+  end
+
+  def runtime_non_proxy_name?(name)
+    RUNTIME_NON_PROXY_NAMES.any? { |blocked| blocked.casecmp(name.to_s).zero? }
+  end
+
+  def runtime_non_proxy_type?(type)
+    RUNTIME_NON_PROXY_TYPES.any? { |blocked| blocked.casecmp(type.to_s).zero? }
+  end
+
+  def runtime_proxy_group_type?(type)
+    RUNTIME_PROXY_GROUP_TYPES.any? { |group_type| group_type.casecmp(type.to_s).zero? }
+  end
+
+  def runtime_proxy_path_safe?(proxies, name, seen = {})
+    return false unless proxies.is_a?(Hash) && name.is_a?(String) && !name.empty?
+    return false if runtime_non_proxy_name?(name) || seen[name]
+
+    proxy = proxies[name]
+    return false unless proxy.is_a?(Hash)
+
+    type = proxy["type"].to_s
+    return false if type.empty? || runtime_non_proxy_type?(type)
+    unless runtime_proxy_group_type?(type)
+      return false if proxy.key?("now") || proxy.key?("all")
+      return true
+    end
+
+    visited = seen.merge(name => true)
+    if type.casecmp("LoadBalance").zero?
+      members = proxy["all"]
+      return false unless members.is_a?(Array) && !members.empty?
+
+      members.all? { |member| runtime_proxy_path_safe?(proxies, member, visited) }
+    else
+      runtime_proxy_path_safe?(proxies, proxy["now"], visited)
+    end
+  end
+
+  def runtime_proxy_candidate_safe?(proxies, provider_proxies, proxy, seen)
+    return false unless proxy.is_a?(Hash)
+
+    type = proxy["type"].to_s
+    return false if type.empty? || runtime_non_proxy_type?(type)
+    unless runtime_proxy_group_type?(type)
+      return false if proxy.key?("now") || proxy.key?("all")
+      return true
+    end
+
+    if type.casecmp("LoadBalance").zero?
+      members = proxy["all"]
+      return false unless members.is_a?(Array) && !members.empty?
+
+      members.all? do |member|
+        runtime_proxy_candidates_safe?(proxies, provider_proxies, member, seen)
+      end
+    else
+      runtime_proxy_candidates_safe?(proxies, provider_proxies, proxy["now"], seen)
+    end
+  end
+
+  def runtime_proxy_candidates_safe?(proxies, provider_proxies, name, seen)
+    return false unless name.is_a?(String) && !name.empty?
+    return false if runtime_non_proxy_name?(name) || seen[name]
+
+    candidates = []
+    candidates << proxies[name] if proxies[name].is_a?(Hash)
+    candidates.concat(Array(provider_proxies[name]))
+    return false if candidates.empty?
+
+    visited = seen.merge(name => true)
+    candidates.all? do |proxy|
+      runtime_proxy_candidate_safe?(proxies, provider_proxies, proxy, visited)
+    end
+  end
+
+  def runtime_proxy_group_safe?(requester, group, proxies: nil)
+    proxies ||= runtime_proxies(requester)
+    return false unless proxies.is_a?(Hash)
+
+    provider_proxies = runtime_provider_proxies(requester)
+    return false unless provider_proxies.is_a?(Hash)
+    return false if runtime_non_proxy_name?(group)
+
+    root = proxies[group]
+    return false unless root.is_a?(Hash) && runtime_proxy_group_type?(root["type"])
+
+    runtime_proxy_candidate_safe?(proxies, provider_proxies, root, { group => true })
+  rescue StandardError
+    false
+  end
+
+  def profile_ai_runtime_group(path, policy: nil)
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    rules = Array(config["rules"])
+    first = rule_info(rules[0])
+    second = rule_info(rules[1])
+    return nil unless first[:type] == "NETWORK" && first[:payload].to_s.casecmp("UDP").zero? &&
+                      second[:type] == "NETWORK" && second[:payload].to_s.casecmp("UDP").zero? &&
+                      second[:target].to_s.casecmp("REJECT").zero?
+
+    target = first[:target].to_s
+    return nil unless selectable_groups(config).any? { |group| group["name"] == target }
+
+    if policy
+      required = render_ai_rules(policy, target).map { |rule| managed_rule_identity(rule) }
+      return nil if required.empty? || required.any?(&:nil?)
+
+      identities = rules.map { |rule| managed_rule_identity(rule) }
+      positions = required.map { |identity| identities.index(identity) }
+      return nil if positions.any?(&:nil?)
+
+      first_broad = rules.index { |rule| broad_rule?(rule) }
+      return nil if first_broad && positions.any? { |position| position >= first_broad }
+    end
+
+    target
+  rescue StandardError
+    nil
+  end
+
+  def restore_candidate_valid?(path, usage_profile, policy: nil, validator: nil)
+    validator ||= method(:validate_with_mihomo)
+    validation = validator.call(path)
+    return :timeout if validation == :timeout
+    return false unless validation == true
+
+    usage_profile != 3 || (policy && !profile_ai_runtime_group(path, policy: policy).nil?)
+  rescue StandardError
+    false
   end
 
   def runtime_selections_for_profile(selections, path)
@@ -190,7 +353,7 @@ module ClaudeEasy
   end
 
   def runtime_health_healthy?(requester, selections:, expected_tun:, connectivity_checker: nil,
-                              precommit_condition: nil)
+                              precommit_condition: nil, required_proxy_group: nil)
     return false unless runtime_precommit_allowed?(precommit_condition)
 
     caches_flushed = ["/cache/fakeip/flush", "/cache/dns/flush"].all? do |endpoint|
@@ -200,9 +363,19 @@ module ClaudeEasy
     return false unless caches_flushed
     return false if expected_tun != :ignore && tun_state(requester: requester) != expected_tun
 
-    after = runtime_selections(requester)
+    proxies = runtime_proxies(requester)
+    return false unless proxies
+
+    after = proxies.each_with_object({}) do |(name, proxy), current|
+      next unless proxy.is_a?(Hash) && proxy["now"].is_a?(String)
+      next unless proxy["type"].to_s.casecmp("Selector").zero?
+
+      current[name] = proxy["now"]
+    end
     return false unless after.is_a?(Hash) && selections.is_a?(Hash)
     return false unless selections.all? { |name, selected| after.key?(name) && after[name] == selected }
+    return false if required_proxy_group &&
+                    !runtime_proxy_group_safe?(requester, required_proxy_group, proxies: proxies)
     return false unless dns_runtime_healthy?(requester, "www.baidu.com")
     return false unless dns_runtime_healthy?(requester, "www.google.com")
 
@@ -257,8 +430,29 @@ module ClaudeEasy
     false
   end
 
+  def verify_unchanged_profile_runtime(result, socket: nil, requester: nil,
+                                       precommit_condition: nil, require_safe_ai: false)
+    return result unless require_safe_ai
+
+    group = profile_ai_runtime_group(result.fetch(:path))
+    return result.merge(status: :runtime_check_failed) unless group
+    if requester.nil?
+      socket ||= controller_socket
+      return result.merge(status: :runtime_check_failed) unless socket
+
+      requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+    end
+    healthy = runtime_precommit_allowed?(precommit_condition) &&
+              runtime_proxy_group_safe?(requester, group) &&
+              runtime_precommit_allowed?(precommit_condition)
+    healthy ? result : result.merge(status: :runtime_check_failed)
+  rescue StandardError
+    result.merge(status: :runtime_check_failed)
+  end
+
   def activate_updated_profile(result, socket: nil, requester: nil, connectivity_checker: nil,
-                               require_tun: true, precommit_condition: nil)
+                               require_tun: true, precommit_condition: nil,
+                               require_safe_ai: false)
     pending = -> { result.merge(status: :reload_failed_restore_pending) }
     return pending.call unless profile_result_current?(result)
 
@@ -296,6 +490,8 @@ module ClaudeEasy
     return result.merge(status: rollback.call) if expected_tun == :unknown
     candidate_selections = runtime_selections_for_profile(before, result.fetch(:path))
     return result.merge(status: rollback.call) unless candidate_selections
+    required_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
+    return result.merge(status: rollback.call) if require_safe_ai && !required_proxy_group
     unless runtime_precommit_allowed?(precommit_condition)
       status = restore_profile_bytes(result) ? :reload_failed_rolled_back : :reload_failed_rollback_conflict
       return result.merge(status: status)
@@ -311,7 +507,8 @@ module ClaudeEasy
     healthy = runtime_health_healthy?(
       requester, selections: candidate_selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker,
-      precommit_condition: precommit_condition
+      precommit_condition: precommit_condition,
+      required_proxy_group: required_proxy_group
     )
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback.call) unless

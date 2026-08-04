@@ -1,9 +1,12 @@
 module ClaudeEasy
   module_function
 
+  class ProfileCommitStateUncertainError < IOError; end
+
   LOCK_TIMEOUT_SECONDS = 5
   PROFILE_TRANSACTION_BASENAME = ".claude-easy-profile-transaction.json".freeze
   PROFILE_OPERATION_LOCK_BASENAME = ".claude-easy-operation.lock".freeze
+  PROFILE_TRANSACTION_COMMITTED_BYTES = (JSON.generate("Version" => 3, "Committed" => true) + "\n").b.freeze
 
   def monotonic_now
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -107,6 +110,17 @@ module ClaudeEasy
     File.exist?(path) || File.symlink?(path)
   end
 
+  def cleanup_committed_profile_transaction(backup_root)
+    path = profile_transaction_path(backup_root)
+    return :none unless File.exist?(path) || File.symlink?(path)
+
+    snapshot = regular_file_snapshot_once(path, "配置事务记录")
+    return :pending unless snapshot.fetch(:bytes) == PROFILE_TRANSACTION_COMMITTED_BYTES
+
+    remove_profile_transaction(snapshot)
+    :committed
+  end
+
   def fsync_parent_directory(path)
     directory = File.dirname(File.expand_path(path))
     File.open(directory, File::RDONLY) do |handle|
@@ -128,7 +142,7 @@ module ClaudeEasy
     end
   end
 
-  def remove_profile_transaction(snapshot)
+  def remove_profile_transaction(snapshot, state_uncertain_on_sync_failure: false)
     path = snapshot.fetch(:path)
     flags = File::RDONLY
     flags |= File::NOFOLLOW if File.const_defined?(:NOFOLLOW)
@@ -142,8 +156,42 @@ module ClaudeEasy
         [current.dev, current.ino] == snapshot.fetch(:identity) &&
         handle.read.b == snapshot.fetch(:bytes)
 
-      File.unlink(path)
+      unless snapshot.fetch(:bytes) == PROFILE_TRANSACTION_COMMITTED_BYTES
+        Tempfile.create([".claude-easy-profile-committed-", ".tmp"], File.dirname(path)) do |temporary|
+          temporary.binmode
+          temporary.write(PROFILE_TRANSACTION_COMMITTED_BYTES)
+          temporary.flush
+          temporary.fsync
+          File.chmod(0o600, temporary.path)
+          current = File.lstat(path)
+          handle.rewind
+          raise IOError, "配置事务记录同时发生变化" unless
+            current.file? && !current.symlink? &&
+            [current.dev, current.ino] == snapshot.fetch(:identity) &&
+            handle.read.b == snapshot.fetch(:bytes)
+
+          File.rename(temporary.path, path)
+          begin
+            fsync_parent_directory(path)
+          rescue SystemCallError, IOError
+            raise ProfileCommitStateUncertainError, "配置事务提交状态无法确认" if
+              state_uncertain_on_sync_failure
+            raise
+          end
+        end
+      end
+    end
+
+    begin
+      committed = regular_file_snapshot_once(path, "配置事务已提交标记")
+      raise IOError, "配置事务已提交标记同时发生变化" unless
+        committed.fetch(:bytes) == PROFILE_TRANSACTION_COMMITTED_BYTES
+
+      current = File.lstat(path)
+      File.unlink(path) if [current.dev, current.ino] == committed.fetch(:identity)
       fsync_parent_directory(path)
+    rescue SystemCallError, IOError
+      # The durable committed marker makes a reappearing or retained journal safe to clean later.
     end
     true
   end
@@ -158,6 +206,10 @@ module ClaudeEasy
     raise InvalidConfigError, "配置事务记录无效" unless text.valid_encoding?
 
     state = JSON.parse(text)
+    if state == { "Version" => 3, "Committed" => true }
+      remove_profile_transaction(snapshot)
+      return :committed
+    end
     valid_state = state.is_a?(Hash) && state.keys.sort == %w[Items Version] &&
                   [1, 2].include?(state["Version"]) && state["Items"].is_a?(Array) &&
                   !state["Items"].empty?
@@ -320,6 +372,7 @@ module ClaudeEasy
       backup_root, roots: roots, keep_transaction: pending
     )
     return :none unless pending
+    return :recovered if transaction == :committed
     return :runtime_restore_pending unless
       reload_runtime &&
       reload_recovered_profile_runtime(
@@ -337,7 +390,10 @@ module ClaudeEasy
   def recover_pending_profile_transaction(backup_root, directories:, selected_name: nil,
                                           guard_storage: false, expected_storage: nil)
     operation_lock = profile_operation_lock(backup_root)
-    return :none unless profile_transaction_pending?(backup_root)
+    transaction_state = cleanup_committed_profile_transaction(backup_root)
+    return :recovered if transaction_state == :committed
+    return :profile_directory_missing if directories.empty?
+    return :none if transaction_state == :none
 
     runtime_context = if selected_name.nil?
                         capture_runtime_profile_context(
@@ -616,15 +672,24 @@ module ClaudeEasy
             )
           end
           result[:active] = item.fetch(:active)
-          if auto_reload && !dry_run && result[:active] && result[:status] == :updated
-            result = activate_updated_profile(
-              result,
-              socket: socket,
-              requester: requester,
-              connectivity_checker: connectivity_checker,
-              require_tun: usage_profile >= 2,
-              precommit_condition: precommit_condition
-            )
+          if !dry_run && result[:active]
+            if auto_reload && result[:status] == :updated
+              result = activate_updated_profile(
+                result,
+                socket: socket,
+                requester: requester,
+                connectivity_checker: connectivity_checker,
+                require_tun: usage_profile >= 2,
+                precommit_condition: precommit_condition,
+                require_safe_ai: usage_profile == 3
+              )
+            elsif result[:status] == :unchanged
+              result = verify_unchanged_profile_runtime(
+                result, socket: socket, requester: requester,
+                precommit_condition: precommit_condition,
+                require_safe_ai: usage_profile == 3
+              )
+            end
           end
           results << result
           next if %i[updated unchanged].include?(result[:status])
@@ -661,7 +726,7 @@ module ClaudeEasy
              results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) }
             stale = results.reject { |result| profile_result_current?(result) }
             if stale.empty?
-              remove_profile_transaction(transaction)
+              remove_profile_transaction(transaction, state_uncertain_on_sync_failure: true)
             else
               runtime_committed = results.any? do |result|
                 result[:active] && result[:reloaded] == true

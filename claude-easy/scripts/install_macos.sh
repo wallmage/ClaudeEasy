@@ -524,6 +524,10 @@ run_committing_profile_operation() {
     preserve_profile_operation_state
     PROFILE_OPERATION_COMMITTED=1
     PROFILE_OPERATION_RESULT_FAILED=1
+  elif [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 77 ]; then
+    preserve_profile_operation_state
+    PROFILE_OPERATION_RECOVERY_INTENT=1
+    PROFILE_OPERATION_RESULT_UNKNOWN=1
   elif [ "$PROFILE_OPERATION_RECEIPT_INVALID" -eq 1 ] ||
        [ "$PROFILE_OPERATION_CHILD_STATUS" -ge 128 ]; then
     preserve_profile_operation_state
