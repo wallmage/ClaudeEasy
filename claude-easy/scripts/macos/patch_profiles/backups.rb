@@ -287,7 +287,7 @@ module ClaudeEasy
       result = result.dup
       result.delete(:reloaded)
       unless runtime_committed
-        remove_profile_transaction(transaction)
+        remove_profile_transaction(transaction) if backup_restore_transaction_releasable?(result)
         return result.merge(status: :restore_conflict)
       end
 
@@ -315,6 +315,24 @@ module ClaudeEasy
       remove_profile_transaction(transaction)
     end
     result
+  end
+
+  def backup_restore_transaction_releasable?(result)
+    path = result.fetch(:path)
+    expected_path = result.fetch(:patched_path)
+    expected_identity = result.fetch(:patched_identity)
+    original = result.fetch(:rollback_bytes)
+    write_path = File.realpath(path)
+    return true unless write_path == expected_path
+
+    stat = File.stat(write_path)
+    return true unless [stat.dev, stat.ino] == expected_identity
+
+    regular_file_snapshot_once(write_path, "备份恢复目标").fetch(:bytes) == original
+  rescue Errno::ENOENT, Errno::ENOTDIR, Errno::ELOOP
+    true
+  rescue SystemCallError, IOError, InvalidConfigError, KeyError
+    false
   end
 
   def restore_backup(backup_id, directories:, backup_root:, expected_current_sha256:, validator:,

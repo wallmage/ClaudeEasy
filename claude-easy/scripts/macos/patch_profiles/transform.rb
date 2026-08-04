@@ -264,10 +264,10 @@ module ClaudeEasy
     return false if group_excludes_type?(group, proxy["type"])
 
     included = group["filter"].to_s
-    return false unless included.empty? || simple_group_filter_match(included, name) == true
+    return false if !included.empty? && simple_group_filter_match(included, name) == false
 
     excluded = group["exclude-filter"].to_s
-    excluded.empty? || simple_group_filter_match(excluded, name) == false
+    excluded.empty? || simple_group_filter_match(excluded, name) != true
   end
 
   def provider_import_can_have_source?(group)

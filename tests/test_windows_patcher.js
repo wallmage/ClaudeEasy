@@ -619,6 +619,23 @@ test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvaila
   }
 });
 
+test('complex dynamic filters are patched in every usage profile', { skip: !available }, () => {
+  const config = {
+    proxies: [{ name: 'HK 01', type: 'ss', server: 'hk.example' }],
+    'proxy-groups': [{
+      name: 'Dynamic', type: 'select', 'include-all-proxies': true,
+      filter: '(?i)HK|香港'
+    }],
+    rules: ['MATCH,Dynamic']
+  };
+
+  for (const usageProfile of [1, 2, 3]) {
+    const patched = engine.claudeEasyTransform(config, 'fixture', usageProfile);
+    assert.notDeepEqual(patched, config, `usage profile ${usageProfile}`);
+    assert.equal(engine.claudeEasyDetectMain(patched), 'Dynamic', `usage profile ${usageProfile}`);
+  }
+});
+
 test('shared unsafe group references use managed wrappers', { skip: !fixturesAvailable }, () => {
   const fixtures = JSON.parse(fs.readFileSync(fixturePath, 'utf8')).unsafe_reference_cases;
   const routeWrapper = '🔗 路由引用 · ClaudeEasy';

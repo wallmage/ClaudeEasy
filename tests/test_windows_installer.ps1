@@ -1232,7 +1232,7 @@ param(
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
 $script:ClaudeEasyOperation = "test"
 $script:ClaudeEasyProfile = $null
-$unsafeProgress = "已更新并通过检查：11111111-2222-4333-8444-555555555555$([char]27)[31m$([char]0x202E)`r`n伪造" + ("长" * 300)
+$unsafeProgress = "已更新并通过检查：11111111-2222-4333-8444-555555555555 错误token=private结束 错误Bearer private结束 错误https://secret.invalid/path结束$([char]27)[31m$([char]0x202E)`r`n伪造" + ("长" * 300)
 Write-Info $unsafeProgress
 if ($Json) {
     $result = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Checks @("single-check") -Messages @($script:ClaudeEasyMessages) -Warnings @("first-warning", "second-warning")
@@ -1247,6 +1247,7 @@ if ($Json) {
     )
     Assert-True ($unnamedProfileOutput.ExitCode -eq 0) "human-readable progress probe failed"
     Assert-True ($unnamedProfileOutput.Output -notmatch '11111111-2222-4333-8444-555555555555') "human-readable progress leaked a UUID from an unnamed profile"
+    Assert-True ($unnamedProfileOutput.Output -notmatch 'private|secret\.invalid') "human-readable progress leaked a credential or URL next to Unicode text"
     Assert-True ($unnamedProfileOutput.Output.Trim() -notmatch '\x1B|\[31m|[\p{Cc}\p{Cf}]') "human-readable progress retained terminal or format controls"
     Assert-True ($unnamedProfileOutput.Output.Trim().Length -le 240) "human-readable progress exceeded the dynamic text limit"
     $unnamedProfileJson = Assert-JsonResult (Invoke-TestPowerShell $progressProbePath @(
@@ -1255,6 +1256,7 @@ if ($Json) {
         "-Json"
     )) "install" 0
     Assert-True ((@($unnamedProfileJson.messages) -join "") -notmatch '11111111-2222-4333-8444-555555555555') "JSON progress leaked a UUID from an unnamed profile"
+    Assert-True ((@($unnamedProfileJson.messages) -join "") -notmatch 'private|secret\.invalid') "JSON progress leaked a credential or URL next to Unicode text"
     Assert-True ([string]$unnamedProfileJson.messages[0] -notmatch '\x1B|\[31m|[\p{Cc}\p{Cf}]') "JSON progress retained terminal or format controls"
     Assert-True (([string]$unnamedProfileJson.messages[0]).Length -le 240) "JSON progress exceeded the dynamic text limit"
     foreach ($arrayField in @("changes", "checks", "items", "messages", "warnings")) {

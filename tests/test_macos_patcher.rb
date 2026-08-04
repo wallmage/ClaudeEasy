@@ -1397,6 +1397,23 @@ class MacosPatcherTest < Minitest::Test
     refute_includes output.string, "11111111-2222-3333-4444-555555555555"
   end
 
+  def test_result_contract_redacts_a_uuid_next_to_unicode_text
+    output = ClaudeEasyResult.sanitize_text(
+      "已更新：11111111-2222-3333-4444-555555555555配置"
+    )
+
+    refute_includes output, "11111111-2222-3333-4444-555555555555"
+  end
+
+  def test_result_contract_redacts_sensitive_shapes_next_to_unicode_text
+    output = ClaudeEasyResult.sanitize_text(
+      "错误token=private结束 错误Bearer private结束 错误https://secret.invalid/path结束"
+    )
+
+    refute_includes output, "private"
+    refute_includes output, "secret.invalid"
+  end
+
   def test_patcher_json_mode_emits_one_redacted_contract_object
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "friend.yaml")
@@ -2367,6 +2384,59 @@ class MacosPatcherTest < Minitest::Test
       assert_equal :restore_conflict, result.fetch(:status)
       assert_equal external.b, File.binread(profile)
       refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_restore_backup_keeps_transaction_for_same_file_partial_overwrite
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      backup_root = File.join(directory, "backups")
+      current = YAML.dump(base_config.merge("subscription-marker" => "current"))
+      restored = YAML.dump(base_config.merge("subscription-marker" => "restored"))
+      partial = restored.byteslice(0, restored.bytesize / 2)
+      File.binwrite(profile, current)
+      backup = ClaudeEasy.create_versioned_backup(
+        profile, backup_root, content: restored, reason: "prewrite"
+      )
+      activation = lambda do |result|
+        File.binwrite(profile, partial)
+        result
+      end
+
+      result = ClaudeEasy.restore_backup(
+        File.basename(backup), directories: [directory], backup_root: backup_root,
+        expected_current_sha256: Digest::SHA256.hexdigest(current.b),
+        validator: ->(_candidate) { true }, activation: activation
+      )
+
+      assert_equal :restore_conflict, result.fetch(:status)
+      assert_equal partial.b, File.binread(profile)
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_backup_restore_transaction_can_release_a_missing_target
+    result = {
+      path: "/missing/friend.yaml", patched_path: "/missing/friend.yaml",
+      patched_identity: [1, 2], rollback_bytes: "original"
+    }
+
+    assert ClaudeEasy.backup_restore_transaction_releasable?(result)
+  end
+
+  def test_backup_restore_transaction_keeps_journal_when_target_cannot_be_read
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "candidate")
+      stat = File.stat(profile)
+      result = {
+        path: profile, patched_path: File.realpath(profile),
+        patched_identity: [stat.dev, stat.ino], rollback_bytes: "original"
+      }
+
+      ClaudeEasy.stub(:regular_file_snapshot_once, ->(*_args) { raise IOError, "injected" }) do
+        refute ClaudeEasy.backup_restore_transaction_releasable?(result)
+      end
     end
   end
 
@@ -5628,6 +5698,23 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_complex_dynamic_filter_is_patched_in_every_usage_profile
+    config = {
+      "proxies" => [{ "name" => "HK 01", "type" => "ss", "server" => "hk.example" }],
+      "proxy-groups" => [{
+        "name" => "Dynamic", "type" => "select", "include-all-proxies" => true,
+        "filter" => "(?i)HK|香港"
+      }],
+      "rules" => ["MATCH,Dynamic"]
+    }
+
+    [1, 2, 3].each do |usage_profile|
+      result = ClaudeEasy.patch(config, @policy, usage_profile: usage_profile)
+      assert result.fetch(:changed), "usage profile #{usage_profile}"
+      assert_equal "Dynamic", result.fetch(:main_group), "usage profile #{usage_profile}"
+    end
+  end
+
   def test_shared_unsafe_group_reference_fixtures
     fixtures = JSON.parse(File.read(MAIN_GROUP_FIXTURES)).fetch("unsafe_reference_cases")
     route_wrapper = "🔗 路由引用 · ClaudeEasy"
@@ -6762,6 +6849,21 @@ class MacosPatcherTest < Minitest::Test
     refute_includes output, "password"
     refute_includes output, "uuid"
     assert_equal 3, output.scan("[已隐藏]").length
+  end
+
+  def test_safe_labels_hide_a_uuid_next_to_unicode_text
+    output = ClaudeEasy.safe_label("订阅11111111-2222-3333-4444-555555555555配置")
+
+    refute_includes output, "11111111-2222-3333-4444-555555555555"
+  end
+
+  def test_safe_labels_hide_sensitive_shapes_next_to_unicode_text
+    output = ClaudeEasy.safe_label(
+      "错误password=private结束 错误Bearer private结束 错误https://secret.invalid/path结束"
+    )
+
+    refute_includes output, "private"
+    refute_includes output, "secret.invalid"
   end
 
   def test_backup_directory_and_files_use_private_permissions

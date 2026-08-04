@@ -304,6 +304,28 @@
       "expected_main_group": "Dynamic"
     },
     {
+      "name": "complex-filter-can-select-a-dynamic-proxy-source",
+      "config": {
+        "proxies": [{ "name": "HK 01", "type": "ss", "server": "hk.example" }],
+        "proxy-groups": [
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true, "filter": "(?i)HK|香港" }
+        ],
+        "rules": ["MATCH,Dynamic"]
+      },
+      "expected_main_group": "Dynamic"
+    },
+    {
+      "name": "complex-exclude-filter-cannot-disprove-a-dynamic-proxy-source",
+      "config": {
+        "proxies": [{ "name": "HK 01", "type": "ss", "server": "hk.example" }],
+        "proxy-groups": [
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true, "exclude-filter": "(?i)US|美国" }
+        ],
+        "rules": ["MATCH,Dynamic"]
+      },
+      "expected_main_group": "Dynamic"
+    },
+    {
       "name": "include-all-providers-is-a-dynamic-proxy-source",
       "config": {
         "proxy-providers": {

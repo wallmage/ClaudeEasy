@@ -191,9 +191,9 @@ function claudeEasyImportedProxySource(config, group, name) {
   const proxy = (config.proxies || []).find(function (item) { return item && item.name === name; });
   if (claudeEasyGroupExcludesType(group, proxy.type)) return false;
   const included = String(group.filter || "");
-  if (included && claudeEasySimpleGroupFilterMatch(included, name) !== true) return false;
+  if (included && claudeEasySimpleGroupFilterMatch(included, name) === false) return false;
   const excluded = String(group["exclude-filter"] || "");
-  return !excluded || claudeEasySimpleGroupFilterMatch(excluded, name) === false;
+  return !excluded || claudeEasySimpleGroupFilterMatch(excluded, name) !== true;
 }
 
 function claudeEasyProviderImportCanHaveSource(group) {
