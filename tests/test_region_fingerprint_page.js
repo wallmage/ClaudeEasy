@@ -176,7 +176,7 @@ test("the detector is one self-contained HTML file with only the disclosed WebRT
     "default-src": "'none'",
     "script-src": "'unsafe-inline'",
     "style-src": "'unsafe-inline'",
-    "connect-src": "https://cloudflare.com",
+    "connect-src": "https://ipwho.is",
     "img-src": "'none'",
     "font-src": "'none'",
     "object-src": "'none'",
@@ -192,7 +192,7 @@ test("the detector is one self-contained HTML file with only the disclosed WebRT
   assert.doesNotMatch(source, /\b(?:src|href)\s*=/i);
   assert.deepEqual(
     Array.from(executableSource.matchAll(/https?:\/\/[^'"\s<]+/g), (match) => match[0]),
-    ["https://cloudflare.com;", "https://cloudflare.com/cdn-cgi/trace"],
+    ["https://ipwho.is;", "https://ipwho.is/"],
   );
   assert.match(source, /\bfetch\b/);
   assert.doesNotMatch(
@@ -219,7 +219,7 @@ test("the detector is one self-contained HTML file with only the disclosed WebRT
       "stun:stun1.l.google.com:19302",
     ],
   );
-  assert.match(source, /WebRTC.*STUN.*网页公网出口/);
+  assert.match(source, /WebRTC.*STUN.*中国大陆/);
   assert.match(source, /低风险/);
   assert.match(source, /中等风险/);
   assert.match(source, /高风险/);
@@ -302,11 +302,11 @@ test("the public contract exposes the upstream ten signals and weights", () => {
   assert.equal(api.riskBand(100), "high");
 });
 
-test("WebRTC contributes ten only for a confirmed exit mismatch", async () => {
+test("only a confirmed mainland China WebRTC public IP contributes ten", async () => {
   const api = detectorApi();
   const candidate = await api.detect(baseEnvironment({
     detectWebrtcLeak: async () => ({
-      raw: "检测到 WebRTC 出口与网页公网出口不一致",
+      raw: "检测到 WebRTC 中国大陆公网 IP",
       score: 1,
     }),
   }));
@@ -315,60 +315,49 @@ test("WebRTC contributes ten only for a confirmed exit mismatch", async () => {
   assert.equal(signal.score, 1);
   assert.equal(signal.contribution, 10);
   assert.equal(signal.match, "strong");
-  assert.match(signal.raw, /出口.*不一致/);
+  assert.equal(signal.raw, "检测到 WebRTC 中国大陆公网 IP");
 });
 
-test("WebRTC classification compares public STUN and browser HTTP exits", () => {
+test("WebRTC classification only treats country code CN as a leak", () => {
   const api = detectorApi();
   assert.deepEqual(
-    { ...api.classifyWebrtc("198.51.100.7", [
+    { ...api.classifyWebrtc([
       { ip: "198.51.100.7", type: "srflx" },
-    ]) },
-    { raw: "WebRTC 出口与网页公网出口一致", score: 0 },
+    ], { "198.51.100.7": "CN" }) },
+    { raw: "检测到 WebRTC 中国大陆公网 IP", score: 1 },
   );
+  for (const country of ["JP", "US", "HK", "MO", "TW", "SG"]) {
+    assert.deepEqual(
+      { ...api.classifyWebrtc([
+        { ip: "198.51.100.7", type: "srflx" },
+      ], { "198.51.100.7": country }) },
+      { raw: "WebRTC 公网 IP 均不在中国大陆", score: 0 },
+      country,
+    );
+  }
   assert.deepEqual(
-    { ...api.classifyWebrtc("198.51.100.7", [
-      { ip: "203.0.113.9", type: "srflx" },
-    ]) },
-    { raw: "检测到 WebRTC 出口与网页公网出口不一致", score: 1 },
-  );
-  assert.deepEqual(
-    { ...api.classifyWebrtc("198.51.100.7", [
-      { ip: "192.168.1.7", type: "host" },
-    ]) },
-    { raw: "检测到 WebRTC 暴露本地网络地址", score: 1 },
-  );
-  assert.deepEqual(
-    { ...api.classifyWebrtc("198.51.100.7", [
+    { ...api.classifyWebrtc([
       { ip: "203.0.113.9", type: "relay" },
-    ]) },
-    { raw: "未发现 WebRTC IP 泄露", score: 0 },
+      { ip: "192.168.1.7", type: "host" },
+    ], {}) },
+    { raw: "未发现 WebRTC 公网 IP", score: 0 },
   );
   assert.deepEqual(
-    { ...api.classifyWebrtc("198.51.100.7", []) },
-    { raw: "未发现 WebRTC IP 泄露", score: 0 },
+    { ...api.classifyWebrtc([], {}) },
+    { raw: "未发现 WebRTC 公网 IP", score: 0 },
   );
   assert.throws(
-    () => api.classifyWebrtc("", [{ ip: "203.0.113.9", type: "srflx" }]),
-    /网页公网出口/,
-  );
-  assert.throws(
-    () => api.classifyWebrtc("2001:db8::7", [
+    () => api.classifyWebrtc([
       { ip: "203.0.113.9", type: "srflx" },
-    ]),
-    /同协议族/,
-  );
-  assert.deepEqual(
-    { ...api.classifyWebrtc("2001:db8::7", [
-      { ip: "2001:0db8:0:0:0:0:0:7", type: "srflx" },
-    ]) },
-    { raw: "WebRTC 出口与网页公网出口一致", score: 0 },
+    ], {}),
+    /归属地/,
   );
 });
 
-test("the WebRTC probe uses three STUN servers and the HTTP exit reference", async () => {
+test("the WebRTC probe uses three STUN servers and checks each public IP country", async () => {
   const api = detectorApi();
   let configuration;
+  const lookups = [];
   class FakePeerConnection {
     constructor(value) {
       configuration = value;
@@ -391,7 +380,10 @@ test("the WebRTC probe uses three STUN servers and the HTTP exit reference", asy
 
   const result = await api.detectWebrtcLeak({
     PeerConnection: FakePeerConnection,
-    fetchPublicIp: async () => "198.51.100.7",
+    lookupCountry: async (ip) => {
+      lookups.push(ip);
+      return "JP";
+    },
     schedule: () => {},
   });
   assert.equal(
@@ -404,8 +396,33 @@ test("the WebRTC probe uses three STUN servers and the HTTP exit reference", asy
       ],
     }),
   );
+  assert.deepEqual(lookups, ["198.51.100.7"]);
   assert.equal(result.score, 0);
-  assert.equal(result.raw, "WebRTC 出口与网页公网出口一致");
+  assert.equal(result.raw, "WebRTC 公网 IP 均不在中国大陆");
+});
+
+test("the country lookup sends only the WebRTC IP and reads an ISO country code", async () => {
+  const requests = [];
+  const api = detectorApi({
+    window: {
+      fetch: async (url, options) => {
+        requests.push({ url, options });
+        return {
+          ok: true,
+          json: async () => ({
+            ip: "198.51.100.7",
+            success: true,
+            country_code: "JP",
+          }),
+        };
+      },
+    },
+  });
+
+  assert.equal(await api.lookupCountry("198.51.100.7"), "JP");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://ipwho.is/198.51.100.7");
+  assert.equal(requests[0].options.cache, "no-store");
 });
 
 test("a failed WebRTC probe stays unknown without aborting the other signals", async () => {

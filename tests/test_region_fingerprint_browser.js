@@ -11,7 +11,7 @@ const PAGE_URL = pathToFileURL(path.join(
   "assets",
   "claude-region-check.html",
 )).href;
-const PUBLIC_IP_URL = "https://cloudflare.com/cdn-cgi/trace";
+const COUNTRY_API_PREFIX = "https://ipwho.is/";
 
 const TARGETS = {
   chrome: { browserType: chromium, launch: { channel: "chrome" } },
@@ -107,11 +107,15 @@ for (const targetName of requestedTargets()) {
     await page.route("**/*", async (route) => {
       if (route.request().url().startsWith("file:")) {
         await route.continue();
-      } else if (route.request().url() === PUBLIC_IP_URL) {
+      } else if (route.request().url().startsWith(COUNTRY_API_PREFIX)) {
         await route.fulfill({
           status: 200,
-          contentType: "text/plain",
-          body: "ip=198.51.100.7\n",
+          contentType: "application/json",
+          body: JSON.stringify({
+            ip: route.request().url().slice(COUNTRY_API_PREFIX.length),
+            success: true,
+            country_code: "JP",
+          }),
         });
       } else {
         await route.abort();
@@ -242,7 +246,7 @@ for (const targetName of requestedTargets()) {
     assert.deepEqual(consoleProblems, []);
     assert.deepEqual(pageErrors, []);
     assert.ok(
-      externalRequests.every((url) => url === PUBLIC_IP_URL),
+      externalRequests.every((url) => url.startsWith(COUNTRY_API_PREFIX)),
       `unexpected external requests: ${JSON.stringify(externalRequests)}`,
     );
     assert.deepEqual(websockets, []);

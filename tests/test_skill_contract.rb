@@ -507,6 +507,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "中国大陆简体中文"
       assert_includes document, "新加坡中文"
       assert_includes document, "`zh-Hans`"
+      assert_includes document, "只有中国大陆"
+      assert_includes document, "其他国家和地区"
+      assert_includes document, "无法确认归属地"
     end
   end
 

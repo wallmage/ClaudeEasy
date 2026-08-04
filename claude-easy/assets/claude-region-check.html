@@ -27,7 +27,7 @@ SOFTWARE.
     <meta charset="utf-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://cloudflare.com; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://ipwho.is; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
@@ -409,7 +409,7 @@ SOFTWARE.
         分数越高表示大陆关联信号越多；它不代表 Claude 的官方判定，
         也不能作为 Claude 是否可用的通过条件。
       </p>
-      <div class="privacy">不上传检测结果；WebRTC 项会通过 STUN 与 Cloudflare 比较网页公网出口</div>
+      <div class="privacy">不上传完整检测结果；WebRTC 项会通过 STUN 取公网 IP，并向 IPWhois 查询是否属于中国大陆</div>
       <noscript>
         <p class="noscript-warning" role="alert">
           无法运行检测：当前浏览器禁用了 JavaScript。请启用后重新打开本地页面。
@@ -455,7 +455,7 @@ SOFTWARE.
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
-          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项比较 STUN 暴露地址与同协议族的网页公网出口：一致或没有暴露时为 0 分，不一致或暴露本地网络地址时为 10 分；无法取得网页出口或协议族无法对应时显示“无法读取”，不会误计为安全或泄露。</p>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项通过 STUN 取得公网 IP，再向 IPWhois 查询国家代码：只有中国大陆 CN 计 10 分，其他国家和地区均为 0 分；无法确认归属地时显示“无法读取”，不会误计为安全或泄露。</p>
         </article>
       </section>
 
@@ -726,7 +726,7 @@ SOFTWARE.
           return ip ? { ip: ip, type: type } : null;
         }
 
-        function classifyWebrtc(publicIp, candidates) {
+        function publicWebrtcCandidates(candidates) {
           var unique = [];
           (candidates || []).forEach(function (candidate) {
             var ip = normalizeIp(candidate.ip);
@@ -736,36 +736,37 @@ SOFTWARE.
               return entry.ip === ip && entry.type === type;
             })) unique.push({ ip: ip, type: type });
           });
-          if (unique.some(function (candidate) {
-            return candidate.type === "host" && isPrivateIp(candidate.ip);
-          })) {
-            return { raw: "检测到 WebRTC 暴露本地网络地址", score: 1 };
-          }
-          var publicCandidates = unique.filter(function (candidate) {
+          return unique.filter(function (candidate) {
             return !isPrivateIp(candidate.ip);
           });
-          if (publicCandidates.length === 0) {
-            return { raw: "未发现 WebRTC IP 泄露", score: 0 };
-          }
-          var reference = normalizeIp(publicIp);
-          if (!reference) throw new Error("无法取得网页公网出口");
-          var referenceIsV4 = reference.indexOf(".") !== -1;
-          if (publicCandidates.some(function (candidate) {
-            return (candidate.ip.indexOf(".") !== -1) !== referenceIsV4;
-          })) {
-            throw new Error("无法取得同协议族的网页公网出口");
-          }
-          var mismatch = publicCandidates.some(function (candidate) {
-            return candidate.ip !== reference;
-          });
-          return mismatch
-            ? { raw: "检测到 WebRTC 出口与网页公网出口不一致", score: 1 }
-            : { raw: "WebRTC 出口与网页公网出口一致", score: 0 };
         }
 
-        async function fetchBrowserPublicIp() {
+        function classifyWebrtc(candidates, countries) {
+          var publicCandidates = publicWebrtcCandidates(candidates);
+          if (publicCandidates.length === 0) {
+            return { raw: "未发现 WebRTC 公网 IP", score: 0 };
+          }
+          var countryCodes = publicCandidates.map(function (candidate) {
+            return String(countries && countries[candidate.ip] || "")
+              .trim()
+              .toUpperCase();
+          });
+          if (countryCodes.some(function (country) {
+            return country === "CN";
+          })) {
+            return { raw: "检测到 WebRTC 中国大陆公网 IP", score: 1 };
+          }
+          if (countryCodes.some(function (country) {
+            return !/^[A-Z]{2}$/.test(country);
+          })) throw new Error("无法确认 WebRTC 公网 IP 归属地");
+          return { raw: "WebRTC 公网 IP 均不在中国大陆", score: 0 };
+        }
+
+        async function lookupCountry(ip) {
+          var normalized = normalizeIp(ip);
+          if (!normalized) throw new Error("无法确认 WebRTC 公网 IP 归属地");
           if (typeof root.fetch !== "function") {
-            throw new Error("无法取得网页公网出口");
+            throw new Error("无法确认 WebRTC 公网 IP 归属地");
           }
           var controller = typeof root.AbortController === "function"
             ? new root.AbortController()
@@ -777,18 +778,23 @@ SOFTWARE.
             : null;
           try {
             var response = await root.fetch(
-              "https://cloudflare.com/cdn-cgi/trace",
+              "https://ipwho.is/" + encodeURIComponent(normalized),
               {
                 cache: "no-store",
                 signal: controller ? controller.signal : undefined
               }
             );
-            if (!response.ok) throw new Error("无法取得网页公网出口");
-            var body = await response.text();
-            var match = body.match(/(?:^|\n)ip=([^\n]+)/);
-            var ip = normalizeIp(match && match[1]);
-            if (!ip) throw new Error("无法取得网页公网出口");
-            return ip;
+            if (!response.ok) {
+              throw new Error("无法确认 WebRTC 公网 IP 归属地");
+            }
+            var body = await response.json();
+            var country = String(body && body.country_code || "")
+              .trim()
+              .toUpperCase();
+            if (!body || body.success !== true || !/^[A-Z]{2}$/.test(country)) {
+              throw new Error("无法确认 WebRTC 公网 IP 归属地");
+            }
+            return country;
           } finally {
             if (timer !== null && typeof root.clearTimeout === "function") {
               root.clearTimeout(timer);
@@ -802,11 +808,11 @@ SOFTWARE.
             settings,
             "PeerConnection"
           ) ? settings.PeerConnection : root.RTCPeerConnection;
-          var fetchPublicIp = settings.fetchPublicIp || fetchBrowserPublicIp;
+          var countryLookup = settings.lookupCountry || lookupCountry;
           var schedule = settings.schedule || root.setTimeout;
           return new Promise(function (resolve, reject) {
             if (typeof Constructor !== "function") {
-              resolve({ raw: "未发现 WebRTC IP 泄露", score: 0 });
+              resolve({ raw: "未发现 WebRTC 公网 IP", score: 0 });
               return;
             }
 
@@ -821,13 +827,23 @@ SOFTWARE.
               } catch (_error) {
                 // Continue with candidates already collected.
               }
-              var needsReference = candidates.some(function (candidate) {
-                return candidate.type !== "relay" && !isPrivateIp(candidate.ip);
-              });
-              Promise.resolve(needsReference ? fetchPublicIp() : "")
-                .then(function (publicIp) {
-                  resolve(classifyWebrtc(publicIp, candidates));
-                }).catch(reject);
+              var publicCandidates = publicWebrtcCandidates(candidates);
+              Promise.all(publicCandidates.map(function (candidate) {
+                return Promise.resolve(countryLookup(candidate.ip)).then(
+                  function (country) {
+                    return [candidate.ip, country];
+                  },
+                  function () {
+                    return [candidate.ip, ""];
+                  }
+                );
+              })).then(function (entries) {
+                var countries = Object.create(null);
+                entries.forEach(function (entry) {
+                  countries[entry[0]] = entry[1];
+                });
+                resolve(classifyWebrtc(candidates, countries));
+              }).catch(reject);
             }
 
             try {
@@ -977,7 +993,7 @@ SOFTWARE.
                 definitions.webrtcLeak,
                 String(webRtc && webRtc.raw || "未发现 WebRTC IP 候选"),
                 Number(webRtc && webRtc.score || 0),
-                "full"
+                String(webRtc && webRtc.coverage || "full")
               ));
             } catch (_error) {
               results.push(outcome(
@@ -1207,6 +1223,7 @@ SOFTWARE.
           browserEnvironment: browserEnvironment,
           detectWebrtcLeak: detectWebrtcLeak,
           classifyWebrtc: classifyWebrtc,
+          lookupCountry: lookupCountry,
           riskBand: riskBand,
           scoreTimezone: scoreTimezone,
           scoreLanguage: scoreLanguage,
