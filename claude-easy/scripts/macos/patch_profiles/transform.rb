@@ -3,14 +3,15 @@ module ClaudeEasy
 
   AI_GROUP_BASE = "🤖 AI · ClaudeEasy".freeze
   SAFE_GROUP_BASE = "🛡 安全代理 · ClaudeEasy".freeze
+  REFERENCE_GROUP_BASE = "🔗 路由引用 · ClaudeEasy".freeze
   MIN_MIHOMO_VERSION = [1, 19, 27].freeze
   MAX_PATCH_ATTEMPTS = 3
   POLICY_VERSION = 1
   AUTO_CORE = Object.new.freeze
-  DIRECT_TYPES = %w[direct dns reject pass compatible rematch].freeze
+  DIRECT_TYPES = %w[direct dns reject reject-drop pass pass-rule compatible rematch].freeze
   DIRECT_NAMES = %w[DIRECT REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH].freeze
-  ROUTE_GROUP_TYPES = %w[select url-test fallback load-balance relay].freeze
-  EXCLUDED_SAFE_TYPES = "Direct|Dns|Reject|Pass|Compatible|Rematch".freeze
+  ROUTE_GROUP_TYPES = %w[select url-test fallback load-balance].freeze
+  EXCLUDED_SAFE_TYPES = "Direct|Dns|Reject|RejectDrop|Pass|PassRule|Compatible|Rematch".freeze
   LEGACY_QUIC_REJECT_RULE = "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT".freeze
   CN_PROVIDER_SUFFIX = /(?:-[2-9]|-[1-9][0-9]+)?/.freeze
 
@@ -81,6 +82,42 @@ module ClaudeEasy
     base_path.delete_suffix(extension) + suffix + extension
   end
 
+  def mihomo_home_path_key(path)
+    return nil unless path.is_a?(String) && !path.empty?
+
+    home = File.join(Dir.home, ".config", "clash.meta")
+    absolute = File.absolute_path(path, home)
+    existing = absolute
+    missing = []
+    until File.exist?(existing)
+      parent = File.dirname(existing)
+      break if parent == existing
+
+      missing.unshift(File.basename(existing))
+      existing = parent
+    end
+    existing = File.realpath(existing) if File.exist?(existing)
+    normalized = File.join(existing, *missing).unicode_normalize(:nfc)
+    mihomo_home_case_insensitive? ? normalized.downcase(:fold) : normalized
+  rescue ArgumentError, EncodingError, SystemCallError
+    nil
+  end
+
+  def mihomo_home_case_insensitive?
+    existing = File.join(Dir.home, ".config", "clash.meta")
+    until File.exist?(existing)
+      parent = File.dirname(existing)
+      return false if parent == existing
+
+      existing = parent
+    end
+    canonical = File.realpath(existing)
+    alternate = canonical.swapcase
+    alternate != canonical && File.exist?(alternate) && File.identical?(canonical, alternate)
+  rescue ArgumentError, SystemCallError
+    false
+  end
+
   def owned_cn_provider?(name, provider, policy)
     provider_policy = policy["cn_domain_provider"]
     return false unless provider_policy.is_a?(Hash) && provider.is_a?(Hash)
@@ -101,7 +138,8 @@ module ClaudeEasy
       name = base
       sequence = 2
       while providers.key?(name) || providers.any? { |_candidate, provider|
-              provider.is_a?(Hash) && provider["path"] == cn_provider_path(provider_policy, name)
+              provider.is_a?(Hash) &&
+                mihomo_home_path_key(provider["path"]) == mihomo_home_path_key(cn_provider_path(provider_policy, name))
             }
         name = "#{base}-#{sequence}"
         sequence += 1
@@ -177,11 +215,101 @@ module ClaudeEasy
   end
 
   def managed_group_name?(name)
-    managed_name?(name, AI_GROUP_BASE) || managed_name?(name, SAFE_GROUP_BASE)
+    managed_name?(name, AI_GROUP_BASE) || managed_name?(name, SAFE_GROUP_BASE) ||
+      managed_name?(name, REFERENCE_GROUP_BASE)
+  end
+
+  def normalized_adapter_type(type)
+    normalized = type.to_s.downcase.gsub(/[^a-z0-9]/, "")
+    return "shadowsocks" if normalized == "ss"
+    return "shadowsocksr" if normalized == "ssr"
+    return "selector" if normalized == "select"
+
+    normalized
+  end
+
+  def group_excludes_type?(group, type)
+    excluded = group["exclude-type"].to_s.split("|").map { |item| normalized_adapter_type(item) }
+    excluded.include?(normalized_adapter_type(type))
+  end
+
+  def proxy_source?(config, name)
+    proxy = Array(config["proxies"]).find do |item|
+      item.is_a?(Hash) && item["name"].is_a?(String) && item["name"] == name
+    end
+    proxy && !direct_name?(name) && !DIRECT_TYPES.include?(proxy["type"].to_s.downcase)
+  end
+
+  def simple_group_filter_match(pattern, name)
+    return nil unless pattern.is_a?(String) && name.is_a?(String)
+
+    source = pattern
+    insensitive = source.start_with?("(?i)")
+    source = source.delete_prefix("(?i)") if insensitive
+    return true if source == ".*"
+
+    exact = source.start_with?("^") && source.end_with?("$")
+    source = source[1...-1] if exact
+    return nil if source.match?(/[\\.\^$*+?()\[\]{}|]/)
+
+    candidate = insensitive ? name.downcase : name
+    expected = insensitive ? source.downcase : source
+    exact ? candidate == expected : candidate.include?(expected)
+  end
+
+  def imported_proxy_source?(config, group, name)
+    return false unless proxy_source?(config, name)
+
+    proxy = Array(config["proxies"]).find { |item| item.is_a?(Hash) && item["name"] == name }
+    return false if group_excludes_type?(group, proxy["type"])
+
+    included = group["filter"].to_s
+    return false unless included.empty? || simple_group_filter_match(included, name) == true
+
+    excluded = group["exclude-filter"].to_s
+    excluded.empty? || simple_group_filter_match(excluded, name) == false
+  end
+
+  def provider_import_can_have_source?(group)
+    exclusion = group["exclude-filter"]
+    !(exclusion.is_a?(String) && exclusion.delete_prefix("(?i)") == ".*")
+  end
+
+  def provider_source?(config, name)
+    providers = config["proxy-providers"]
+    providers.is_a?(Hash) && name.is_a?(String) && !name.empty? && providers[name].is_a?(Hash)
+  end
+
+  def group_has_proxy_source?(config, group, visiting = [])
+    name = group["name"]
+    return false if visiting.include?(name)
+
+    return true if provider_import_can_have_source?(group) &&
+      Array(group["use"]).any? { |provider| provider_source?(config, provider) }
+    if group["include-all"] == true || group["include-all-providers"] == true
+      providers = config["proxy-providers"]
+      return true if provider_import_can_have_source?(group) && providers.is_a?(Hash) && providers.any? { |provider, value|
+        provider.is_a?(String) && !provider.empty? && value.is_a?(Hash)
+      }
+    end
+    if group["include-all"] == true || group["include-all-proxies"] == true
+      return true if Array(config["proxies"]).any? do |proxy|
+        proxy.is_a?(Hash) && imported_proxy_source?(config, group, proxy["name"])
+      end
+    end
+
+    nested_groups = route_groups(config)
+    Array(group["proxies"]).any? do |member|
+      next true if proxy_source?(config, member)
+
+      nested = nested_groups.find { |candidate| candidate["name"] == member }
+      nested && group_has_proxy_source?(config, nested, visiting + [name])
+    end
   end
 
   def detect_main_group(config, policy)
     groups = route_groups(config)
+    groups = groups.select { |group| group_has_proxy_source?(config, group) }
     candidates = groups.reject do |group|
       ai_name?(group["name"], policy) || managed_group_name?(group["name"])
     end
@@ -206,18 +334,8 @@ module ClaudeEasy
       return found if found
     end
 
-    candidates.each do |group|
-      return group["name"] unless Array(group["use"]).empty?
+    return candidates.first["name"] unless candidates.empty?
 
-      members = Array(group["proxies"])
-      return group["name"] unless members.empty? || members.all? { |member| direct_name?(member) }
-    end
-    groups.each do |group|
-      return group["name"] unless Array(group["use"]).empty?
-
-      members = Array(group["proxies"])
-      return group["name"] unless members.empty? || members.all? { |member| direct_name?(member) }
-    end
     groups.first&.fetch("name")
   end
 
@@ -244,6 +362,28 @@ module ClaudeEasy
     "#{base} #{suffix}"
   end
 
+  def safe_reference_name?(name)
+    name.is_a?(String) && !name.empty? && !name.match?(/[#,=&%]|\p{Cc}/)
+  end
+
+  def reference_wrapper?(group, target)
+    group.is_a?(Hash) && managed_name?(group["name"], REFERENCE_GROUP_BASE) &&
+      group.keys.sort == %w[name proxies type].sort && group["type"].to_s.downcase == "select" &&
+      group["proxies"] == [target]
+  end
+
+  def safe_group_reference(config, target)
+    return target if safe_reference_name?(target)
+    return nil unless route_groups(config).any? { |group| group["name"] == target }
+
+    existing = Array(config["proxy-groups"]).find { |group| reference_wrapper?(group, target) }
+    return existing["name"] if existing
+
+    name = unique_group_name(config, REFERENCE_GROUP_BASE)
+    config["proxy-groups"] << { "name" => name, "type" => "select", "proxies" => [target] }
+    name
+  end
+
   def managed_ai_group_fingerprint?(group)
     return false unless group.is_a?(Hash)
     return false unless (group.keys - %w[name proxies type use]).empty?
@@ -261,7 +401,12 @@ module ClaudeEasy
 
   def managed_safe_group_fingerprint?(group)
     expected_keys = %w[empty-fallback exclude-type include-all name proxies type]
-    legacy_exclusions = [EXCLUDED_SAFE_TYPES, "Direct|Reject|Pass|Compatible|Rematch", "Direct|Reject|Pass|Compatible"]
+    legacy_exclusions = [
+      EXCLUDED_SAFE_TYPES,
+      "Direct|Dns|Reject|Pass|Compatible|Rematch",
+      "Direct|Reject|Pass|Compatible|Rematch",
+      "Direct|Reject|Pass|Compatible"
+    ]
     return false unless group.is_a?(Hash) && group.keys.sort == expected_keys.sort
     return false unless group["type"].to_s.downcase == "select" && group["include-all"] == true
     return false unless group["empty-fallback"].to_s.casecmp("REJECT").zero?
@@ -656,7 +801,9 @@ module ClaudeEasy
     original = deep_copy(config)
     patched = deep_copy(config)
     patched["rules"] ||= []
-    main_group = detect_main_group(patched, policy)
+    detected_main_group = detect_main_group(patched, policy)
+    return base_result(config, :no_main_group) unless detected_main_group
+    main_group = safe_group_reference(patched, detected_main_group)
     return base_result(config, :no_main_group) unless main_group
 
     cn_provider = patch_common_cn(patched, policy, main_group)
@@ -687,6 +834,8 @@ module ClaudeEasy
                else
                  ensure_ai_group(patched, policy)
                end
+    return base_result(config, :no_ai_nodes) unless ai_group
+    ai_group = safe_group_reference(patched, ai_group)
     return base_result(config, :no_ai_nodes) unless ai_group
     route_group = main_group
     patched["ipv6"] = false

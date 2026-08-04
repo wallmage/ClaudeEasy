@@ -388,7 +388,7 @@ module ClaudeEasy
           operation: "auto_update_ownership_state", exit_code: 1, status: "failed",
           code: "auto_update_state_invalid", summary_zh: "无法读取订阅自动更新所有权状态。"
         ) if options[:json]
-        warn error.message
+        warn safe_label(error.message)
         return 1
       end
     end
@@ -448,7 +448,7 @@ module ClaudeEasy
           operation: "disable_subscription_auto_update", exit_code: 1, status: "failed",
           code: "auto_update_failed", summary_zh: "无法关闭订阅自动更新。"
         ) if options[:json]
-        warn error.message
+        warn safe_label(error.message)
         return 1
       end
     end
@@ -489,7 +489,7 @@ module ClaudeEasy
           operation: "restore_owned_subscription_auto_update", exit_code: 1, status: "failed",
           code: "auto_update_restore_failed", summary_zh: "无法安全恢复订阅自动更新。"
         ) if options[:json]
-        warn error.message
+        warn safe_label(error.message)
         return 1
       end
     end
@@ -499,9 +499,9 @@ module ClaudeEasy
       return emit_cli_result(
         operation: "list_backups", exit_code: 0, status: backups.empty? ? "no_change" : "ok",
         code: backups.empty? ? "no_backups" : "backups_listed", summary_zh: "已读取可用备份。",
-        checks: [{ "name" => "backup_count", "value" => backups.length }]
+        checks: [{ "name" => "backup_count", "value" => backups.length }], items: backups
       ) if options[:json]
-      puts backups
+      backups.each { |item| puts "#{item.fetch('created_at')}\t#{item.fetch('id')}" }
       return 0
     end
 
@@ -524,7 +524,7 @@ module ClaudeEasy
         code: snapshots.empty? ? "snapshot_exists" : "snapshot_created", summary_zh: "初始快照处理完成。",
         changes: snapshots.empty? ? [] : ["initial_snapshot"]
       ) if options[:json]
-      snapshots.each { |path| puts File.basename(path) }
+      snapshots.each { |path| puts public_backup_id(File.basename(path)) }
       return 0
     end
 
@@ -558,9 +558,14 @@ module ClaudeEasy
       return emit_cli_result(
         operation: "compare_backup", exit_code: 0, status: comparison.fetch(:same) ? "no_change" : "ok",
         code: comparison.fetch(:same) ? "backup_matches" : "backup_differs", summary_zh: "备份比较完成。",
-        changes: comparison.fetch(:changes)
+        changes: comparison.fetch(:changes),
+        items: [{
+          "id" => comparison.fetch(:backup_id), "same" => comparison.fetch(:same),
+          "backup_sha256" => comparison.fetch(:backup_sha256),
+          "current_sha256" => comparison.fetch(:current_sha256)
+        }]
       ) if options[:json]
-      puts JSON.generate(comparison)
+      puts JSON.generate(ClaudeEasyResult.sanitize(comparison))
       return 0
     end
 
@@ -634,7 +639,8 @@ module ClaudeEasy
         status: status, code: code, summary_zh: summary,
         changes: result[:status] == :updated ? ["profile_restored"] : []
       ) if options[:json]
-      puts JSON.generate(result.reject { |key, _value| key == :rollback_bytes })
+      public_result = result.reject { |key, _value| key == :rollback_bytes }
+      puts JSON.generate(ClaudeEasyResult.sanitize(public_result))
       return exit_code
     end
 
@@ -681,11 +687,26 @@ module ClaudeEasy
         return 1
       end
       if result[:status] == :runtime_restore_pending
+        summary = if result[:rollback_superseded]
+                    "安全更新失败；订阅回滚后又发生刷新，已保留新内容，且运行内核恢复失败。"
+                  else
+                    "安全更新失败；订阅文件已恢复，但运行内核恢复失败。"
+                  end
         return emit_cli_result(
           operation: "safe_update", exit_code: 1, status: "partial", code: "safe_update_runtime_pending",
-          summary_zh: "安全更新失败；订阅文件已恢复，但运行内核恢复失败。", profile: options[:usage_profile]
+          summary_zh: summary, profile: options[:usage_profile]
         ) if options[:json]
-        warn "安全更新失败；订阅文件已恢复，但运行内核恢复失败。"
+        warn summary
+        return 1
+      end
+      if result[:reason] == :rollback_superseded
+        return emit_cli_result(
+          operation: "safe_update", exit_code: 1, status: "failed",
+          code: "safe_update_rollback_superseded",
+          summary_zh: "安全更新失败；回滚后订阅又发生刷新，已保留新内容。",
+          profile: options[:usage_profile]
+        ) if options[:json]
+        warn "安全更新失败；回滚后订阅又发生刷新，已保留新内容。"
         return 1
       end
       item_results = result.fetch(:items, [])
@@ -768,7 +789,7 @@ module ClaudeEasy
       operation: "parse_arguments", exit_code: 64, status: "invalid_request", code: "invalid_arguments",
       summary_zh: "参数错误。"
     ) if json_mode
-    warn "参数错误：#{error.message}"
+    warn "参数错误：#{safe_label(error.message)}"
     warn parser
     64
   rescue Errno::ENOENT

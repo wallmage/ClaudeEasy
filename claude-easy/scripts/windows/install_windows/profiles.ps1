@@ -1,4 +1,13 @@
-﻿function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
+﻿function Get-RemoteSubscriptionItemMappingEntry([string]$Line, [bool]$InlineField) {
+    $candidate = $Line
+    if ($InlineField) {
+        if ($Line -notmatch '^\s*-\s+(.+)$') { return $null }
+        $candidate = $Matches[1]
+    }
+    return Get-YamlMappingEntry $candidate
+}
+
+function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         if ($Lines[$i] -match "`t") { throw "profiles.yaml 使用了制表符缩进，无法安全修改。" }
         if ($Lines[$i].Trim() -match '^(?:---|\.\.\.)(?:\s+#.*)?$') {
@@ -39,9 +48,12 @@
         $finish = if ($position + 1 -lt $starts.Count) { $starts[$position + 1].Index } else { $itemsEnd }
         $fieldIndent = $start.Indent + 2
         $fieldValues = @{}
-        $inlineEntry = Get-YamlMappingEntry $start.Inline
-        if ($null -ne $inlineEntry) { $fieldValues[[string]$inlineEntry.Key] = @([string]$inlineEntry.Value) }
         $optionIndexes = @()
+        $inlineEntry = Get-RemoteSubscriptionItemMappingEntry $Lines[$start.Index] $true
+        if ($null -ne $inlineEntry) {
+            $fieldValues[[string]$inlineEntry.Key] = @([string]$inlineEntry.Value)
+            if ($inlineEntry.Key -eq "option") { $optionIndexes += $start.Index }
+        }
         for ($i = $start.Index + 1; $i -lt $finish; $i++) {
             if ([string]::IsNullOrWhiteSpace($Lines[$i]) -or $Lines[$i].TrimStart().StartsWith("#")) { continue }
             if ((Get-YamlIndent $Lines[$i]) -ne $fieldIndent) { continue }
@@ -83,6 +95,7 @@
             Name = $nameValue
             Updated = $updatedValue
             OptionIndex = $(if ($optionIndexes.Count -eq 1) { [int]$optionIndexes[0] } else { -1 })
+            OptionIsInline = ($optionIndexes.Count -eq 1 -and [int]$optionIndexes[0] -eq [int]$start.Index)
         }
     }
     $remoteUids = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
@@ -106,7 +119,7 @@ function Get-RemoteSubscriptionAutoUpdateStateRecords([string]$Text) {
         $optionEnd = -1
         if ($item.OptionIndex -ge 0) {
             $optionLine = [string]$lines[$item.OptionIndex]
-            $optionEntry = Get-YamlMappingEntry $lines[$item.OptionIndex]
+            $optionEntry = Get-RemoteSubscriptionItemMappingEntry $lines[$item.OptionIndex] ([bool]$item.OptionIsInline)
             $optionValue = (($optionEntry.Value -replace '^\s*#.*$', '') -replace '\s+#.*$', '').Trim()
             if ($optionValue -match '^[&*]' -or ($optionValue -match '^\{' -and $optionValue -ne '{}')) {
                 throw "profiles.yaml 的 option 使用了无法安全修改的写法。"
@@ -164,6 +177,8 @@ function Get-RemoteSubscriptionAutoUpdateStateRecords([string]$Text) {
             FieldIndent = [int]$item.FieldIndent
             OptionStyle = $optionStyle
             OptionLine = $optionLine
+            OptionIsInline = [bool]$item.OptionIsInline
+            ItemIndent = [int]$item.ItemIndent
         }
     }
     return @($records)
@@ -206,6 +221,8 @@ function Restore-RemoteSubscriptionAutoUpdate([string]$Text, [object[]]$Ownershi
             OptionIndex = [int]$current.OptionIndex
             OptionEnd = [int]$current.OptionEnd
             FieldIndent = [int]$current.FieldIndent
+            ItemIndent = [int]$current.ItemIndent
+            OptionIsInline = [bool]$current.OptionIsInline
             OriginalState = $originalState
             OriginalOptionBase64 = [string]$owned.OriginalOptionBase64
         }
@@ -221,11 +238,14 @@ function Restore-RemoteSubscriptionAutoUpdate([string]$Text, [object[]]$Ownershi
             throw "订阅自动更新所有权状态包含无效 UTF-8。"
         }
         if (-not [string]::IsNullOrEmpty($originalOptionLine)) {
-            $originalOptionMatch = [regex]::Match($originalOptionLine, '^( *)option\s*:')
+            $originalOptionMatch = [regex]::Match($originalOptionLine, '^( *)(-\s+)?option\s*:')
             if (-not $originalOptionMatch.Success) {
                 throw "订阅自动更新所有权状态中的 option 行无效。"
             }
-            if ($originalOptionMatch.Groups[1].Value.Length -ne $plan.FieldIndent) {
+            $originalWasInline = $originalOptionMatch.Groups[2].Success
+            $expectedIndent = if ($originalWasInline) { $plan.ItemIndent } else { $plan.FieldIndent }
+            if ($originalWasInline -ne [bool]$plan.OptionIsInline -or
+                $originalOptionMatch.Groups[1].Value.Length -ne $expectedIndent) {
                 throw "订阅自动更新所有权状态与当前订阅缩进不一致。"
             }
         }
@@ -247,12 +267,10 @@ function Restore-RemoteSubscriptionAutoUpdate([string]$Text, [object[]]$Ownershi
             continue
         }
         if (-not $hasOtherOptionContent) {
-            $originalEntry = Get-YamlMappingEntry $originalOptionLine
+            $originalEntry = Get-RemoteSubscriptionItemMappingEntry $originalOptionLine ($originalOptionLine -match '^\s*-\s+')
             $originalValue = ($originalEntry.Value -replace '\s+#.*$', '').Trim()
             if ($originalValue -in @("null", "~", "{}")) {
-                $originalComment = if ($originalEntry.Value -match '(\s+#.*)$') { $Matches[1] } else { "" }
-                $normalizedOptionLine = (" " * $plan.FieldIndent) + "option: $originalValue$originalComment"
-                $lines = Replace-YamlRange -Lines $lines -Start $plan.OptionIndex -End ($plan.AllowIndex + 1) -Replacement @($normalizedOptionLine)
+                $lines = Replace-YamlRange -Lines $lines -Start $plan.OptionIndex -End ($plan.AllowIndex + 1) -Replacement @($originalOptionLine)
                 continue
             }
         }
@@ -315,13 +333,13 @@ function Assert-RemoteSubscriptionAutoUpdateOwnershipState([object]$State) {
             throw "订阅自动更新所有权状态项目无效。"
         }
         if ($optionLine -match "[`r`n`t\0-\x08\x0B\x0C\x0E-\x1F]" -or
-            (-not [string]::IsNullOrEmpty($optionLine) -and $optionLine -notmatch '^ +option\s*:')) {
+            (-not [string]::IsNullOrEmpty($optionLine) -and $optionLine -notmatch '^(?: +option\s*:| *-\s+option\s*:)')) {
             throw "订阅自动更新所有权状态项目无效。"
         }
         if ([string]::IsNullOrEmpty($optionLine)) {
             if ($originalState -ne "missing") { throw "订阅自动更新所有权状态项目无效。" }
         } else {
-            $optionEntry = Get-YamlMappingEntry $optionLine
+            $optionEntry = Get-RemoteSubscriptionItemMappingEntry $optionLine ($optionLine -match '^\s*-\s+')
             if ($null -eq $optionEntry -or $optionEntry.Key -ne "option") {
                 throw "订阅自动更新所有权状态项目无效。"
             }
@@ -413,14 +431,19 @@ function Set-RemoteSubscriptionAutoUpdateDisabled([string]$Text) {
             continue
         }
 
-        $optionEntry = Get-YamlMappingEntry $lines[$item.OptionIndex]
+        $optionEntry = Get-RemoteSubscriptionItemMappingEntry $lines[$item.OptionIndex] ([bool]$item.OptionIsInline)
         $optionValue = (($optionEntry.Value -replace '^\s*#.*$', '') -replace '\s+#.*$', '').Trim()
         if ($optionValue -match '^[&*]' -or ($optionValue -match '^\{' -and $optionValue -ne '{}')) {
             throw "profiles.yaml 的 option 使用了无法安全修改的写法。"
         }
         if ($optionValue -match '^(?:null|~|\{\})$') {
+            $optionLine = if ([bool]$item.OptionIsInline) {
+                (" " * $item.ItemIndent) + "- option:"
+            } else {
+                "${fieldPrefix}option:"
+            }
             $lines = Replace-YamlRange -Lines $lines -Start $item.OptionIndex -End ($item.OptionIndex + 1) -Replacement @(
-                "${fieldPrefix}option:",
+                $optionLine,
                 "${fieldPrefix}  allow_auto_update: false"
             )
             continue

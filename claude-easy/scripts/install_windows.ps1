@@ -14,7 +14,27 @@
 
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path (Join-Path $PSScriptRoot "windows") "result_contract.ps1"
-if (-not (Test-Path -LiteralPath $resultContractPath -PathType Leaf)) {
+$resultContractLoaded = $false
+if (Test-Path -LiteralPath $resultContractPath -PathType Leaf) {
+    try {
+        $null = . $resultContractPath
+        $resultContractLoaded = $true
+        foreach ($requiredResultFunction in @(
+            "Protect-ClaudeEasyResultText",
+            "Protect-ClaudeEasyResultValue",
+            "New-ClaudeEasyResult",
+            "Write-ClaudeEasyResult"
+        )) {
+            if ($null -eq (Get-Command $requiredResultFunction -CommandType Function -ErrorAction SilentlyContinue)) {
+                $resultContractLoaded = $false
+                break
+            }
+        }
+    } catch {
+        $resultContractLoaded = $false
+    }
+}
+if (-not $resultContractLoaded) {
     if ($Json) {
         [Console]::Out.WriteLine('{"schema":"claude-easy.result","version":1,"command":"install","platform":"windows","client":"clash-verge-rev","operation":"load","ok":false,"status":"failed","code":"incomplete_package","exit_code":6,"summary_zh":"安装包不完整。","profile":null,"changes":[],"checks":[],"items":[],"messages":[],"warnings":[]}')
     } else {
@@ -22,12 +42,12 @@ if (-not (Test-Path -LiteralPath $resultContractPath -PathType Leaf)) {
     }
     exit 6
 }
-. $resultContractPath
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
 $script:ClaudeEasyOperation = if ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
+$enginePath = Join-Path (Join-Path $PSScriptRoot "windows") "clash_verge_global.js"
 $installerModules = @(
     "common.ps1",
     "yaml.ps1",
@@ -38,16 +58,19 @@ $installerModules = @(
     "safe_update.ps1"
 )
 try {
+    if (-not (Test-Path -LiteralPath $enginePath -PathType Leaf)) {
+        throw "安装包不完整：缺少 Windows 全局扩展脚本。"
+    }
     foreach ($installerModule in $installerModules) {
         $installerModulePath = Join-Path $installerModuleRoot $installerModule
         if (-not (Test-Path -LiteralPath $installerModulePath -PathType Leaf)) {
             throw "安装包不完整：缺少 Windows 安装模块。"
         }
-        . $installerModulePath
+        $null = . $installerModulePath
     }
 } catch {
     if ($Json) {
-        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "install" -Operation "load" -Ok $false -Status "failed" -Code "incomplete_package" -ExitCode 6 -SummaryZh "安装包不完整。")
+        [Console]::Out.WriteLine('{"schema":"claude-easy.result","version":1,"command":"install","platform":"windows","client":"clash-verge-rev","operation":"load","ok":false,"status":"failed","code":"incomplete_package","exit_code":6,"summary_zh":"安装包不完整。","profile":null,"changes":[],"checks":[],"items":[],"messages":[],"warnings":[]}')
     } else {
         [Console]::Error.WriteLine("[ClaudeEasy] 安装包不完整。")
     }
@@ -58,7 +81,6 @@ if ([string]::IsNullOrWhiteSpace($AppHome)) {
     try {
         $AppHome = Resolve-ClashVergeAppHome
     } catch {
-        if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] $($_.Exception.Message)") }
         Complete-InstallResult 2 "invalid_request" "ambiguous_app_home" "检测到多个 Clash Verge Rev 配置目录；未执行任何操作。"
     }
 }
@@ -67,9 +89,7 @@ if (-not [string]::IsNullOrWhiteSpace($AppHome)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $AppHome -PathType Container)) {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 没有找到受支持的 Clash Verge Rev。请安装最新版 Clash Verge Rev，打开一次后再运行 ClaudeEasy。") }
     Complete-InstallResult 2 "unsupported" "client_not_found" "没有找到受支持的 Clash Verge Rev。"
-    exit 2
 }
 
 $requestedOperations = @(
@@ -98,7 +118,6 @@ $autoUpdateStatePath = Join-Path $AppHome "claude-easy-auto-update-state.json"
 $usageStatePath = Join-Path $AppHome "claude-easy-usage-profile.json"
 $safeUpdateStatePath = Join-Path $AppHome "claude-easy-safe-update.json"
 $targetScript = Join-Path $profilesDirectory "Script.js"
-$enginePath = Join-Path (Join-Path $PSScriptRoot "windows") "clash_verge_global.js"
 
 $mutationLock = $null
 try {
@@ -383,9 +402,36 @@ if ($VerifySafeUpdate) {
 
 if ($ListBackups) {
     $backupItems = @()
-    if (Test-Path -LiteralPath $backupRoot -PathType Container) {
-        Get-ChildItem -LiteralPath $backupRoot -File -Filter "*.backup" | Sort-Object Name -Descending | ForEach-Object {
-            if ($Json) { $backupItems += $_.Name } else { $_.Name }
+    $backupFiles = @()
+    $backupRootSafe = $true
+    try {
+        Assert-NoReparsePointPath $backupRoot "备份目录"
+    } catch {
+        $backupRootSafe = $false
+    }
+    if ($backupRootSafe -and (Test-Path -LiteralPath $backupRoot -PathType Container)) {
+        $backupFiles = @(Get-ChildItem -LiteralPath $backupRoot -File -Filter "*.backup" | Sort-Object Name -Descending)
+    }
+    foreach ($backupFile in $backupFiles) {
+        $backupGuard = $null
+        try {
+            $backupGuard = Open-SafeUpdateVersionGuard (Join-Path $backupRoot $backupFile.Name) "备份"
+            $publicBackup = Get-PublicBackupDescriptor $backupFile.Name
+        } catch {
+            continue
+        } finally {
+            if ($null -ne $backupGuard) {
+                $backupGuard.Stream.Dispose()
+                for ($guardIndex = $backupGuard.DirectoryGuards.Count - 1; $guardIndex -ge 0; $guardIndex--) {
+                    $backupGuard.DirectoryGuards[$guardIndex].Dispose()
+                }
+            }
+        }
+        $backupItems += $publicBackup
+        if (-not $Json) {
+            $safeCreatedAt = Protect-ClaudeEasyResultText $publicBackup.created_at
+            $safeBackupId = Protect-ClaudeEasyResultText $publicBackup.id
+            [Console]::Out.WriteLine(("{0}`t{1}" -f $safeCreatedAt, $safeBackupId))
         }
     }
     $backupStatus = if ($backupItems.Count -eq 0) { "no_change" } else { "ok" }
@@ -394,30 +440,39 @@ if ($ListBackups) {
 
 if (-not [string]::IsNullOrWhiteSpace($CompareBackup)) {
     $resolved = Get-BackupTarget $CompareBackup
-    $backupHash = (Get-FileHash -LiteralPath $resolved.BackupPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $currentHash = (Get-FileHash -LiteralPath $resolved.TargetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $currentSnapshot = Get-OptionalFileSnapshot $resolved.TargetPath "当前配置"
+    if (-not $currentSnapshot.Exists) { throw "当前配置不存在，无法比较。" }
+    $backupHash = Get-BytesSha256 $resolved.BackupSnapshot.Bytes
+    $currentHash = Get-BytesSha256 $currentSnapshot.Bytes
     $same = ($backupHash -eq $currentHash)
     $changedFields = @()
     if (-not $same) {
         if ([System.IO.Path]::GetExtension($resolved.TargetPath) -match '^\.ya?ml$') {
-            $backupText = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($resolved.BackupPath))
-            $currentText = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($resolved.TargetPath))
+            $backupText = [System.Text.Encoding]::UTF8.GetString($resolved.BackupSnapshot.Bytes)
+            $currentText = [System.Text.Encoding]::UTF8.GetString($currentSnapshot.Bytes)
             $changedFields = @(Get-RedactedYamlChangedPaths $backupText $currentText)
         } else {
             $changedFields = @("文件内容")
         }
     }
-    $comparison = [pscustomobject]@{
-        Backup = $CompareBackup
-        Profile = (Split-Path -Leaf $resolved.TargetPath)
-        Same = $same
-        BackupSha256 = $backupHash
-        CurrentSha256 = $currentHash
-        ChangedFields = $changedFields
-        ConfigurationDifference = $(if ($same) { "无配置差异" } else { "存在配置差异；为保护隐私只输出发生变化的字段名" })
+    $comparison = [pscustomobject][ordered]@{
+        id = [string]$resolved.PublicId
+        same = $same
+        backup_sha256 = $backupHash
+        current_sha256 = $currentHash
     }
-    if (-not $Json) { $comparison | ConvertTo-Json }
-    Complete-InstallResult 0 $(if ($same) { "no_change" } else { "ok" }) "backup_compared" "备份比较已完成。" @($changedFields) @($comparison)
+    if (-not $Json) {
+        $humanComparison = [pscustomobject][ordered]@{
+            id = [string]$resolved.PublicId
+            same = $same
+            backup_sha256 = $backupHash
+            current_sha256 = $currentHash
+            changed_fields = $changedFields
+        }
+        $safeComparison = Protect-ClaudeEasyResultValue $humanComparison
+        [Console]::Out.WriteLine(($safeComparison | ConvertTo-Json -Compress))
+    }
+    Complete-InstallResult 0 $(if ($same) { "no_change" } else { "ok" }) "backup_compared" "备份比较已完成。" @($changedFields) @() @($comparison)
 }
 
 if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
@@ -428,7 +483,7 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     if (-not $currentSnapshot.Exists) { throw "当前配置不存在，拒绝恢复。" }
     $currentHash = Get-BytesSha256 $currentSnapshot.Bytes
     if ($currentHash -ne $ExpectedCurrentSha256.ToLowerInvariant()) { throw "当前配置已变化，拒绝覆盖。" }
-    $restoreBytes = [System.IO.File]::ReadAllBytes($resolved.BackupPath)
+    $restoreBytes = $resolved.BackupSnapshot.Bytes
     Test-RestoreCandidate $resolved.TargetPath $restoreBytes
     $validatedCurrentSnapshot = Get-OptionalFileSnapshot $resolved.TargetPath "当前配置"
     if (-not $validatedCurrentSnapshot.Exists -or
@@ -436,7 +491,7 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
         (Get-BytesSha256 $validatedCurrentSnapshot.Bytes) -ne $currentHash) {
         throw "当前配置在检查期间发生变化，拒绝覆盖。"
     }
-    Backup-Versioned $resolved.TargetPath $backupRoot "pre-restore" | Out-Null
+    Backup-Versioned $resolved.TargetPath $backupRoot "pre-restore" -SourceBytes $currentSnapshot.Bytes -UseSourceBytes | Out-Null
     $restoreCommitted = Invoke-VerifiedFileTransaction @(
         [pscustomobject]@{
             Path = $resolved.TargetPath
@@ -453,22 +508,18 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     Complete-InstallResult 0 "ok" "backup_restored" "备份已恢复；恢复前版本已经另行备份。" @("configuration")
 }
 } catch {
-    if ($Json) {
-        $operationStatus = if ($_.Exception.Message -match "已恢复") { "rolled_back" } else { "failed" }
-        Complete-InstallResult 1 $operationStatus "operation_failed" ("操作失败：" + $_.Exception.Message)
-    }
-    throw
+    $operationStatus = if ($_.Exception.Message -match "已恢复") { "rolled_back" } else { "failed" }
+    Complete-InstallResult 1 $operationStatus "operation_failed" ("操作失败：" + $_.Exception.Message)
 }
 try {
     $savedUsageProfile = Get-SavedUsageProfile $usageStatePath
 } catch {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] $($_.Exception.Message)") }
     Complete-InstallResult 1 "failed" "usage_profile_read_failed" ("读取用途档位失败：" + $_.Exception.Message)
 }
 
 if ($ShowUsageProfile) {
     if ($savedUsageProfile -ne 0) { $script:ClaudeEasyProfile = $savedUsageProfile }
-    if (-not $Json) { if ($savedUsageProfile -eq 0) { Write-Output "unset" } else { Write-Output $savedUsageProfile } }
+    if (-not $Json) { Write-ClaudeEasyHumanText $(if ($savedUsageProfile -eq 0) { "unset" } else { [string]$savedUsageProfile }) }
     Complete-InstallResult 0 "ok" "usage_profile_shown" "用途档位已读取。"
 }
 
@@ -477,7 +528,6 @@ $resolvedUsageProfile = $UsageProfile
 if ($resolvedUsageProfile -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_USAGE_PROFILE)) {
     $parsedUsageProfile = 0
     if (-not [int]::TryParse($env:CLAUDE_EASY_USAGE_PROFILE, [ref]$parsedUsageProfile)) {
-        if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 用途档位无效，只能是 1、2 或 3。") }
         Complete-InstallResult 64 "invalid_request" "invalid_usage_profile" "用途档位无效，只能是 1、2 或 3。"
     }
     $resolvedUsageProfile = $parsedUsageProfile
@@ -489,20 +539,12 @@ if ($resolvedUsageProfile -eq 0) {
     $resolvedUsageProfile = $savedUsageProfile
 }
 if ($resolvedUsageProfile -eq 0) {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 还没有选择用途档位。请先在 skill 中选择：1 普通浏览、2 海外 AI、3 Claude/Claude Code。") }
     Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
 }
 if ($resolvedUsageProfile -notin @(1, 2, 3)) {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 用途档位无效，只能是 1、2 或 3。") }
     Complete-InstallResult 64 "invalid_request" "invalid_usage_profile" "用途档位无效，只能是 1、2 或 3。"
 }
 $script:ClaudeEasyProfile = $resolvedUsageProfile
-
-if (-not (Test-Path -LiteralPath $enginePath -PathType Leaf)) {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 安装包不完整：缺少 Windows 全局扩展脚本。") }
-    Complete-InstallResult 3 "failed" "package_incomplete" "安装包不完整：缺少 Windows 全局扩展脚本。"
-    exit 3
-}
 
 try {
     $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
@@ -517,11 +559,6 @@ try {
             "client_running_profile_three_deferred"
         } else {
             "client_running_auto_update_deferred"
-        }
-        if (-not $Json) {
-            [Console]::Error.WriteLine(
-                "[ClaudeEasy] Clash Verge Rev 正在运行；为避免客户端内存状态覆盖 profiles.yaml，本次未修改用途档位、自动更新所有权、脚本或客户端配置。请在客户端未运行时按当前档位重试。"
-            )
         }
         Complete-InstallResult 1 "partial" $runningCode "客户端正在运行；本次未修改用途档位、自动更新所有权、脚本或客户端配置，请在客户端未运行时按当前档位重试。"
     }
@@ -698,9 +735,7 @@ try {
     Complete-InstallResult 0 "ok" "installed" "Windows ClaudeEasy 已安装。" @("global_script", "auto_update", "tun", "dns", "ipv6")
     exit 0
 } catch {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 安装失败：$($_.Exception.Message)") }
     Complete-InstallResult 1 $(if ($_.Exception.Message -match "已撤销|恢复") { "rolled_back" } else { "failed" }) "install_failed" ("安装失败：" + $_.Exception.Message)
-    exit 1
 }
 } finally {
     Exit-AppHomeMutationLock $mutationLock

@@ -193,6 +193,22 @@ say() {
   /usr/bin/printf '%s\n' "[ClaudeEasy] $1"
 }
 
+install_package_complete() {
+  for required_package_file in \
+    "$UNINSTALLER_SOURCE" \
+    "$PATCHER_SOURCE" \
+    "$RESULT_CONTRACT_SOURCE" \
+    "$OPERATION_LOCK_SOURCE" \
+    "$POLICY_SOURCE"; do
+    [ -f "$required_package_file" ] && [ ! -L "$required_package_file" ] || return 1
+  done
+  return 0
+}
+
+install_package_dependencies_load() {
+  /usr/bin/ruby "$PATCHER_SOURCE" --json --help >/dev/null 2>&1
+}
+
 durable_ensure_private_directory() {
   /usr/bin/ruby "$OPERATION_LOCK_SOURCE" --ensure-private-directory "$1"
 }
@@ -632,6 +648,10 @@ if [ -n "$USAGE_PROFILE" ]; then
 fi
 
 if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
+  if ! install_package_complete; then
+    say "安装包不完整。"
+    finish 6 failed incomplete_package "安装包不完整。" install
+  fi
   if [ "$(uname -s)" != "Darwin" ]; then
     say "当前系统不是 macOS。Windows 请使用 Clash Verge Rev 的 Windows 安装程序。"
     finish 2 unsupported unsupported_platform "当前系统不是 macOS。" install
@@ -645,8 +665,8 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
     say "这台 Mac 没有系统 Ruby，无法运行补丁。"
     finish 3 unsupported ruby_missing "这台 Mac 没有系统 Ruby，无法运行补丁。" install
   fi
-  if [ ! -f "$OPERATION_LOCK_SOURCE" ]; then
-    say "安装包不完整：缺少操作锁程序。"
+  if ! install_package_dependencies_load; then
+    say "安装包不完整。"
     finish 6 failed incomplete_package "安装包不完整。" install
   fi
   if [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" = "1" ]; then
@@ -710,8 +730,8 @@ if [ -n "$CUSTOM_PROFILE_DIR" ] && [ ! -d "$CUSTOM_PROFILE_DIR" ]; then
   finish 5 failed profile_directory_missing "没有找到指定的 ClashX Meta 配置目录。" install
 fi
 
-if [ ! -f "$PATCHER_SOURCE" ] || [ ! -f "$POLICY_SOURCE" ] || [ ! -f "$RESULT_CONTRACT_SOURCE" ]; then
-  say "安装包不完整：缺少补丁程序或策略文件。"
+if ! install_package_complete || ! install_package_dependencies_load; then
+  say "安装包不完整。"
   finish 6 failed incomplete_package "安装包不完整。" install
 fi
 

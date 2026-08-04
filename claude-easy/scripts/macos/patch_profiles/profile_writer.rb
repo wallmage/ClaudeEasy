@@ -327,6 +327,8 @@ module ClaudeEasy
         connectivity_checker: connectivity_checker,
         precommit_condition: precommit_condition
       )
+    return :runtime_restore_pending unless
+      runtime_precommit_allowed?(precommit_condition)
 
     remove_profile_transaction(transaction)
     :recovered
@@ -586,6 +588,7 @@ module ClaudeEasy
                                          expanded_path,
                                          {
                                            original: preview.fetch(:transaction_original),
+                                           candidate: preview.fetch(:transaction_candidate),
                                            identity: target&.fetch(:identity),
                                            write_path: target&.fetch(:write_path)
                                          }
@@ -604,6 +607,14 @@ module ClaudeEasy
             expected_identity: expectation&.fetch(:identity),
             expected_path: expectation&.fetch(:write_path)
           )
+          if transaction && result[:status] == :unchanged
+            result = result.merge(
+              rollback_bytes: expectation.fetch(:original),
+              patched_digest: Digest::SHA256.hexdigest(expectation.fetch(:candidate)),
+              patched_identity: expectation.fetch(:identity),
+              patched_path: expectation.fetch(:write_path)
+            )
+          end
           result[:active] = item.fetch(:active)
           if auto_reload && !dry_run && result[:active] && result[:status] == :updated
             result = activate_updated_profile(
@@ -628,24 +639,73 @@ module ClaudeEasy
 
         batch_committed = results.length == work_items.length &&
                           results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) }
-        runtime_committed = results.any? do |result|
-          result[:active] && result[:status] == :updated && result[:reloaded] == true
-        end
         if batch_committed &&
-           !runtime_committed &&
            results.any? { |result| result[:status] == :updated } &&
            !runtime_precommit_allowed?(precommit_condition)
           results.reverse_each do |result|
             next unless result[:status] == :updated
 
-            result[:status] = restore_profile_bytes(result) ? :batch_rolled_back : :batch_rollback_failed
+            restored = restore_profile_bytes(result)
+            if result[:active] && result[:reloaded] == true
+              result.delete(:reloaded)
+              result[:status] = restored ?
+                :reload_failed_restore_pending : :reload_failed_rollback_conflict
+            else
+              result[:status] = restored ? :batch_rolled_back : :batch_rollback_failed
+            end
           end
         end
 
         if transaction
           if results.length == work_items.length &&
              results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) }
-            remove_profile_transaction(transaction)
+            stale = results.reject { |result| profile_result_current?(result) }
+            if stale.empty?
+              remove_profile_transaction(transaction)
+            else
+              runtime_committed = results.any? do |result|
+                result[:active] && result[:reloaded] == true
+              end
+              stale.each do |result|
+                result.delete(:reloaded)
+                result[:status] = :concurrent_change
+                result[:transaction_commit] = true
+              end
+              recovery = begin
+                recover_profile_transaction(
+                  backup_root, roots: roots,
+                  allow_concurrent_paths: stale.map { |result| result.fetch(:path) },
+                  keep_transaction: runtime_committed
+                )
+              rescue StandardError
+                nil
+              end
+              results.each do |result|
+                next unless result[:status] == :updated
+
+                result.delete(:reloaded)
+                result[:status] = recovery ? :batch_rolled_back : :batch_rollback_failed
+              end
+              if runtime_committed
+                restored_runtime = recovery && reload_recovered_profile_runtime(
+                  work_items, require_tun: usage_profile >= 2,
+                  socket: socket, requester: requester,
+                  connectivity_checker: connectivity_checker,
+                  precommit_condition: precommit_condition
+                ) && runtime_precommit_allowed?(precommit_condition)
+                if restored_runtime
+                  begin
+                    remove_profile_transaction(recovery)
+                  rescue StandardError
+                    restored_runtime = false
+                  end
+                end
+                unless restored_runtime
+                  active_result = results.find { |result| result[:active] }
+                  active_result[:status] = :reload_failed_restore_pending if active_result
+                end
+              end
+            end
           else
             allowed_concurrent_paths = results.each_with_object([]) do |result, paths|
               if result[:status] == :concurrent_change && result[:transaction_commit] == false
@@ -655,7 +715,9 @@ module ClaudeEasy
             recover_profile_transaction(
               backup_root, roots: roots, allow_concurrent_paths: allowed_concurrent_paths,
               keep_transaction: results.any? do |result|
-                result[:status] == :reload_failed_restore_pending
+                %i[reload_failed_restore_pending reload_failed_rollback_conflict].include?(
+                  result[:status]
+                )
               end
             )
           end

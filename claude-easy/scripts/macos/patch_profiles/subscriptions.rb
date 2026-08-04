@@ -13,6 +13,7 @@ module ClaudeEasy
 
   AUTO_UPDATE_OWNERSHIP_BASENAME = "clashx-meta-kAutoUpdateEnable.state.json".freeze
   AUTO_UPDATE_DOMAINS = %w[com.metacubex.ClashX.meta com.MetaCubeX.ClashX.meta].freeze
+  MAX_REMOTE_SUBSCRIPTION_BYTES = 32 * 1024 * 1024
 
   def auto_update_ownership_path(backup_root)
     File.join(File.expand_path(backup_root), AUTO_UPDATE_OWNERSHIP_BASENAME)
@@ -474,7 +475,16 @@ module ClaudeEasy
     value.gsub("\\") { "\\\\" }.gsub('"', '\\"')
   end
 
-  def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
+  def mihomo_loopback_proxy_url?(value)
+    value.is_a?(String) && value.match?(%r{\A(?:http|socks5h)://127\.0\.0\.1:(?:[1-9]\d{0,4})\z}) &&
+      value.rpartition(":").last.to_i <= 65_535
+  end
+
+  def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS,
+                                proxy_url: nil)
+    raise InvalidConfigError, "Mihomo 本机代理不可用" unless
+      mihomo_loopback_proxy_url?(proxy_url)
+
     config = <<~CURL
       url = "#{curl_config_value(target.fetch(:url))}"
       silent
@@ -484,14 +494,32 @@ module ClaudeEasy
       user-agent = "ClashX Meta"
       proto = "=https"
       max-time = #{Integer(timeout_seconds)}
+      max-filesize = #{MAX_REMOTE_SUBSCRIPTION_BYTES}
     CURL
     stdout, _stderr, status = Open3.capture3(
-      "/usr/bin/curl", "--config", "-", stdin_data: config, binmode: true
+      CURL_ISOLATED_ENVIRONMENT,
+      "/usr/bin/curl", "-q", "--proxy", proxy_url, "--config", "-",
+      stdin_data: config, binmode: true
     )
-    raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
+    raise InvalidConfigError, "远程订阅下载失败" unless
+      status.success? && !stdout.empty? && stdout.bytesize <= MAX_REMOTE_SUBSCRIPTION_BYTES
 
     stdout
   rescue KeyError, ArgumentError
+    raise InvalidConfigError, "远程订阅下载失败"
+  end
+
+  def fetch_remote_subscription_via_mihomo(target,
+                                           timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
+    socket = controller_socket
+    raise InvalidConfigError, "Mihomo 本机代理不可用" unless socket
+
+    requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+    proxy_url = runtime_loopback_proxy(requester)
+    raise InvalidConfigError, "Mihomo 本机代理不可用" unless proxy_url
+
+    fetch_remote_subscription(target, timeout_seconds: timeout_seconds, proxy_url: proxy_url)
+  rescue SystemCallError, IOError
     raise InvalidConfigError, "远程订阅下载失败"
   end
 
@@ -618,9 +646,19 @@ module ClaudeEasy
   def finish_safe_update_rollback(items, transaction, backup_root, roots, keep_transaction: false)
     failures = rollback_safe_update_items(items)
     recover_profile_transaction(backup_root, roots: roots, keep_transaction: keep_transaction)
-    []
+    unrestored = items.select do |item|
+      item[:committed_identity] && !safe_update_item_restored?(item)
+    end.map { |item| item.fetch(:name) }.uniq
+    {
+      failures: failures.select { |name| unrestored.include?(name) }.uniq,
+      superseded: unrestored.reject { |name| failures.include?(name) }
+    }
   rescue StandardError
-    failures.nil? || failures.empty? ? [""] : failures
+    unrestored = items.select do |item|
+      item[:committed_identity] && !safe_update_item_restored?(item)
+    end.map { |item| item.fetch(:name) }.uniq
+    failures = Array(failures) | unrestored
+    { failures: failures.empty? ? [""] : failures, superseded: [] }
   end
 
   def default_safe_update_activation(items, usage_profile, selected_name = selected_profile_name,
@@ -639,7 +677,8 @@ module ClaudeEasy
     )
   end
 
-  def reload_recovered_safe_update_runtime(targets, usage_profile, selected_name)
+  def reload_recovered_safe_update_runtime(targets, usage_profile, selected_name,
+                                           precommit_condition: nil)
     active = targets.find { |target| active_profile?(target.fetch(:path), selected_name) }
     return true unless active
 
@@ -654,23 +693,33 @@ module ClaudeEasy
 
     expected_tun = usage_profile >= 2 ? :enabled : :ignore
     roots = targets.map { |target| File.dirname(File.expand_path(target.fetch(:path))) }.uniq
-    runtime_context = capture_runtime_profile_context(roots)
-    return false unless runtime_context && runtime_context.fetch(:selected) == selected_name
+    unless precommit_condition
+      runtime_context = capture_runtime_profile_context(roots)
+      return false unless runtime_context && runtime_context.fetch(:selected) == selected_name
+
+      precommit_condition = lambda do
+        runtime_profile_context_current?(runtime_context, roots)
+      end
+    end
+    return false unless runtime_precommit_allowed?(precommit_condition)
 
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(active.fetch(:path)))
     )
     return false unless code == 204
+    return false unless runtime_precommit_allowed?(precommit_condition)
 
-    runtime_health_healthy?(
+    healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
-      connectivity_checker: method(:default_connectivity_healthy?)
+      precommit_condition: precommit_condition
     )
+    healthy && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
     false
   end
 
-  def safe_update_all(targets:, policy:, backup_root:, usage_profile:, fetcher: method(:fetch_remote_subscription),
+  def safe_update_all(targets:, policy:, backup_root:, usage_profile:,
+                      fetcher: method(:fetch_remote_subscription_via_mihomo),
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil)
     operation_lock = nil
@@ -716,7 +765,10 @@ module ClaudeEasy
                                 File.symlink?(profile_transaction_path(backup_root))
       recover_profile_transaction(backup_root, roots: roots)
       if pending_runtime_restore &&
-         !reload_recovered_safe_update_runtime(targets, usage_profile, selected_name)
+         !reload_recovered_safe_update_runtime(
+           targets, usage_profile, selected_name,
+           precommit_condition: precommit_condition
+         )
         return {
           status: :runtime_restore_pending, failed_profile: "",
           reason: :transaction_runtime_restore_failed
@@ -835,11 +887,16 @@ module ClaudeEasy
       reason = concurrent_change ? :concurrent_change : :write_failed
       handles.each { |_item, handle| handle.close rescue nil }
       handles.clear
-      failures = finish_safe_update_rollback(items, transaction, backup_root, roots)
-      unless failures.empty?
+      rollback = finish_safe_update_rollback(items, transaction, backup_root, roots)
+      unless rollback.fetch(:failures).empty?
         return {
-          status: :rollback_failed, failed_profile: failures.reject(&:empty?).first.to_s, reason: reason
+          status: :rollback_failed,
+          failed_profile: rollback.fetch(:failures).reject(&:empty?).first.to_s,
+          reason: reason
         }
+      end
+      unless rollback.fetch(:superseded).empty?
+        return { status: :aborted, failed_profile: "", reason: :rollback_superseded }
       end
       return { status: :aborted, failed_profile: "", reason: reason }
     ensure
@@ -847,10 +904,15 @@ module ClaudeEasy
     end
 
     unless items.all? { |item| safe_update_item_committed?(item) }
-      rollback_failed = !finish_safe_update_rollback(items, transaction, backup_root, roots).empty?
+      rollback = finish_safe_update_rollback(items, transaction, backup_root, roots)
+      reason = if rollback.fetch(:failures).empty? && !rollback.fetch(:superseded).empty?
+                 :rollback_superseded
+               else
+                 :concurrent_change
+               end
       return {
-        status: rollback_failed ? :rollback_failed : :aborted,
-        failed_profile: "", reason: :concurrent_change
+        status: rollback.fetch(:failures).empty? ? :aborted : :rollback_failed,
+        failed_profile: "", reason: reason
       }
     end
 
@@ -871,24 +933,71 @@ module ClaudeEasy
     end
     activated = activation_result == true ||
                 (activation_result.is_a?(Hash) && activation_result[:reloaded] == true)
+    if activated && !runtime_precommit_allowed?(precommit_condition)
+      activation_result = { status: :reload_failed_restore_pending }
+      activated = false
+    end
     runtime_status = activation_result[:status] if activation_result.is_a?(Hash)
     unless activated
       runtime_restore_pending = %i[
         reload_failed_restore_pending reload_failed_rollback_conflict
       ].include?(runtime_status)
-      failures = finish_safe_update_rollback(
+      rollback = finish_safe_update_rollback(
         items, transaction, backup_root, roots, keep_transaction: runtime_restore_pending
       )
-      unless failures.empty?
+      unless rollback.fetch(:failures).empty?
         return { status: :rollback_failed, failed_profile: "", reason: :activation_failed }
       end
       if runtime_restore_pending
         return {
           status: :runtime_restore_pending, failed_profile: "", reason: :activation_failed,
-          runtime_status: runtime_status
+          runtime_status: runtime_status,
+          rollback_superseded: !rollback.fetch(:superseded).empty?
         }
       end
+      unless rollback.fetch(:superseded).empty?
+        return { status: :aborted, failed_profile: "", reason: :rollback_superseded }
+      end
       return { status: :aborted, failed_profile: "", reason: :activation_failed }
+    end
+
+    stale_items = items.reject { |item| safe_update_item_committed?(item) }
+    unless stale_items.empty?
+      runtime_committed = activation_result.is_a?(Hash) && activation_result[:reloaded] == true
+      rollback = finish_safe_update_rollback(
+        items, transaction, backup_root, roots, keep_transaction: runtime_committed
+      )
+      stale_names = stale_items.map { |item| item.fetch(:name) }
+      failures = rollback.fetch(:failures) - stale_names
+      superseded = rollback.fetch(:superseded) | stale_names
+      unless failures.empty?
+        return {
+          status: :rollback_failed, failed_profile: failures.first.to_s,
+          reason: :concurrent_change
+        }
+      end
+      if runtime_committed
+        restored_runtime = reload_recovered_safe_update_runtime(
+          targets, usage_profile, selected_name,
+          precommit_condition: precommit_condition
+        ) && runtime_precommit_allowed?(precommit_condition)
+        if restored_runtime
+          begin
+            remove_profile_transaction(transaction)
+          rescue StandardError
+            restored_runtime = false
+          end
+        end
+        unless restored_runtime
+          return {
+            status: :runtime_restore_pending, failed_profile: "",
+            reason: :concurrent_change,
+            runtime_status: :reload_failed_restore_pending,
+            rollback_superseded: !superseded.empty?
+          }
+        end
+      end
+      return { status: :aborted, failed_profile: "", reason: :rollback_superseded }
     end
 
     remove_profile_transaction(transaction)

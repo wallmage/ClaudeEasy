@@ -50,7 +50,7 @@ module MacosRuntimeFixture
     path
   end
 
-  def start_release_controller(home)
+  def start_release_controller(home, mixed_port:)
     socket_path = File.join(
       "/tmp", "claude-easy-#{Process.pid}-#{rand(1_000_000)}.sock"
     )
@@ -82,6 +82,11 @@ module MacosRuntimeFixture
                  JSON.generate("proxies" => {
                    "Main" => { "type" => "Selector", "now" => "node" }
                  })
+               elsif target == "/configs"
+                 JSON.generate(
+                   "mixed-port" => mixed_port,
+                   "tun" => { "enable" => false }
+                 )
                elsif target&.start_with?("/dns/query?")
                  JSON.generate("Status" => 0, "Answer" => [{ "data" => "127.0.0.1" }])
                else
@@ -107,49 +112,86 @@ module MacosRuntimeFixture
   end
 
   def start_release_connectivity_server(home)
+    ca_key = OpenSSL::PKey::RSA.new(2048)
+    ca = OpenSSL::X509::Certificate.new
+    ca.version = 2
+    ca.serial = 1
+    ca.subject = OpenSSL::X509::Name.parse("/CN=ClaudeEasy test CA")
+    ca.issuer = ca.subject
+    ca.public_key = ca_key.public_key
+    ca.not_before = Time.now - 60
+    ca.not_after = Time.now + 3600
+    ca_extensions = OpenSSL::X509::ExtensionFactory.new
+    ca_extensions.subject_certificate = ca
+    ca_extensions.issuer_certificate = ca
+    ca.add_extension(ca_extensions.create_extension("basicConstraints", "CA:TRUE", true))
+    ca.add_extension(ca_extensions.create_extension("keyUsage", "keyCertSign,cRLSign", true))
+    ca.sign(ca_key, OpenSSL::Digest::SHA256.new)
+
     key = OpenSSL::PKey::RSA.new(2048)
     certificate = OpenSSL::X509::Certificate.new
     certificate.version = 2
-    certificate.serial = 1
+    certificate.serial = 2
     certificate.subject = OpenSSL::X509::Name.parse("/CN=www.google.com")
-    certificate.issuer = certificate.subject
+    certificate.issuer = ca.subject
     certificate.public_key = key.public_key
     certificate.not_before = Time.now - 60
     certificate.not_after = Time.now + 3600
     extensions = OpenSSL::X509::ExtensionFactory.new
     extensions.subject_certificate = certificate
-    extensions.issuer_certificate = certificate
+    extensions.issuer_certificate = ca
+    certificate.add_extension(
+      extensions.create_extension("basicConstraints", "CA:FALSE", true)
+    )
+    certificate.add_extension(
+      extensions.create_extension("keyUsage", "digitalSignature,keyEncipherment", true)
+    )
+    certificate.add_extension(
+      extensions.create_extension("extendedKeyUsage", "serverAuth", false)
+    )
     certificate.add_extension(
       extensions.create_extension("subjectAltName", "DNS:www.google.com")
     )
-    certificate.sign(key, OpenSSL::Digest::SHA256.new)
+    certificate.sign(ca_key, OpenSSL::Digest::SHA256.new)
 
     tcp_server = TCPServer.new("127.0.0.1", 0)
     context = OpenSSL::SSL::SSLContext.new
     context.cert = certificate
     context.key = key
-    ssl_server = OpenSSL::SSL::SSLServer.new(tcp_server, context)
     thread = Thread.new do
-      client = ssl_server.accept
-      client.gets
-      while (line = client.gets)
-        break if line == "\r\n"
+      loop do
+        client = tcp_server.accept
+        request_line = client.gets.to_s
+        while (line = client.gets)
+          break if line == "\r\n"
+        end
+        unless request_line.start_with?("CONNECT www.google.com:443 ")
+          client.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+          client.close
+          next
+        end
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n")
+        ssl = OpenSSL::SSL::SSLSocket.new(client, context)
+        ssl.sync_close = true
+        ssl.accept
+        ssl.gets
+        while (line = ssl.gets)
+          break if line == "\r\n"
+        end
+        ssl.write(
+          "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n" \
+          "Connection: close\r\n\r\n"
+        )
+        ssl.close
+      rescue IOError, Errno::EBADF
+        break
+      rescue OpenSSL::SSL::SSLError
+        client&.close rescue nil
       end
-      client.write(
-        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n" \
-        "Connection: close\r\n\r\n"
-      )
-    rescue IOError, Errno::EBADF, OpenSSL::SSL::SSLError
-      nil
-    ensure
-      client&.close rescue nil
     end
-    File.write(
-      File.join(home, ".curlrc"),
-      "insecure\n" \
-      "connect-to = \"www.google.com:443:127.0.0.1:#{tcp_server.addr.fetch(1)}\"\n"
-    )
-    [tcp_server, thread]
+    ca_path = File.join(home, "claude-easy-test-ca.pem")
+    File.write(ca_path, ca.to_pem)
+    [tcp_server, thread, ca_path, tcp_server.addr.fetch(1)]
   end
 
   def stop_release_runtime_fixture(controller_server:, controller_thread:,

@@ -10,7 +10,27 @@
 
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path $PSScriptRoot "result_contract.ps1"
-if (-not (Test-Path -LiteralPath $resultContractPath -PathType Leaf)) {
+$resultContractLoaded = $false
+if (Test-Path -LiteralPath $resultContractPath -PathType Leaf) {
+    try {
+        $null = . $resultContractPath
+        $resultContractLoaded = $true
+        foreach ($requiredResultFunction in @(
+            "Protect-ClaudeEasyResultText",
+            "Protect-ClaudeEasyResultValue",
+            "New-ClaudeEasyResult",
+            "Write-ClaudeEasyResult"
+        )) {
+            if ($null -eq (Get-Command $requiredResultFunction -CommandType Function -ErrorAction SilentlyContinue)) {
+                $resultContractLoaded = $false
+                break
+            }
+        }
+    } catch {
+        $resultContractLoaded = $false
+    }
+}
+if (-not $resultContractLoaded) {
     if ($Json) {
         [Console]::Out.WriteLine('{"schema":"claude-easy.result","version":1,"command":"verify_routes","platform":"windows","client":"clash-verge-rev","operation":"load","ok":false,"status":"failed","code":"incomplete_package","exit_code":6,"summary_zh":"安装包不完整。","profile":null,"changes":[],"checks":[],"items":[],"messages":[],"warnings":[]}')
     } else {
@@ -18,10 +38,19 @@ if (-not (Test-Path -LiteralPath $resultContractPath -PathType Leaf)) {
     }
     exit 6
 }
-. $resultContractPath
 $script:ClaudeEasyChecks = New-Object System.Collections.ArrayList
 $script:ClaudeEasyControllerBaseUrl = ""
 $script:ClaudeEasyControllerSecret = ""
+
+function Write-ClaudeEasyVerificationText([string]$Message, [switch]$ErrorStream) {
+    $safeMessage = Protect-ClaudeEasyResultText $Message
+    if ($ErrorStream) {
+        [Console]::Error.WriteLine($safeMessage)
+    } else {
+        [Console]::Out.WriteLine($safeMessage)
+    }
+}
+
 $observationSecondsValue = 0
 if (-not [int]::TryParse(
         $ObservationSeconds,
@@ -32,7 +61,7 @@ if (-not [int]::TryParse(
     if ($Json) {
         Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "观察时间必须为 1 到 60 秒。")
     } else {
-        [Console]::Error.WriteLine("[ClaudeEasy] 观察时间必须为 1 到 60 秒。")
+        Write-ClaudeEasyVerificationText "[ClaudeEasy] 观察时间必须为 1 到 60 秒。" -ErrorStream
     }
     exit 64
 }
@@ -46,7 +75,7 @@ if ($blankGroupOverride) {
     if ($Json) {
         Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "代理组名称不能为空。")
     } else {
-        [Console]::Error.WriteLine("[ClaudeEasy] 代理组名称不能为空。")
+        Write-ClaudeEasyVerificationText "[ClaudeEasy] 代理组名称不能为空。" -ErrorStream
     }
     exit 64
 }
@@ -213,7 +242,7 @@ function Get-SafeVerificationFailureMessage([string]$Message) {
             "[已隐藏]"
         )
     }
-    return $safe
+    return Protect-ClaudeEasyResultText $safe
 }
 
 function Get-Policy {
@@ -248,7 +277,7 @@ function Find-Group([object]$Proxies, [object[]]$Candidates, [string]$Requested,
 }
 
 function Test-SupportedRouteGroupType([string]$GroupType) {
-    return $GroupType -in @("Selector", "URLTest", "Fallback", "LoadBalance", "Relay")
+    return $GroupType -in @("Selector", "URLTest", "Fallback", "LoadBalance")
 }
 
 function Test-UsableRouteGroupSelection([object]$Group) {
@@ -389,7 +418,7 @@ function Test-RouteChains(
     if (-not $AllowExplicitProxyGroup) {
         return $chainItems -contains $ExpectedGroup
     }
-    if ($chainItems -contains $AiGroup) { return $false }
+    if ($ExpectedGroup -ne $AiGroup -and $chainItems -contains $AiGroup) { return $false }
     if ($chainItems -contains $ExpectedGroup) { return $true }
     for ($index = 0; $index -lt $chainItems.Count; $index++) {
         $name = [string]$chainItems[$index]
@@ -447,12 +476,12 @@ function Observe-Route(
                 }
                 $passed = Test-RouteChains $Proxies $chains $ExpectedGroup $ExpectedSelection $AiGroup $AllowExplicitProxyGroup $Providers $providerChains
                 [void]$script:ClaudeEasyChecks.Add([ordered]@{ name = $Label.ToLowerInvariant(); ok = $passed; status = $(if ($passed) { "passed" } else { "failed" }) })
-                if (-not $Json) { Write-Host ("{0}：{1}" -f $Label, $(if ($passed) { "通过" } else { "失败" })) }
+                if (-not $Json) { Write-ClaudeEasyVerificationText ("{0}：{1}" -f $Label, $(if ($passed) { "通过" } else { "失败" })) }
                 return $passed
             }
         }
         [void]$script:ClaudeEasyChecks.Add([ordered]@{ name = $Label.ToLowerInvariant(); ok = $false; status = "not_observed" })
-        if (-not $Json) { Write-Host "$Label：失败（没有观察到对应连接）" }
+        if (-not $Json) { Write-ClaudeEasyVerificationText "$Label：失败（没有观察到对应连接）" }
         return $false
     } finally {
         if ($null -ne $process -and -not $process.HasExited) {
@@ -491,8 +520,8 @@ try {
     }
 
     if (-not $Json) {
-        Write-Output "主代理组：已识别；当前选择已隐藏"
-        Write-Output "AI 分组：已识别；当前选择已隐藏"
+        Write-ClaudeEasyVerificationText "主代理组：已识别；当前选择已隐藏"
+        Write-ClaudeEasyVerificationText "AI 分组：已识别；当前选择已隐藏"
     }
     $checks = @(
         (Observe-Route "Google" "https://www.google.com/search?q=clash-route-verification" '(?i)(^|\.)google\.com$' $main $mainSelection $proxies $ai $true $providers),
@@ -511,7 +540,7 @@ try {
     if ($Json) {
         Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $failureMessage) -Checks @($script:ClaudeEasyChecks))
     } else {
-        [Console]::Error.WriteLine("[ClaudeEasy] Windows 分流验证失败：$failureMessage")
+        Write-ClaudeEasyVerificationText "[ClaudeEasy] Windows 分流验证失败：$failureMessage" -ErrorStream
     }
     exit 1
 }

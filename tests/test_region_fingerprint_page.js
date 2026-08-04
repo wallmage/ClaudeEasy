@@ -440,6 +440,34 @@ test("a failed WebRTC probe stays unknown without aborting the other signals", a
   assert.equal(signal.contribution, null);
 });
 
+test("an unavailable WebRTC API stays unknown and hides the total", async () => {
+  const context = {
+    measureText: () => ({ width: 100 }),
+  };
+  const api = detectorApi({
+    document: {
+      createElement: () => ({ getContext: () => context }),
+    },
+    navigator: {
+      language: "en-US",
+      platform: "MacIntel",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+        "AppleWebKit/605.1.15 Safari/605.1.15",
+      userAgentData: undefined,
+    },
+  });
+
+  const result = await api.detect(api.browserEnvironment());
+  const signal = result.signals.find((entry) => entry.id === "webrtcLeak");
+
+  assert.equal(signal.coverage, "unavailable");
+  assert.equal(signal.score, null);
+  assert.equal(signal.contribution, null);
+  assert.equal(result.total, null);
+  assert.equal(result.unknownWeight, 10);
+});
+
 test("rejected high-entropy client hints fall back without aborting the scan", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
@@ -677,7 +705,9 @@ test("browser environment survives unavailable canvas font detection", async () 
   assert.equal(result.signals.length, 10);
   assert.equal(fonts.coverage, "unavailable");
   assert.equal(vendorFonts.coverage, "unavailable");
-  assert.equal(result.unavailableCount, 2);
+  assert.equal(result.unavailableCount, 3);
+  assert.equal(result.total, null);
+  assert.equal(result.unknownWeight, 34);
 });
 
 test("browser environment detects fonts from measured canvas width changes", () => {

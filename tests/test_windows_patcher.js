@@ -217,6 +217,67 @@ test('common China-domain baseline preserves a colliding user provider path', { 
   assert.ok(patched.rules.includes(`RULE-SET,${provider.name}-2,DIRECT`));
 });
 
+test('common China-domain baseline normalizes Unicode provider cache paths', { skip: !available }, () => {
+  const input = baseConfig();
+  const provider = engine.CLAUDE_EASY_POLICY.cnDomainProvider;
+  const originalPath = provider.path;
+  provider.path = './ruleset/caf\u00e9.mrs';
+  input['rule-providers'] = {
+    'user-cn': { type: 'file', behavior: 'domain', path: './ruleset/cafe\u0301.mrs' }
+  };
+
+  try {
+    const patched = engine.claudeEasyTransform(input, 'fixture', 1);
+    assert.equal(patched['rule-providers'][provider.name], undefined);
+    assert.equal(patched['rule-providers'][`${provider.name}-2`].path, './ruleset/caf\u00e9-2.mrs');
+  } finally {
+    provider.path = originalPath;
+  }
+});
+
+for (const collision of [
+  ['backslash separators', '.\\ruleset\\claude-easy-cn-domain.mrs'],
+  ['an omitted dot segment', 'ruleset/claude-easy-cn-domain.mrs'],
+  ['different path casing', './RULESET/CLAUDE-EASY-CN-DOMAIN.MRS'],
+  ['collapsed parent segments', './ruleset/sub/../claude-easy-cn-domain.mrs'],
+  ['an absolute Mihomo HomeDir path', 'C:\\Users\\alice\\AppData\\Roaming\\mihomo\\ruleset\\claude-easy-cn-domain.mrs'],
+  ['an absolute UNC Mihomo HomeDir path', '\\\\server\\share\\mihomo\\ruleset\\claude-easy-cn-domain.mrs']
+]) {
+  test(`common China-domain baseline preserves a Windows-equivalent user provider path: ${collision[0]}`, { skip: !available }, () => {
+    const input = baseConfig();
+    const provider = engine.CLAUDE_EASY_POLICY.cnDomainProvider;
+    input['rule-providers'] = {
+      'user-cn': { type: 'file', behavior: 'domain', path: collision[1] }
+    };
+
+    const patched = engine.claudeEasyTransform(input, 'fixture', 1);
+
+    assert.equal(patched['rule-providers']['user-cn'].path, collision[1]);
+    assert.equal(patched['rule-providers'][provider.name], undefined);
+    assert.equal(patched['rule-providers'][`${provider.name}-2`].path, `./ruleset/${provider.name}-2.mrs`);
+  });
+}
+
+for (const distinctPath of [
+  'C:\\cache\\claude-easy-cn-domain.mrs',
+  '\\\\server\\share\\cache\\claude-easy-cn-domain.mrs',
+  '../ruleset/claude-easy-cn-domain.mrs'
+]) {
+  test(`common China-domain baseline keeps a distinct Windows path: ${distinctPath}`, { skip: !available }, () => {
+    const input = baseConfig();
+    const provider = engine.CLAUDE_EASY_POLICY.cnDomainProvider;
+    input['rule-providers'] = {
+      'user-cn': { type: 'file', behavior: 'domain', path: distinctPath }
+    };
+
+    const patched = engine.claudeEasyTransform(input, 'fixture', 1);
+
+    assert.equal(patched['rule-providers']['user-cn'].path, distinctPath);
+    assert.equal(patched['rule-providers'][provider.name].path, provider.path);
+    assert.equal(patched['rule-providers'][`${provider.name}-2`], undefined);
+  });
+}
+
 test('reuses the existing AI group without creating visible groups', { skip: !available }, () => {
   const config = baseConfig();
   const originalAi = structuredClone(config['proxy-groups'].find((group) => group.name === 'AI'));
@@ -310,7 +371,7 @@ test('removes groups created by an older patch', { skip: !available }, () => {
   config['proxy-groups'].push({ name: aiName, type: 'select', proxies: ['台湾家宽 01'] });
   config['proxy-groups'].push({
     name: safeName, type: 'select', proxies: ['台湾家宽 01', '日本家宽 01'],
-    'include-all': true, 'exclude-type': 'Direct|Dns|Reject|Pass|Compatible|Rematch', 'empty-fallback': 'REJECT'
+    'include-all': true, 'exclude-type': 'Direct|Dns|Reject|RejectDrop|Pass|PassRule|Compatible|Rematch', 'empty-fallback': 'REJECT'
   });
   config.dns.nameserver = [`https://dns.alidns.com/dns-query#${safeName}`];
   config.dns['nameserver-policy'] = { '+.openai.com': [`https://dns.alidns.com/dns-query#${safeName}`] };
@@ -558,6 +619,38 @@ test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvaila
   }
 });
 
+test('shared unsafe group references use managed wrappers', { skip: !fixturesAvailable }, () => {
+  const fixtures = JSON.parse(fs.readFileSync(fixturePath, 'utf8')).unsafe_reference_cases;
+  const routeWrapper = '🔗 路由引用 · ClaudeEasy';
+  const aiWrapper = '🔗 路由引用 · ClaudeEasy 2';
+  for (const fixture of fixtures) {
+    const input = structuredClone(fixture.config);
+    const snapshot = structuredClone(input);
+    const patched = engine.claudeEasyTransform(input, 'fixture');
+    const groups = patched['proxy-groups'];
+
+    assert.deepEqual(groups.find((group) => group.name === routeWrapper).proxies, [fixture.main_group], fixture.name);
+    assert.deepEqual(groups.find((group) => group.name === aiWrapper).proxies, [fixture.ai_group], fixture.name);
+    const provider = Object.values(patched['rule-providers']).find((item) => item.url === engine.CLAUDE_EASY_POLICY.cnDomainProvider.url);
+    assert.equal(provider.proxy, routeWrapper, fixture.name);
+    assert.deepEqual(
+      patched.dns.nameserver,
+      engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#${routeWrapper}`),
+      fixture.name
+    );
+    assert.deepEqual(
+      patched.dns['nameserver-policy']['+.openai.com'],
+      engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#${aiWrapper}`),
+      fixture.name
+    );
+    assert.ok(patched.rules.includes(`NETWORK,UDP,${aiWrapper}`), fixture.name);
+    assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${aiWrapper}`), fixture.name);
+    assert.equal(JSON.stringify(patched.dns).includes('skip-cert-verify=true'), false, fixture.name);
+    assert.deepEqual(input, snapshot, `${fixture.name}: input mutated`);
+    assert.deepEqual(engine.claudeEasyTransform(patched, 'fixture'), patched, `${fixture.name}: second pass`);
+  }
+});
+
 test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAvailable }, () => {
   const fixtures = JSON.parse(fs.readFileSync(fixturePath, 'utf8')).transform_cases;
   for (const fixture of fixtures) {
@@ -721,15 +814,15 @@ test('PowerShell installer keeps exit codes by avoiding Write-Error', () => {
   const source = fs.readFileSync(installerPath, 'utf8');
   assert.doesNotMatch(source, /\bWrite-Error\b/, 'Write-Error becomes terminating under $ErrorActionPreference = "Stop"');
   assert.match(source, /\[Console\]::Error\.WriteLine/);
-  for (const code of ['exit 0', 'exit 1', 'exit 2', 'exit 3']) {
+  for (const code of ['exit 0', 'exit 6']) {
     assert.ok(source.includes(code), `missing ${code}`);
   }
-  const notFound = source.indexOf('没有找到受支持的 Clash Verge Rev');
-  assert.ok(notFound !== -1 && source.indexOf('exit 2') > notFound, 'missing client must exit 2');
-  const missingEngine = source.indexOf('安装包不完整');
-  assert.ok(missingEngine !== -1 && source.indexOf('exit 3') > missingEngine, 'missing engine must exit 3');
-  const failure = source.indexOf('安装失败');
-  assert.ok(failure !== -1 && source.lastIndexOf('exit 1') > failure, 'install failure must exit 1');
+  assert.match(source, /Complete-InstallResult 2 "unsupported" "client_not_found"/, 'missing client must exit 2 through the result contract');
+  const engineRequirement = source.indexOf('clash_verge_global.js');
+  const appHomeDiscovery = source.indexOf('Resolve-ClashVergeAppHome');
+  assert.ok(engineRequirement !== -1 && engineRequirement < appHomeDiscovery, 'package integrity must check the global script before AppHome discovery');
+  assert.doesNotMatch(source, /\bpackage_incomplete\b|\bexit 3\b/, 'missing engine must use incomplete_package and exit 6');
+  assert.match(source, /Complete-InstallResult 1[^\r\n]+"install_failed"/, 'install failure must exit 1 through the result contract');
 });
 
 test('DNS fragments must resolve to a non-direct proxy or group', { skip: !available }, () => {
@@ -1059,7 +1152,10 @@ test('PowerShell installer structurally edits YAML and rolls back failed transac
   assert.match(source, /function Test-GeneratedYaml/);
   assert.match(source, /function Invoke-VerifiedPathTransaction/);
   assert.match(source, /function Get-RedactedYamlChangedPaths/);
-  assert.match(source, /ChangedFields/);
+  assert.match(source, /Complete-InstallResult 0 \$\(if \(\$same\) \{ "no_change" \} else \{ "ok" \}\) "backup_compared" "备份比较已完成。" @\(\$changedFields\) @\(\) @\(\$comparison\)/);
+  assert.doesNotMatch(source, /configuration_difference/);
+  assert.match(source, /BackupSnapshot/);
+  assert.doesNotMatch(source, /Get-FileHash -LiteralPath \$resolved\.BackupPath|ReadAllBytes\(\$resolved\.BackupPath\)/);
   assert.match(source, /Assert-RemoteSubscriptionAutoUpdateDisabled \$output \| Out-Null/);
   assert.match(source, /ComputeHash\(\$[Bb]ytes,\s*0,\s*\$[Bb]ytes\.Length\)/);
   assert.doesNotMatch(source, /ComputeHash\(\$[Bb]ytes\)/);
@@ -1114,14 +1210,18 @@ test('Windows installation fails closed and preserves exact restore state', () =
   assert.match(uninstaller, /Backup-Versioned \$Path \$backupRoot "pre-uninstall"/);
   assert.equal(fs.existsSync(installWrapperPath), true);
   assert.equal(fs.existsSync(uninstallWrapperPath), true);
-  assert.match(fs.readFileSync(installWrapperPath, 'utf8'), /-ExecutionPolicy Bypass/);
-  assert.match(fs.readFileSync(uninstallWrapperPath, 'utf8'), /-ExecutionPolicy Bypass/);
+  for (const wrapperPath of [installWrapperPath, uninstallWrapperPath]) {
+    const wrapper = fs.readFileSync(wrapperPath, 'utf8');
+    assert.match(wrapper, /-ExecutionPolicy Bypass/);
+    assert.match(wrapper, /incomplete_package/);
+    assert.match(wrapper, /exit \/b 6/i);
+  }
 });
 
 test('Windows installer is split into side-effect-free modules with stable function ownership', () => {
   const entry = fs.readFileSync(installerPath, 'utf8');
   const expected = {
-    'common.ps1': ['Write-Info', 'Complete-InstallResult', 'Get-SavedUsageProfile', 'Save-UsageProfile'],
+    'common.ps1': ['Write-ClaudeEasyHumanText', 'Write-Info', 'Complete-InstallResult', 'Get-SavedUsageProfile', 'Save-UsageProfile'],
     'transaction.ps1': [
       'Protect-BackupAcl', 'ConvertTo-NormalizedWindowsPath', 'Resolve-ClashVergeAppHome',
       'Get-AppHomeRelativePath',
@@ -1150,7 +1250,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Get-ManagedTunLines', 'New-ManagedTunBlock', 'Set-YamlTunMapping', 'Test-GeneratedYaml'
     ],
     'profiles.ps1': [
-      'Get-RemoteSubscriptionProfileItems', 'Get-RemoteSubscriptionAutoUpdateStateRecords',
+      'Get-RemoteSubscriptionItemMappingEntry', 'Get-RemoteSubscriptionProfileItems',
+      'Get-RemoteSubscriptionAutoUpdateStateRecords',
       'Get-RemoteSubscriptionAutoUpdateOwnership', 'Restore-RemoteSubscriptionAutoUpdate',
       'Assert-RemoteSubscriptionAutoUpdateOwnershipState', 'Merge-RemoteSubscriptionAutoUpdateOwnership',
       'Get-RemoteSubscriptionTargets',
@@ -1168,7 +1269,9 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Assert-JavaScriptCanCompose', 'Build-GlobalScript'
     ],
     'safe_update.ps1': [
-      'Get-BackupTarget', 'Get-ClaudeEasyManagedScriptBlock', 'Get-ClaudeEasyManagedScriptEnvelope',
+      'Get-PublicBackupDescriptor', 'Get-PublicBackupId', 'Get-BackupTarget',
+      'Get-ClaudeEasyManagedScriptBlock',
+      'Get-ClaudeEasyManagedScriptEnvelope',
       'Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive',
       'Assert-ClaudeEasyManagedScriptCurrent',
       'Test-ClaudeEasyFlowSequenceHasItem', 'Assert-ClaudeEasyProxyGroupCollection', 'Test-RestoreCandidate',
@@ -1255,6 +1358,8 @@ test('Windows public commands share the JSON v1 result contract', () => {
   assert.match(contract, /function New-ClaudeEasyResult/);
   assert.match(contract, /function Write-ClaudeEasyResult/);
   assert.match(contract, /function Protect-ClaudeEasyResultValue/);
+  assert.match(contract, /\\p\{Cc\}/);
+  assert.match(contract, /ClaudeEasyResultTextLimit = 240/);
   assert.match(contract, /ConvertTo-Json -Depth/);
 
   for (const entry of [installerPath, uninstallerPath, routeVerifierPath]) {

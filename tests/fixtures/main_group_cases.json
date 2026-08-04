@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "comment": "Shared macOS/Windows conformance cases. transform_cases lock the reviewed full output with expected_config_sha256, then require both engines to produce the same configuration without mutating the input; all Mihomo proxy-group types are valid route-group candidates and AI-named or direct-only groups are last resorts.",
+  "comment": "Shared macOS/Windows conformance cases. transform_cases lock the reviewed full output with expected_config_sha256, then require both engines to produce the same configuration without mutating the input; all Mihomo proxy-group types are valid route-group candidates, dynamic sources are recognized, and groups without a real proxy source are rejected.",
   "cases": [
     {
       "name": "match-target-wins",
@@ -75,7 +75,7 @@
       "expected_main_group": "AI"
     },
     {
-      "name": "direct-only-group-is-final-valid-fallback",
+      "name": "direct-only-group-is-not-a-main-group",
       "config": {
         "proxies": [{ "name": "台湾家宽 01", "type": "ss", "server": "tw.example" }],
         "proxy-groups": [
@@ -83,7 +83,7 @@
         ],
         "rules": ["MATCH,DIRECT"]
       },
-      "expected_main_group": "DirectOnly"
+      "expected_main_group": null
     },
     {
       "name": "narrow-streaming-rules-do-not-outrank",
@@ -254,7 +254,7 @@
       "expected_main_group": "Balanced"
     },
     {
-      "name": "relay-only-group-is-usable",
+      "name": "relay-only-group-is-not-supported",
       "config": {
         "proxies": [
           { "name": "hop-one", "type": "ss", "server": "one.example" },
@@ -265,7 +265,7 @@
         ],
         "rules": ["MATCH,Relay"]
       },
-      "expected_main_group": "Relay"
+      "expected_main_group": null
     },
     {
       "name": "missing-match-target-falls-through",
@@ -278,6 +278,209 @@
         "rules": ["MATCH,Missing"]
       },
       "expected_main_group": "Proxy"
+    },
+    {
+      "name": "include-all-is-a-dynamic-proxy-source",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "DirectOnly", "type": "select", "proxies": ["DIRECT"] },
+          { "name": "Dynamic", "type": "select", "include-all": true }
+        ],
+        "rules": []
+      },
+      "expected_main_group": "Dynamic"
+    },
+    {
+      "name": "include-all-proxies-is-a-dynamic-proxy-source",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "DirectOnly", "type": "select", "proxies": ["DIRECT"] },
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true }
+        ],
+        "rules": []
+      },
+      "expected_main_group": "Dynamic"
+    },
+    {
+      "name": "include-all-providers-is-a-dynamic-proxy-source",
+      "config": {
+        "proxy-providers": {
+          "airport": { "type": "http", "url": "https://example.invalid/sub", "interval": 3600 }
+        },
+        "proxy-groups": [
+          { "name": "DirectOnly", "type": "select", "proxies": ["DIRECT"] },
+          { "name": "Dynamic", "type": "select", "include-all-providers": true }
+        ],
+        "rules": []
+      },
+      "expected_main_group": "Dynamic"
+    },
+    {
+      "name": "exclude-type-removes-an-include-all-proxy-source",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true, "exclude-type": "Shadowsocks" },
+          { "name": "Proxy", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Dynamic"]
+      },
+      "expected_main_group": "Proxy"
+    },
+    {
+      "name": "source-filters-do-not-remove-an-explicit-proxy",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          {
+            "name": "Explicit",
+            "type": "select",
+            "proxies": ["node"],
+            "exclude-type": "Shadowsocks",
+            "filter": "^missing$",
+            "exclude-filter": ".*"
+          }
+        ],
+        "rules": ["MATCH,Explicit"]
+      },
+      "expected_main_group": "Explicit"
+    },
+    {
+      "name": "source-filters-do-not-remove-an-explicit-nested-group",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Leaf", "type": "select", "proxies": ["node"] },
+          {
+            "name": "Nested",
+            "type": "select",
+            "proxies": ["Leaf"],
+            "exclude-type": "Selector",
+            "filter": "^missing$",
+            "exclude-filter": ".*"
+          }
+        ],
+        "rules": ["MATCH,Nested"]
+      },
+      "expected_main_group": "Nested"
+    },
+    {
+      "name": "exclude-filter-removes-all-include-all-proxy-sources",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true, "exclude-filter": ".*" },
+          { "name": "Proxy", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Dynamic"]
+      },
+      "expected_main_group": "Proxy"
+    },
+    {
+      "name": "filter-removes-all-include-all-proxy-sources",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true, "filter": "^missing$" },
+          { "name": "Proxy", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Dynamic"]
+      },
+      "expected_main_group": "Proxy"
+    },
+    {
+      "name": "missing-and-direct-type-leaves-are-not-proxy-sources",
+      "config": {
+        "proxies": [{ "name": "Local", "type": "direct" }],
+        "proxy-groups": [
+          { "name": "Leaves", "type": "select", "proxies": ["Ghost", "Local", "DIRECT"] },
+          { "name": "Nested", "type": "select", "proxies": ["Leaves"] }
+        ],
+        "rules": ["MATCH,Nested"]
+      },
+      "expected_main_group": null
+    },
+    {
+      "name": "missing-provider-reference-is-not-a-proxy-source",
+      "config": {
+        "proxy-providers": {},
+        "proxy-groups": [
+          { "name": "Provider", "type": "select", "use": ["missing"] }
+        ],
+        "rules": ["MATCH,Provider"]
+      },
+      "expected_main_group": null
+    },
+    {
+      "name": "reject-drop-and-pass-rule-leaves-are-not-proxy-sources",
+      "config": {
+        "proxies": [
+          { "name": "DropLeaf", "type": "reject-drop" },
+          { "name": "PassLeaf", "type": "pass-rule" }
+        ],
+        "proxy-groups": [
+          { "name": "Dynamic", "type": "select", "include-all-proxies": true },
+          { "name": "Nested", "type": "select", "proxies": ["Dynamic", "DropLeaf", "PassLeaf"] }
+        ],
+        "rules": ["MATCH,Nested"]
+      },
+      "expected_main_group": null
+    }
+  ],
+  "unsafe_reference_cases": [
+    {
+      "name": "ampersand-group-names-use-safe-references",
+      "main_group": "Main&DIRECT&skip-cert-verify=true",
+      "ai_group": "AI&DIRECT&skip-cert-verify=true",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Main&DIRECT&skip-cert-verify=true", "type": "select", "proxies": ["node"] },
+          { "name": "AI&DIRECT&skip-cert-verify=true", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Main&DIRECT&skip-cert-verify=true"]
+      }
+    },
+    {
+      "name": "hash-group-names-use-safe-references",
+      "main_group": "Main#DIRECT",
+      "ai_group": "AI#DIRECT",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Main#DIRECT", "type": "select", "proxies": ["node"] },
+          { "name": "AI#DIRECT", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Main#DIRECT"]
+      }
+    },
+    {
+      "name": "comma-group-names-use-safe-references",
+      "main_group": "Main,REJECT",
+      "ai_group": "AI,REJECT",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Main,REJECT", "type": "select", "proxies": ["node"] },
+          { "name": "AI,REJECT", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Main,REJECT"]
+      }
+    },
+    {
+      "name": "line-break-group-names-use-safe-references",
+      "main_group": "Main\r\nREJECT",
+      "ai_group": "AI\r\nREJECT",
+      "config": {
+        "proxies": [{ "name": "node", "type": "ss", "server": "node.example" }],
+        "proxy-groups": [
+          { "name": "Main\r\nREJECT", "type": "select", "proxies": ["node"] },
+          { "name": "AI\r\nREJECT", "type": "select", "proxies": ["node"] }
+        ],
+        "rules": ["MATCH,Main\r\nREJECT"]
+      }
     }
   ],
   "transform_cases": [
@@ -512,9 +715,9 @@
       },
       "expected_changed": false,
       "expected_main_group": null,
-      "expected_detected_main_group": "Main",
+      "expected_detected_main_group": null,
       "expected_ai_group": null,
-      "expected_status": "no_ai_nodes"
+      "expected_status": "no_main_group"
     },
     {
       "name": "invalid-array-input-stays-unchanged",

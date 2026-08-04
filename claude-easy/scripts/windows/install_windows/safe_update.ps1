@@ -1,10 +1,76 @@
-﻿function Get-BackupTarget([string]$BackupId) {
-    if ([string]::IsNullOrWhiteSpace($BackupId) -or $BackupId -ne (Split-Path -Leaf $BackupId) -or $BackupId -notlike "*.backup") {
+﻿function Get-PublicBackupDescriptor([string]$BackupName) {
+    if ([string]::IsNullOrWhiteSpace($BackupName) -or $BackupName -ne (Split-Path -Leaf $BackupName)) {
         throw "备份编号无效。"
     }
-    $backupPath = Join-Path $backupRoot $BackupId
-    if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) { throw "找不到指定备份。" }
-    if ($BackupId -notmatch '--([0-9a-f]{16})--(.+)\.backup$') { throw "备份编号无效。" }
+    $pattern = '^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})_(?<hour>\d{2})-(?<minute>\d{2})-(?<second>\d{2})\.(?<fraction>\d{7})(?<offset_sign>[+-])(?<offset_hour>\d{2})(?<offset_minute>\d{2})--[a-z][a-z0-9-]{0,31}--[0-9a-f]{16}--.+\.backup$'
+    if ($BackupName -cnotmatch $pattern) { throw "备份编号无效。" }
+    $createdAtCandidate = (
+        "{0}-{1}-{2}T{3}:{4}:{5}.{6}{7}{8}:{9}" -f
+            $Matches.year, $Matches.month, $Matches.day,
+            $Matches.hour, $Matches.minute, $Matches.second,
+            $Matches.fraction, $Matches.offset_sign,
+            $Matches.offset_hour, $Matches.offset_minute
+    )
+    $createdAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParseExact(
+            $createdAtCandidate,
+            "yyyy-MM-dd'T'HH:mm:ss.fffffffzzz",
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::None,
+            [ref]$createdAt
+        )) {
+        throw "备份编号无效。"
+    }
+    $digest = Get-BytesSha256 ([System.Text.Encoding]::UTF8.GetBytes($BackupName))
+    return [pscustomobject][ordered]@{
+        id = "ce-backup-v1-$digest"
+        created_at = $createdAt.ToString(
+            "yyyy-MM-dd'T'HH:mm:ss.fffffffzzz",
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+    }
+}
+
+function Get-PublicBackupId([string]$BackupName) {
+    return [string]((Get-PublicBackupDescriptor $BackupName).id)
+}
+
+function Get-BackupTarget([string]$BackupId) {
+    if ([string]::IsNullOrWhiteSpace($BackupId) -or $BackupId -ne (Split-Path -Leaf $BackupId)) {
+        throw "备份编号无效。"
+    }
+    Assert-NoReparsePointPath $backupRoot "备份目录"
+    $storageItems = @()
+    if (Test-Path -LiteralPath $backupRoot -PathType Container) {
+        $storageItems = @(Get-ChildItem -LiteralPath $backupRoot -File -Filter "*.backup")
+    }
+    $storageName = $BackupId
+    if ($BackupId -cmatch '^ce-backup-v1-[0-9a-f]{64}$') {
+        $storageMatches = @($storageItems | Where-Object {
+            try {
+                (Get-PublicBackupId $_.Name) -ceq $BackupId
+            } catch {
+                $false
+            }
+        })
+        if ($storageMatches.Count -eq 0) { throw "找不到指定备份。" }
+        if ($storageMatches.Count -ne 1) { throw "备份无法对应到唯一的存储文件。" }
+        $storageName = [string]$storageMatches[0].Name
+    } elseif ($BackupId -notlike "*.backup") {
+        throw "备份编号无效。"
+    } else {
+        $storageMatches = @($storageItems | Where-Object {
+            [string]::Equals([string]$_.Name, $BackupId, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($storageMatches.Count -eq 0) { throw "找不到指定备份。" }
+        if ($storageMatches.Count -ne 1) { throw "备份无法对应到唯一的存储文件。" }
+        $storageName = [string]$storageMatches[0].Name
+    }
+    $backupPath = Join-Path $backupRoot $storageName
+    $backupSnapshot = Get-OptionalFileSnapshot $backupPath "备份"
+    if (-not $backupSnapshot.Exists) { throw "找不到指定备份。" }
+    $publicDescriptor = Get-PublicBackupDescriptor $storageName
+    if ($storageName -notmatch '--([0-9a-f]{16})--(.+)\.backup$') { throw "备份编号无效。" }
     $key = $Matches[1]
     $basename = $Matches[2]
     $candidates = @($targetScript, $profilesIndexPath, $vergePath, $configPath)
@@ -17,7 +83,12 @@
         (Get-PathKey $_) -eq $key
     })
     if ($matches.Count -ne 1) { throw "备份无法对应到唯一的当前配置。" }
-    return [pscustomobject]@{ BackupPath = $backupPath; TargetPath = $matches[0] }
+    return [pscustomobject]@{
+        BackupPath = $backupPath
+        BackupSnapshot = $backupSnapshot
+        TargetPath = $matches[0]
+        PublicId = ([string]$publicDescriptor.id)
+    }
 }
 
 function Get-ClaudeEasyManagedScriptBlock([string]$ScriptText, [int]$UsageProfile) {

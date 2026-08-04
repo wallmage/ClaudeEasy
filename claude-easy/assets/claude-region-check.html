@@ -812,7 +812,7 @@ SOFTWARE.
           var schedule = settings.schedule || root.setTimeout;
           return new Promise(function (resolve, reject) {
             if (typeof Constructor !== "function") {
-              resolve({ raw: "未发现 WebRTC 公网 IP", score: 0 });
+              reject(new Error("WebRTC API 不可用"));
               return;
             }
 

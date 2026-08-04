@@ -193,7 +193,10 @@ function Backup-Versioned(
     $stampTime = Get-Date
     $destination = $null
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
-        $stamp = $stampTime.AddTicks($attempt).ToString("yyyy-MM-dd_HH-mm-ss.fffffffzzz").Replace(":", "")
+        $stamp = $stampTime.AddTicks($attempt).ToString(
+            "yyyy-MM-dd_HH-mm-ss.fffffffzzz",
+            [System.Globalization.CultureInfo]::InvariantCulture
+        ).Replace(":", "")
         $candidate = Join-Path $BackupRoot ("$stamp--$Reason--$key--$basename.backup")
         if (-not (Test-Path -LiteralPath $candidate)) {
             $destination = $candidate

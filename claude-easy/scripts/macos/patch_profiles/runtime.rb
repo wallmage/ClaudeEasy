@@ -1,6 +1,12 @@
 module ClaudeEasy
   module_function
 
+  CURL_ISOLATED_ENVIRONMENT = {
+    "http_proxy" => nil, "https_proxy" => nil, "all_proxy" => nil,
+    "HTTP_PROXY" => nil, "HTTPS_PROXY" => nil, "ALL_PROXY" => nil,
+    "no_proxy" => nil, "NO_PROXY" => nil
+  }.freeze
+
   def controller_socket
     cache_directories = [
       File.expand_path("~/Library/Caches/com.MetaCubeX.ClashX.meta/cacheConfigs"),
@@ -24,11 +30,12 @@ module ClaudeEasy
   end
 
   def controller_request(socket, method, path, body = nil)
-    arguments = ["/usr/bin/curl", "-sS", "--max-time", "3", "-X", method, "--unix-socket", socket,
+    arguments = ["/usr/bin/curl", "-q", "-sS", "--proxy", "", "--noproxy", "*",
+                 "--max-time", "3", "-X", method, "--unix-socket", socket,
                  "-o", "-", "-w", "\n%{http_code}"]
     arguments.concat(["-H", "Content-Type: application/json", "--data", body]) if body
     arguments << "http://localhost#{path}"
-    output, status = Open3.capture2e(*arguments)
+    output, status = Open3.capture2e(CURL_ISOLATED_ENVIRONMENT, *arguments)
     return [0, ""] unless status.success?
 
     response_body, code = output.rpartition("\n").values_at(0, 2)
@@ -101,12 +108,42 @@ module ClaudeEasy
     false
   end
 
-  def default_connectivity_healthy?
+  def runtime_loopback_proxy(requester)
+    status, body = requester.call("GET", "/configs", nil)
+    return nil unless status == 200
+
+    config = JSON.parse(body)
+    return nil unless config.is_a?(Hash)
+
+    [["mixed-port", "http"], ["port", "http"], ["socks-port", "socks5h"]].each do |key, scheme|
+      port = config[key]
+      next unless port.is_a?(Integer) && port.between?(1, 65_535)
+
+      return "#{scheme}://127.0.0.1:#{port}"
+    end
+    nil
+  rescue JSON::ParserError, SystemCallError, IOError
+    nil
+  end
+
+  def default_connectivity_healthy?(requester: nil, tun_mode: :enabled)
+    proxy = if tun_mode == :enabled
+              ""
+            else
+              return false unless requester
+
+              runtime_loopback_proxy(requester)
+            end
+    return false unless proxy
+
+    arguments = [
+      "/usr/bin/curl", "-q", "-sS", "--fail", "--proxy", proxy,
+      "--max-time", "8", "-o", "/dev/null"
+    ]
+    arguments.concat(["--noproxy", "*"]) if tun_mode == :enabled
+    arguments << "https://www.google.com/generate_204"
     3.times do
-      _output, status = Open3.capture2e(
-        "/usr/bin/curl", "-sS", "--fail", "--max-time", "8", "-o", "/dev/null",
-        "https://www.google.com/generate_204"
-      )
+      _output, status = Open3.capture2e(CURL_ISOLATED_ENVIRONMENT, *arguments)
       return true if status.success?
     rescue StandardError
       next
@@ -152,7 +189,10 @@ module ClaudeEasy
     false
   end
 
-  def runtime_health_healthy?(requester, selections:, expected_tun:, connectivity_checker:)
+  def runtime_health_healthy?(requester, selections:, expected_tun:, connectivity_checker: nil,
+                              precommit_condition: nil)
+    return false unless runtime_precommit_allowed?(precommit_condition)
+
     caches_flushed = ["/cache/fakeip/flush", "/cache/dns/flush"].all? do |endpoint|
       code, _body = requester.call("POST", endpoint, nil)
       [200, 204].include?(code)
@@ -166,7 +206,12 @@ module ClaudeEasy
     return false unless dns_runtime_healthy?(requester, "www.baidu.com")
     return false unless dns_runtime_healthy?(requester, "www.google.com")
 
-    connectivity_checker.call
+    connectivity_checker ||= lambda do
+      default_connectivity_healthy?(requester: requester, tun_mode: expected_tun)
+    end
+    return false unless connectivity_checker.call
+
+    runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
     false
   end
@@ -182,7 +227,6 @@ module ClaudeEasy
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
-    connectivity_checker ||= method(:default_connectivity_healthy?)
     selections = runtime_selections(requester)
     return false unless selections
 
@@ -203,10 +247,12 @@ module ClaudeEasy
     )
     return false unless code == 204
 
-    runtime_health_healthy?(
+    healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
-      connectivity_checker: connectivity_checker
+      connectivity_checker: connectivity_checker,
+      precommit_condition: precommit_condition
     )
+    healthy && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
     false
   end
@@ -226,8 +272,6 @@ module ClaudeEasy
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
-    connectivity_checker ||= method(:default_connectivity_healthy?)
-
     before = runtime_selections(requester)
     unless before
       return result.merge(
@@ -266,9 +310,12 @@ module ClaudeEasy
 
     healthy = runtime_health_healthy?(
       requester, selections: candidate_selections, expected_tun: expected_tun,
-      connectivity_checker: connectivity_checker
+      connectivity_checker: connectivity_checker,
+      precommit_condition: precommit_condition
     )
     return pending.call unless profile_result_current?(result)
+    return result.merge(status: rollback.call) unless
+      runtime_precommit_allowed?(precommit_condition)
     return result.merge(reloaded: true) if healthy
 
     result.merge(status: rollback.call)
@@ -284,7 +331,6 @@ module ClaudeEasy
                                     connectivity_checker: nil, precommit_condition: nil)
     return :reload_failed_rollback_conflict unless restore_profile_bytes(result)
     return :reload_failed_restore_pending unless requester && path && selections && expected_tun
-    connectivity_checker ||= method(:default_connectivity_healthy?)
     return :reload_failed_restore_pending unless runtime_precommit_allowed?(precommit_condition)
 
     code, _body = requester.call(
@@ -292,10 +338,13 @@ module ClaudeEasy
     )
     return :reload_failed_restore_pending unless code == 204
 
-    runtime_health_healthy?(
+    healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
-      connectivity_checker: connectivity_checker
-    ) ? :reload_failed_rolled_back : :reload_failed_restore_pending
+      connectivity_checker: connectivity_checker,
+      precommit_condition: precommit_condition
+    )
+    healthy && runtime_precommit_allowed?(precommit_condition) ?
+      :reload_failed_rolled_back : :reload_failed_restore_pending
   rescue StandardError
     :reload_failed_restore_pending
   end

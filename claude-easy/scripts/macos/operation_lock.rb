@@ -1,6 +1,22 @@
 #!/usr/bin/ruby
 
 require "fileutils"
+require "fiddle/import"
+
+module ClaudeEasyExclusiveRename
+  extend Fiddle::Importer
+
+  RENAME_EXCL = 0x00000004
+
+  dlload "/usr/lib/libSystem.B.dylib"
+  extern "int renamex_np(const char *, const char *, unsigned int)"
+
+  def self.call(source, destination)
+    return true if renamex_np(source, destination, RENAME_EXCL).zero?
+
+    raise SystemCallError.new("exclusive rename failed", Fiddle.last_error)
+  end
+end
 
 module ClaudeEasyOperationLock
   module_function
@@ -15,6 +31,7 @@ module ClaudeEasyOperationLock
   SYNC_DIRECTORY_COMMAND = "--sync-directory".freeze
   SYNC_FILE_COMMAND = "--sync-file".freeze
   VERIFY_HELD_COMMAND = "--verify-held-lock".freeze
+  RENAME_EXCLUSIVE_COMMAND = "--rename-exclusive".freeze
 
   def monotonic_now
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -119,6 +136,34 @@ module ClaudeEasyOperationLock
     false
   end
 
+  def rename_exclusive(source, destination)
+    expanded_source = File.expand_path(source)
+    expanded_destination = File.expand_path(destination)
+    source_parent = File.dirname(expanded_source)
+    destination_parent = File.dirname(expanded_destination)
+    source_parent_stat = File.lstat(source_parent)
+    destination_parent_stat = File.lstat(destination_parent)
+    raise IOError, "rename parent is unsafe" unless
+      source_parent_stat.directory? && !source_parent_stat.symlink? &&
+      destination_parent_stat.directory? && !destination_parent_stat.symlink?
+
+    source_stat = File.lstat(expanded_source)
+    begin
+      File.lstat(expanded_destination)
+      raise IOError, "rename destination already exists"
+    rescue Errno::ENOENT
+      nil
+    end
+    ClaudeEasyExclusiveRename.call(expanded_source, expanded_destination)
+    destination_stat = File.lstat(expanded_destination)
+    raise IOError, "renamed path identity changed" unless
+      [source_stat.dev, source_stat.ino] == [destination_stat.dev, destination_stat.ino]
+
+    fsync_directory(source_parent)
+    fsync_directory(destination_parent) unless destination_parent == source_parent
+    true
+  end
+
   def acquire(path, timeout_seconds: LOCK_TIMEOUT_SECONDS)
     directory = File.dirname(path)
     state_root = File.dirname(directory)
@@ -152,6 +197,10 @@ module ClaudeEasyOperationLock
   end
 
   def run(arguments)
+    if arguments.length == 3 && arguments.fetch(0) == RENAME_EXCLUSIVE_COMMAND
+      rename_exclusive(arguments.fetch(1), arguments.fetch(2))
+      return 0
+    end
     if arguments.length == 2
       case arguments.fetch(0)
       when ENSURE_DIRECTORY_COMMAND

@@ -11,16 +11,18 @@ module ClashRouteBootstrap
   def load_dependencies(loader:, argv:, output:)
     %w[patch_profiles result_contract].each { |path| loader.call(path) }
     true
-  rescue LoadError
-    raise unless argv.include?("--json")
-
-    output.write(JSON.generate(
-      "schema" => "claude-easy.result", "version" => 1, "command" => "verify_routes",
-      "platform" => "macos", "client" => "clashx-meta", "operation" => "load",
-      "ok" => false, "status" => "failed", "code" => "incomplete_package", "exit_code" => 6,
-      "summary_zh" => "安装包不完整。", "profile" => nil, "changes" => [], "checks" => [],
-      "items" => [], "messages" => [], "warnings" => []
-    ) + "\n")
+  rescue LoadError, SyntaxError
+    if argv.include?("--json")
+      output.write(JSON.generate(
+        "schema" => "claude-easy.result", "version" => 1, "command" => "verify_routes",
+        "platform" => "macos", "client" => "clashx-meta", "operation" => "load",
+        "ok" => false, "status" => "failed", "code" => "incomplete_package", "exit_code" => 6,
+        "summary_zh" => "安装包不完整。", "profile" => nil, "changes" => [], "checks" => [],
+        "items" => [], "messages" => [], "warnings" => []
+      ) + "\n")
+    else
+      output.write("安装包不完整。\n")
+    end
     false
   end
 end
@@ -42,7 +44,7 @@ module ClashRouteVerifier
   NON_PROXY_TERMINALS = %w[
     DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
   ].freeze
-  PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance Relay].freeze
+  PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
   NON_PROXY_TYPES = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch].freeze
 
   def get_json(socket, endpoint)
@@ -70,11 +72,22 @@ module ClashRouteVerifier
     listener&.close
   end
 
-  def observe_connection(socket, url, host_pattern, observation_seconds: 15)
+  def observe_connection(socket, url, host_pattern, observation_seconds: 15,
+                         proxy_url: nil)
+    unless proxy_url
+      requester = lambda do |method, endpoint, body|
+        ClaudeEasy.controller_request(socket, method, endpoint, body)
+      end
+      proxy_url = ClaudeEasy.runtime_loopback_proxy(requester)
+    end
+    return nil unless ClaudeEasy.mihomo_loopback_proxy_url?(proxy_url)
+
     existing = Array(get_json(socket, "/connections")&.fetch("connections", [])).map { |entry| entry["id"] }
     source_port = reserve_local_port
     pid = Process.spawn(
-      "/usr/bin/curl", "--http1.1", "--fail", "-L", "--max-time", "15", "--limit-rate", "2k",
+      ClaudeEasy::CURL_ISOLATED_ENVIRONMENT,
+      "/usr/bin/curl", "-q", "--proxy", proxy_url,
+      "--http1.1", "--fail", "-L", "--max-time", "15", "--limit-rate", "2k",
       "--local-port", source_port.to_s, url,
       out: File::NULL, err: File::NULL
     )
@@ -207,7 +220,7 @@ module ClashRouteVerifier
     return false unless expected_proxy.is_a?(Hash) && proxy_group_type?(expected_proxy["type"])
     return chains.include?(expected_group) if kind == :ai
 
-    return false if chains.include?(ai_group)
+    return false if expected_group != ai_group && chains.include?(ai_group)
     return true if chains.include?(expected_group)
 
     chains.each_with_index.any? do |name, index|

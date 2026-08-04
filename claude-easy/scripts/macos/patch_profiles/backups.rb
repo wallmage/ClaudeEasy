@@ -1,6 +1,8 @@
 module ClaudeEasy
   module_function
 
+  BACKUP_FILENAME_PATTERN = /\A(?<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{9}[+-]\d{4})--[a-z][a-z0-9-]{0,31}--[0-9a-f]{16}--.+\.backup\z/
+
   def excluded_path?(path)
     basename = File.basename(path)
     basename.start_with?(".") || basename.match?(/(?:^|[._-])(?:bak|backup|claude-easy)(?:[._-]|\z)/i) ||
@@ -148,23 +150,51 @@ module ClaudeEasy
     end
   end
 
-  def list_backups(backup_root)
+  def backup_filenames(backup_root)
     root = File.expand_path(backup_root)
     return [] unless File.directory?(root) && !File.symlink?(root)
 
     Dir.children(root).select do |name|
       path = File.join(root, name)
-      name.match?(/\A\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{9}[+-]\d{4}--[a-z][a-z0-9-]{0,31}--[0-9a-f]{16}--.+\.backup\z/) &&
+      name.match?(BACKUP_FILENAME_PATTERN) &&
         !name.include?("--preference--") &&
         File.file?(path) && !File.symlink?(path)
     end.sort.reverse
   end
 
+  def public_backup_id(filename)
+    "ce-backup-v1-#{Digest::SHA256.hexdigest(File.basename(filename.to_s))}"
+  end
+
+  def backup_created_at(filename)
+    match = BACKUP_FILENAME_PATTERN.match(File.basename(filename.to_s))
+    raise InvalidConfigError, "备份编号无效" unless match
+
+    Time.strptime(match[:timestamp], "%Y-%m-%d_%H-%M-%S.%N%z").iso8601(9)
+  end
+
+  def list_backups(backup_root)
+    backup_filenames(backup_root).map do |filename|
+      { "id" => public_backup_id(filename), "created_at" => backup_created_at(filename) }
+    end
+  end
+
   def resolve_backup_id(backup_id, backup_root)
-    raise InvalidConfigError, "备份编号无效" unless backup_id == File.basename(backup_id.to_s) && backup_id.end_with?(".backup")
+    normalized = backup_id.to_s
+    raise InvalidConfigError, "备份编号无效" unless normalized == File.basename(normalized)
 
     root = File.expand_path(backup_root)
-    path = File.join(root, backup_id)
+    filename = if normalized.match?(/\Ace-backup-v1-[0-9a-f]{64}\z/)
+                 matches = backup_filenames(root).select { |name| public_backup_id(name) == normalized }
+                 raise InvalidConfigError, "找不到指定备份" unless matches.length == 1
+
+                 matches.first
+               else
+                 raise InvalidConfigError, "备份编号无效" unless normalized.end_with?(".backup")
+
+                 normalized
+               end
+    path = File.join(root, filename)
     raise InvalidConfigError, "找不到指定备份" unless File.file?(path) && !File.symlink?(path)
 
     path
@@ -210,7 +240,14 @@ module ClaudeEasy
     if before.is_a?(Hash) && after.is_a?(Hash)
       (before.keys | after.keys).map(&:to_s).sort.each do |key|
         break if output.length >= limit
-        path = prefix ? "#{prefix}.#{key}" : key
+        public_key = if %w[
+          proxy-providers rule-providers hosts dns.hosts dns.nameserver-policy script.shortcuts
+        ].include?(prefix)
+                       "[item]"
+                     else
+                       key
+                     end
+        path = prefix ? "#{prefix}.#{public_key}" : public_key
         before_key = before.key?(key) ? key : before.keys.find { |candidate| candidate.to_s == key }
         after_key = after.key?(key) ? key : after.keys.find { |candidate| candidate.to_s == key }
         if before_key.nil? || after_key.nil?
@@ -227,22 +264,53 @@ module ClaudeEasy
 
   def compare_backup(backup_id, directories:, backup_root:)
     backup_path = resolve_backup_id(backup_id, backup_root)
-    target = find_backup_target(backup_id, directories)
+    physical_id = File.basename(backup_path)
+    public_id = public_backup_id(physical_id)
+    target = find_backup_target(physical_id, directories)
     backup_bytes = read_regular_file_once(backup_path, "备份")
     current_bytes = File.binread(File.realpath(target))
-    backup_config = load_yaml(backup_bytes.dup.force_encoding(Encoding::UTF_8), backup_id)
+    backup_config = load_yaml(backup_bytes.dup.force_encoding(Encoding::UTF_8), public_id)
     current_config = load_yaml(current_bytes.dup.force_encoding(Encoding::UTF_8), target)
     {
-      backup_id: backup_id,
-      profile: File.basename(target),
+      backup_id: public_id,
       same: backup_bytes == current_bytes,
       backup_sha256: Digest::SHA256.hexdigest(backup_bytes),
       current_sha256: Digest::SHA256.hexdigest(current_bytes),
-      changes: redacted_changed_paths(backup_config, current_config)
+      changes: redacted_changed_paths(backup_config, current_config).uniq
     }
   end
 
-  def finish_backup_restore_transaction(transaction, result)
+  def finish_backup_restore_transaction(transaction, result, precommit_condition: nil)
+    successful = %i[updated no_change].include?(result.fetch(:status))
+    if successful && !profile_result_current?(result)
+      runtime_committed = result[:reloaded] == true
+      result = result.dup
+      result.delete(:reloaded)
+      unless runtime_committed
+        remove_profile_transaction(transaction)
+        return result.merge(status: :restore_conflict)
+      end
+
+      restored_runtime = reload_recovered_profile_runtime(
+        [{ path: result.fetch(:path), active: true }], require_tun: :preserve,
+        precommit_condition: precommit_condition
+      ) && runtime_precommit_allowed?(precommit_condition)
+      if restored_runtime
+        remove_profile_transaction(transaction)
+        return result.merge(status: :restore_conflict)
+      end
+
+      return result.merge(status: :reload_failed_restore_pending)
+    end
+    if %i[updated no_change].include?(result.fetch(:status)) &&
+       !runtime_precommit_allowed?(precommit_condition)
+      restored = restore_profile_bytes(result)
+      result = result.merge(
+        status: restored ? :reload_failed_restore_pending : :reload_failed_rollback_conflict
+      )
+      result.delete(:reloaded)
+      return result
+    end
     if %i[updated no_change reload_failed_rolled_back].include?(result.fetch(:status))
       remove_profile_transaction(transaction)
     end
@@ -274,13 +342,15 @@ module ClaudeEasy
       recover_profile_transaction(backup_root, roots: directories)
     end
     backup_path = resolve_backup_id(backup_id, backup_root)
-    target = find_backup_target(backup_id, directories)
+    physical_id = File.basename(backup_path)
+    public_id = public_backup_id(physical_id)
+    target = find_backup_target(physical_id, directories)
     write_path = File.realpath(target)
     backup_bytes = read_regular_file_once(backup_path, "备份")
     backup_text = backup_bytes.dup.force_encoding(Encoding::UTF_8)
     raise InvalidConfigError, "备份不是有效的 UTF-8" unless backup_text.valid_encoding?
 
-    load_yaml(backup_text, backup_id)
+    load_yaml(backup_text, public_id)
     Tempfile.create([File.basename(write_path), ".restore"], File.dirname(write_path)) do |temporary|
       temporary.binmode
       temporary.write(backup_bytes)
@@ -309,10 +379,12 @@ module ClaudeEasy
         patched_digest: Digest::SHA256.hexdigest(backup_bytes),
         patched_identity: transaction_target.fetch(:identity),
         patched_path: transaction_target.fetch(:write_path),
-        restored_backup: backup_id
+        restored_backup: public_id
       }
       result = activation.call(result) if activation
-      return finish_backup_restore_transaction(transaction, result)
+      return finish_backup_restore_transaction(
+        transaction, result, precommit_condition: precommit_condition
+      )
     end
 
     create_versioned_backup(target, backup_root, content: current_bytes, reason: "pre-restore")
@@ -340,10 +412,12 @@ module ClaudeEasy
       patched_digest: Digest::SHA256.hexdigest(backup_bytes),
       patched_identity: transaction_target.fetch(:identity),
       patched_path: transaction_target.fetch(:write_path),
-      restored_backup: backup_id
+      restored_backup: public_id
     }
     result = activation.call(result) if activation
-    finish_backup_restore_transaction(transaction, result)
+    finish_backup_restore_transaction(
+      transaction, result, precommit_condition: precommit_condition
+    )
   rescue Psych::Exception, InvalidConfigError, SystemStackError
     { status: :invalid_backup }
   rescue SystemCallError, IOError

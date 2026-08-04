@@ -1,16 +1,27 @@
 ﻿$script:ClaudeEasyResultSchema = "claude-easy.result"
 $script:ClaudeEasyResultVersion = 1
 $script:ClaudeEasyResultCommands = @("install", "uninstall", "patch", "verify_routes")
+$script:ClaudeEasyResultTextLimit = 240
 
 function Protect-ClaudeEasyResultText([object]$Value) {
     if ($null -eq $Value) { return $null }
     $text = [string]$Value
-    $text = [regex]::Replace($text, '(?i)\b(?:https?|socks5?)://\S+', '[已隐藏地址]')
+    $text = [regex]::Replace($text, '\x1B\][^\x07]*(?:\x07|\x1B\\)', '')
+    $text = [regex]::Replace($text, '\x1B\[[0-?]*[ -/]*[@-~]', '')
+    $text = [regex]::Replace($text, '[\p{Cc}\p{Cf}]', '')
+    $text = [regex]::Replace($text, '(?i)\b[A-Za-z][A-Za-z0-9+.-]*://\S+', '[已隐藏地址]')
     $text = [regex]::Replace($text, '(?i)\bBearer\s+\S+', 'Bearer [已隐藏]')
     $text = [regex]::Replace($text, '(?i)\b(password|passwd|secret|token|uuid|private[-_ ]?key|controller[-_ ]?key)\s*[:=]\s*\S+', '$1=[已隐藏]')
     $text = [regex]::Replace($text, '(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b', '[已隐藏]')
-    $text = [regex]::Replace($text, '(?i)(?:[A-Z]:\\|\\\\)[^\r\n；，。]+', '[已隐藏路径]')
-    $text = [regex]::Replace($text, '(?<![A-Za-z0-9])/(?:Users|home|private|tmp|var|etc)/[^\r\n；，。]+', '[已隐藏路径]')
+    $text = [regex]::Replace($text, '(?i)(?:[A-Z]:[\\/]|\\\\|//)[^\r\n；，。]+', '[已隐藏路径]')
+    $text = [regex]::Replace($text, '(?<![A-Za-z0-9])/(?!/)[^\r\n；，。]+', '[已隐藏路径]')
+    $text = $text.Trim()
+    if ($text.Length -gt $script:ClaudeEasyResultTextLimit) {
+        $text = $text.Substring(0, $script:ClaudeEasyResultTextLimit)
+        if ($text.Length -gt 0 -and [char]::IsHighSurrogate($text[$text.Length - 1])) {
+            $text = $text.Substring(0, $text.Length - 1)
+        }
+    }
     return $text
 }
 
@@ -42,10 +53,18 @@ function Protect-ClaudeEasyResultValue([object]$Value) {
     }
     if ($Value -is [System.Collections.IEnumerable]) {
         $result = @()
-        foreach ($entry in $Value) { $result += (Protect-ClaudeEasyResultValue $entry) }
-        return @($result)
+        foreach ($entry in $Value) { $result += ,(Protect-ClaudeEasyResultValue $entry) }
+        return ,$result
     }
-    return $Value
+    if ($Value -is [bool] -or
+        $Value -is [byte] -or $Value -is [sbyte] -or
+        $Value -is [int16] -or $Value -is [uint16] -or
+        $Value -is [int32] -or $Value -is [uint32] -or
+        $Value -is [int64] -or $Value -is [uint64] -or
+        $Value -is [single] -or $Value -is [double] -or $Value -is [decimal]) {
+        return $Value
+    }
+    return (Protect-ClaudeEasyResultText $Value)
 }
 
 function New-ClaudeEasyResult(
@@ -77,7 +96,7 @@ function New-ClaudeEasyResult(
         code = $Code
         exit_code = $ExitCode
         summary_zh = (Protect-ClaudeEasyResultText $SummaryZh)
-        profile = $Profile
+        profile = Protect-ClaudeEasyResultValue $Profile
         changes = @(ConvertTo-ClaudeEasyResultArray $Changes)
         checks = @(ConvertTo-ClaudeEasyResultArray $Checks)
         items = @(ConvertTo-ClaudeEasyResultArray $Items)
@@ -88,5 +107,6 @@ function New-ClaudeEasyResult(
 
 function Write-ClaudeEasyResult([object]$Result) {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-    [Console]::Out.WriteLine(($Result | ConvertTo-Json -Depth 8 -Compress))
+    $protected = Protect-ClaudeEasyResultValue $Result
+    [Console]::Out.WriteLine(($protected | ConvertTo-Json -Depth 8 -Compress))
 }

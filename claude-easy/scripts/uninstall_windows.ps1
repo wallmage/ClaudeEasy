@@ -21,18 +21,61 @@ if (-not $packageComplete) {
     }
     exit 6
 }
-. $resultContractPath
-foreach ($uninstallerModule in $uninstallerModules) {
-    . (Join-Path $uninstallerModuleRoot $uninstallerModule)
+$resultContractLoaded = $false
+try {
+    $null = . $resultContractPath
+    $resultContractLoaded = $true
+    foreach ($requiredResultFunction in @(
+        "Protect-ClaudeEasyResultText",
+        "Protect-ClaudeEasyResultValue",
+        "New-ClaudeEasyResult",
+        "Write-ClaudeEasyResult"
+    )) {
+        if ($null -eq (Get-Command $requiredResultFunction -CommandType Function -ErrorAction SilentlyContinue)) {
+            $resultContractLoaded = $false
+            break
+        }
+    }
+} catch {
+    $resultContractLoaded = $false
+}
+if (-not $resultContractLoaded) {
+    if ($Json) {
+        [Console]::Out.WriteLine('{"schema":"claude-easy.result","version":1,"command":"uninstall","platform":"windows","client":"clash-verge-rev","operation":"load","ok":false,"status":"failed","code":"incomplete_package","exit_code":6,"summary_zh":"安装包不完整。","profile":null,"changes":[],"checks":[],"items":[],"messages":[],"warnings":[]}')
+    } else {
+        [Console]::Error.WriteLine("[ClaudeEasy] 安装包不完整。")
+    }
+    exit 6
+}
+try {
+    foreach ($uninstallerModule in $uninstallerModules) {
+        $null = . (Join-Path $uninstallerModuleRoot $uninstallerModule)
+    }
+} catch {
+    if ($Json) {
+        [Console]::Out.WriteLine('{"schema":"claude-easy.result","version":1,"command":"uninstall","platform":"windows","client":"clash-verge-rev","operation":"load","ok":false,"status":"failed","code":"incomplete_package","exit_code":6,"summary_zh":"安装包不完整。","profile":null,"changes":[],"checks":[],"items":[],"messages":[],"warnings":[]}')
+    } else {
+        [Console]::Error.WriteLine("[ClaudeEasy] 安装包不完整。")
+    }
+    exit 6
 }
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
+
+function Write-ClaudeEasyHumanText([string]$Message, [switch]$ErrorStream) {
+    $safeMessage = Protect-ClaudeEasyResultText $Message
+    if ($ErrorStream) {
+        [Console]::Error.WriteLine($safeMessage)
+    } else {
+        [Console]::Out.WriteLine($safeMessage)
+    }
+}
 
 function Write-Info([string]$Message) {
     if ($Json) {
         [void]$script:ClaudeEasyMessages.Add((Protect-ClaudeEasyResultText $Message))
         return
     }
-    Write-Host "[ClaudeEasy] $Message"
+    Write-ClaudeEasyHumanText "[ClaudeEasy] $Message"
 }
 
 function Complete-UninstallResult(
@@ -46,6 +89,10 @@ function Complete-UninstallResult(
     if ($Json) {
         $result = New-ClaudeEasyResult -Command "uninstall" -Operation "uninstall" -Ok ($ExitCode -eq 0) -Status $Status -Code $Code -ExitCode $ExitCode -SummaryZh $SummaryZh -Changes $Changes -Messages @($script:ClaudeEasyMessages) -Warnings $Warnings
         Write-ClaudeEasyResult $result
+    } elseif ($ExitCode -eq 0) {
+        Write-ClaudeEasyHumanText "[ClaudeEasy] $SummaryZh"
+    } else {
+        Write-ClaudeEasyHumanText "[ClaudeEasy] $SummaryZh" -ErrorStream
     }
     exit $ExitCode
 }
@@ -128,7 +175,6 @@ if ([string]::IsNullOrWhiteSpace($AppHome)) {
     try {
         $AppHome = Resolve-ClashVergeAppHome
     } catch {
-        if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] $($_.Exception.Message)") }
         Complete-UninstallResult 2 "invalid_request" "ambiguous_app_home" "检测到多个 Clash Verge Rev 配置目录；未执行任何操作。"
     }
 }
@@ -137,7 +183,6 @@ if (-not [string]::IsNullOrWhiteSpace($AppHome)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($AppHome)) {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 没有找到 Clash Verge Rev 配置目录。") }
     Complete-UninstallResult 2 "unsupported" "client_not_found" "没有找到 Clash Verge Rev 配置目录。"
 }
 
@@ -408,7 +453,6 @@ try {
     if ($usageStateExists) { $changes += "usage_profile" }
     Complete-UninstallResult 0 "ok" "uninstalled" "ClaudeEasy 已安全移除。" $changes
 } catch {
-    if (-not $Json) { [Console]::Error.WriteLine("[ClaudeEasy] 卸载失败：$($_.Exception.Message)") }
     Complete-UninstallResult 1 "failed" "uninstall_failed" ("卸载失败：" + $_.Exception.Message)
 }
 } finally {

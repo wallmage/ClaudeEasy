@@ -521,7 +521,9 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "              keep_transaction: results.any? do |result|\n" \
-          "                result[:status] == :reload_failed_restore_pending\n" \
+          "                %i[reload_failed_restore_pending reload_failed_rollback_conflict].include?(\n" \
+          "                  result[:status]\n" \
+          "                )\n" \
           "              end\n",
         "              keep_transaction: false\n"
       )
@@ -622,10 +624,14 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/macos/patch_profiles/backups.rb",
         "    result = activation.call(result) if activation\n" \
-          "    finish_backup_restore_transaction(transaction, result)\n",
+          "    finish_backup_restore_transaction(\n" \
+          "      transaction, result, precommit_condition: precommit_condition\n" \
+          "    )\n",
         "    remove_profile_transaction(transaction)\n" \
           "    result = activation.call(result) if activation\n" \
-          "    finish_backup_restore_transaction(transaction, result)\n"
+          "    finish_backup_restore_transaction(\n" \
+          "      transaction, result, precommit_condition: precommit_condition\n" \
+          "    )\n"
       )
 
       assert_mutation_is_killed(
@@ -711,9 +717,9 @@ class MutationSafetyTest < Minitest::Test
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "      handles.each { |_item, handle| handle.close rescue nil }\n" \
           "      handles.clear\n" \
-          "      failures = finish_safe_update_rollback(items, transaction, backup_root, roots)\n",
+          "      rollback = finish_safe_update_rollback(items, transaction, backup_root, roots)\n",
         "      handles.clear\n" \
-          "      failures = finish_safe_update_rollback(items, transaction, backup_root, roots)\n"
+          "      rollback = finish_safe_update_rollback(items, transaction, backup_root, roots)\n"
       )
 
       assert_mutation_is_killed(
@@ -2607,6 +2613,61 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_macos_uninstall_post_verification_quarantine_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/uninstall_macos.sh",
+        '  quarantine_staged_slot "$USAGE_STATE_PATH" usage || finish_quarantine_failure',
+        '  /bin/rm -f "$USAGE_STATE_PATH"'
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name", "test_uninstaller_preserves_a_replacement_created_after_final_verification"
+      )
+    end
+  end
+
+  def test_macos_install_package_bootstrap_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_macos.sh",
+        "install_package_dependencies_load() {\n" \
+          "  /usr/bin/ruby \"$PATCHER_SOURCE\" --json --help >/dev/null 2>&1\n" \
+          "}\n",
+        "install_package_dependencies_load() {\n" \
+          "  return 0\n" \
+          "}\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name", "test_installer_rejects_each_missing_release_dependency_before_creating_state"
+      )
+    end
+  end
+
+  def test_macos_uninstall_phase_aware_exit_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/uninstall_macos.sh",
+        "          unexpected_code=uninstall_interrupted_rolled_back\n",
+        "          unexpected_code=unexpected_exit\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_wrappers.rb",
+        "--name", "test_uninstaller_never_deletes_install_files_before_ready_is_durable"
+      )
+    end
+  end
+
   def test_macos_runtime_profile_precommit_guard_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
@@ -2633,11 +2694,9 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
         "        if batch_committed &&\n" \
-          "           !runtime_committed &&\n" \
           "           results.any? { |result| result[:status] == :updated } &&\n" \
           "           !runtime_precommit_allowed?(precommit_condition)\n",
         "        if false &&\n" \
-          "           !runtime_committed &&\n" \
           "           results.any? { |result| result[:status] == :updated } &&\n" \
           "           !runtime_precommit_allowed?(precommit_condition)\n"
       )
@@ -2773,8 +2832,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/uninstall_macos.sh",
-        "recover_pending_profile_transaction\nrestore_uncommitted_uninstall",
-        ": # mutant: skip pending profile recovery\nrestore_uncommitted_uninstall"
+        "recover_pending_profile_transaction\nrestore_uncommitted_or_finish",
+        ": # mutant: skip pending profile recovery\nrestore_uncommitted_or_finish"
       )
 
       assert_mutation_is_killed(
@@ -2792,11 +2851,10 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/uninstall_macos.sh",
-        "  if /bin/ln \"$slot\" \"$destination\"; then\n" \
-          "    durable_sync_directory \"$destination_directory\"\n" \
-          "    return 0\n" \
-          "  fi\n",
-        "  /bin/cp -p \"$slot\" \"$destination\"\n"
+        "    if durable_rename_exclusive \"$removed_slot\" \"$destination\"; then\n" \
+          "      return 0\n" \
+          "    fi\n",
+        "    /bin/cp -p \"$removed_slot\" \"$destination\"\n"
       )
 
       assert_mutation_is_killed(
@@ -2813,8 +2871,11 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/uninstall_macos.sh",
         "  if [ ! -f \"$UNINSTALL_STAGING/READY\" ]; then\n" \
-          "    /bin/rm -rf \"$UNINSTALL_STAGING\"\n" \
-          "    durable_sync_directory \"$INSTALL_DIR\"\n" \
+          "    if ! /bin/rm -rf \"$UNINSTALL_STAGING\" ||\n" \
+          "       ! durable_sync_directory \"$INSTALL_DIR\"; then\n" \
+          "      set_restore_failure uninstall_restore_failed \"未完成的卸载暂存无法完整清理或同步。\"\n" \
+          "      return 1\n" \
+          "    fi\n" \
           "    return 0\n" \
           "  fi\n",
         ""

@@ -173,17 +173,18 @@ class SkillContractTest < Minitest::Test
         release_usage_state = File.join(
           release_home, "Library", "Application Support", "ClaudeEasy", "usage-profile.plist"
         )
+        connectivity_server, connectivity_thread, connectivity_ca, mixed_port =
+          start_release_connectivity_server(release_home)
+        controller_server, controller_thread, controller_socket_path, controller_requests =
+          start_release_controller(release_home, mixed_port: mixed_port)
         release_env = {
           "HOME" => release_home,
           "RUBYOPT" => "-r#{preferences_fixture}",
           "CLAUDE_EASY_PROFILE_DIR" => profile_directory,
           "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
-          "CLAUDE_EASY_USAGE_PROFILE" => nil
+          "CLAUDE_EASY_USAGE_PROFILE" => nil,
+          "CURL_CA_BUNDLE" => connectivity_ca
         }
-        controller_server, controller_thread, controller_socket_path, controller_requests =
-          start_release_controller(release_home)
-        connectivity_server, connectivity_thread =
-          start_release_connectivity_server(release_home)
         begin
           probe = <<~RUBY
             context = ClaudeEasy.capture_runtime_profile_context([ARGV.fetch(0)])
@@ -718,7 +719,7 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_verifier, "function Test-SafeLiveChain"
     assert_includes windows_verifier, "function Get-LiveChainProxy"
     assert_includes windows_verifier, "function Test-SupportedRouteGroupType"
-    %w[Selector URLTest Fallback LoadBalance Relay].each do |group_type|
+    %w[Selector URLTest Fallback LoadBalance].each do |group_type|
       assert_includes windows_verifier, %("#{group_type}")
     end
     assert_includes(
@@ -777,7 +778,7 @@ class SkillContractTest < Minitest::Test
       assert_includes mac_source, %(["#{label}", "#{url}")
       assert_includes windows_source, %("#{label}" "#{url}")
     end
-    %w[Selector URLTest Fallback LoadBalance Relay].each do |group_type|
+    %w[Selector URLTest Fallback LoadBalance].each do |group_type|
       assert_includes mac_source, group_type
       assert_includes windows_source, group_type
     end
@@ -977,7 +978,11 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, "RestoreBackup"
     assert_includes windows_installer, "claude-easy-backups"
     assert_includes windows_installer, "yyyy-MM-dd_HH-mm-ss"
-    assert_includes windows_installer, "ChangedFields"
+    assert_includes windows_installer, "changed_fields"
+    %w[id same backup_sha256 current_sha256].each do |field|
+      assert_match(/^\s+#{field} = /, windows_installer)
+    end
+    assert_includes windows_installer, '@($changedFields) @() @($comparison)'
     assert_includes skill, "先列出备份"
     assert_includes skill, "先比较"
     assert_includes skill, "症状出现前"
@@ -1280,7 +1285,7 @@ class SkillContractTest < Minitest::Test
     source = File.read(File.join(SKILL, "SKILL.md"))
 
     assert_includes source, "访问 Google 时必须经过主代理组"
-    assert_includes source, "不能经过 `DIRECT` 或 AI 分组"
+    assert_includes source, "主组与 AI 组不同时不能经过 AI 组"
     assert_includes source, "访问 OpenAI、Anthropic 或 Claude 时必须经过 AI 分组当前节点"
     assert_includes source, "macOS 或 Windows 环境只要提供 Computer Use，就由代理连续完成"
     assert_includes source, "当前环境没有 Computer Use 时，给出中文逐步操作"
@@ -1292,7 +1297,7 @@ class SkillContractTest < Minitest::Test
 
     %w[Google OpenAI Anthropic Claude].each { |name| assert_includes source, name }
     assert_includes source, "def route_passes?"
-    assert_includes source, "return false if chains.include?(ai_group)"
+    assert_includes source, "return false if expected_group != ai_group && chains.include?(ai_group)"
     assert_includes source, 'existing.include?(entry["id"])'
   end
 
@@ -1504,6 +1509,35 @@ class SkillContractTest < Minitest::Test
     assert_includes installer, "uninstall_recovery_failed"
   end
 
+  def test_macos_installer_preflights_the_package_and_uninstaller_quarantines_verified_files
+    installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
+    uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
+    patcher = File.read(File.join(SKILL, "scripts/macos/patch_profiles.rb"))
+    operation_lock = File.read(File.join(SKILL, "scripts/macos/operation_lock.rb"))
+
+    assert_includes installer, "install_package_dependencies_load()"
+    assert_includes installer, '"$PATCHER_SOURCE" --json --help'
+    dependency_preflight = installer.index("if ! install_package_dependencies_load; then")
+    lock_acquisition = installer.index('"$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh')
+    refute_nil dependency_preflight
+    refute_nil lock_acquisition
+    assert_operator dependency_preflight, :<, lock_acquisition
+    %w[
+      result_contract operation_lock patch_profiles/transform patch_profiles/backups
+      patch_profiles/mihomo patch_profiles/profile_writer patch_profiles/subscriptions
+      patch_profiles/runtime patch_profiles/cli
+    ].each { |dependency| assert_includes patcher, dependency }
+
+    assert_includes operation_lock, "renamex_np"
+    assert_includes operation_lock, "RENAME_EXCL"
+    assert_includes uninstaller, 'quarantine_staged_slot "$USAGE_STATE_PATH" usage'
+    assert_includes uninstaller, 'removed_slot="$UNINSTALL_STAGING/$slot.removed"'
+    assert_includes uninstaller, "uninstall_interrupted_rolled_back"
+    assert_includes uninstaller, "uninstall_committed_interrupted"
+    assert_includes uninstaller, "uninstall_recovery_failed"
+    assert_includes uninstaller, "CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT"
+  end
+
   def test_macos_profile_operation_signal_handoff_preserves_committed_state
     installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
     cli = File.read(File.join(SKILL, "scripts/macos/patch_profiles/cli.rb"))
@@ -1662,7 +1696,7 @@ class SkillContractTest < Minitest::Test
     uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     patcher = mac_patcher_source
     recovery = uninstaller.index("\nrecover_pending_profile_transaction\n")
-    uninstall_recovery = uninstaller.index("\nrestore_uncommitted_uninstall\n", recovery)
+    uninstall_recovery = uninstaller.index("\nrestore_uncommitted_or_finish\n", recovery)
 
     refute_nil recovery
     refute_nil uninstall_recovery
@@ -2319,6 +2353,28 @@ class SkillContractTest < Minitest::Test
       refute_includes source, "请先从托盘菜单完全退出"
       refute_includes source, "退出客户端，再"
     end
+  end
+
+  def test_diagnostics_never_launches_clash_client_as_an_inspection_probe
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+    agent_instructions = File.read(File.join(ROOT, "AGENTS.md"))
+
+    [skill, policy, design, agent_instructions].each do |source|
+      assert_includes source, "不得运行 ClashX Meta 主程序"
+      assert_includes source, "`--version`"
+      assert_includes source, "`Info.plist`"
+      assert_includes source, "Mihomo"
+    end
+
+    production_scripts = Dir.glob(File.join(SKILL, "scripts/**/*.{rb,sh,ps1,cmd,js}"))
+    offenders = production_scripts.select do |path|
+      File.binread(path).force_encoding("UTF-8").scrub.match?(
+        %r{/Applications/ClashX Meta\.app/Contents/MacOS/ClashX Meta}
+      )
+    end
+    assert_empty offenders, "production script launches ClashX Meta as a probe: #{offenders.join(', ')}"
   end
 
   def test_validation_timeout_and_idempotence_guards_are_documented

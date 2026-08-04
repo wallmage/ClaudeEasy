@@ -106,9 +106,10 @@ const CLAUDE_EASY_POLICY = {
 
 const CLAUDE_EASY_AI_GROUP = "🤖 AI · ClaudeEasy";
 const CLAUDE_EASY_SAFE_GROUP = "🛡 安全代理 · ClaudeEasy";
+const CLAUDE_EASY_REFERENCE_GROUP = "🔗 路由引用 · ClaudeEasy";
 const CLAUDE_EASY_DIRECT_NAMES = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH"];
-const CLAUDE_EASY_DIRECT_TYPES = ["direct", "dns", "reject", "pass", "compatible", "rematch"];
-const CLAUDE_EASY_ROUTE_GROUP_TYPES = ["select", "url-test", "fallback", "load-balance", "relay"];
+const CLAUDE_EASY_DIRECT_TYPES = ["direct", "dns", "reject", "reject-drop", "pass", "pass-rule", "compatible", "rematch"];
+const CLAUDE_EASY_ROUTE_GROUP_TYPES = ["select", "url-test", "fallback", "load-balance"];
 const CLAUDE_EASY_LEGACY_QUIC_REJECT_RULE = "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT";
 const CLAUDE_EASY_USAGE_PROFILE = 3;
 
@@ -144,13 +145,102 @@ function claudeEasyManagedName(name, base) {
 }
 
 function claudeEasyManagedGroupName(name) {
-  return claudeEasyManagedName(name, CLAUDE_EASY_AI_GROUP) || claudeEasyManagedName(name, CLAUDE_EASY_SAFE_GROUP);
+  return claudeEasyManagedName(name, CLAUDE_EASY_AI_GROUP) || claudeEasyManagedName(name, CLAUDE_EASY_SAFE_GROUP) ||
+    claudeEasyManagedName(name, CLAUDE_EASY_REFERENCE_GROUP);
+}
+
+function claudeEasyNormalizedAdapterType(type) {
+  const normalized = String(type || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized === "ss") return "shadowsocks";
+  if (normalized === "ssr") return "shadowsocksr";
+  if (normalized === "select") return "selector";
+  return normalized;
+}
+
+function claudeEasyGroupExcludesType(group, type) {
+  const sourceType = claudeEasyNormalizedAdapterType(type);
+  return String(group["exclude-type"] || "").split("|").some(function (item) {
+    return claudeEasyNormalizedAdapterType(item) === sourceType;
+  });
+}
+
+function claudeEasyProxySource(config, name) {
+  const proxy = (config.proxies || []).find(function (item) {
+    return item && typeof item.name === "string" && item.name === name;
+  });
+  return Boolean(proxy) && !claudeEasyDirectName(name) &&
+    CLAUDE_EASY_DIRECT_TYPES.indexOf(String(proxy.type || "").toLowerCase()) === -1;
+}
+
+function claudeEasySimpleGroupFilterMatch(pattern, name) {
+  if (typeof pattern !== "string" || typeof name !== "string") return null;
+  let source = pattern;
+  const insensitive = source.indexOf("(?i)") === 0;
+  if (insensitive) source = source.slice(4);
+  if (source === ".*") return true;
+  const exact = source.length >= 2 && source[0] === "^" && source[source.length - 1] === "$";
+  if (exact) source = source.slice(1, -1);
+  if (/[\\.\^$*+?()\[\]{}|]/.test(source)) return null;
+  const candidate = insensitive ? name.toLowerCase() : name;
+  const expected = insensitive ? source.toLowerCase() : source;
+  return exact ? candidate === expected : candidate.indexOf(expected) !== -1;
+}
+
+function claudeEasyImportedProxySource(config, group, name) {
+  if (!claudeEasyProxySource(config, name)) return false;
+  const proxy = (config.proxies || []).find(function (item) { return item && item.name === name; });
+  if (claudeEasyGroupExcludesType(group, proxy.type)) return false;
+  const included = String(group.filter || "");
+  if (included && claudeEasySimpleGroupFilterMatch(included, name) !== true) return false;
+  const excluded = String(group["exclude-filter"] || "");
+  return !excluded || claudeEasySimpleGroupFilterMatch(excluded, name) === false;
+}
+
+function claudeEasyProviderImportCanHaveSource(group) {
+  const exclusion = group["exclude-filter"];
+  return typeof exclusion !== "string" || exclusion.replace(/^\(\?i\)/, "") !== ".*";
+}
+
+function claudeEasyProviderSource(config, name) {
+  const providers = config["proxy-providers"];
+  const provider = providers && typeof providers === "object" && !Array.isArray(providers) ? providers[name] : null;
+  return typeof name === "string" && name.length > 0 && provider && typeof provider === "object" && !Array.isArray(provider);
+}
+
+function claudeEasyGroupHasProxySource(config, group, visiting) {
+  visiting = visiting || [];
+  if (visiting.indexOf(group.name) !== -1) return false;
+
+  if (claudeEasyProviderImportCanHaveSource(group) && (Array.isArray(group.use) ? group.use : []).some(function (name) {
+    return claudeEasyProviderSource(config, name);
+  })) return true;
+  if (group["include-all"] === true || group["include-all-providers"] === true) {
+    const providers = config["proxy-providers"];
+    if (claudeEasyProviderImportCanHaveSource(group) && providers && typeof providers === "object" && !Array.isArray(providers) && Object.keys(providers).some(function (name) {
+      return claudeEasyProviderSource(config, name);
+    })) return true;
+  }
+  if (group["include-all"] === true || group["include-all-proxies"] === true) {
+    if ((config.proxies || []).some(function (proxy) {
+      return proxy && claudeEasyImportedProxySource(config, group, proxy.name);
+    })) return true;
+  }
+
+  const nestedGroups = claudeEasyRouteGroups(config);
+  return (Array.isArray(group.proxies) ? group.proxies : []).some(function (member) {
+    if (claudeEasyProxySource(config, member)) return true;
+    const nested = nestedGroups.find(function (candidate) { return candidate.name === member; });
+    return Boolean(nested) && claudeEasyGroupHasProxySource(config, nested, visiting.concat([group.name]));
+  });
 }
 
 // Prefer an independent non-AI group. AI-named and managed groups remain
 // available only as last resorts so a valid subscription is never skipped.
 function claudeEasyDetectMain(config) {
   const groups = claudeEasyRouteGroups(config);
+  for (let index = groups.length - 1; index >= 0; index -= 1) {
+    if (!claudeEasyGroupHasProxySource(config, groups[index], [])) groups.splice(index, 1);
+  }
   const candidates = groups.filter(function (group) {
     return !claudeEasyAiName(group.name) && !claudeEasyManagedGroupName(group.name);
   });
@@ -182,18 +272,7 @@ function claudeEasyDetectMain(config) {
     const found = names.find(function (name) { return name.toLowerCase() === preferred; });
     if (found) return found;
   }
-  for (let i = 0; i < candidates.length; i += 1) {
-    const uses = Array.isArray(candidates[i].use) ? candidates[i].use : [];
-    if (uses.length) return candidates[i].name;
-    const members = Array.isArray(candidates[i].proxies) ? candidates[i].proxies : [];
-    if (members.length && !members.every(claudeEasyDirectName)) return candidates[i].name;
-  }
-  for (let i = 0; i < groups.length; i += 1) {
-    const uses = Array.isArray(groups[i].use) ? groups[i].use : [];
-    if (uses.length) return groups[i].name;
-    const members = Array.isArray(groups[i].proxies) ? groups[i].proxies : [];
-    if (members.length && !members.every(claudeEasyDirectName)) return groups[i].name;
-  }
+  if (candidates.length) return candidates[0].name;
   return groups.length ? groups[0].name : null;
 }
 
@@ -220,6 +299,29 @@ function claudeEasyUniqueGroupName(config, base) {
   return base + " " + suffix;
 }
 
+function claudeEasySafeReferenceName(name) {
+  return typeof name === "string" && name.length > 0 && !/[#,=&%\x00-\x1f\x7f-\x9f]/.test(name);
+}
+
+function claudeEasyReferenceWrapper(group, target) {
+  return group && claudeEasyManagedName(group.name, CLAUDE_EASY_REFERENCE_GROUP) &&
+    Object.keys(group).sort().join("\u0000") === ["name", "proxies", "type"].sort().join("\u0000") &&
+    String(group.type).toLowerCase() === "select" && Array.isArray(group.proxies) &&
+    group.proxies.length === 1 && group.proxies[0] === target;
+}
+
+function claudeEasySafeGroupReference(config, target) {
+  if (claudeEasySafeReferenceName(target)) return target;
+  if (!claudeEasyRouteGroups(config).some(function (group) { return group.name === target; })) return null;
+  const existing = (config["proxy-groups"] || []).find(function (group) {
+    return claudeEasyReferenceWrapper(group, target);
+  });
+  if (existing) return existing.name;
+  const name = claudeEasyUniqueGroupName(config, CLAUDE_EASY_REFERENCE_GROUP);
+  config["proxy-groups"].push({ name: name, type: "select", proxies: [target] });
+  return name;
+}
+
 function claudeEasyManagedAiFingerprint(group) {
   if (!group) return false;
   if (Object.keys(group).some(function (key) { return ["name", "proxies", "type", "use"].indexOf(key) === -1; })) return false;
@@ -236,7 +338,7 @@ function claudeEasyManagedSafeFingerprint(group) {
   if (!group || Object.keys(group).sort().join("\u0000") !== expected) return false;
   if (String(group.type).toLowerCase() !== "select" || group["include-all"] !== true) return false;
   if (String(group["empty-fallback"]).toUpperCase() !== "REJECT") return false;
-  if (["Direct|Dns|Reject|Pass|Compatible|Rematch", "Direct|Reject|Pass|Compatible|Rematch", "Direct|Reject|Pass|Compatible"].indexOf(group["exclude-type"]) === -1) return false;
+  if (["Direct|Dns|Reject|RejectDrop|Pass|PassRule|Compatible|Rematch", "Direct|Dns|Reject|Pass|Compatible|Rematch", "Direct|Reject|Pass|Compatible|Rematch", "Direct|Reject|Pass|Compatible"].indexOf(group["exclude-type"]) === -1) return false;
   return Array.isArray(group.proxies) && group.proxies.every(function (name) {
     return typeof name === "string" && name !== group.name;
   });
@@ -311,7 +413,7 @@ function claudeEasyAiGroupSources(config) {
   const proxies = [];
   (config.proxies || []).forEach(function (proxy) {
     if (!proxy || typeof proxy.name !== "string" || !proxy.name || claudeEasyDirectName(proxy.name)) return;
-    if (["direct", "dns", "reject", "pass", "compatible", "rematch"].indexOf(String(proxy.type || "").toLowerCase()) !== -1) return;
+    if (CLAUDE_EASY_DIRECT_TYPES.indexOf(String(proxy.type || "").toLowerCase()) !== -1) return;
     if (proxies.indexOf(proxy.name) === -1) proxies.push(proxy.name);
   });
   const providers = [];
@@ -560,6 +662,48 @@ function claudeEasyCnProviderPath(name) {
   return provider.path.slice(0, dot) + suffix + provider.path.slice(dot);
 }
 
+function claudeEasyWindowsPathKey(value) {
+  if (typeof value !== "string") return null;
+  let path = value.replace(/\//g, "\\");
+  let root = "";
+  const drive = path.match(/^[A-Za-z]:/);
+  if (drive) {
+    root = drive[0].toLowerCase();
+    path = path.slice(2);
+  }
+  if (path.indexOf("\\\\") === 0) {
+    root += "\\\\";
+    path = path.replace(/^\\+/, "");
+  } else if (path.indexOf("\\") === 0) {
+    root += "\\";
+    path = path.replace(/^\\+/, "");
+  }
+
+  const parts = [];
+  path.split("\\").forEach(function (part) {
+    if (!part || part === ".") return;
+    if (part === "..") {
+      if (parts.length && parts[parts.length - 1] !== "..") parts.pop();
+      else if (root.indexOf("\\") === -1) parts.push(part);
+      return;
+    }
+    parts.push(part.normalize("NFC").toUpperCase().toLowerCase());
+  });
+  return root + "|" + parts.join("\\");
+}
+
+function claudeEasyWindowsProviderPathCollision(existingValue, managedValue) {
+  const existingKey = claudeEasyWindowsPathKey(existingValue);
+  const managedKey = claudeEasyWindowsPathKey(managedValue);
+  if (existingKey === null || managedKey === null) return false;
+  if (existingKey === managedKey) return true;
+  const existingPath = existingValue.replace(/\//g, "\\");
+  if (!/^(?:[A-Za-z]:\\|\\)/.test(existingPath)) return false;
+  const existingParts = existingKey.slice(existingKey.indexOf("|") + 1);
+  const managedParts = managedKey.slice(managedKey.indexOf("|") + 1);
+  return existingParts === managedParts || existingParts.slice(-(managedParts.length + 1)) === "\\" + managedParts;
+}
+
 function claudeEasyOwnedCnProvider(name, provider) {
   const expected = CLAUDE_EASY_POLICY.cnDomainProvider;
   return provider && typeof provider === "object" && claudeEasyManagedCnProviderName(name) &&
@@ -579,7 +723,8 @@ function claudeEasyEnsureCnProvider(config, routeGroup) {
     let sequence = 2;
     while (Object.prototype.hasOwnProperty.call(providers, name) || Object.keys(providers).some(function (candidate) {
       const provider = providers[candidate];
-      return provider && typeof provider === "object" && provider.path === claudeEasyCnProviderPath(name);
+      return provider && typeof provider === "object" &&
+        claudeEasyWindowsProviderPathCollision(provider.path, claudeEasyCnProviderPath(name));
     })) {
       name = expected.name + "-" + sequence;
       sequence += 1;
@@ -697,7 +842,9 @@ function claudeEasyApply(config, profileName, usageProfile) {
   if (!claudeEasyUsable(config)) return config;
   const patched = claudeEasyClone(config);
   if (!Array.isArray(patched.rules)) patched.rules = [];
-  const mainGroup = claudeEasyDetectMain(patched);
+  const detectedMainGroup = claudeEasyDetectMain(patched);
+  if (!detectedMainGroup) return config;
+  const mainGroup = claudeEasySafeGroupReference(patched, detectedMainGroup);
   if (!mainGroup) return config;
   const profile = [1, 2, 3].indexOf(usageProfile) !== -1 ? usageProfile : 3;
   const cnProviderName = claudeEasyCommonCn(patched, mainGroup);
@@ -713,6 +860,8 @@ function claudeEasyApply(config, profileName, usageProfile) {
   } else {
     aiGroup = claudeEasyEnsureAiGroup(patched);
   }
+  if (!aiGroup) return config;
+  aiGroup = claudeEasySafeGroupReference(patched, aiGroup);
   if (!aiGroup) return config;
   const routeGroup = mainGroup;
   patched.ipv6 = false;

@@ -405,7 +405,7 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
     Assert-True ($result.platform -eq "windows") "JSON result platform mismatch"
     Assert-True ($result.client -eq "clash-verge-rev") "JSON result client mismatch"
     Assert-True (
-        $text -notmatch '(?i)https?://|Bearer\s+|password\s*[:=]|secret\s*[:=]|token\s*[:=]|uuid\s*[:=]|private[_-]?key\s*[:=]|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+        $text -notmatch '(?i)\b[A-Za-z][A-Za-z0-9+.-]*://|Bearer\s+|password\s*[:=]|secret\s*[:=]|token\s*[:=]|uuid\s*[:=]|private[_-]?key\s*[:=]|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
     ) "JSON result leaked a secret, credential, identifier, or URL"
     Assert-True ([int]$result.exit_code -eq $ExitCode) (
         "JSON result exit_code mismatch for ${Command}: expected $ExitCode, JSON reported $($result.exit_code), process exited $($Invocation.ExitCode), status=$($result.status), code=$($result.code), summary=$($result.summary_zh)"
@@ -489,6 +489,30 @@ function Invoke-TestPowerShellWithStandardInput(
     }
 }
 
+function Invoke-TestPowerShellWithSeparatedStreams(
+    [string]$ScriptPath,
+    [string[]]$ScriptArguments
+) {
+    $process = New-TestPowerShellProcess $ScriptPath $ScriptArguments
+    try {
+        if (-not $process.Start()) { throw "PowerShell test process did not start" }
+        $process.StandardInput.Close()
+        $standardOutput = $process.StandardOutput.ReadToEndAsync()
+        $standardError = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill() } catch { }
+            throw "PowerShell test process timed out"
+        }
+        return [pscustomobject]@{
+            StandardOutput = $standardOutput.Result
+            StandardError = $standardError.Result
+            ExitCode = $process.ExitCode
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Get-WindowsProcessCommandLine([int]$ProcessId) {
     $cimCommand = Get-Command Get-CimInstance -ErrorAction SilentlyContinue
     if ($null -ne $cimCommand) {
@@ -560,6 +584,26 @@ try {
     [System.IO.File]::WriteAllText($fakeCore, $fakeCoreText, [System.Text.Encoding]::ASCII)
     if (-not $onWindows) { & /bin/chmod 700 $fakeCore }
     if ($onWindows) {
+        foreach ($wrapperCase in @(
+            @{ Source = $installWrapper; Command = "install"; Name = "install_windows.cmd" },
+            @{ Source = $uninstallWrapper; Command = "uninstall"; Name = "uninstall_windows.cmd" }
+        )) {
+            $missingEntrypointRoot = Join-Path $sandbox ("missing-entrypoint-" + $wrapperCase.Command)
+            New-Item -ItemType Directory -Path $missingEntrypointRoot -Force | Out-Null
+            $missingEntrypointWrapper = Join-Path $missingEntrypointRoot $wrapperCase.Name
+            Copy-Item -LiteralPath $wrapperCase.Source -Destination $missingEntrypointWrapper
+            $missingEntrypointOutput = & $env:ComSpec /d /c $missingEntrypointWrapper -Json 2>&1 | Out-String
+            $missingEntrypointInvocation = [pscustomobject]@{
+                Output = $missingEntrypointOutput
+                ExitCode = $LASTEXITCODE
+            }
+            $missingEntrypointResult = Assert-JsonResult `
+                $missingEntrypointInvocation $wrapperCase.Command 6
+            Assert-True ($missingEntrypointResult.code -eq "incomplete_package") (
+                "$($wrapperCase.Name) did not report a missing PowerShell entrypoint"
+            )
+        }
+
         $mutatingCoreText = "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nif not `"%CLAUDE_EASY_MUTATE_TARGET%`"==`"`" (`r`n  >`"%CLAUDE_EASY_MUTATE_TARGET%`" echo friend_concurrent: true`r`n)`r`nexit /b 0`r`n"
         [System.IO.File]::WriteAllText($mutatingCore, $mutatingCoreText, [System.Text.Encoding]::ASCII)
         $identityMutatingCoreText = "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nif not `"%CLAUDE_EASY_MUTATE_TARGET%`"==`"`" (`r`n  copy /b `"%CLAUDE_EASY_MUTATE_TARGET%`" `"%CLAUDE_EASY_MUTATE_TARGET%.replacement`" >nul`r`n  del /f /q `"%CLAUDE_EASY_MUTATE_TARGET%`"`r`n  move /y `"%CLAUDE_EASY_MUTATE_TARGET%.replacement`" `"%CLAUDE_EASY_MUTATE_TARGET%`" >nul`r`n)`r`nexit /b 0`r`n"
@@ -1092,6 +1136,10 @@ try {
                 $mutexUninstallJson = Assert-JsonResult $mutexUninstall "uninstall" 1
                 Assert-True ($mutexUninstallJson.code -eq "operation_in_progress") "parallel uninstall did not share the installer AppHome lock"
                 Assert-True ((Get-TreeContentSnapshot $mutexCase) -ceq $mutexBefore) "rejected parallel uninstall changed AppHome"
+                $mutexUninstallText = Invoke-TestPowerShellWithSeparatedStreams $uninstaller @("-AppHome", $mutexCase)
+                Assert-True ($mutexUninstallText.ExitCode -eq 1) "non-JSON parallel uninstall returned the wrong exit code"
+                Assert-True ($mutexUninstallText.StandardError.Contains("已有 ClaudeEasy 操作正在进行")) "failed non-JSON uninstall omitted its Chinese summary from stderr"
+                Assert-True ([string]::IsNullOrWhiteSpace($mutexUninstallText.StandardOutput)) "failed non-JSON uninstall wrote its summary to stdout"
             }
         } finally {
             [System.IO.File]::WriteAllText($mutexReleasePath, "release")
@@ -1156,9 +1204,66 @@ try {
     $invalidContractCommandRejected = $false
     try { New-ClaudeEasyResult -Command "contract-test" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" | Out-Null } catch { $invalidContractCommandRejected = $true }
     Assert-True $invalidContractCommandRejected "result contract accepted an unstable command name"
-    $nestedSecretResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Checks @([pscustomobject]@{ nested = [ordered]@{ url = "https://secret.invalid/path"; path = "C:\Users\friend\secret.yaml"; token = "token=private"; uuid = "11111111-2222-3333-4444-555555555555" } })
+    $nestedSecretResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Checks @([pscustomobject]@{ nested = [ordered]@{ url = "https://secret.invalid/path"; node = "ss://cipher:password@secret.invalid:443"; path = "C:\Users\friend\secret.yaml"; forward_path = "D:/Work/ordinary/file.yaml"; forward_unc = "//server/share/ordinary/file.yaml"; posix_path = "/opt/ordinary/file.yaml"; token = "token=private"; uuid = "11111111-2222-3333-4444-555555555555" } })
     $nestedSecretJson = $nestedSecretResult | ConvertTo-Json -Depth 8 -Compress
-    Assert-True ($nestedSecretJson -notmatch 'secret\.invalid|C:\\Users\\friend|token=private|11111111-2222-3333-4444-555555555555') "result contract leaked nested sensitive text"
+    Assert-True ($nestedSecretJson -notmatch 'secret\.invalid|ss://|C:\\Users\\friend|D:/Work|//server/share|/opt/ordinary|token=private|11111111-2222-3333-4444-555555555555') "result contract leaked nested sensitive text"
+    $profileSecretResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Profile ([pscustomobject]@{ name = ""; uid = "11111111-2222-4333-8444-555555555555" })
+    $profileSecretJson = $profileSecretResult | ConvertTo-Json -Depth 8 -Compress
+    Assert-True ($profileSecretJson -notmatch '11111111-2222-4333-8444-555555555555') "result contract leaked a UUID from an unnamed profile"
+    $unsafeResultText = "前缀$([char]27)[31m$([char]0x202E)`r`n伪造" + ("长" * 300)
+    $protectedResultText = Protect-ClaudeEasyResultText $unsafeResultText
+    Assert-True ($protectedResultText -notmatch '\x1B|\[31m|[\p{Cc}\p{Cf}]') "result contract retained terminal or format controls"
+    Assert-True ($protectedResultText.Length -le 240) "result contract did not limit dynamic text length"
+    $surrogateBoundaryText = Protect-ClaudeEasyResultText (("a" * 239) + [char]0xD83D + [char]0xDE00)
+    Assert-True ($surrogateBoundaryText.Length -eq 239) "result contract split a Unicode surrogate pair at the text limit"
+    $unknownScalarResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Items @([Guid]"11111111-2222-4333-8444-555555555555")
+    $unknownScalarJson = $unknownScalarResult | ConvertTo-Json -Depth 8 -Compress
+    Assert-True ($unknownScalarJson -notmatch '11111111-2222-4333-8444-555555555555') "result contract left an unknown scalar unsanitized"
+
+    $progressProbePath = Join-Path $sandbox "result-progress-probe.ps1"
+    $progressProbeSource = @'
+param(
+    [string]$ResultContractPath,
+    [string]$CommonModulePath,
+    [switch]$Json
+)
+. $ResultContractPath
+. $CommonModulePath
+$script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
+$script:ClaudeEasyOperation = "test"
+$script:ClaudeEasyProfile = $null
+$unsafeProgress = "已更新并通过检查：11111111-2222-4333-8444-555555555555$([char]27)[31m$([char]0x202E)`r`n伪造" + ("长" * 300)
+Write-Info $unsafeProgress
+if ($Json) {
+    $result = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Checks @("single-check") -Messages @($script:ClaudeEasyMessages) -Warnings @("first-warning", "second-warning")
+    $result.items = ,@("nested-item")
+    Write-ClaudeEasyResult $result
+}
+'@
+    [System.IO.File]::WriteAllText($progressProbePath, $progressProbeSource, (New-Object System.Text.UTF8Encoding($true)))
+    $unnamedProfileOutput = Invoke-TestPowerShell $progressProbePath @(
+        "-ResultContractPath", $resultContract,
+        "-CommonModulePath", (Join-Path $installerModuleRoot "common.ps1")
+    )
+    Assert-True ($unnamedProfileOutput.ExitCode -eq 0) "human-readable progress probe failed"
+    Assert-True ($unnamedProfileOutput.Output -notmatch '11111111-2222-4333-8444-555555555555') "human-readable progress leaked a UUID from an unnamed profile"
+    Assert-True ($unnamedProfileOutput.Output.Trim() -notmatch '\x1B|\[31m|[\p{Cc}\p{Cf}]') "human-readable progress retained terminal or format controls"
+    Assert-True ($unnamedProfileOutput.Output.Trim().Length -le 240) "human-readable progress exceeded the dynamic text limit"
+    $unnamedProfileJson = Assert-JsonResult (Invoke-TestPowerShell $progressProbePath @(
+        "-ResultContractPath", $resultContract,
+        "-CommonModulePath", (Join-Path $installerModuleRoot "common.ps1"),
+        "-Json"
+    )) "install" 0
+    Assert-True ((@($unnamedProfileJson.messages) -join "") -notmatch '11111111-2222-4333-8444-555555555555') "JSON progress leaked a UUID from an unnamed profile"
+    Assert-True ([string]$unnamedProfileJson.messages[0] -notmatch '\x1B|\[31m|[\p{Cc}\p{Cf}]') "JSON progress retained terminal or format controls"
+    Assert-True (([string]$unnamedProfileJson.messages[0]).Length -le 240) "JSON progress exceeded the dynamic text limit"
+    foreach ($arrayField in @("changes", "checks", "items", "messages", "warnings")) {
+        Assert-True ($unnamedProfileJson.$arrayField -is [System.Array]) "JSON result changed $arrayField from an array"
+    }
+    Assert-True (@($unnamedProfileJson.changes).Count -eq 0) "JSON result changed an empty array"
+    Assert-True (@($unnamedProfileJson.checks).Count -eq 1) "JSON result changed a single-item array"
+    Assert-True (@($unnamedProfileJson.warnings).Count -eq 2) "JSON result changed a multi-item array"
+    Assert-True ($unnamedProfileJson.items[0] -is [System.Array] -and @($unnamedProfileJson.items[0]).Count -eq 1) "JSON result flattened a nested array"
 
     $jsonShowCase = Join-Path $sandbox "json-show-case"
     New-Item -ItemType Directory -Path $jsonShowCase -Force | Out-Null
@@ -1183,6 +1288,172 @@ try {
     )
     $orphanExpectedHashResult = Assert-JsonResult $orphanExpectedHash "install" 64
     Assert-True ($orphanExpectedHashResult.code -eq "unexpected_hash") "orphan restore hash was not rejected"
+
+    $listSummary = Invoke-TestPowerShellWithSeparatedStreams $installer @(
+        "-AppHome", $jsonShowCase, "-ListBackups"
+    )
+    Assert-True ($listSummary.ExitCode -eq 0) "non-JSON backup list failed"
+    Assert-True ($listSummary.StandardOutput.Contains("备份清单已读取。")) "successful non-JSON install operation omitted its Chinese summary"
+    Assert-True ([string]::IsNullOrWhiteSpace($listSummary.StandardError)) "successful non-JSON install operation wrote to stderr"
+    $conflictSummary = Invoke-TestPowerShellWithSeparatedStreams $installer @(
+        "-AppHome", $jsonShowCase, "-ShowUsageProfile", "-ListBackups"
+    )
+    Assert-True ($conflictSummary.ExitCode -eq 64) "non-JSON conflicting operation returned the wrong exit code"
+    Assert-True ($conflictSummary.StandardError.Contains("一次只能执行一个操作。")) "failed non-JSON install operation omitted its Chinese summary from stderr"
+    Assert-True ([string]::IsNullOrWhiteSpace($conflictSummary.StandardOutput)) "failed non-JSON install operation wrote its summary to stdout"
+
+    $publicBackupCase = Join-Path $sandbox "public-backup-id-case"
+    $publicBackupProfiles = Join-Path $publicBackupCase "profiles"
+    $publicBackupRoot = Join-Path $publicBackupCase "claude-easy-backups"
+    $publicBackupUid = "11111111-2222-4333-8444-555555555555"
+    $publicBackupTarget = Join-Path $publicBackupProfiles "$publicBackupUid.yaml"
+    $publicBackupText = "mode: rule`nipv6: false`nproxies: []`nproxy-groups:`n  - name: Main`n    type: select`n    proxies:`n      - DIRECT`nrules: []`n"
+    $publicCurrentText = $publicBackupText.Replace("mode: rule", "mode: global")
+    New-Item -ItemType Directory -Path $publicBackupProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText($publicBackupTarget, $publicBackupText)
+    $publicBackupLock = Enter-AppHomeMutationLock $publicBackupCase
+    try {
+        $publicRawBackup = Split-Path -Leaf (Backup-Versioned $publicBackupTarget $publicBackupRoot "prewrite")
+    } finally {
+        Exit-AppHomeMutationLock $publicBackupLock
+    }
+    [System.IO.File]::WriteAllText($publicBackupTarget, $publicCurrentText)
+    $publicIdSha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $publicIdDigest = ($publicIdSha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($publicRawBackup)) | ForEach-Object { $_.ToString("x2") }) -join ""
+    } finally {
+        $publicIdSha.Dispose()
+    }
+    $publicBackupId = "ce-backup-v1-$publicIdDigest"
+    Assert-True ($publicRawBackup -match '^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2}\.\d{7})([+-]\d{2})(\d{2})--') "public backup fixture has an invalid storage timestamp"
+    $publicBackupCreatedAt = "$($Matches[1])T$($Matches[2]):$($Matches[3]):$($Matches[4])$($Matches[5]):$($Matches[6])"
+
+    $publicList = Invoke-TestPowerShell $installer @("-AppHome", $publicBackupCase, "-ListBackups")
+    Assert-True ($publicList.ExitCode -eq 0) "public backup list failed"
+    Assert-True ($publicList.Output.Contains("$publicBackupCreatedAt`t$publicBackupId")) "public backup list omitted its creation time and opaque ID"
+    Assert-True (-not $publicList.Output.Contains($publicBackupUid)) "public backup list exposed a UUID"
+    Assert-True (-not $publicList.Output.Contains($publicRawBackup)) "public backup list exposed its storage filename"
+    $publicListJson = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $publicBackupCase, "-ListBackups", "-Json"
+    )) "install" 0
+    Assert-True (@($publicListJson.items).Count -eq 1) "JSON backup list returned the wrong item count"
+    Assert-True ([string]($publicListJson.items[0].id) -ceq $publicBackupId) "JSON backup list did not return the opaque ID"
+    Assert-True ([string]($publicListJson.items[0].created_at) -ceq $publicBackupCreatedAt) "JSON backup list did not return the RFC3339 creation time"
+    Assert-True ((@($publicListJson.items[0].PSObject.Properties.Name | Sort-Object) -join ",") -ceq "created_at,id") "JSON backup list exposed storage metadata"
+
+    if ($onWindows) {
+        $linkedRawBackup = $publicRawBackup.Replace("--prewrite--", "--linked--")
+        Assert-True ($linkedRawBackup -cne $publicRawBackup) "linked backup fixture did not receive a distinct storage name"
+        $linkedBackupPath = Join-Path $publicBackupRoot $linkedRawBackup
+        New-Item -ItemType HardLink -Path $linkedBackupPath -Target (Join-Path $publicBackupRoot $publicRawBackup) | Out-Null
+        $linkedIdSha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $linkedIdDigest = ($linkedIdSha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($linkedRawBackup)) | ForEach-Object { $_.ToString("x2") }) -join ""
+        } finally {
+            $linkedIdSha.Dispose()
+        }
+        $linkedBackupId = "ce-backup-v1-$linkedIdDigest"
+        $linkedTargetBefore = [System.IO.File]::ReadAllBytes($publicBackupTarget)
+        try {
+            $linkedList = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+                "-AppHome", $publicBackupCase, "-ListBackups", "-Json"
+            )) "install" 0
+            Assert-True (@($linkedList.items).Count -eq 0) "backup list published a file with a hard-link alias"
+            $linkedCompare = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+                "-AppHome", $publicBackupCase, "-CompareBackup", $linkedBackupId, "-Json"
+            )) "install" 1
+            Assert-True ($linkedCompare.code -eq "operation_failed") "backup comparison accepted a file with a hard-link alias"
+            $linkedRestore = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+                "-AppHome", $publicBackupCase,
+                "-RestoreBackup", $linkedBackupId,
+                "-ExpectedCurrentSha256", (Get-BytesSha256 $linkedTargetBefore),
+                "-MihomoPath", $fakeCore,
+                "-Json"
+            )) "install" 1
+            Assert-True ($linkedRestore.code -eq "operation_failed") "backup restore accepted a file with a hard-link alias"
+            Assert-True (
+                [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($publicBackupTarget)) -ceq
+                [Convert]::ToBase64String($linkedTargetBefore)
+            ) "rejected linked-backup restore changed the current configuration"
+        } finally {
+            Remove-Item -LiteralPath $linkedBackupPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $publicBackupHash = (Get-FileHash -LiteralPath (Join-Path $publicBackupRoot $publicRawBackup) -Algorithm SHA256).Hash.ToLowerInvariant()
+    $publicCurrentHash = (Get-FileHash -LiteralPath $publicBackupTarget -Algorithm SHA256).Hash.ToLowerInvariant()
+    $publicCompareInvocation = Invoke-TestPowerShell $installer @(
+        "-AppHome", $publicBackupCase, "-CompareBackup", $publicBackupId, "-Json"
+    )
+    $publicCompare = Assert-JsonResult $publicCompareInvocation "install" 0
+    $publicComparison = @($publicCompare.items)[0]
+    Assert-True ((@($publicComparison.PSObject.Properties.Name | Sort-Object) -join ",") -ceq "backup_sha256,current_sha256,id,same") "backup comparison exposed fields outside the public machine contract"
+    foreach ($comparisonField in @("id", "same", "backup_sha256", "current_sha256")) {
+        Assert-True ($null -ne $publicComparison.PSObject.Properties[$comparisonField]) "backup comparison omitted $comparisonField"
+    }
+    Assert-True ([string]$publicComparison.id -ceq $publicBackupId) "backup comparison returned the wrong opaque ID"
+    Assert-True (-not [bool]$publicComparison.same) "backup comparison reported changed files as identical"
+    Assert-True ([string]$publicComparison.backup_sha256 -ceq $publicBackupHash) "backup comparison returned the wrong backup hash"
+    Assert-True ([string]$publicComparison.current_sha256 -ceq $publicCurrentHash) "backup comparison returned the wrong current hash"
+    $legacyComparison = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $publicBackupCase, "-CompareBackup", $publicRawBackup, "-Json"
+    )) "install" 0
+    Assert-True ([string](@($legacyComparison.items)[0].id) -ceq $publicBackupId) "backup comparison dropped raw-filename compatibility"
+    $publicHumanComparison = Invoke-TestPowerShell $installer @(
+        "-AppHome", $publicBackupCase, "-CompareBackup", $publicBackupId
+    )
+    Assert-True (-not $publicHumanComparison.Output.Contains($publicBackupUid)) "human-readable backup comparison exposed a UUID"
+    Assert-True ($publicHumanComparison.Output.Contains($publicBackupId)) "human-readable backup comparison omitted the complete opaque ID"
+    Assert-True ($publicHumanComparison.Output.Contains($publicBackupHash)) "human-readable backup comparison omitted the complete backup hash"
+    Assert-True ($publicHumanComparison.Output.Contains($publicCurrentHash)) "human-readable backup comparison omitted the complete current hash"
+
+    $publicRestore = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $publicBackupCase,
+        "-RestoreBackup", $publicBackupId,
+        "-ExpectedCurrentSha256", $publicCurrentHash,
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )) "install" 0
+    Assert-True ($publicRestore.code -eq "backup_restored") "opaque backup restore did not complete"
+    Assert-True ((Get-Content -LiteralPath $publicBackupTarget -Raw) -ceq $publicBackupText) "opaque backup restore wrote the wrong content"
+    [System.IO.File]::WriteAllText($publicBackupTarget, $publicCurrentText)
+    $legacyCurrentHash = (Get-FileHash -LiteralPath $publicBackupTarget -Algorithm SHA256).Hash.ToLowerInvariant()
+    $legacyRestore = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $publicBackupCase,
+        "-RestoreBackup", $publicRawBackup,
+        "-ExpectedCurrentSha256", $legacyCurrentHash,
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )) "install" 0
+    Assert-True ($legacyRestore.code -eq "backup_restored") "backup restore dropped raw-filename compatibility"
+
+    $sensitiveCorePath = Join-Path $sandbox "11111111-2222-4333-8444-555555555555-secret-core.exe"
+    $sensitiveFailure = Invoke-TestPowerShellWithSeparatedStreams $installer @(
+        "-AppHome", $jsonShowCase,
+        "-UsageProfile", "1",
+        "-MihomoPath", $sensitiveCorePath
+    )
+    Assert-True ($sensitiveFailure.ExitCode -eq 1) "missing sensitive core path did not fail"
+    Assert-True ($sensitiveFailure.StandardError.Contains("安装失败：")) "redacted install failure omitted its Chinese summary"
+    Assert-True (-not $sensitiveFailure.StandardError.Contains("11111111-2222-4333-8444-555555555555")) "install exception output exposed a UUID"
+    Assert-True (-not $sensitiveFailure.StandardError.Contains($sensitiveCorePath)) "install exception output exposed a path"
+    Assert-True ([string]::IsNullOrWhiteSpace($sensitiveFailure.StandardOutput)) "failed install wrote its summary to stdout"
+    $forwardSlashCorePath = "D:/Work/ordinary/missing-core.exe"
+    $forwardSlashFailure = Invoke-TestPowerShellWithSeparatedStreams $installer @(
+        "-AppHome", $jsonShowCase,
+        "-UsageProfile", "1",
+        "-MihomoPath", $forwardSlashCorePath
+    )
+    Assert-True ($forwardSlashFailure.ExitCode -eq 1) "missing forward-slash core path did not fail"
+    Assert-True (-not $forwardSlashFailure.StandardError.Contains($forwardSlashCorePath)) "human-readable exception exposed a forward-slash Windows path"
+    Assert-True ([string]::IsNullOrWhiteSpace($forwardSlashFailure.StandardOutput)) "forward-slash path failure wrote to stdout"
+    $forwardSlashJsonFailure = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $jsonShowCase,
+        "-UsageProfile", "1",
+        "-MihomoPath", $forwardSlashCorePath,
+        "-Json"
+    )) "install" 1
+    Assert-True (-not $forwardSlashJsonFailure.summary_zh.Contains($forwardSlashCorePath)) "JSON exception exposed a forward-slash Windows path"
 
     $jsonUninstall = Invoke-TestPowerShell $uninstaller @("-AppHome", $jsonShowCase, "-Json")
     $jsonUninstallResult = Assert-JsonResult $jsonUninstall "uninstall" 0
@@ -1284,7 +1555,7 @@ function Invoke-ControllerJson([string]$Endpoint) {
         )
     }
 }
-foreach ($groupType in @("Selector", "URLTest", "Fallback", "LoadBalance", "Relay")) {
+foreach ($groupType in @("Selector", "URLTest", "Fallback", "LoadBalance")) {
     $mainProxies = [pscustomobject]@{
         Main = [pscustomobject]@{ type = $groupType; now = "Fixture Node" }
     }
@@ -1928,13 +2199,73 @@ public static class FakeCurl {
     $missingModulesResult = Assert-JsonResult $missingModules "install" 6
     Assert-True ($missingModulesResult.code -eq "incomplete_package") "missing installer modules were not structured"
 
+    $missingEnginePackageParent = Join-Path $sandbox "missing-engine-package"
+    New-Item -ItemType Directory -Path $missingEnginePackageParent -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $missingEnginePackageParent -Recurse
+    $missingEnginePackage = Join-Path $missingEnginePackageParent "claude-easy"
+    $missingEngineInstaller = Join-Path (Join-Path $missingEnginePackage "scripts") "install_windows.ps1"
+    Remove-Item -LiteralPath (Join-Path (Join-Path $missingEnginePackage "scripts/windows") "clash_verge_global.js") -Force
+    $missingEngineHome = Join-Path $sandbox "missing-engine-home"
+    New-Item -ItemType Directory -Path $missingEngineHome -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $missingEngineHome "keep.txt"), "unchanged")
+    $missingEngineBefore = Get-TreeContentSnapshot $missingEngineHome
+    $missingEngineResult = Assert-JsonResult (Invoke-TestPowerShell $missingEngineInstaller @(
+        "-AppHome", $missingEngineHome,
+        "-UsageProfile", "1",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )) "install" 6
+    Assert-True ($missingEngineResult.code -eq "incomplete_package") "missing global script did not report incomplete_package"
+    Assert-True ((Get-TreeContentSnapshot $missingEngineHome) -ceq $missingEngineBefore) "missing global script changed AppHome before package validation"
+
     $brokenUninstaller = Join-Path $brokenPackageRoot "uninstall_windows.ps1"
     $brokenVerifier = Join-Path $brokenPackageRoot "verify_routes.ps1"
     Copy-Item -LiteralPath $uninstaller -Destination $brokenUninstaller
     Copy-Item -LiteralPath $routeVerifier -Destination $brokenVerifier
+    Copy-Item -LiteralPath $installerModuleRoot -Destination $brokenWindows -Recurse
+    $corruptContractText = "function Broken-ClaudeEasyContract {`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $brokenWindows "result_contract.ps1"), $corruptContractText)
+    [System.IO.File]::WriteAllText((Join-Path $brokenPackageRoot "result_contract.ps1"), $corruptContractText)
+    $corruptContractHomeBefore = Get-TreeContentSnapshot $jsonShowCase
+    $corruptInstallContract = Assert-JsonResult (Invoke-TestPowerShell $brokenInstaller @(
+        "-AppHome", $jsonShowCase, "-Json"
+    )) "install" 6
+    $corruptUninstallContract = Assert-JsonResult (Invoke-TestPowerShell $brokenUninstaller @(
+        "-AppHome", $jsonShowCase, "-Json"
+    )) "uninstall" 6
+    $corruptVerifyContract = Assert-JsonResult (Invoke-TestPowerShell $brokenVerifier @(
+        "-ObservationSeconds", "1", "-Json"
+    )) "verify_routes" 6
+    foreach ($corruptContractResult in @($corruptInstallContract, $corruptUninstallContract, $corruptVerifyContract)) {
+        Assert-True ($corruptContractResult.code -eq "incomplete_package") "corrupt result contract did not report incomplete_package"
+    }
+    Assert-True ((Get-TreeContentSnapshot $jsonShowCase) -ceq $corruptContractHomeBefore) "corrupt result contract changed AppHome"
     Remove-Item -LiteralPath (Join-Path $brokenWindows "result_contract.ps1") -Force
+    Remove-Item -LiteralPath (Join-Path $brokenPackageRoot "result_contract.ps1") -Force
     Assert-JsonResult (Invoke-TestPowerShell $brokenUninstaller @("-AppHome", $jsonShowCase, "-Json")) "uninstall" 6 | Out-Null
     Assert-JsonResult (Invoke-TestPowerShell $brokenVerifier @("-ObservationSeconds", "0", "-Json")) "verify_routes" 6 | Out-Null
+
+    $corruptModulePackageParent = Join-Path $sandbox "corrupt-module-package"
+    New-Item -ItemType Directory -Path $corruptModulePackageParent -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $corruptModulePackageParent -Recurse
+    $corruptModulePackage = Join-Path $corruptModulePackageParent "claude-easy"
+    $corruptModuleScripts = Join-Path $corruptModulePackage "scripts"
+    [System.IO.File]::WriteAllText(
+        (Join-Path (Join-Path $corruptModuleScripts "windows/install_windows") "profiles.ps1"),
+        'throw "C:\Users\private\module-load-canary"'
+    )
+    $corruptModuleHome = Join-Path $sandbox "corrupt-module-home"
+    New-Item -ItemType Directory -Path $corruptModuleHome -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $corruptModuleHome "keep.txt"), "unchanged")
+    $corruptModuleHomeBefore = Get-TreeContentSnapshot $corruptModuleHome
+    $corruptModuleInstall = Assert-JsonResult (Invoke-TestPowerShell (Join-Path $corruptModuleScripts "install_windows.ps1") @(
+        "-AppHome", $corruptModuleHome, "-Json"
+    )) "install" 6
+    $corruptModuleUninstall = Assert-JsonResult (Invoke-TestPowerShell (Join-Path $corruptModuleScripts "uninstall_windows.ps1") @(
+        "-AppHome", $corruptModuleHome, "-Json"
+    )) "uninstall" 6
+    Assert-True ($corruptModuleInstall.code -eq "incomplete_package" -and $corruptModuleUninstall.code -eq "incomplete_package") "corrupt Windows module did not report incomplete_package"
+    Assert-True ((Get-TreeContentSnapshot $corruptModuleHome) -ceq $corruptModuleHomeBefore) "corrupt Windows module changed AppHome"
 
     $lightCase = Join-Path $sandbox "light-profile-case"
     New-Item -ItemType Directory -Path $lightCase -Force | Out-Null
@@ -2047,6 +2378,56 @@ items:
     Assert-True ($profilesIndexOutput.Contains("update_interval: 1440")) "unrelated remote option was removed"
     Assert-True ((Set-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput) -eq $profilesIndexOutput) "profiles.yaml transform is not idempotent"
     Assert-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput
+    $inlineOptionInput = @'
+items:
+- option:
+    allow_auto_update: true
+  uid: R-inline-option
+  type: remote
+'@
+    $inlineOptionOutput = Set-RemoteSubscriptionAutoUpdateDisabled $inlineOptionInput
+    Assert-True ([regex]::Matches($inlineOptionOutput, '(?m)^\s*-\s+option\s*:').Count -eq 1) "list-item-first option was duplicated"
+    Assert-True ([regex]::Matches($inlineOptionOutput, '(?m)^\s+option\s*:').Count -eq 0) "list-item-first option gained a second mapping"
+    Assert-True ($inlineOptionOutput -match '(?m)^\s+allow_auto_update:\s+false\s*$') "list-item-first option was not disabled"
+    Assert-RemoteSubscriptionAutoUpdateDisabled $inlineOptionOutput
+    $inlineOptionOwnership = @(Get-RemoteSubscriptionAutoUpdateOwnership $inlineOptionInput)
+    Assert-True ($inlineOptionOwnership.Count -eq 1 -and $inlineOptionOwnership[0].OriginalState -eq "true") "list-item-first option ownership was not recorded"
+    $inlineOptionRestored = Restore-RemoteSubscriptionAutoUpdate $inlineOptionOutput $inlineOptionOwnership
+    $inlineOptionRestoredState = @(Get-RemoteSubscriptionAutoUpdateStateRecords $inlineOptionRestored)
+    Assert-True ($inlineOptionRestoredState.Count -eq 1 -and $inlineOptionRestoredState[0].State -eq "true") "list-item-first option was not restored"
+    Assert-True ([regex]::Matches($inlineOptionRestored, '(?m)^\s*-\s+option\s*:').Count -eq 1) "list-item-first option restore changed the list shape"
+    $inlineScalarOptionCases = @(
+        [pscustomobject]@{ Uid = "R-inline-null"; Value = "null # keep null" },
+        [pscustomobject]@{ Uid = "R-inline-tilde"; Value = "~" },
+        [pscustomobject]@{ Uid = "R-inline-empty-map"; Value = "{}" }
+    )
+    foreach ($inlineScalarOptionCase in $inlineScalarOptionCases) {
+        $inlineScalarInput = "items:`r`n- option: $($inlineScalarOptionCase.Value)`r`n  uid: $($inlineScalarOptionCase.Uid)`r`n  type: remote`r`n"
+        $inlineScalarOwnership = @(Get-RemoteSubscriptionAutoUpdateOwnership $inlineScalarInput)
+        Assert-True ($inlineScalarOwnership.Count -eq 1 -and $inlineScalarOwnership[0].OriginalState -eq "missing") "list-item-first scalar option ownership was not recorded"
+        $inlineScalarOutput = Set-RemoteSubscriptionAutoUpdateDisabled $inlineScalarInput
+        Assert-True ([regex]::Matches($inlineScalarOutput, '(?m)^\s*-\s+option\s*:\s*$').Count -eq 1) "list-item-first scalar option lost its list shape"
+        Assert-True ([regex]::Matches($inlineScalarOutput, '(?m)^\s+option\s*:').Count -eq 0) "list-item-first scalar option gained a duplicate mapping"
+        Assert-True ($inlineScalarOutput -match '(?m)^\s+allow_auto_update:\s+false\s*$') "list-item-first scalar option was not disabled"
+        Assert-RemoteSubscriptionAutoUpdateDisabled $inlineScalarOutput
+        $inlineScalarRestored = Restore-RemoteSubscriptionAutoUpdate $inlineScalarOutput $inlineScalarOwnership
+        Assert-True ($inlineScalarRestored -ceq $inlineScalarInput) "list-item-first scalar option was not restored byte-for-byte"
+    }
+    $inlineDuplicateOptionRejected = $false
+    try {
+        Assert-RemoteSubscriptionAutoUpdateDisabled @'
+items:
+- option:
+    allow_auto_update: false
+  uid: R-inline-duplicate
+  type: remote
+  option:
+    allow_auto_update: false
+'@
+    } catch {
+        $inlineDuplicateOptionRejected = $true
+    }
+    Assert-True $inlineDuplicateOptionRejected "auto-update self-check accepted duplicate option when the first mapping field was inline"
     $nullUpdatedTargets = @(
         Get-RemoteSubscriptionProfileItems @(Split-YamlLines $profilesIndexInput) |
             Where-Object { $_.Type -eq "remote" }
@@ -3196,6 +3577,7 @@ rules:
     Assert-True (Test-RouteChains $routeChains @("Singapore", "Google") "Main" "Taiwan" "AI" $true) "Windows route verifier rejected a user Google proxy group"
     Assert-True (-not (Test-RouteChains $routeChains @("GameNode", "Gaming") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted an unrelated selector for Google traffic"
     Assert-True (-not (Test-RouteChains $routeChains @("Japan", "AI", "Google") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted the AI group for ordinary Google traffic"
+    Assert-True (Test-RouteChains $routeChains @("Japan", "AI") "AI" "Japan" "AI" $true) "Windows route verifier rejected Google traffic when the expected group was the AI group"
     Assert-True (Test-RouteChains $routeChains @("Japan", "AI") "AI" "Japan" "AI" $false) "Windows route verifier rejected the required AI group"
     Assert-True (Test-RouteChains $routeChains @("Balance Node", "Balanced") "Balanced" "" "AI" $true) "Windows route verifier rejected a load-balance group without now"
     Assert-True (-not (Test-RouteChains $routeChains @("Balanced") "Balanced" "" "AI" $true)) "Windows route verifier accepted a load-balance chain without a concrete node"
@@ -3385,6 +3767,18 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
     $savedBackup = [System.IO.File]::ReadAllBytes($firstVersionedBackup)
     Assert-True (([Convert]::ToBase64String($savedBackup)) -eq ([Convert]::ToBase64String($backupBytes))) "first versioned backup changed"
     Assert-True ((Get-Content -LiteralPath $secondVersionedBackup -Raw) -eq "second") "second versioned backup did not capture the next write"
+    $cultureBackupSource = Join-Path $sandbox "culture-backup-source.txt"
+    [System.IO.File]::WriteAllText($cultureBackupSource, "culture")
+    $previousCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = New-Object System.Globalization.CultureInfo("th-TH")
+        $gregorianYear = [DateTime]::Now.ToString("yyyy", [System.Globalization.CultureInfo]::InvariantCulture)
+        $cultureBackup = Backup-Versioned $cultureBackupSource $versionedBackupRoot "prewrite"
+        Assert-True ((Split-Path -Leaf $cultureBackup).StartsWith($gregorianYear + "-")) "versioned backup timestamp followed the host calendar"
+        Get-PublicBackupDescriptor (Split-Path -Leaf $cultureBackup) | Out-Null
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $previousCulture
+    }
     $lockedBackupGuard = Open-SafeUpdateVersionGuard $backupSource "测试备份来源"
     try {
         $lockedBackupBytes = Get-StreamBytes $lockedBackupGuard.Stream

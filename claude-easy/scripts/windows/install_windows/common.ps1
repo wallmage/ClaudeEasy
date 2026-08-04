@@ -1,9 +1,18 @@
-﻿function Write-Info([string]$Message) {
+﻿function Write-ClaudeEasyHumanText([string]$Message, [switch]$ErrorStream) {
+    $safeMessage = Protect-ClaudeEasyResultText $Message
+    if ($ErrorStream) {
+        [Console]::Error.WriteLine($safeMessage)
+    } else {
+        [Console]::Out.WriteLine($safeMessage)
+    }
+}
+
+function Write-Info([string]$Message) {
     if ($Json) {
         [void]$script:ClaudeEasyMessages.Add((Protect-ClaudeEasyResultText $Message))
         return
     }
-    Write-Host "[ClaudeEasy] $Message"
+    Write-ClaudeEasyHumanText "[ClaudeEasy] $Message"
 }
 
 function Complete-InstallResult(
@@ -19,6 +28,10 @@ function Complete-InstallResult(
     if ($Json) {
         $result = New-ClaudeEasyResult -Command "install" -Operation $script:ClaudeEasyOperation -Ok ($ExitCode -eq 0) -Status $Status -Code $Code -ExitCode $ExitCode -SummaryZh $SummaryZh -Profile $script:ClaudeEasyProfile -Changes $Changes -Checks $Checks -Items $Items -Messages @($script:ClaudeEasyMessages) -Warnings $Warnings
         Write-ClaudeEasyResult $result
+    } elseif ($ExitCode -eq 0) {
+        Write-ClaudeEasyHumanText "[ClaudeEasy] $SummaryZh"
+    } else {
+        Write-ClaudeEasyHumanText "[ClaudeEasy] $SummaryZh" -ErrorStream
     }
     exit $ExitCode
 }
