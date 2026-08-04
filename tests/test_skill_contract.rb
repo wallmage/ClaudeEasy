@@ -502,11 +502,11 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "美国区域设置"
       assert_includes document, "实际用于 Claude 的同一浏览器"
       assert_includes document, "系统和其他应用"
-      assert_includes document, "`navigator.languages` 完整列表"
-      assert_includes document, "大陆简体主语言计 1"
-      assert_includes document, "后续出现大陆简体计 0.7"
-      assert_includes document, "台湾语言"
-      assert_includes document, "通用 `zh` 回退不计分"
+      assert_includes document, "`navigator.language`"
+      assert_includes document, "当前浏览器界面语言"
+      assert_includes document, "中国大陆简体中文"
+      assert_includes document, "新加坡中文"
+      assert_includes document, "`zh-Hans`"
     end
   end
 

@@ -139,7 +139,7 @@ function baseEnvironment(overrides = {}) {
   return {
     timeZone: "Asia/Taipei",
     timezoneOffset: -480,
-    languages: ["zh-TW", "zh", "en"],
+    language: "zh-TW",
     intlLocale: "zh-TW",
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
@@ -700,7 +700,7 @@ test("browser environment detects fonts from measured canvas width changes", () 
   assert.equal(environment.hasFont("Definitely Missing"), false);
 });
 
-test("browser environment reads navigator.languages like upstream", () => {
+test("browser environment ignores fallback languages and reads only the interface language", () => {
   let languagesReads = 0;
   const navigator = {
     language: "en-US",
@@ -723,9 +723,9 @@ test("browser environment reads navigator.languages like upstream", () => {
 
   const environment = api.browserEnvironment();
 
-  assert.equal(JSON.stringify(environment.languages), JSON.stringify(["en-US", "zh-CN"]));
-  assert.equal(languagesReads, 1);
-  assert.equal(Object.hasOwn(environment, "language"), false);
+  assert.equal(environment.language, "en-US");
+  assert.equal(languagesReads, 0);
+  assert.equal(Object.hasOwn(environment, "languages"), false);
 });
 
 test("browser environment tolerates restricted navigator getters", async () => {
@@ -753,7 +753,7 @@ test("browser environment tolerates restricted navigator getters", async () => {
   const environment = api.browserEnvironment();
   const result = await api.detect(environment);
 
-  assert.equal(JSON.stringify(environment.languages), JSON.stringify([]));
+  assert.equal(environment.language, "");
   assert.equal(environment.userAgent, "");
   assert.equal(environment.platform, "");
   assert.equal(result.status, "complete");
@@ -785,7 +785,7 @@ test("unreadable browser values remain unknown instead of looking safe", async (
   const result = await api.detect({
     timeZone: "",
     timezoneOffset: Number.NaN,
-    languages: [],
+    language: "",
     intlLocale: "",
     userAgent: "",
     platform: "",
@@ -835,8 +835,8 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
 
   assert.equal(api.scoreTimezone("Asia/Taipei"), 0);
   assert.equal(api.scoreTimezone("Asia/Shanghai"), 1);
-  assert.equal(api.scoreLanguages(["zh-TW", "zh", "en"]), 0);
-  assert.equal(api.scoreLanguages(["zh-CN", "zh", "en"]), 1);
+  assert.equal(api.scoreLanguage("zh-TW"), 0);
+  assert.equal(api.scoreLanguage("zh-CN"), 1);
   assert.equal(api.scoreIntlLocale("zh-TW"), 0);
   assert.equal(api.scoreIntlLocale("zh-Hant-TW"), 0.5);
   assert.equal(api.scoreIntlLocale("zh-CN"), 1);
@@ -844,35 +844,41 @@ test("Taiwan preferences score zero while mainland preferences score fully", () 
   assert.equal(api.scoreIntlLocale("zh-Hant-HK"), 0.5);
 });
 
-test("browser language score exactly follows the upstream language-list rules", () => {
+test("browser language score only recognizes mainland Simplified Chinese", () => {
   const api = detectorApi();
 
-  const cases = [
-    [["zh-CN", "zh", "en"], 1],
-    [["zh-Hans", "en"], 1],
-    [["zh-TW", "zh", "en"], 0],
-    [["zh-HK", "zh", "en"], 0.5],
-    [["en-US", "zh-CN"], 0.7],
-    [["en-US", "zh-HK"], 0.4],
-    [["zh-SG", "en"], 0.4],
-    [["en-US", "en"], 0],
-    [[], 0],
-  ];
-  for (const [languages, expected] of cases) {
-    assert.equal(api.scoreLanguages(languages), expected, languages.join(","));
+  for (const language of ["zh-CN", "zh-Hans", "zh-Hans-CN"]) {
+    assert.equal(api.scoreLanguage(language), 1, language);
+  }
+  for (const language of [
+    "en-US",
+    "zh-SG",
+    "zh-Hans-SG",
+    "zh-MY",
+    "zh-TW",
+    "zh-Hans-TW",
+    "zh-Hant",
+    "zh-Hant-CN",
+    "zh-HK",
+    "zh-MO",
+    "zh",
+    "",
+  ]) {
+    assert.equal(api.scoreLanguage(language), 0, language);
   }
 });
 
-test("language signal scores and displays the browser language list", async () => {
+test("English interface stays zero even when fallback languages include Simplified Chinese", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
-    languages: ["en-US", "zh-CN"],
+    language: "en-US",
+    languages: ["en-US", "en", "zh", "zh-CN", "zh-TW"],
   }));
   const language = result.signals.find((signal) => signal.id === "language");
 
-  assert.equal(language.raw, "en-us, zh-cn");
-  assert.equal(language.score, 0.7);
-  assert.equal(language.contribution, 13);
+  assert.equal(language.raw, "en-US");
+  assert.equal(language.score, 0);
+  assert.equal(language.contribution, 0);
 });
 
 test("match count uses the upstream 0.25 threshold", async () => {
@@ -1045,7 +1051,7 @@ test("partial-match branches keep their documented contributions", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
     timeZone: "Asia/Hong_Kong",
-    languages: ["zh-HK", "zh", "en"],
+    language: "zh-HK",
     intlLocale: "zh-Hant-HK",
     hasFont: (font) => ["PingFang TC", "MiSans"].includes(font),
   }));
@@ -1054,7 +1060,7 @@ test("partial-match branches keep their documented contributions", async () => {
   );
 
   assert.equal(signals.timezone.contribution, 14);
-  assert.equal(signals.language.contribution, 9);
+  assert.equal(signals.language.contribution, 0);
   assert.equal(signals.fonts.contribution, 3);
   assert.equal(signals.vendorFonts.contribution, 8);
   assert.equal(signals.intlLocale.contribution, 2);
@@ -1068,7 +1074,7 @@ test("every contribution is bounded and the displayed total is their exact sum",
   const result = await api.detect(
     baseEnvironment({
       timeZone: "Asia/Shanghai",
-      languages: ["zh-CN", "zh", "en"],
+      language: "zh-CN",
       intlLocale: "zh-CN",
       userAgent:
         "Mozilla/5.0 (Linux; Android 14; HUAWEI) " +

@@ -451,7 +451,7 @@ SOFTWARE.
       <section class="explain" aria-label="结果说明">
         <article class="note">
           <h2>怎样看结果</h2>
-          <p>分数越高表示大陆关联信号越多。0–30 分为低风险，31–60 分为中等风险，61–100 分为高风险。语言项读取浏览器提供的完整语言列表，并按 FuckClaude 当前规则计算主语言与后续中文偏好。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
+          <p>分数越高表示大陆关联信号越多。0–30 分为低风险，31–60 分为中等风险，61–100 分为高风险。语言项只读取当前浏览器界面语言；只有中国大陆简体中文计分，英文、繁体中文、新加坡中文和其他语言均为 0 分。任何非零项都会显示贡献，信号分达到 0.25 才计为“命中”。参考分只用于比较修改前后，不是安全结论或验收门槛。</p>
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
@@ -585,54 +585,17 @@ SOFTWARE.
           return 0;
         }
 
-        function scoreLanguages(languages) {
-          var list = Array.isArray(languages)
-            ? languages.map(function (language) {
-              return String(language || "").toLowerCase();
-            }).filter(Boolean)
-            : [];
-          function isTaiwan(language) {
-            return language.indexOf("zh-tw") === 0 ||
-              (language.indexOf("hant") !== -1 &&
-                language.indexOf("tw") !== -1);
-          }
-          function isHongKongOrMacau(language) {
-            return language.indexOf("zh-hk") === 0 ||
-              language.indexOf("zh-mo") === 0;
-          }
-          function isTraditional(language) {
-            return isTaiwan(language) ||
-              isHongKongOrMacau(language) ||
-              language.indexOf("hant") !== -1;
-          }
-          var firstTraditional = list.findIndex(isTraditional);
-          function isSimplifiedMainland(language, index) {
-            return language.indexOf("zh-cn") === 0 ||
-              language.indexOf("hans") !== -1 ||
-              (language === "zh" &&
-                (firstTraditional === -1 || index < firstTraditional));
-          }
-          var kept = list.map(function (language, index) {
-            return { language: language, index: index };
-          }).filter(function (entry) {
-            return !isTaiwan(entry.language) && !(
-              entry.language === "zh" &&
-              firstTraditional !== -1 &&
-              entry.index > firstTraditional
-            );
-          });
-          var primary = kept[0];
-          if (!primary) return 0;
-          if (isSimplifiedMainland(primary.language, primary.index)) return 1;
-          if (isHongKongOrMacau(primary.language) ||
-              primary.language.indexOf("hant") !== -1) return 0.5;
-          if (kept.some(function (entry) {
-            return isSimplifiedMainland(entry.language, entry.index);
-          })) return 0.7;
-          if (kept.some(function (entry) {
-            return entry.language.indexOf("zh") === 0;
-          })) return 0.4;
-          return 0;
+        function scoreLanguage(language) {
+          var value = String(language || "")
+            .trim()
+            .replace(/_/g, "-")
+            .toLowerCase();
+          return value === "zh-cn" ||
+            /^zh-cn-/.test(value) ||
+            value === "zh-hans" ||
+            /^zh-hans-cn(?:-|$)/.test(value)
+            ? 1
+            : 0;
         }
 
         function scoreIntlLocale(locale) {
@@ -950,16 +913,12 @@ SOFTWARE.
             timeZone ? "full" : "unavailable"
           ));
 
-          var languages = Array.isArray(environment.languages)
-            ? environment.languages.map(function (language) {
-              return String(language || "").toLowerCase();
-            }).filter(Boolean)
-            : [];
+          var language = String(environment.language || "");
           results.push(outcome(
             definitions.language,
-            languages.join(", ") || "无法读取",
-            scoreLanguages(languages),
-            languages.length > 0 ? "full" : "unavailable"
+            language || "无法读取",
+            scoreLanguage(language),
+            language ? "full" : "unavailable"
           ));
 
           var simplifiedResult = fontResult(environment, SIMPLIFIED_FONTS);
@@ -1196,22 +1155,16 @@ SOFTWARE.
           } catch (_error) {
             context = null;
           }
-          var languages = safeRead(function () {
-            return navigator.languages;
-          }, []);
-          if (!Array.isArray(languages) || languages.length === 0) {
-            var language = safeRead(function () {
-              return navigator.language;
-            }, "");
-            languages = language ? [language] : [];
-          }
+          var language = safeRead(function () {
+            return navigator.language;
+          }, "");
           var fontDetectionAvailable = Boolean(
             context && typeof context.measureText === "function"
           );
           return {
             timeZone: dateTimeOptions.timeZone || "",
             timezoneOffset: new Date().getTimezoneOffset(),
-            languages: languages.slice(),
+            language: language,
             intlLocale: dateTimeOptions.locale || "",
             userAgent: safeRead(function () {
               return navigator.userAgent;
@@ -1256,7 +1209,7 @@ SOFTWARE.
           classifyWebrtc: classifyWebrtc,
           riskBand: riskBand,
           scoreTimezone: scoreTimezone,
-          scoreLanguages: scoreLanguages,
+          scoreLanguage: scoreLanguage,
           scoreIntlLocale: scoreIntlLocale
         });
       }(window));
