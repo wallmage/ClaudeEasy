@@ -150,6 +150,8 @@ macOS 备份恢复遇到旧 Patch 事务时，必须在哈希判断前同时恢�
 
 macOS 运行 `ruby scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝，请求禁用代理和重定向，任何输出或日志都不能包含密钥。两端都从 Mihomo `/rules` 的最后一个 `MATCH` 读取当前实际主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不能另用磁盘配置或固定名称猜测。两者启动的 curl 都绑定独立源端口，只接受源端口、TCP、目标域名和新连接 ID 同时匹配的 Mihomo 实时记录，不能拿浏览器或后台程序的并发流量代替。验收同时读取 `/proxies`、`/providers/proxies`、`chains` 和 `providerChains`，按本次连接的实际叶子类型判断；自定义名称的 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 也必须失败。访问 Google 时必须经过主代理组，或订阅明确提供的非 AI 专用组，不能经过 `DIRECT` 或 AI 分组；访问 OpenAI、Anthropic 或 Claude 时必须经过 AI 分组当前节点。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 和 `Relay` 都按实际连接链验收；没有 `now` 的主代理组或 AI `LoadBalance` 都以观察到的叶子为准，不能拿请求前的 `now` 快照代替。JSON 成功码统一为 `routes_verified`，失败码统一为 `route_verification_failed`；每项检查只返回 `passed`、`failed` 或 `not_observed`。任何一项走错都要继续修复，不能只看 YAML 规则。
 
+Claude 联网只由分流验证脚本完成。任何 Patch、Diagnostics、复测或安全更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`，也不得进入已登录账号、读取账号页面或发送测试消息。用户要求“完整流程”“确认 Claude 可用”或“不要停”都不扩大这项授权；浏览器只打开离线区域检测页和下列三项 DNS/WebRTC 页面。
+
 再验证用户报告的国内站点；没有指定站点时使用常见国内域名。通过 Mihomo `/dns/query` 读取当前 A/CNAME，同时直接查询策略中的两套大陆 DoH，确认当前结果来自同类大陆 CDN，而不是代理节点所在地的解析结果。随后记录 HTTPS 的 DNS、TCP、TLS、首字节和总耗时，并从 `/connections` 确认连接链为 `DIRECT`。解析位置、实时时间和连接链缺一项都不能写成通过。
 
 然后使用 Computer Use 自动打开以下页面并完成操作。它们会收到浏览器公网 IP；用户已经要求运行本 skill 时可视为同意执行这些指定测试：

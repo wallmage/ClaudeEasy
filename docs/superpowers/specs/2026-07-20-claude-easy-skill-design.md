@@ -164,6 +164,8 @@ ClaudeEasy 的公开入口固定在 `claude-easy/`；参数和调用方式不因
 
 当前订阅只有本地控制器自动刷新和运行检查都通过，才能说补丁已经生效。随后先用 Mihomo 实时连接确认国内网站获得大陆 CDN 并走 `DIRECT`、Google 走主代理组或订阅明确提供的非 AI 专用代理组、OpenAI/Anthropic/Claude 走 AI 节点，再检查两项 WebRTC 页面和 DNS 深度测试。Google 不能走 `DIRECT` 或 AI 分组。有 Computer Use 时由代理完成网页操作；没有时给用户中文步骤并要求返回失败截图。只有分流正确、三项网页都没有红色提示，且没有未代理公网 IP、私网地址或本地运营商 DNS，才能说验证通过。
 
+Claude 联网只由分流验证脚本完成。任何 Patch、Diagnostics、复测或安全更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`，也不得进入已登录账号、读取账号页面或发送测试消息。用户要求“完整流程”“确认 Claude 可用”或“不要停”都不扩大这项授权；浏览器只打开离线区域检测页和三项 DNS/WebRTC 页面。
+
 ## 测试策略
 
 `tests/fixtures/main_group_cases.json` 是 macOS Ruby 与 Windows JavaScript 共用的配置转换 conformance 案例。每个案例用人工确认后的 `expected_config_sha256` 锁定完整结果，两端必须读取同一输入、分别匹配该摘要，再对完整输出做深比较；每个发生变化的案例都要再执行一次，并确认第二次不再变化。

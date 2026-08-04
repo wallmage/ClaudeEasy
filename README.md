@@ -255,6 +255,8 @@ macOS 恢复备份前若发现未完成的 Patch，会先恢复原文件和原�
 
 先检查实时分流：macOS 使用 `scripts/macos/verify_routes.rb`，Windows 使用 `scripts/windows/verify_routes.ps1`。两端都从 Mihomo `/rules` 的最后一个 `MATCH` 读取当前主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不再从磁盘配置猜运行状态。两个脚本都让各自启动的 curl 绑定独立源端口，只接受 `/connections` 中同一源端口、TCP、目标域名和新连接 ID 同时匹配的记录，避免把浏览器或后台程序的并发流量误算成测试结果。脚本结合 `/proxies`、`/providers/proxies`、`chains` 与 `providerChains` 检查本次连接的实际叶子类型，自定义名称的 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 出站也不能通过。Google 应经过主代理组，或订阅明确提供的非 AI 专用组，不能经过 AI 分组；OpenAI、Anthropic 和 Claude 应经过 AI 分组。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 与 `Relay` 都按实际连接链验收；没有 `now` 的主代理组或 AI `LoadBalance` 都以观察到的叶子为准。两端的 JSON 成功码为 `routes_verified`，失败码为 `route_verification_failed`；每项检查统一返回 `passed`、`failed` 或 `not_observed`。国内网站的大陆 CDN、HTTPS 耗时与 `DIRECT` 连接在随后步骤中单独核对。只看配置文件或网页出口 IP 不足以证明分流正确。然后测试：
 
+Claude 联网只由分流验证脚本完成。任何 Patch、Diagnostics、复测或安全更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`，也不得进入已登录账号、读取账号页面或发送测试消息。用户要求“完整流程”“确认 Claude 可用”或“不要停”都不扩大这项授权；浏览器只打开离线区域检测页和下列三项 DNS/WebRTC 页面。
+
 1. [IPInfo WebRTC 检测](https://ipinfo.cv/webrtc-check)
 2. [DNS 泄漏检测](https://ip.net.coffee/dns/)：点击“深度测试”
 3. [IP Coffee WebRTC 检测](https://ip.net.coffee/webrtc/)

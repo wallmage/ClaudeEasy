@@ -525,6 +525,8 @@ Windows 全局脚本也必须做二次转换一致性检查；结果不一致时
 
 先生成 Google、OpenAI 和 Claude/Anthropic 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段；控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝，请求禁用系统代理和重定向，命令行、环境变量、输出与日志都不能出现密钥。两端都从 `/rules` 的最后一个 `MATCH` 读取当前运行配置实际使用的主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不再从磁盘配置或固定名称单独推断。每个测试请求必须先绑定独立源端口，观察器只接受启动后出现且 TCP、源端口和目标域名全部匹配的连接 ID；同域名的浏览器、更新器或后台连接不得代替测试请求。验收结合 `chains` 与 `providerChains` 查出本次连接的实际叶子类型，整条链出现 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible` 或 `Rematch` 均失败，即使出站使用自定义名称也一样。Google 的连接链必须包含当前主代理组；若订阅有明确的 Google 专用组，也可包含该非 AI 组，但不能经过 AI 分组。AI 网站的连接链必须包含 AI 分组。`Selector`、`URLTest`、`Fallback`、`LoadBalance` 和 `Relay` 都以实际连接链为准；没有 `now` 的主代理组或 AI `LoadBalance` 都使用观察到的叶子，请求前的 `now` 只用于预检或显示。JSON 成功码为 `routes_verified`，失败码为 `route_verification_failed`；每项检查状态只取 `passed`、`failed` 或 `not_observed`。只看配置文件或网页出口 IP 不足以证明分流正确。
 
+Claude 联网只由分流验证脚本完成。任何 Patch、Diagnostics、复测或安全更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`，也不得进入已登录账号、读取账号页面或发送测试消息。用户要求“完整流程”“确认 Claude 可用”或“不要停”都不扩大这项授权；浏览器只打开离线区域检测页和下列三项 DNS/WebRTC 页面。
+
 然后必须测试：
 
 1. `https://ipinfo.cv/webrtc-check`

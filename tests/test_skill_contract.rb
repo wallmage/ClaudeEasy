@@ -775,6 +775,28 @@ class SkillContractTest < Minitest::Test
     end
   end
 
+  def test_patch_validation_never_opens_claude_in_a_browser
+    documents = [
+      File.read(File.join(ROOT, "README.md")),
+      File.read(File.join(SKILL, "SKILL.md")),
+      File.read(File.join(SKILL, "references/patch-policy.md")),
+      File.read(
+        File.join(
+          ROOT,
+          "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"
+        )
+      )
+    ]
+
+    documents.each do |document|
+      assert_includes document, "不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`"
+      assert_includes document, "只由分流验证脚本完成"
+    end
+
+    assert_includes File.read(File.join(SKILL, "scripts/macos/verify_routes.rb")), "https://claude.ai/"
+    assert_includes File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1")), "https://claude.ai/"
+  end
+
   def test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata
     source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
     documents = [
