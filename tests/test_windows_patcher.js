@@ -1309,6 +1309,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'ConvertTo-Utf8Bytes', 'Write-Utf8Atomic', 'Get-BytesSha256', 'Get-FileSha256',
       'Get-StreamBytes', 'Get-OptionalFileSnapshot', 'Remove-VerifiedOwnedFile', 'Write-LockedStreamBytes',
       'Initialize-VerifiedFileNative', 'Open-VerifiedDirectoryChain', 'Set-VerifiedDeleteDisposition',
+      'New-PrivateFileStream',
       'Write-FileTransactionPreparation', 'Get-ValidatedFileTransactionPaths',
       'Get-InterruptedRecoveryPolicy', 'Get-ValidatedFileTransactionPreparation',
       'Get-ValidatedFileTransactionPreparationTargets', 'Remove-FileTransactionPreparation',
@@ -1317,6 +1318,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Write-FileTransactionJournal', 'Remove-FileTransactionJournal',
       'Get-ValidatedFileTransactionJournal', 'Get-InterruptedTransactionRecoveryPlan',
       'New-InterruptedRecoveryTemporaryFile', 'Remove-InterruptedRecoveryTemporaryFile',
+      'Undo-InterruptedTransactionRecovery',
       'Invoke-InterruptedTransactionRecovery', 'Assert-InterruptedTransactionRecovered',
       'Repair-InterruptedFileTransaction', 'Invoke-VerifiedPathTransaction',
       'Invoke-VerifiedFileTransaction', 'Invoke-VerifiedWriteDeleteTransaction',
@@ -1342,7 +1344,9 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Test-MihomoCandidate'
     ],
     'script_js.ps1': [
-      'Get-JavaScriptAnalysis', 'Rename-JavaScriptMain', 'Assert-JavaScriptReservedIdentifiers',
+      'Test-JavaScriptLineTerminator', 'Test-JavaScriptStringLineBreak',
+      'Get-JavaScriptAnalysis', 'Get-JavaScriptDirectivePrologue',
+      'Rename-JavaScriptMain', 'Assert-JavaScriptReservedIdentifiers',
       'Assert-JavaScriptDoesNotUseDynamicCode',
       'Assert-JavaScriptDoesNotBindMain', 'Assert-JavaScriptDoesNotReferenceMain',
       'Assert-JavaScriptCanCompose', 'Build-GlobalScript'

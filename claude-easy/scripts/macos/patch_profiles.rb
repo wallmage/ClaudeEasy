@@ -36,7 +36,7 @@ module ClaudeEasyBootstrap
   module_function
 
   DEPENDENCIES = %w[
-    result_contract operation_lock patch_profiles/transform patch_profiles/backups patch_profiles/mihomo
+    result_contract operation_lock patch_profiles/transform patch_profiles/backups usage_profile_state patch_profiles/mihomo
     patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime
     patch_profiles/log_repair patch_profiles/cli
   ].freeze

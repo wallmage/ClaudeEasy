@@ -28,6 +28,7 @@ class SkillContractTest < Minitest::Test
     claude-easy/scripts/uninstall_windows.ps1
     claude-easy/scripts/uninstall_windows.cmd
     claude-easy/scripts/macos/operation_lock.rb
+    claude-easy/scripts/macos/usage_profile_state.rb
     claude-easy/scripts/macos/patch_profiles.rb
     claude-easy/scripts/macos/patch_profiles/transform.rb
     claude-easy/scripts/macos/patch_profiles/backups.rb
@@ -1612,10 +1613,10 @@ class SkillContractTest < Minitest::Test
   def test_windows_recovery_race_fixture_targets_current_commit_condition
     fixture = File.read(File.join(ROOT, "tests/test_windows_installer.ps1"))
     transaction = File.read(File.join(SKILL, "scripts/windows/install_windows/transaction.ps1"))
-    needle = %q{$recoveryRacePreparationNeedle = '            $preCommitRejected = -not ('}
+    needle = %q{$recoveryRacePreparationNeedle = '                $finalizeRejected = -not ('}
 
     assert_includes fixture, needle
-    assert_includes transaction, "            $preCommitRejected = -not (\n"
+    assert_includes transaction, "                $finalizeRejected = -not (\n"
   end
 
   def test_macos_installer_is_one_shot
@@ -1676,7 +1677,7 @@ class SkillContractTest < Minitest::Test
     assert_operator dependency_preflight, :<, lock_acquisition
     %w[
       result_contract operation_lock patch_profiles/transform patch_profiles/backups
-      patch_profiles/mihomo patch_profiles/profile_writer patch_profiles/subscriptions
+      usage_profile_state patch_profiles/mihomo patch_profiles/profile_writer patch_profiles/subscriptions
       patch_profiles/runtime patch_profiles/cli
     ].each { |dependency| assert_includes patcher, dependency }
 
@@ -2170,8 +2171,9 @@ class SkillContractTest < Minitest::Test
     assert_includes transaction,
                     "function Test-InterruptedRecoveryCommitCondition("
     assert_includes transaction,
-                    "$recovered = Invoke-InterruptedTransactionRecovery " \
-                    "$plan $preCommitCondition"
+                    "$recovered = Invoke-InterruptedTransactionRecovery `\n" \
+                    "        $plan `\n        $preCommitCondition `\n" \
+                    "        $finalizeCondition"
     assert_includes transaction,
                     "Test-InterruptedRecoveryCommitCondition $preCommitCondition"
     assert_includes transaction,
@@ -2196,13 +2198,53 @@ class SkillContractTest < Minitest::Test
       "Set-VerifiedDeleteDisposition $entry.Stream $true",
       journal_write
     )
+    journal_finalize = journal_body.index('$finalizeResults = @(& $FinalizeCondition)')
+    journal_rollback = journal_body.index('Undo-InterruptedTransactionRecovery $opened')
     refute_nil journal_identity
     refute_nil journal_condition
     refute_nil journal_write
     refute_nil journal_delete
+    refute_nil journal_finalize
+    refute_nil journal_rollback
     assert_operator journal_identity, :<, journal_condition
     assert_operator journal_condition, :<, journal_write
     assert_operator journal_condition, :<, journal_delete
+    assert_operator journal_write, :<, journal_finalize
+    assert_operator journal_delete, :<, journal_finalize
+    assert_operator journal_finalize, :<, journal_rollback
+    assert_equal 2, journal_body.scan('Undo-InterruptedTransactionRecovery $opened').length
+
+    undo_start = transaction.index("function Undo-InterruptedTransactionRecovery(")
+    undo_end = transaction.index("\nfunction Invoke-InterruptedTransactionRecovery(", undo_start)
+    refute_nil undo_start
+    refute_nil undo_end
+    undo_body = transaction[undo_start...undo_end]
+    assert_includes undo_body, 'Set-VerifiedDeleteDisposition $entry.Stream $false'
+    assert_includes undo_body, '$entry.Current `'
+    assert_includes undo_body, 'Set-VerifiedDeleteDisposition $entry.Stream $true'
+
+    recovery_start = transaction.index("function Repair-InterruptedFileTransaction")
+    recovery_end = transaction.index("\nfunction Invoke-VerifiedPathTransaction", recovery_start)
+    refute_nil recovery_start
+    refute_nil recovery_end
+    recovery_body = transaction[recovery_start...recovery_end]
+    final_condition = recovery_body.index('$finalizeCondition = {')
+    final_recheck = recovery_body.index(
+      "Test-InterruptedRecoveryCommitCondition $preCommitCondition",
+      final_condition
+    )
+    final_journal_delete = recovery_body.index(
+      "Remove-FileTransactionJournal $snapshot.Bytes",
+      final_condition
+    )
+    recovery_call = recovery_body.index("Invoke-InterruptedTransactionRecovery `")
+    refute_nil final_condition
+    refute_nil final_recheck
+    refute_nil final_journal_delete
+    refute_nil recovery_call
+    assert_operator final_condition, :<, final_recheck
+    assert_operator final_recheck, :<, final_journal_delete
+    assert_operator final_journal_delete, :<, recovery_call
 
     preparation_start = transaction.index("function Repair-InterruptedFilePreparation")
     preparation_end = transaction.index(
@@ -2221,11 +2263,23 @@ class SkillContractTest < Minitest::Test
     preparation_delete = preparation_body.index(
       "Set-VerifiedDeleteDisposition $entry.Stream $true"
     )
+    preparation_final_condition = preparation_body.index(
+      "Test-InterruptedRecoveryCommitCondition $preCommitCondition",
+      preparation_condition + 1
+    )
+    preparation_cancel_delete = preparation_body.index(
+      "Set-VerifiedDeleteDisposition $entry.Stream $false",
+      preparation_final_condition
+    )
     refute_nil preparation_identity
     refute_nil preparation_condition
     refute_nil preparation_delete
+    refute_nil preparation_final_condition
+    refute_nil preparation_cancel_delete
     assert_operator preparation_identity, :<, preparation_condition
     assert_operator preparation_condition, :<, preparation_delete
+    assert_operator preparation_delete, :<, preparation_final_condition
+    assert_operator preparation_final_condition, :<, preparation_cancel_delete
 
     [installer, uninstaller].each do |entrypoint|
       assert_includes entrypoint, '"transaction_recovery_pending"'
@@ -2799,11 +2853,14 @@ class SkillContractTest < Minitest::Test
 
     refute_nil function_source
     watcher = function_source.index("Start-MihomoCandidateCleanupWatcher $temporary")
+    staging = function_source.index("$stagingStream = New-PrivateFileStream $staging")
     publish = function_source.index("[System.IO.File]::Move($staging, $temporary)")
     refute_nil watcher
+    refute_nil staging
     refute_nil publish
-    assert_operator watcher, :<, publish,
-                    "candidate must never become visible before caller-death cleanup is armed"
+    assert_operator watcher, :<, staging,
+                    "sensitive staging bytes must not exist before caller-death cleanup is armed"
+    assert_operator staging, :<, publish
   end
 
   def test_windows_test_failure_diagnostics_do_not_echo_captured_output
@@ -3050,7 +3107,7 @@ class SkillContractTest < Minitest::Test
     assert_includes uninstaller, '$_.Kind -eq "original-end"'
   end
 
-  def test_windows_backups_are_published_only_after_complete_private_write
+  def test_windows_backups_are_private_before_the_first_byte_is_written
     source = File.binread(
       File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
     ).force_encoding("UTF-8")
@@ -3058,12 +3115,12 @@ class SkillContractTest < Minitest::Test
 
     refute_nil backup
     assert_includes backup, '".claude-easy-backup-"'
+    assert_includes backup, '$backupStream = New-PrivateFileStream $temporary'
     assert_includes backup, '$backupStream.Flush($true)'
-    assert_includes backup, 'Protect-BackupAcl $temporary'
     assert_includes backup, '[System.IO.File]::Move($temporary, $destination)'
+    assert_operator backup.index('$backupStream = New-PrivateFileStream $temporary'), :<,
+                    backup.index('$backupStream.Write(')
     assert_operator backup.index('$backupStream.Flush($true)'), :<,
-                    backup.index('[System.IO.File]::Move($temporary, $destination)')
-    assert_operator backup.index('Protect-BackupAcl $temporary'), :<,
                     backup.index('[System.IO.File]::Move($temporary, $destination)')
   end
 

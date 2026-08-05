@@ -9,36 +9,6 @@ module ClaudeEasy
     File.expand_path("~/Library/Application Support/ClaudeEasy/usage-profile.plist")
   end
 
-  def saved_usage_profile(path: usage_profile_state_path, runner: Open3.method(:capture3))
-    expanded = File.expand_path(path)
-    return nil unless File.exist?(expanded) || File.symlink?(expanded)
-
-    directory = File.dirname(expanded)
-    stat = File.lstat(expanded)
-    directory_stat = File.lstat(directory)
-    raise InvalidConfigError, "用途档位状态无效" unless
-      stat.file? && !stat.symlink? && stat.nlink == 1 && (stat.mode & 0o077).zero? &&
-      directory_stat.directory? && !directory_stat.symlink?
-
-    bytes = read_regular_file_once(expanded, "用途档位状态")
-    read_field = lambda do |field|
-      output, _error, status = runner.call(
-        "/usr/bin/plutil", "-extract", field, "raw", "-o", "-", "-", stdin_data: bytes
-      )
-      raise InvalidConfigError, "用途档位状态无效" unless status.success?
-
-      output.to_s.strip
-    end
-    version = read_field.call("Version")
-    profile = read_field.call("Profile")
-    raise InvalidConfigError, "用途档位状态无效" unless
-      version == "1" && %w[1 2 3].include?(profile)
-
-    profile.to_i
-  rescue SystemCallError, IOError
-    raise InvalidConfigError, "用途档位状态无效"
-  end
-
   def usage_profile_rejection(expected)
     saved = saved_usage_profile
     return ["usage_profile_unset", "尚未保存用途档位，未执行任何修改。"] unless saved
@@ -159,11 +129,10 @@ module ClaudeEasy
   def ai_state(result)
     return "" if result[:ai_group].nil?
 
-    ai_group = safe_label(result[:ai_group])
-    return "；已创建独立 AI 分组「#{ai_group}」，包含全部可用节点和代理提供者，节点由你选择" if result[:ai_group_created]
-    return "；已升级 AI 分组「#{ai_group}」为独立节点选择器，节点由你选择" if result[:ai_group_reset]
+    return "；已创建独立 AI 分组，包含全部可用节点和代理提供者，节点由你选择" if result[:ai_group_created]
+    return "；已升级 AI 分组为独立节点选择器，节点由你选择" if result[:ai_group_reset]
 
-    "；已复用 AI 分组「#{ai_group}」，只补全规则，节点未改"
+    "；已复用 AI 分组，只补全规则，节点未改"
   end
 
   def safe_label(value)
@@ -425,6 +394,24 @@ module ClaudeEasy
       begin
         result = repair_clashx_logs
         changed = result.fetch(:status) == :repaired
+        runtime_verified = verify_clashx_file_logging
+        unless runtime_verified
+          summary = changed ?
+            "ClashX Meta 日志目录权限已修复，但未确认文件日志已经恢复；请继续使用控制器实时日志。" :
+            "未确认 ClashX Meta 文件日志已经恢复；请继续使用控制器实时日志。"
+          return emit_cli_result(
+            operation: "repair_clashx_logs", exit_code: 1,
+            status: changed ? "partial" : "failed", code: "log_runtime_unverified",
+            summary_zh: summary,
+            changes: changed ? ["log_directory_permissions"] : [],
+            checks: [
+              { "name" => "log_directory_writable", "ok" => true },
+              { "name" => "file_logging_runtime", "ok" => false }
+            ]
+          ) if options[:json]
+          warn summary
+          return 1
+        end
         return emit_cli_result(
           operation: "repair_clashx_logs", exit_code: 0,
           status: changed ? "ok" : "no_change",
@@ -433,6 +420,7 @@ module ClaudeEasy
           changes: changed ? ["clashx_file_logging"] : [],
           checks: [
             { "name" => "log_directory_writable", "ok" => true },
+            { "name" => "file_logging_runtime", "ok" => true },
             { "name" => "old_logs_preserved", "ok" => true,
               "value" => result.fetch(:backup_preserved) }
           ]

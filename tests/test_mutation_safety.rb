@@ -1389,10 +1389,13 @@ class MutationSafetyTest < Minitest::Test
                     "                        $entry.Item.Action.Path\n" \
                     "                    )"
     assert_includes source,
+                    '$differentIdentityIsRestoredOriginal = $action.Action -eq "write" -and'
+    assert_includes source,
                     '$snapshot.Identity -cne $action.Identity -and' \
-                    "\n            " \
+                    "\n            -not $differentIdentityIsRestoredOriginal -and"
+    assert_includes source,
                     '($action.Action -ne "delete" -or ' \
-                    '$currentHash -ne $originalHash)'
+                    '$currentHash -ne $originalHash)) {'
   end
 
   def test_windows_safe_update_passive_envelope_guard_mutation_is_killed
@@ -1612,8 +1615,29 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/transaction.ps1",
-        "    \$recovered = Invoke-InterruptedTransactionRecovery \$plan \$preCommitCondition\n",
-        "    \$recovered = Invoke-InterruptedTransactionRecovery \$plan \$null\n"
+        "        \$preCommitCondition `\n        \$finalizeCondition\n",
+        "        \$null `\n        \$finalizeCondition\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name",
+        "test_windows_interrupted_client_sensitive_recovery_waits_for_the_client"
+      )
+    end
+  end
+
+  def test_windows_interrupted_recovery_final_rejection_rollback_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/windows/install_windows/transaction.ps1",
+        "                if (\$finalizeRejected) {\n" \
+        "                    Undo-InterruptedTransactionRecovery \$opened\n" \
+        "                    \$rollbackCompleted = \$true\n",
+        "                if (\$finalizeRejected) {\n" \
+        "                    \$rollbackCompleted = \$true\n"
       )
 
       assert_mutation_is_killed(
@@ -2482,8 +2506,10 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/windows/install_windows/mihomo.ps1",
         "        Start-MihomoCandidateCleanupWatcher $temporary\n" +
-          "        [System.IO.File]::Move($staging, $temporary)",
-        "        [System.IO.File]::Move($staging, $temporary)\n" +
+          "        $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)\n" +
+          "        $stagingStream = New-PrivateFileStream $staging",
+        "        $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)\n" +
+          "        $stagingStream = New-PrivateFileStream $staging\n" +
           "        Start-MihomoCandidateCleanupWatcher $temporary"
       )
 
@@ -2751,7 +2777,7 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
         "--name",
-        "test_run_aborts_if_the_user_enters_an_updated_profile_while_the_initial_profile_is_unchanged"
+        "test_run_rechecks_profile_context_after_all_files_are_written"
       )
     end
   end
@@ -3201,7 +3227,7 @@ class MutationSafetyTest < Minitest::Test
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_backups_are_published_only_after_complete_private_write"
+        "--name", "test_windows_backups_are_private_before_the_first_byte_is_written"
       )
     end
   end

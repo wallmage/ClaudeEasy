@@ -50,7 +50,7 @@ module MacosRuntimeFixture
     path
   end
 
-  def start_release_controller(home, mixed_port:)
+  def start_release_controller(home, mixed_port:, selector_names: ["Main"])
     socket_path = File.join(
       "/tmp", "claude-easy-#{Process.pid}-#{rand(1_000_000)}.sock"
     )
@@ -79,9 +79,9 @@ module MacosRuntimeFixture
         _method, target, = request_line.split(" ", 3)
         requests << target
         body = if target == "/proxies"
-                 JSON.generate("proxies" => {
-                   "Main" => { "type" => "Selector", "now" => "node" }
-                 })
+                 JSON.generate("proxies" => selector_names.to_h do |name|
+                   [name, { "type" => "Selector", "now" => "node" }]
+                 end)
                elsif target == "/configs"
                  JSON.generate(
                    "mixed-port" => mixed_port,

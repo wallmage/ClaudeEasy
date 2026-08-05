@@ -446,7 +446,28 @@ module ClaudeEasy
       config = load_yaml(original_text, path)
       result = patch(config, policy, usage_profile: usage_profile)
       unless result[:changed]
-        preview = result.merge(path: path)
+        unless validator.nil?
+          Tempfile.create(
+            [File.basename(write_path), ".tmp"], File.dirname(write_path), encoding: "UTF-8"
+          ) do |temporary|
+            temporary.write(original_text)
+            temporary.flush
+            temporary.fsync
+            validation = validator.call(temporary.path)
+            if validation == :timeout
+              return base_result(config, :validation_timeout).merge(path: path)
+            end
+            unless validation == true
+              return base_result(config, :validation_failed).merge(path: path)
+            end
+          end
+        end
+        preview = result.merge(
+          path: path,
+          patched_digest: Digest::SHA256.hexdigest(original_bytes.b),
+          patched_identity: [opened.dev, opened.ino],
+          patched_path: write_path
+        )
         if dry_run && capture_transaction
           preview[:transaction_original] = original_bytes.b
           preview[:transaction_candidate] = original_bytes.b
@@ -686,7 +707,9 @@ module ClaudeEasy
             elsif result[:status] == :unchanged
               result = verify_unchanged_profile_runtime(
                 result, socket: socket, requester: requester,
+                connectivity_checker: connectivity_checker,
                 precommit_condition: precommit_condition,
+                require_tun: usage_profile >= 2,
                 require_safe_ai: usage_profile == 3
               )
             end
@@ -718,6 +741,14 @@ module ClaudeEasy
             else
               result[:status] = restored ? :batch_rolled_back : :batch_rollback_failed
             end
+          end
+        end
+
+        if !transaction && results.length == work_items.length &&
+           results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) }
+          results.reject { |result| profile_result_current?(result) }.each do |result|
+            result[:status] = :concurrent_change
+            result[:transaction_commit] = false
           end
         end
 

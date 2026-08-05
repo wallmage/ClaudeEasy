@@ -140,7 +140,9 @@ function Start-MihomoCandidateCleanupWatcher([string]$CandidatePath) {
 `$candidate = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("$pathBase64"))
 try { Wait-Process -Id `$ownerId -ErrorAction SilentlyContinue } catch {}
 if ([System.IO.Path]::GetFileName(`$candidate) -like ".claude-easy-validate-*.yaml") {
-    Remove-Item -LiteralPath `$candidate -Force -ErrorAction SilentlyContinue
+    foreach (`$path in @(`$candidate, (`$candidate + ".staging"))) {
+        Remove-Item -LiteralPath `$path -Force -ErrorAction SilentlyContinue
+    }
 }
 "@
     $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($watcherSource))
@@ -159,14 +161,20 @@ function Test-MihomoCandidate([string]$CorePath, [string]$Text, [string]$Directo
     Test-MihomoVersion $CorePath | Out-Null
     $temporary = Join-Path $Directory (".claude-easy-validate-" + [System.IO.Path]::GetRandomFileName() + ".yaml")
     $staging = $temporary + ".staging"
+    $stagingStream = $null
     try {
-        [System.IO.File]::WriteAllText($staging, $Text, (New-Object System.Text.UTF8Encoding($false)))
-        Protect-BackupAcl $staging
         Start-MihomoCandidateCleanupWatcher $temporary
+        $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)
+        $stagingStream = New-PrivateFileStream $staging
+        $stagingStream.Write($bytes, 0, $bytes.Length)
+        $stagingStream.Flush($true)
+        $stagingStream.Dispose()
+        $stagingStream = $null
         [System.IO.File]::Move($staging, $temporary)
         $result = Invoke-Mihomo $CorePath @("-d", $Directory, "-t", "-f", $temporary)
         if ($result.ExitCode -ne 0) { throw "Mihomo 拒绝了生成的 config.yaml。原文件没有被修改。" }
     } finally {
+        if ($null -ne $stagingStream) { $stagingStream.Dispose() }
         if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
         if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Force }
     }

@@ -249,11 +249,14 @@ module ClaudeEasy
     false
   end
 
-  def runtime_selections_for_profile(selections, path)
+  def runtime_selections_for_profile(selections, path, require_all: false)
     return nil unless selections.is_a?(Hash)
 
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
     selector_names = selectable_groups(config).map { |group| group.fetch("name") }
+    return {} if selector_names.empty?
+    return nil if require_all && !selector_names.all? { |name| selections.key?(name) }
+
     selections.select { |name, _selected| selector_names.include?(name) }
   rescue StandardError
     nil
@@ -314,6 +317,20 @@ module ClaudeEasy
     false
   end
 
+  def harmless_proxy_request_healthy?(requester)
+    proxy = runtime_loopback_proxy(requester)
+    return false unless proxy
+
+    _output, status = Open3.capture2e(
+      CURL_ISOLATED_ENVIRONMENT,
+      "/usr/bin/curl", "-q", "-sS", "--fail", "--proxy", proxy,
+      "--max-time", "8", "-o", "/dev/null", "https://www.google.com/generate_204"
+    )
+    status.success?
+  rescue StandardError
+    false
+  end
+
   def profile_result_current?(result)
     expected = result[:patched_digest]
     identity = result[:patched_identity]
@@ -353,14 +370,17 @@ module ClaudeEasy
   end
 
   def runtime_health_healthy?(requester, selections:, expected_tun:, connectivity_checker: nil,
-                              precommit_condition: nil, required_proxy_group: nil)
+                              precommit_condition: nil, required_proxy_group: nil,
+                              flush_caches: true)
     return false unless runtime_precommit_allowed?(precommit_condition)
 
-    caches_flushed = ["/cache/fakeip/flush", "/cache/dns/flush"].all? do |endpoint|
-      code, _body = requester.call("POST", endpoint, nil)
-      [200, 204].include?(code)
+    if flush_caches
+      caches_flushed = ["/cache/fakeip/flush", "/cache/dns/flush"].all? do |endpoint|
+        code, _body = requester.call("POST", endpoint, nil)
+        [200, 204].include?(code)
+      end
+      return false unless caches_flushed
     end
-    return false unless caches_flushed
     return false if expected_tun != :ignore && tun_state(requester: requester) != expected_tun
 
     proxies = runtime_proxies(requester)
@@ -431,19 +451,31 @@ module ClaudeEasy
   end
 
   def verify_unchanged_profile_runtime(result, socket: nil, requester: nil,
-                                       precommit_condition: nil, require_safe_ai: false)
-    return result unless require_safe_ai
-
-    group = profile_ai_runtime_group(result.fetch(:path))
-    return result.merge(status: :runtime_check_failed) unless group
+                                       connectivity_checker: nil, precommit_condition: nil,
+                                       require_tun: false, require_safe_ai: false)
     if requester.nil?
       socket ||= controller_socket
       return result.merge(status: :runtime_check_failed) unless socket
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
+    selections = runtime_selections(requester)
+    return result.merge(status: :runtime_check_failed) unless selections
+
+    selections = runtime_selections_for_profile(
+      selections, result.fetch(:path), require_all: true
+    )
+    return result.merge(status: :runtime_check_failed) unless selections
+    group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
+    return result.merge(status: :runtime_check_failed) if require_safe_ai && !group
     healthy = runtime_precommit_allowed?(precommit_condition) &&
-              runtime_proxy_group_safe?(requester, group) &&
+              runtime_health_healthy?(
+                requester, selections: selections,
+                expected_tun: require_tun ? :enabled : :ignore,
+                connectivity_checker: connectivity_checker,
+                precommit_condition: precommit_condition,
+                required_proxy_group: group, flush_caches: false
+              ) &&
               runtime_precommit_allowed?(precommit_condition)
     healthy ? result : result.merge(status: :runtime_check_failed)
   rescue StandardError

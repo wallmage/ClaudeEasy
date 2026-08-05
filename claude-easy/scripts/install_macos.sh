@@ -11,6 +11,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PATCHER_SOURCE="$SCRIPT_DIR/macos/patch_profiles.rb"
 RESULT_CONTRACT_SOURCE="$SCRIPT_DIR/macos/result_contract.rb"
 OPERATION_LOCK_SOURCE="$SCRIPT_DIR/macos/operation_lock.rb"
+USAGE_PROFILE_STATE_SOURCE="$SCRIPT_DIR/macos/usage_profile_state.rb"
 OPERATION_LOCK_PATH="$BACKUP_DIR/.claude-easy-wrapper.lock"
 UNINSTALLER_SOURCE="$SCRIPT_DIR/uninstall_macos.sh"
 UNINSTALL_STAGING="$INSTALL_DIR/.claude-easy-uninstall-staging"
@@ -199,6 +200,7 @@ install_package_complete() {
     "$PATCHER_SOURCE" \
     "$RESULT_CONTRACT_SOURCE" \
     "$OPERATION_LOCK_SOURCE" \
+    "$USAGE_PROFILE_STATE_SOURCE" \
     "$POLICY_SOURCE"; do
     [ -f "$required_package_file" ] && [ ! -L "$required_package_file" ] || return 1
   done
@@ -327,13 +329,50 @@ recover_interrupted_uninstall() {
 }
 
 read_saved_profile() {
-  [ -f "$USAGE_STATE_PATH" ] && [ ! -L "$USAGE_STATE_PATH" ] || return 1
-  saved_version=$(/usr/bin/plutil -extract Version raw "$USAGE_STATE_PATH" 2>/dev/null || true)
-  saved_profile=$(/usr/bin/plutil -extract Profile raw "$USAGE_STATE_PATH" 2>/dev/null || true)
-  [ "$saved_version" = "1" ] || return 1
+  if [ ! -e "$USAGE_STATE_PATH" ] && [ ! -L "$USAGE_STATE_PATH" ]; then
+    return 1
+  fi
+  [ -f "$USAGE_STATE_PATH" ] && [ ! -L "$USAGE_STATE_PATH" ] || return 3
+  [ -f "$USAGE_PROFILE_STATE_SOURCE" ] && [ ! -L "$USAGE_PROFILE_STATE_SOURCE" ] || return 4
+  [ -x /usr/bin/ruby ] || return 5
+  saved_profile_status=0
+  saved_profile=$(
+    /usr/bin/ruby "$USAGE_PROFILE_STATE_SOURCE" "$USAGE_STATE_PATH" 2>/dev/null
+  ) || saved_profile_status=$?
+  case "$saved_profile_status" in
+    0) ;;
+    2) return 2 ;;
+    *) return 4 ;;
+  esac
   case "$saved_profile" in
     1|2|3) /usr/bin/printf '%s\n' "$saved_profile" ;;
-    *) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+load_saved_profile_or_finish() {
+  saved_profile_operation=$1
+  SAVED_PROFILE=""
+  saved_profile_status=0
+  SAVED_PROFILE=$(read_saved_profile) || saved_profile_status=$?
+  case "$saved_profile_status" in
+    0|1) ;;
+    2)
+      say "已保存的用途档位状态无效，未执行任何修改。"
+      finish 10 invalid_request usage_profile_invalid "已保存的用途档位状态无效，未执行任何修改。" "$saved_profile_operation"
+      ;;
+    4)
+      say "安装包不完整。"
+      finish 6 failed incomplete_package "安装包不完整。" "$saved_profile_operation"
+      ;;
+    5)
+      say "这台 Mac 没有系统 Ruby，无法读取用途档位。"
+      finish 3 unsupported ruby_missing "这台 Mac 没有系统 Ruby，无法读取用途档位。" "$saved_profile_operation"
+      ;;
+    *)
+      say "档位保存位置不安全，未写入任何设置。"
+      finish 7 failed unsafe_profile_state "档位保存位置不安全，未写入任何设置。" "$saved_profile_operation"
+      ;;
   esac
 }
 
@@ -587,8 +626,9 @@ parse_arguments() {
 }
 
 resolve_usage_profile() {
+  load_saved_profile_or_finish select_profile
   if [ -z "$USAGE_PROFILE" ]; then
-    USAGE_PROFILE=$(read_saved_profile || true)
+    USAGE_PROFILE=$SAVED_PROFILE
     PROFILE_SOURCE="saved"
   fi
   case "$USAGE_PROFILE" in
@@ -603,7 +643,7 @@ resolve_usage_profile() {
       ;;
   esac
 
-  PREVIOUS_PROFILE=$(read_saved_profile || true)
+  PREVIOUS_PROFILE=$SAVED_PROFILE
   if [ "$PREVIOUS_PROFILE" = "3" ] && [ "$USAGE_PROFILE" != "3" ] &&
      [ "$PROFILE_SOURCE" != "saved" ]; then
     say "从档位 3 改为轻量档位前，必须先运行安全卸载。"
@@ -625,7 +665,8 @@ fi
 
 if [ "$SHOW_PROFILE" -eq 1 ]; then
   OPERATION="show_profile"
-  saved_profile=$(read_saved_profile || true)
+  load_saved_profile_or_finish show_profile
+  saved_profile=$SAVED_PROFILE
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if [ -n "$saved_profile" ]; then
       finish 0 ok profile_set "已读取用途档位。" show_profile "$saved_profile"
@@ -652,6 +693,7 @@ if [ -n "$USAGE_PROFILE" ]; then
 fi
 
 if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
+  load_saved_profile_or_finish select_profile
   if ! install_package_complete; then
     say "安装包不完整。"
     finish 6 failed incomplete_package "安装包不完整。" install

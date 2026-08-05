@@ -13,6 +13,9 @@ PATCHER_PATH = File.join(ROOT, "claude-easy/scripts/macos/patch_profiles.rb")
 ROUTE_VERIFIER_PATH = File.join(ROOT, "claude-easy/scripts/macos/verify_routes.rb")
 RESULT_CONTRACT_PATH = File.join(ROOT, "claude-easy/scripts/macos/result_contract.rb")
 OPERATION_LOCK_PATH = File.join(ROOT, "claude-easy/scripts/macos/operation_lock.rb")
+USAGE_PROFILE_STATE_PATH = File.join(
+  ROOT, "claude-easy/scripts/macos/usage_profile_state.rb"
+)
 POLICY_PATH = File.join(ROOT, "claude-easy/references/policy.json")
 MAIN_GROUP_FIXTURES = File.join(ROOT, "tests/fixtures/main_group_cases.json")
 PATCHER_AVAILABLE = File.file?(PATCHER_PATH) && File.file?(POLICY_PATH)
@@ -131,11 +134,11 @@ class MacosPatcherTest < Minitest::Test
 
       begin
         stdout, stderr, status = run_log_repair_command(home)
-        assert status.success?, "#{stdout}\n#{stderr}"
+        assert_equal 1, status.exitstatus, "#{stdout}\n#{stderr}"
         assert_empty stderr
         result = JSON.parse(stdout)
-        assert_equal "logs_repaired", result.fetch("code")
-        assert_equal ["clashx_file_logging"], result.fetch("changes")
+        assert_equal "log_runtime_unverified", result.fetch("code")
+        assert_equal ["log_directory_permissions"], result.fetch("changes")
         assert File.writable?(File.join(config_root, "logs"))
         assert File.executable?(File.join(config_root, "logs"))
         assert Dir.exist?(File.join(config_root, "logs", "2026-08-05_00-59-57"))
@@ -157,16 +160,16 @@ class MacosPatcherTest < Minitest::Test
       FileUtils.mkdir_p(config_root, mode: 0o700)
 
       first_stdout, first_stderr, first_status = run_log_repair_command(home)
-      assert first_status.success?, "#{first_stdout}\n#{first_stderr}"
+      assert_equal 1, first_status.exitstatus, "#{first_stdout}\n#{first_stderr}"
       assert_empty first_stderr
-      assert_equal "logs_repaired", JSON.parse(first_stdout).fetch("code")
+      assert_equal "log_runtime_unverified", JSON.parse(first_stdout).fetch("code")
       logs = File.join(config_root, "logs")
       before = File.stat(logs)
 
       stdout, stderr, status = run_log_repair_command(home)
-      assert status.success?, "#{stdout}\n#{stderr}"
+      assert_equal 1, status.exitstatus, "#{stdout}\n#{stderr}"
       assert_empty stderr
-      assert_equal "logs_already_writable", JSON.parse(stdout).fetch("code")
+      assert_equal "log_runtime_unverified", JSON.parse(stdout).fetch("code")
       after = File.stat(logs)
       assert_equal [before.dev, before.ino], [after.dev, after.ino]
     end
@@ -266,6 +269,61 @@ class MacosPatcherTest < Minitest::Test
         assert Dir.exist?(File.join(logs, "2026-08-05_00-59-57"))
       ensure
         FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_does_not_report_success_while_the_current_session_is_inaccessible
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      session_name = "2026-08-05_00-59-57"
+      session = File.join(logs, session_name)
+      FileUtils.mkdir_p(session, mode: 0o700)
+      old_log = File.join(session, "old.log")
+      File.binwrite(old_log, "incident evidence")
+      File.chmod(0o000, session)
+
+      begin
+        result = ClaudeEasy.repair_clashx_logs(log_root: logs)
+
+        assert_equal :repaired, result.fetch(:status)
+        assert result.fetch(:backup_preserved)
+        assert File.writable?(session)
+        assert File.executable?(session)
+        backup = Dir.glob(File.join(config_root, "logs.permission-backup-*")).fetch(0)
+        FileUtils.chmod_R(0o700, backup)
+        assert_equal "incident evidence", File.binread(File.join(backup, session_name, "old.log"))
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_current_log_session_writability_checks_the_complete_tree
+    Dir.mktmpdir do |logs|
+      session = File.join(logs, "2026-08-05_00-59-57")
+      nested = File.join(session, "nested")
+      FileUtils.mkdir_p(nested)
+      log = File.join(nested, "current.log")
+      File.binwrite(log, "ok")
+      assert ClaudeEasy.current_log_session_writable?(logs)
+
+      File.stub(:writable?, ->(path) { path == log ? false : true }) do
+        refute ClaudeEasy.current_log_session_writable?(logs)
+      end
+
+      fifo = File.join(nested, "unexpected.fifo")
+      File.mkfifo(fifo)
+      refute ClaudeEasy.current_log_session_writable?(logs)
+      FileUtils.rm_f(fifo)
+      link = File.join(nested, "linked.log")
+      File.symlink(log, link)
+      refute ClaudeEasy.current_log_session_writable?(logs)
+      FileUtils.rm_f(link)
+
+      File.stub(:lstat, ->(_path) { raise Errno::EACCES }) do
+        refute ClaudeEasy.current_log_session_writable?(logs)
       end
     end
   end
@@ -394,7 +452,9 @@ class MacosPatcherTest < Minitest::Test
   def test_log_repair_cli_covers_human_success_and_failure_messages
     stdout, stderr = capture_io do
       ClaudeEasy.stub(:repair_clashx_logs, { status: :repaired, backup_preserved: false }) do
-        assert_equal 0, ClaudeEasy.cli(["--repair-clashx-logs"])
+        ClaudeEasy.stub(:verify_clashx_file_logging, true) do
+          assert_equal 0, ClaudeEasy.cli(["--repair-clashx-logs"])
+        end
       end
     end
     assert_includes stdout, "已恢复写入"
@@ -424,13 +484,153 @@ class MacosPatcherTest < Minitest::Test
 
     stdout, stderr = capture_io do
       ClaudeEasy.stub(:repair_clashx_logs, { status: :repaired, backup_preserved: true }) do
-        assert_equal 0, ClaudeEasy.cli(["--repair-clashx-logs", "--json"])
+        ClaudeEasy.stub(:verify_clashx_file_logging, true) do
+          assert_equal 0, ClaudeEasy.cli(["--repair-clashx-logs", "--json"])
+        end
       end
     end
     assert_empty stderr
     result = JSON.parse(stdout)
     assert_equal "logs_repaired", result.fetch("code")
     assert_equal ["clashx_file_logging"], result.fetch("changes")
+  end
+
+  def test_log_repair_cli_does_not_claim_runtime_recovery_without_runtime_evidence
+    stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, { status: :repaired, backup_preserved: true }) do
+        ClaudeEasy.stub(:verify_clashx_file_logging, false) do
+          assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs", "--json"])
+        end
+      end
+    end
+
+    assert_empty stderr
+    result = JSON.parse(stdout)
+    assert_equal "partial", result.fetch("status")
+    assert_equal "log_runtime_unverified", result.fetch("code")
+    assert_equal ["log_directory_permissions"], result.fetch("changes")
+    refute_includes result.fetch("summary_zh"), "已恢复写入"
+
+    _stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, { status: :already_writable }) do
+        ClaudeEasy.stub(:verify_clashx_file_logging, false) do
+          assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs"])
+        end
+      end
+    end
+    assert_includes stderr, "未确认"
+  end
+
+  def test_file_logging_runtime_verification_requires_growth_and_clean_unified_logs
+    Dir.mktmpdir do |logs|
+      session = File.join(logs, "2026-08-05_00-59-57")
+      FileUtils.mkdir_p(session)
+      log = File.join(session, "clashx_2026-08-05.log")
+      File.binwrite(log, "before")
+      status = Struct.new(:success?).new(true)
+      clean_runner = ->(*_arguments) { ["", "", status] }
+      probe = -> { File.binwrite(log, "before-after"); true }
+
+      assert ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs, proxy_probe: probe, runner: clean_runner,
+        sleeper: ->(_seconds) {}
+      )
+
+      File.binwrite(log, "before")
+      error_runner = lambda do |*_arguments|
+        ["DDFileLogManagerDefault Cocoa 513", "", status]
+      end
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs, proxy_probe: probe, runner: error_runner,
+        sleeper: ->(_seconds) {}
+      )
+
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs, proxy_probe: -> { true }, runner: clean_runner,
+        sleeper: ->(_seconds) {}
+      )
+      empty_log = File.join(session, "clashx_empty.log")
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs, proxy_probe: -> { File.binwrite(empty_log, ""); true },
+        runner: clean_runner, sleeper: ->(_seconds) {}
+      )
+      FileUtils.rm_f(empty_log)
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs, proxy_probe: -> { false }, runner: clean_runner,
+        sleeper: ->(_seconds) {}
+      )
+
+      File.binwrite(log, "before")
+      requester = ->(_method, _endpoint, _body) { [200, ""] }
+      ClaudeEasy.stub(:harmless_proxy_request_healthy?, ->(_requester) {
+        File.binwrite(log, "before-after")
+        true
+      }) do
+        assert ClaudeEasy.verify_clashx_file_logging(
+          log_root: logs, requester: requester, runner: clean_runner,
+          sleeper: ->(_seconds) {}
+        )
+      end
+
+      ClaudeEasy.stub(:controller_socket, nil) do
+        refute ClaudeEasy.verify_clashx_file_logging(
+          log_root: logs, runner: clean_runner, sleeper: ->(_seconds) {}
+        )
+      end
+
+      failed_status = Struct.new(:success?).new(false)
+      File.binwrite(log, "before")
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs,
+        proxy_probe: -> { File.binwrite(log, "before-again"); true },
+        runner: ->(*_arguments) { ["", "", failed_status] },
+        sleeper: ->(_seconds) {}
+      )
+
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: File.join(logs, "missing"), proxy_probe: -> { true },
+        runner: clean_runner, sleeper: ->(_seconds) {}
+      )
+      ClaudeEasy.stub(:log_session_names, ["missing-session"]) do
+        assert_empty ClaudeEasy.clashx_log_snapshots(logs)
+      end
+      refute ClaudeEasy.verify_clashx_file_logging(
+        log_root: logs, proxy_probe: -> { raise IOError, "probe failed" },
+        runner: clean_runner
+      )
+
+      File.binwrite(log, "before")
+      ClaudeEasy.stub(:controller_socket, "fixture.sock") do
+        ClaudeEasy.stub(:controller_request, ->(*_arguments) { [200, ""] }) do
+          ClaudeEasy.stub(:harmless_proxy_request_healthy?, lambda { |_requester|
+            File.binwrite(log, "before-after")
+            true
+          }) do
+            assert ClaudeEasy.verify_clashx_file_logging(
+              log_root: logs, runner: clean_runner, sleeper: ->(_seconds) {}
+            )
+          end
+        end
+      end
+    end
+  end
+
+  def test_harmless_proxy_request_uses_one_isolated_request
+    requester = lambda do |_method, _endpoint, _body|
+      [200, JSON.generate("mixed-port" => 7890)]
+    end
+    status = Struct.new(:success?).new(true)
+    captured = nil
+    Open3.stub(:capture2e, ->(*arguments) { captured = arguments; ["", status] }) do
+      assert ClaudeEasy.harmless_proxy_request_healthy?(requester)
+    end
+    assert_equal 1, captured.count("https://www.google.com/generate_204")
+    assert_includes captured, "http://127.0.0.1:7890"
+
+    Open3.stub(:capture2e, ->(*_arguments) { raise IOError }) do
+      refute ClaudeEasy.harmless_proxy_request_healthy?(requester)
+    end
+    refute ClaudeEasy.harmless_proxy_request_healthy?(->(*_arguments) { [500, ""] })
   end
 
   def test_wrapper_operation_lock_serializes_mutations_and_uses_private_permissions
@@ -703,7 +903,8 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert injected
-      refute results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) }
+      refute results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) },
+             results.inspect
       originals.each do |path, bytes|
         assert File.binread(path) == bytes, "failed batch left committed bytes in #{File.basename(path)}"
       end
@@ -6815,6 +7016,41 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_run_rechecks_profile_context_after_all_files_are_written
+    Dir.mktmpdir do |directory|
+      %w[config friend other].each do |name|
+        File.binwrite(
+          File.join(directory, "#{name}.yaml"),
+          YAML.dump(base_config.merge("subscription-marker" => name))
+        )
+      end
+      originals = %w[config friend].to_h do |name|
+        path = File.join(directory, "#{name}.yaml")
+        [path, File.binread(path)]
+      end
+      selected = "friend"
+      validations = 0
+      validator = lambda do |_path|
+        validations += 1
+        selected = "other" if validations == 2
+        true
+      end
+
+      results = ClaudeEasy.stub(:selected_profile_name, -> { selected }) do
+        ClaudeEasy.run(
+          directory: directory, policy_path: POLICY_PATH,
+          backup_root: File.join(directory, "backups"), validator: validator,
+          auto_reload: false, usage_profile: 1
+        )
+      end
+
+      originals.each do |path, original|
+        assert_equal original, File.binread(path)
+      end
+      assert results.any? { |result| result.fetch(:status) == :batch_rolled_back }
+    end
+  end
+
   def test_run_without_reload_stops_when_the_current_profile_cannot_be_read
     Dir.mktmpdir do |directory|
       paths = %w[config friend].to_h do |name|
@@ -7130,6 +7366,173 @@ class MacosPatcherTest < Minitest::Test
         { status: :unchanged }, require_safe_ai: true
       )
       assert_equal :runtime_check_failed, checked.fetch(:status)
+    end
+  end
+
+  def test_unchanged_active_profile_runs_full_non_mutating_runtime_acceptance
+    [1, 2, 3].each do |usage_profile|
+      Dir.mktmpdir do |directory|
+        profile = File.join(directory, "friend.yaml")
+        patch_result = ClaudeEasy.patch(base_config, @policy, usage_profile: usage_profile)
+        File.write(profile, YAML.dump(patch_result.fetch(:config)))
+        ai_group = patch_result[:ai_group]
+        requests = []
+        proxies = {
+          "Main" => { "type" => "Selector", "now" => "node" },
+          "node" => { "type" => "Shadowsocks" }
+        }
+        if ai_group
+          proxies[ai_group] = { "type" => "Selector", "now" => usage_profile == 3 ? "DIRECT" : "node" }
+          proxies["DIRECT"] = { "type" => "Direct" }
+        end
+        requester = lambda do |method, endpoint, _body = nil|
+          requests << [method, endpoint]
+          case [method, endpoint]
+          when ["GET", "/proxies"]
+            [200, JSON.generate("proxies" => proxies)]
+          when ["GET", "/configs"]
+            [200, JSON.generate("tun" => { "enable" => usage_profile != 2 })]
+          else
+            if method == "GET" && endpoint.start_with?("/dns/query?")
+              [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+            else
+              [404, ""]
+            end
+          end
+        end
+
+        result = ClaudeEasy.run(
+          directory: directory, policy_path: POLICY_PATH,
+          backup_root: File.join(directory, "backups"), selected_name: "friend",
+          validator: ->(_path) { true }, auto_reload: false, requester: requester,
+          connectivity_checker: -> { false }, usage_profile: usage_profile
+        ).first
+
+        assert_equal :runtime_check_failed, result.fetch(:status), "profile #{usage_profile}"
+        assert requests.any? { |method, _endpoint| method == "GET" }, "profile #{usage_profile}"
+        refute requests.any? { |method, _endpoint| %w[POST PUT].include?(method) }, "profile #{usage_profile}"
+      end
+    end
+  end
+
+  def test_unchanged_runtime_rejects_missing_disk_selectors
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      patched = ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config)
+      File.binwrite(profile, YAML.dump(patched))
+      requester = lambda do |method, endpoint, _body = nil|
+        if [method, endpoint] == ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Unrelated" => { "type" => "Selector", "now" => "other-node" },
+            "other-node" => { "type" => "Shadowsocks" }
+          })]
+        elsif method == "GET" && endpoint.start_with?("/dns/query?")
+          [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+        else
+          [404, ""]
+        end
+      end
+
+      result = ClaudeEasy.run(
+        directory: directory, policy_path: POLICY_PATH,
+        backup_root: File.join(directory, "backups"), selected_name: "friend",
+        validator: ->(_path) { true }, auto_reload: false, requester: requester,
+        connectivity_checker: -> { true }, usage_profile: 1
+      ).first
+
+      assert_equal :runtime_check_failed, result.fetch(:status)
+    end
+  end
+
+  def test_updated_profile_can_add_a_new_ai_selector_before_runtime_reload
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, YAML.dump(base_config))
+      patch_result = ClaudeEasy.patch_path(
+        profile, @policy, usage_profile: 3, validator: ->(_candidate) { true }
+      )
+      health_options = nil
+      put_paths = []
+      requester = lambda do |method, endpoint, body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "node" },
+            "node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        when ["PUT", "/configs?force=true"]
+          put_paths << JSON.parse(body).fetch("path")
+          [204, ""]
+        else
+          [404, ""]
+        end
+      end
+
+      activated = ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
+        health_options = options
+        true
+      }) do
+        ClaudeEasy.activate_updated_profile(
+          patch_result, requester: requester, connectivity_checker: -> { true },
+          require_tun: true, require_safe_ai: true
+        )
+      end
+
+      assert_equal true, activated.fetch(:reloaded)
+      assert_equal [File.expand_path(profile)], put_paths
+      assert_equal({ "Main" => "node" }, health_options.fetch(:selections))
+      assert_equal "AI", health_options.fetch(:required_proxy_group)
+    end
+  end
+
+  def test_unchanged_batch_rechecks_every_file_after_runtime_acceptance
+    Dir.mktmpdir do |directory|
+      patched = ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config)
+      config_path = File.join(directory, "other.yaml")
+      friend_path = File.join(directory, "friend.yaml")
+      File.binwrite(config_path, YAML.dump(patched))
+      File.binwrite(friend_path, YAML.dump(patched))
+      replacement = YAML.dump(base_config.merge("subscription-marker" => "external"))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "node" },
+            "AI" => { "type" => "Selector", "now" => "Main" },
+            "node" => { "type" => "Shadowsocks" }
+          })]
+        else
+          if method == "GET" && endpoint.start_with?("/dns/query?")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          else
+            [404, ""]
+          end
+        end
+      end
+      refreshed = false
+      connectivity_checker = lambda do
+        unless refreshed
+          temporary = File.join(directory, ".external-refresh.yaml")
+          File.binwrite(temporary, replacement)
+          File.rename(temporary, config_path)
+          refreshed = true
+        end
+        true
+      end
+
+      results = ClaudeEasy.run(
+        directory: directory, policy_path: POLICY_PATH,
+        backup_root: File.join(directory, "backups"), selected_name: "friend",
+        validator: ->(_path) { true }, auto_reload: false, requester: requester,
+        connectivity_checker: connectivity_checker, usage_profile: 1
+      )
+
+      assert results.any? { |result| result.fetch(:status) == :updated }, results.inspect
+      final_config = ClaudeEasy.load_yaml(File.binread(config_path), config_path)
+      assert_equal "external", final_config.fetch("subscription-marker")
+      refute ClaudeEasy.patch(final_config, @policy, usage_profile: 1).fetch(:changed)
     end
   end
 
@@ -7679,6 +8082,17 @@ class MacosPatcherTest < Minitest::Test
     refute_includes output, "secret-value"
   end
 
+  def test_status_output_never_includes_an_ai_group_name
+    ai_group = "ACME Taiwan Enterprise"
+    output = ClaudeEasy.chinese_status(
+      path: "/profiles/friend.yaml", status: :updated, active: false,
+      ai_group: ai_group, ai_group_created: false, ai_group_reset: false
+    )
+
+    refute_includes output, ai_group
+    assert_includes output, "已复用 AI 分组"
+  end
+
   def test_safe_labels_hide_absolute_paths
     output = ClaudeEasy.safe_label("failed at /Users/private/Clash/config.yaml and C:\\Users\\private\\Clash\\config.yaml")
 
@@ -8086,6 +8500,36 @@ class MacosPatcherTest < Minitest::Test
 
       assert_equal :validation_failed, result.fetch(:status)
       assert_equal original, File.read(path)
+    end
+  end
+
+  def test_unchanged_profiles_are_still_validated_before_batch_acceptance
+    Dir.mktmpdir do |directory|
+      active = File.join(directory, "active.yaml")
+      inactive = File.join(directory, "inactive.yaml")
+      patched = ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config)
+      File.binwrite(active, YAML.dump(patched))
+      File.binwrite(inactive, YAML.dump(patched.merge("mixed-port" => "not-a-port")))
+      timeout = ClaudeEasy.patch_path(
+        active, @policy, usage_profile: 1, validator: ->(_candidate) { :timeout }
+      )
+      assert_equal :validation_timeout, timeout.fetch(:status)
+      validator_calls = []
+      validator = lambda do |candidate|
+        config = ClaudeEasy.load_yaml(File.read(candidate, encoding: "UTF-8"), candidate)
+        validator_calls << config["mixed-port"]
+        config["mixed-port"] != "not-a-port"
+      end
+
+      results = ClaudeEasy.run(
+        directory: directory, policy_path: POLICY_PATH,
+        backup_root: File.join(directory, "backups"), selected_name: "active",
+        validator: validator, auto_reload: false, usage_profile: 1
+      )
+
+      assert_equal 2, validator_calls.length
+      assert results.any? { |result| result.fetch(:status) == :validation_failed }
+      refute results.all? { |result| result.fetch(:status) == :unchanged }
     end
   end
 
@@ -10366,10 +10810,35 @@ class MacosPatcherTest < Minitest::Test
       path = File.join(directory, "usage-profile.plist")
       File.binwrite(path, "invalid")
       File.chmod(0o600, path)
-      failing_runner = ->(*_arguments, **_options) { raise IOError, "injected parser failure" }
       assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.saved_usage_profile(path: path, runner: failing_runner)
+        ClaudeEasy.saved_usage_profile(path: path)
       end
+    end
+  end
+
+  def test_usage_profile_reader_standalone_exit_contract
+    _stdout, _stderr, status = capture_ruby_entrypoint(USAGE_PROFILE_STATE_PATH)
+    assert_equal 2, status.exitstatus
+
+    Dir.mktmpdir do |directory|
+      missing = File.join(directory, "missing.plist")
+      stdout, stderr, status = capture_ruby_entrypoint(USAGE_PROFILE_STATE_PATH, missing)
+      assert_equal 1, status.exitstatus
+      assert_empty stdout
+      assert_empty stderr
+
+      state = File.join(directory, "usage-profile.plist")
+      File.binwrite(
+        state,
+        %(<?xml version="1.0"?><plist version="1.0"><dict>) \
+          + %(<key>Version</key><integer>1</integer>) \
+          + %(<key>Profile</key><integer>3</integer></dict></plist>)
+      )
+      File.chmod(0o600, state)
+      stdout, stderr, status = capture_ruby_entrypoint(USAGE_PROFILE_STATE_PATH, state)
+      assert_equal 0, status.exitstatus
+      assert_equal "3\n", stdout
+      assert_empty stderr
     end
   end
 

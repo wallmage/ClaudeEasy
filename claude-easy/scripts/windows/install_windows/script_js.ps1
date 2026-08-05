@@ -1,7 +1,18 @@
-﻿function Get-JavaScriptAnalysis([string]$Text) {
+﻿function Test-JavaScriptLineTerminator([string]$Character) {
+    return $Character.Length -eq 1 -and
+        ([int][char]$Character -in @(0x000A, 0x000D, 0x2028, 0x2029))
+}
+
+function Test-JavaScriptStringLineBreak([string]$Character) {
+    return $Character.Length -eq 1 -and ([int][char]$Character -in @(0x000A, 0x000D))
+}
+
+function Get-JavaScriptAnalysis([string]$Text) {
     $mask = New-Object System.Text.StringBuilder
     $markers = @()
     $stringLiterals = @()
+    $stringTokens = @()
+    $templateStarts = @()
     $state = "code"
     $templateExpressionDepths = @()
     $literalStart = -1
@@ -14,7 +25,8 @@
         if ($state -eq "code") {
             if ($character -eq "/" -and $next -eq "/") {
                 $finish = $index + 2
-                while ($finish -lt $Text.Length -and $Text[$finish] -ne "`r" -and $Text[$finish] -ne "`n") { $finish++ }
+                while ($finish -lt $Text.Length -and
+                    -not (Test-JavaScriptLineTerminator ([string]$Text[$finish]))) { $finish++ }
                 $comment = $Text.Substring($index, $finish - $index).Trim()
                 if ($comment -eq "// CLAUDEEASY BEGIN") {
                     $markers += [pscustomobject]@{ Kind = "begin"; Start = $index; End = $finish }
@@ -35,7 +47,7 @@
                 $finish += 2
                 while ($index -lt $finish) {
                     $masked = [string]$Text[$index]
-                    [void]$mask.Append($(if ($masked -eq "`r" -or $masked -eq "`n") { $masked } else { " " }))
+                    [void]$mask.Append($(if (Test-JavaScriptLineTerminator $masked) { $masked } else { " " }))
                     $index++
                 }
                 continue
@@ -84,6 +96,7 @@
             if ($character -eq '`') {
                 $state = "template"
                 $hasLiteral = $true
+                $templateStarts += $index
                 [void]$mask.Append(" ")
                 $index++
                 continue
@@ -99,7 +112,7 @@
                 $index++
                 if ($index -lt $Text.Length) {
                     $escaped = [string]$Text[$index]
-                    [void]$mask.Append($(if ($escaped -eq "`r" -or $escaped -eq "`n") { $escaped } else { " " }))
+                    [void]$mask.Append($(if (Test-JavaScriptLineTerminator $escaped) { $escaped } else { " " }))
                     $index++
                 }
                 continue
@@ -117,7 +130,7 @@
                 $index += 2
                 continue
             }
-            [void]$mask.Append($(if ($character -eq "`r" -or $character -eq "`n") { $character } else { " " }))
+            [void]$mask.Append($(if (Test-JavaScriptLineTerminator $character) { $character } else { " " }))
             $index++
             continue
         }
@@ -125,8 +138,7 @@
             [void]$mask.Append(" ")
             $index++
             if ($index -lt $Text.Length) {
-                $escaped = [string]$Text[$index]
-                [void]$mask.Append($(if ($escaped -eq "`r" -or $escaped -eq "`n") { $escaped } else { " " }))
+                [void]$mask.Append(" ")
                 $index++
             }
             continue
@@ -134,7 +146,13 @@
         if (($state -eq "single" -and $character -eq "'") -or
             ($state -eq "double" -and $character -eq '"')) {
             if ($literalStart -ge 0) {
-                $stringLiterals += $Text.Substring($literalStart, $index - $literalStart + 1)
+                $literal = $Text.Substring($literalStart, $index - $literalStart + 1)
+                $stringLiterals += $literal
+                $stringTokens += [pscustomobject]@{
+                    Start = $literalStart
+                    End = $index + 1
+                    Text = $literal
+                }
             }
             $literalStart = -1
             $state = "code"
@@ -142,10 +160,11 @@
             $index++
             continue
         }
-        if (($state -eq "single" -or $state -eq "double") -and ($character -eq "`r" -or $character -eq "`n")) {
+        if (($state -eq "single" -or $state -eq "double") -and
+            (Test-JavaScriptStringLineBreak $character)) {
             throw "JavaScript 字符串没有结束，原脚本没有被修改。"
         }
-        [void]$mask.Append($(if ($character -eq "`r" -or $character -eq "`n") { $character } else { " " }))
+        [void]$mask.Append(" ")
         $index++
     }
     if ($state -ne "code" -or $templateExpressionDepths.Count -gt 0) {
@@ -155,13 +174,83 @@
         Code = $mask.ToString()
         Markers = @($markers)
         StringLiterals = @($stringLiterals)
+        StringTokens = @($stringTokens)
+        TemplateStarts = @($templateStarts)
         HasLiteral = $hasLiteral
     }
 }
 
+function Get-JavaScriptDirectivePrologue([string]$Text) {
+    $analysis = Get-JavaScriptAnalysis $Text
+    $whiteSpace = '[\u0009\u000B\u000C\u0020\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF]'
+    $lineTerminator = '[\u000A\u000D\u2028\u2029]'
+    $spacing = '(?:' + $whiteSpace + '|' + $lineTerminator + ')'
+    $cursor = 0
+    $directives = @()
+    $tokens = @($analysis.StringTokens)
+    for ($tokenIndex = 0; $tokenIndex -lt $tokens.Count; $tokenIndex++) {
+        $token = $tokens[$tokenIndex]
+        if (@($analysis.TemplateStarts | Where-Object {
+            [int]$_ -ge $cursor -and [int]$_ -lt [int]$token.Start
+        }).Count -gt 0) { break }
+        $gap = $analysis.Code.Substring($cursor, $token.Start - $cursor)
+        if ($gap -notmatch ('\A' + $spacing + '*\z')) { break }
+
+        $cursor = [int]$token.End
+        if ($cursor -ge $analysis.Code.Length) {
+            $directives += ([string]$token.Text + ";")
+            break
+        }
+
+        $nextStringStart = if ($tokenIndex + 1 -lt $tokens.Count) {
+            [int]$tokens[$tokenIndex + 1].Start
+        } else {
+            $analysis.Code.Length
+        }
+        $nextTemplateStart = @($analysis.TemplateStarts | Where-Object {
+            [int]$_ -ge $cursor -and [int]$_ -lt $nextStringStart
+        } | Select-Object -First 1)
+        $boundary = if ($nextTemplateStart.Count -gt 0) {
+            [int]$nextTemplateStart[0]
+        } else {
+            $nextStringStart
+        }
+        $tail = $analysis.Code.Substring($cursor, $boundary - $cursor)
+        $explicitTerminator = [regex]::Match(
+            $tail,
+            '\A' + $spacing + '*;'
+        )
+        if ($explicitTerminator.Success) {
+            $directives += ([string]$token.Text + ";")
+            $cursor += $explicitTerminator.Length
+            continue
+        }
+
+        $leading = [regex]::Match($tail, '\A' + $spacing + '*')
+        if ($leading.Value -notmatch $lineTerminator) { break }
+        $nextCode = $tail.Substring($leading.Length)
+        if ($nextCode.Length -eq 0 -and $nextTemplateStart.Count -gt 0) {
+            $nextCode = '`'
+        }
+        $keywordContinuation = '\A(?:in|instanceof)(?=$|' + $whiteSpace + '|' +
+            $lineTerminator + '|[\(\)\[\]\{\};,.?~!+\-*/%<>=&|^:''"\x60])'
+        if ($nextCode.Length -gt 0 -and
+            -not $nextCode.StartsWith("++") -and
+            -not $nextCode.StartsWith("--") -and
+            ($nextCode -match '\A(?:[\(\[\.]|\?\.|\x60|[+\-*/%<>=&|^?:,])' -or
+                $nextCode -match $keywordContinuation)) {
+            break
+        }
+        $directives += ([string]$token.Text + ";")
+        $cursor += $leading.Length
+    }
+    return @($directives)
+}
+
 function Rename-JavaScriptMain([string]$Text, [string]$From, [string]$To) {
     $analysis = Get-JavaScriptAnalysis $Text
-    $pattern = '(?m)^\s*function\s+' + [regex]::Escape($From) + '\s*\('
+    $lineStart = '(?:\A|(?<=[\r\n\u2028\u2029]))'
+    $pattern = $lineStart + '\s*function\s+' + [regex]::Escape($From) + '\s*\('
     $matches = [regex]::Matches($analysis.Code, $pattern)
     if ($matches.Count -ne 1) { throw "无法确认原始 main 函数，原脚本没有被修改。" }
     $relative = $matches[0].Value.IndexOf($From, [StringComparison]::Ordinal)
@@ -189,7 +278,8 @@ function Assert-JavaScriptDoesNotUseDynamicCode([string]$Text) {
 
 function Assert-JavaScriptDoesNotBindMain([string]$Text) {
     $code = (Get-JavaScriptAnalysis $Text).Code
-    $declaration = '(?m)(?:^|[;{}])\s*(?:async\s+)?(?:function|class|var|let|const)\s+main\b'
+    $declaration = '(?:\A|(?<=[\r\n\u2028\u2029;{}]))\s*' +
+        '(?:async\s+)?(?:function|class|var|let|const)\s+main\b'
     $assignment = '(?<![A-Za-z0-9_$.])main\s*='
     if ([regex]::IsMatch($code, $declaration) -or [regex]::IsMatch($code, $assignment)) {
         throw "现有脚本在允许的入口之外不能重新定义 main；原脚本没有被修改。"
@@ -207,10 +297,11 @@ function Assert-JavaScriptDoesNotReferenceMain([string]$Code) {
 
 function Assert-JavaScriptCanCompose([string]$Text) {
     $analysis = Get-JavaScriptAnalysis $Text
-    if ([regex]::IsMatch($analysis.Code, '(?m)^\s*async\s+function\s+main\s*\(')) {
+    $lineStart = '(?:\A|(?<=[\r\n\u2028\u2029]))'
+    if ([regex]::IsMatch($analysis.Code, $lineStart + '\s*async\s+function\s+main\s*\(')) {
         throw "检测到异步 main。Clash Verge Rev 不会等待异步 main 的结果，原脚本没有被修改。"
     }
-    $matches = [regex]::Matches($analysis.Code, '(?m)^\s*function\s+main\s*\(')
+    $matches = [regex]::Matches($analysis.Code, $lineStart + '\s*function\s+main\s*\(')
     if ($matches.Count -ne 1) {
         throw "检测到已有全局扩展脚本，但无法安全合并。原脚本没有被修改，请把提示和 Script.js 截图发回来。"
     }
@@ -302,6 +393,7 @@ function Build-GlobalScript(
 
     $parts = @()
     $parts += $begin
+    $parts += @(Get-JavaScriptDirectivePrologue $previous)
     $parts += "let claudeEasyInstallManagedMain = (function ("
     $parts += "  claudeEasyRealGlobal,"
     $parts += "  claudeEasyNativeObject,"

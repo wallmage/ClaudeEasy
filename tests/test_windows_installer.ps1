@@ -4344,6 +4344,28 @@ try {
                 $identityAfterRecovery -ceq $replacementIdentity -and
                 $identityContentPreserved
             ) "interrupted recovery overwrote a same-byte file with a different identity"
+
+            $originalReplacement = Join-Path $identityCrashHome "original-replacement.tmp"
+            $displacedReplacement = Join-Path $identityCrashHome "replacement-displaced.tmp"
+            [System.IO.File]::WriteAllText($originalReplacement, "first-original")
+            [System.IO.File]::Move($identityCrashFirstPath, $displacedReplacement)
+            [System.IO.File]::Move($originalReplacement, $identityCrashFirstPath)
+            [System.IO.File]::Delete($displacedReplacement)
+            $originalReplacementIdentity = (
+                Get-OptionalFileSnapshot $identityCrashFirstPath "identity crash original replacement"
+            ).Identity
+
+            $identityRecoveryLock = Enter-AppHomeMutationLock $identityCrashHome
+            Exit-AppHomeMutationLock $identityRecoveryLock
+
+            $recoveredOriginal = Get-OptionalFileSnapshot (
+                $identityCrashFirstPath
+            ) "identity crash recovered original replacement"
+            Assert-True (
+                $recoveredOriginal.Identity -ceq $originalReplacementIdentity -and
+                (Get-Content -LiteralPath $identityCrashFirstPath -Raw) -eq "first-original" -and
+                -not (Test-Path -LiteralPath (Join-Path $identityCrashHome ".claude-easy-transaction.json"))
+            ) "interrupted recovery rejected an independently restored original file"
         }
 
         $crashDeleteHome = Join-Path $sandbox "crash-delete-home"
@@ -5088,8 +5110,8 @@ try {
             $recoveryRaceJournalFunction = $recoveryRaceText.IndexOf(
                 "function Repair-InterruptedFileTransaction"
             )
-            $recoveryRacePreparationNeedle = '            $preCommitRejected = -not ('
-            $recoveryRaceJournalNeedle = 'Invoke-InterruptedTransactionRecovery $plan'
+            $recoveryRacePreparationNeedle = '                $finalizeRejected = -not ('
+            $recoveryRaceJournalNeedle = '        if (-not (Test-InterruptedRecoveryCommitCondition $preCommitCondition)) {'
             $recoveryRacePreparationOffset = $recoveryRaceText.IndexOf(
                 $recoveryRacePreparationNeedle,
                 $recoveryRacePreparationFunction
@@ -5154,7 +5176,7 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
                 $recoveryRacePreparationHook
             )
             $recoveryRaceJournalOffset += $recoveryRacePreparationHook.Length
-            $recoveryRaceJournalHook = '    Start-ClaudeEasyRecoveryRaceClient "journal"' + [Environment]::NewLine
+            $recoveryRaceJournalHook = '        Start-ClaudeEasyRecoveryRaceClient "journal"' + [Environment]::NewLine
             $recoveryRaceText = $recoveryRaceText.Insert(
                 $recoveryRaceJournalOffset,
                 $recoveryRaceJournalHook
@@ -6582,7 +6604,13 @@ function main(config) {
   config.friend = globalThis.friendGlobal + 1;
   config.helper = globalThis.helper();
   config.friendTopLevelThis = friendTopLevelThis;
-  config.friendCallThis = this === globalThis;
+  config.friendCallThis = this === undefined;
+  try {
+    friendStrictLeak = true;
+    config.friendStrictAssignment = false;
+  } catch (error) {
+    config.friendStrictAssignment = error instanceof ReferenceError;
+  }
   globalThis.main = function(value) { value.bypassed = true; return value; };
   globalThis["claude" + "EasyTransform"] = function(value) { value.bypassed = true; return value; };
   return config;
@@ -6593,7 +6621,49 @@ Object.defineProperty(globalThis, "main", {
   configurable: true
 });
 '@
-    Write-TestUtf8Text (Join-Path $composeProfiles "Script.js") $originalScript
+    $javaScriptLineSeparator = [string][char]0x2028
+    $originalScript = $originalScript.Replace(
+        "var friendGlobal = 40;",
+        ('var friendSeparator = "a' + $javaScriptLineSeparator + 'b";' + "`nvar friendGlobal = 40;")
+    ).Replace("`nfunction main(config)", $javaScriptLineSeparator + "function main(config)")
+    $bomStrictScript = ([string][char]0xFEFF) + $originalScript
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue $bomStrictScript).Count -eq 1
+    ) "BOM hid a JavaScript strict directive"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`n+0;`nfunction main(config) { return config; }")).Count -eq 0
+    ) "a continued string expression was promoted to a strict directive"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`ninstanceof Object;`nfunction main(config) { return config; }")).Count -eq 0
+    ) "a keyword continuation was promoted to a strict directive"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`ninπ;`nfunction main(config) { return config; }")).Count -eq 1
+    ) "a Unicode identifier beginning with a keyword hid a strict directive"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`nin·;`nfunction main(config) { return config; }")).Count -eq 1
+    ) "an Other_ID_Continue character hid a strict directive"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + ([string][char]0x2003) + ";`nfunction main(config) { return config; }")).Count -eq 1
+    ) "ECMAScript whitespace before a semicolon hid a strict directive"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('// comment' + ([string][char]0x2028) + '"use strict"; function main(config) { return config; }')).Count -eq 1
+    ) "a Unicode line terminator kept a line comment open"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`nfunction main(config) { return config; }")).Count -eq 1
+    ) "a semicolon-free strict directive before a function was lost"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict";`n"use asm";`nfunction main(config) { return config; }')).Count -eq 2
+    ) "multiple terminated directives were not preserved"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"`n"use asm"`nfunction main(config) { return config; }')).Count -eq 2
+    ) "multiple ASI-terminated directives were not preserved"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('`banner`' + "`n" + '"use strict"; function main(config) { return config; }')).Count -eq 0
+    ) "a directive after a template expression was promoted"
+    Assert-True (
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`n" + '`continued`' + "`nfunction main(config) { return config; }")).Count -eq 0
+    ) "a template continuation was promoted to a directive"
+    Write-TestUtf8Text (Join-Path $composeProfiles "Script.js") $bomStrictScript
     Invoke-Installer $composeCase
     $composedPath = Join-Path $composeProfiles "Script.js"
     $enginePath = Join-Path (Join-Path $root "claude-easy/scripts/windows") "clash_verge_global.js"
@@ -6734,7 +6804,8 @@ for (const serialized of context.__claudeEasyResults) {
   if (!result || result.friend !== 41) throw new Error("previous global writes were not forwarded");
   if (result.helper !== 41) throw new Error("previous top-level function was not installed on globalThis");
   if (result.friendTopLevelThis !== true) throw new Error("previous top-level this was not the Script global");
-  if (result.friendCallThis !== true) throw new Error("previous main call did not keep Script this semantics");
+  if (result.friendCallThis !== true) throw new Error("previous main lost strict this semantics");
+  if (result.friendStrictAssignment !== true) throw new Error("previous main lost strict assignment semantics");
   if (result.bypassed === true) throw new Error("previous script replaced a managed binding");
   if (!result["rule-providers"] || !Object.keys(result["rule-providers"]).some((name) => name.indexOf("claude-easy-cn-domain") === 0)) {
     throw new Error("ClaudeEasy transform did not run");

@@ -25,6 +25,7 @@ class MacosWrapperTest < Minitest::Test
     macos/patch_profiles.rb
     macos/result_contract.rb
     macos/operation_lock.rb
+    macos/usage_profile_state.rb
     macos/patch_profiles/transform.rb
     macos/patch_profiles/backups.rb
     macos/patch_profiles/mihomo.rb
@@ -53,6 +54,14 @@ class MacosWrapperTest < Minitest::Test
     }.merge(extra_env)
     stdout, stderr, status = Open3.capture3(env, "/bin/sh", path, *arguments)
     [stdout, stderr, status, state]
+  end
+
+  def capture_stream(stream, buffer)
+    Thread.new do
+      buffer << stream.read
+    rescue IOError
+      nil
+    end
   end
 
   def require_production_probe!
@@ -436,8 +445,8 @@ class MacosWrapperTest < Minitest::Test
           Open3.popen3(env, "/bin/sh", uninstaller, "--json") do |stdin, out, error, thread|
             process_thread = thread
             stdin.close
-            readers << Thread.new { stdout << out.read }
-            readers << Thread.new { stderr << error.read }
+            readers << capture_stream(out, stdout)
+            readers << capture_stream(error, stderr)
             deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
             until File.exist?(ready)
               raise "uninstaller never reached final verification" if
@@ -450,6 +459,7 @@ class MacosWrapperTest < Minitest::Test
             File.binwrite(continue_path, "continue")
             raise "uninstaller did not exit" unless thread.join(10)
             status = thread.value
+            readers.each(&:join)
           end
         ensure
           File.binwrite(continue_path, "continue") rescue nil
@@ -617,8 +627,8 @@ class MacosWrapperTest < Minitest::Test
           Open3.popen3(env, "/bin/sh", uninstaller, "--json", pgroup: true) do |stdin, out, error, thread|
             process_thread = thread
             stdin.close
-            readers << Thread.new { stdout << out.read }
-            readers << Thread.new { stderr << error.read }
+            readers << capture_stream(out, stdout)
+            readers << capture_stream(error, stderr)
             deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
             until File.exist?(ready)
               raise "uninstaller never reached durable READY" if
@@ -628,6 +638,7 @@ class MacosWrapperTest < Minitest::Test
             Process.kill("TERM", -thread.pid)
             raise "uninstaller did not exit after TERM" unless thread.join(10)
             status = thread.value
+            readers.each(&:join)
           end
         ensure
           Process.kill("KILL", -process_thread.pid) rescue nil
@@ -769,8 +780,8 @@ class MacosWrapperTest < Minitest::Test
           Open3.popen3(env, "/bin/sh", uninstaller, "--json") do |stdin, out, error, thread|
             process_thread = thread
             stdin.close
-            readers << Thread.new { stdout << out.read }
-            readers << Thread.new { stderr << error.read }
+            readers << capture_stream(out, stdout)
+            readers << capture_stream(error, stderr)
             deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
             until File.exist?(ready)
               raise "uninstaller never reached the staging gate" if
@@ -783,6 +794,7 @@ class MacosWrapperTest < Minitest::Test
             File.binwrite(continue_path, "continue")
             raise "uninstaller did not exit after the staging gate" unless thread.join(10)
             status = thread.value
+            readers.each(&:join)
           end
         ensure
           File.binwrite(continue_path, "continue") rescue nil
@@ -850,6 +862,7 @@ class MacosWrapperTest < Minitest::Test
             system("/usr/bin/plutil", "-create", "xml1", state)
             system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
             system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+            File.chmod(0o600, state)
 
             ready = File.join(home, "uninstall-delete-ready")
             continue_path = File.join(home, "uninstall-delete-continue")
@@ -882,8 +895,8 @@ class MacosWrapperTest < Minitest::Test
               Open3.popen3(env, "/bin/sh", uninstaller, "--json") do |stdin, out, error, thread|
                 uninstall_thread = thread
                 stdin.close
-                readers << Thread.new { uninstall_stdout << out.read }
-                readers << Thread.new { uninstall_stderr << error.read }
+                readers << capture_stream(out, uninstall_stdout)
+                readers << capture_stream(error, uninstall_stderr)
                 deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
                 until File.exist?(ready)
                   raise "uninstaller never reached the pre-delete gate" if
@@ -895,6 +908,7 @@ class MacosWrapperTest < Minitest::Test
                 File.binwrite(continue_path, "continue")
                 raise "uninstaller did not exit after the pre-delete gate" unless thread.join(10)
                 uninstall_status = thread.value
+                readers.each(&:join)
               end
             ensure
               File.binwrite(continue_path, "continue") rescue nil
@@ -990,6 +1004,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
+          File.chmod(0o600, state)
           ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json")
           preference = File.join(home, "auto-update-state")
           File.binwrite(ownership, "{}")
@@ -1561,6 +1576,107 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_installer_rejects_an_existing_invalid_usage_profile_state
+    [
+      "truncated",
+      "<?xml version=\"1.0\"?><plist><dict><key>Version</key><integer>2</integer></dict></plist>",
+      "<?xml version=\"1.0\"?><plist><dict><key>Version</key><string>1</string><key>Profile</key><string>3</string></dict></plist>",
+      "<?xml version=\"1.0\"?><plist><dict><key>Version</key><integer>1</integer><key>Profile</key><integer>1</integer><key>Profile</key><integer>3</integer></dict></plist>",
+      "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Version</key><integer>1<unexpected/></integer><key>Profile</key><integer>3</integer></dict></plist>"
+    ].each do |bytes|
+      [["--show-profile", "--json"], ["--profile", "1", "--json"],
+       ["--profile", "2", "--json"], ["--profile", "3", "--json"]].each do |arguments|
+        with_supported_mihomo_installer do |installer|
+          Dir.mktmpdir do |home|
+            with_supported_app(home) do
+              state = usage_state_path(home)
+              FileUtils.mkdir_p(File.dirname(state))
+              File.binwrite(state, bytes)
+
+              stdout, stderr, status = run_script(installer, *arguments, home: home)
+
+              assert_equal 10, status.exitstatus, "#{arguments.inspect}\n#{stdout}\n#{stderr}"
+              assert_empty stderr
+              result = assert_json_result(stdout, status, command: "install")
+              assert_equal "usage_profile_invalid", result.fetch("code")
+              assert_equal bytes, File.binread(state)
+              refute Dir.exist?(File.join(File.dirname(state), "backups"))
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def test_installer_rejects_non_private_or_hardlinked_usage_profile_state_before_locking
+    %i[public hardlink].each do |variant|
+      [["--show-profile", "--json"], ["--profile", "1", "--json"],
+       ["--profile", "2", "--json"], ["--profile", "3", "--json"]].each do |arguments|
+        with_supported_mihomo_installer do |installer|
+          Dir.mktmpdir do |home|
+            with_supported_app(home) do
+              state = usage_state_path(home)
+              FileUtils.mkdir_p(File.dirname(state))
+              system("/usr/bin/plutil", "-create", "xml1", state)
+              system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+              system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
+              File.chmod(0o600, state)
+              if variant == :public
+                File.chmod(0o644, state)
+              else
+                File.link(state, File.join(home, "usage-profile-alias.plist"))
+              end
+              original = File.binread(state)
+
+              stdout, stderr, status = run_script(installer, *arguments, home: home)
+
+              assert_equal 10, status.exitstatus, "#{variant} #{arguments.inspect}\n#{stdout}\n#{stderr}"
+              assert_empty stderr
+              result = assert_json_result(stdout, status, command: "install")
+              assert_equal "usage_profile_invalid", result.fetch("code")
+              assert_equal original, File.binread(state)
+              refute Dir.exist?(File.join(File.dirname(state), "backups"))
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def test_installer_reports_an_incomplete_package_when_strict_profile_reader_cannot_load
+    cases = {
+      "macos/usage_profile_state.rb" => [["--show-profile", "--json"], ["--profile", "3", "--json"]],
+      "macos/patch_profiles.rb" => [["--profile", "3", "--json"]],
+      "macos/patch_profiles/runtime.rb" => [["--profile", "3", "--json"]]
+    }
+    cases.each do |relative_path, argument_sets|
+      argument_sets.each do |arguments|
+        with_real_installer_package do |installer|
+          scripts = File.dirname(installer)
+          FileUtils.rm_f(File.expand_path(relative_path, scripts))
+          Dir.mktmpdir do |home|
+            state = usage_state_path(home)
+            FileUtils.mkdir_p(File.dirname(state))
+            system("/usr/bin/plutil", "-create", "xml1", state)
+            system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+            system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
+            File.chmod(0o600, state)
+            original = File.binread(state)
+
+            stdout, stderr, status = run_script(installer, *arguments, home: home)
+
+            assert_equal 6, status.exitstatus, "#{relative_path} #{arguments.inspect}\n#{stdout}\n#{stderr}"
+            assert_empty stderr
+            result = assert_json_result(stdout, status, command: "install")
+            assert_equal "incomplete_package", result.fetch("code")
+            assert_equal original, File.binread(state)
+            refute Dir.exist?(File.join(File.dirname(state), "backups"))
+          end
+        end
+      end
+    end
+  end
+
   def test_profiles_one_and_two_are_saved_and_apply_the_common_subscription_baseline
     with_supported_mihomo_installer do |installer|
       [1, 2].each do |profile|
@@ -1618,7 +1734,7 @@ class MacosWrapperTest < Minitest::Test
         connectivity_server, connectivity_thread, connectivity_ca, mixed_port =
           start_release_connectivity_server(home)
         controller_server, controller_thread, controller_socket_path, controller_requests =
-          start_release_controller(home, mixed_port: mixed_port)
+          start_release_controller(home, mixed_port: mixed_port, selector_names: ["Proxy"])
         begin
           stdout, stderr, status, state = run_script(
             INSTALLER, "--profile", "1", home: home,
@@ -1709,6 +1825,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+          File.chmod(0o600, state)
           original = File.binread(state)
 
           stdout, _stderr, status = run_script(installer, "--profile", "2", home: home)
@@ -1764,6 +1881,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+          File.chmod(0o600, state)
           env = {
             "HOME" => home,
             "CLAUDE_EASY_USAGE_STATE_PATH" => state,
@@ -1864,6 +1982,7 @@ class MacosWrapperTest < Minitest::Test
                 system("/usr/bin/plutil", "-create", "xml1", state)
                 system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
                 system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+                File.chmod(0o600, state)
                 arguments = ["--profile", "3"]
                 arguments.unshift("--safe-update") if operation == "safe-update"
                 arguments << "--json" if json
@@ -1951,6 +2070,7 @@ class MacosWrapperTest < Minitest::Test
               system("/usr/bin/plutil", "-create", "xml1", state)
               system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
               system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+              File.chmod(0o600, state)
               arguments = ["--profile", "3"]
               arguments.unshift("--safe-update") if operation == "safe-update"
               arguments << "--json" if json
@@ -2034,6 +2154,7 @@ class MacosWrapperTest < Minitest::Test
                 system("/usr/bin/plutil", "-create", "xml1", state)
                 system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
                 system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+                File.chmod(0o600, state)
                 arguments = ["--profile", "3"]
                 arguments.unshift("--safe-update") if operation == "safe-update"
                 arguments << "--json" if json
@@ -2095,6 +2216,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+          File.chmod(0o600, state)
 
           stdout, stderr, status = run_script(installer, "--profile", "3", "--json", home: home)
 
@@ -2176,6 +2298,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+          File.chmod(0o600, state)
 
           _stdout, _stderr, status = run_script(installer, "--profile", "3", home: home)
 
@@ -2268,6 +2391,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
+          File.chmod(0o600, state)
 
           _stdout, _stderr, status = run_script(installer, "--profile", "3", home: home)
 
@@ -2316,6 +2440,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
+          File.chmod(0o600, state)
 
           _stdout, _stderr, status = run_script(installer, home: home)
 
@@ -2361,6 +2486,7 @@ class MacosWrapperTest < Minitest::Test
             system("/usr/bin/plutil", "-create", "xml1", state)
             system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
             system("/usr/bin/plutil", "-insert", "Profile", "-integer", profile.to_s, state)
+            File.chmod(0o600, state)
             File.write(ownership, "owned")
             File.write(File.join(home, "auto-update"), "disabled")
 
@@ -2408,6 +2534,7 @@ class MacosWrapperTest < Minitest::Test
             system("/usr/bin/plutil", "-create", "xml1", state)
             system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
             system("/usr/bin/plutil", "-insert", "Profile", "-integer", profile.to_s, state)
+            File.chmod(0o600, state)
 
             stdout, stderr, status = run_script(
               installer, *arguments, "--json", home: home
@@ -2569,6 +2696,7 @@ class MacosWrapperTest < Minitest::Test
           system("/usr/bin/plutil", "-create", "xml1", state)
           system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
           system("/usr/bin/plutil", "-insert", "Profile", "-integer", "3", state)
+          File.chmod(0o600, state)
           original = File.binread(state)
 
           stdout, _stderr, status = run_script(installer, "--profile", "1", home: home)

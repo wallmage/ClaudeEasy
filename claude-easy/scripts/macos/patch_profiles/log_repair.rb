@@ -55,6 +55,89 @@ module ClaudeEasy
     []
   end
 
+  def current_log_session_writable?(log_root)
+    session_name = log_session_names(log_root).last
+    return true unless session_name
+
+    pending = [File.join(log_root, session_name)]
+    until pending.empty?
+      path = pending.pop
+      stat = File.lstat(path)
+      return false if stat.symlink?
+      if stat.directory?
+        return false unless File.writable?(path) && File.executable?(path)
+
+        pending.concat(Dir.children(path).map { |name| File.join(path, name) })
+      elsif stat.file?
+        return false unless File.writable?(path)
+      else
+        return false
+      end
+    end
+    true
+  rescue SystemCallError
+    false
+  end
+
+  def clashx_log_snapshots(log_root)
+    session_name = log_session_names(log_root).last
+    return {} unless session_name
+
+    session = File.join(log_root, session_name)
+    Dir.children(session).each_with_object({}) do |name, snapshots|
+      next unless name.match?(/\Aclashx_.*\.log\z/)
+
+      path = File.join(session, name)
+      stat = File.lstat(path)
+      next unless stat.file? && !stat.symlink?
+
+      snapshots[path] = [stat.dev, stat.ino, stat.size]
+    end
+  rescue SystemCallError
+    {}
+  end
+
+  def verify_clashx_file_logging(log_root: clashx_log_root, requester: nil, proxy_probe: nil,
+                                 runner: Open3.method(:capture3), now: -> { Time.now },
+                                 sleeper: Kernel.method(:sleep))
+    before = clashx_log_snapshots(log_root)
+    if proxy_probe.nil?
+      if requester.nil?
+        socket = controller_socket
+        return false unless socket
+
+        requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+      end
+      proxy_probe = -> { harmless_proxy_request_healthy?(requester) }
+    end
+    started_at = now.call
+    return false unless proxy_probe.call
+
+    grew = false
+    10.times do
+      after = clashx_log_snapshots(log_root)
+      grew = after.any? do |path, identity_and_size|
+        previous = before[path]
+        previous.nil? ? identity_and_size.fetch(2).positive? :
+          identity_and_size.fetch(2) > previous.fetch(2)
+      end
+      break if grew
+
+      sleeper.call(0.2)
+    end
+    return false unless grew
+
+    output, _error, status = runner.call(
+      "/usr/bin/log", "show", "--start", started_at.utc.iso8601(6),
+      "--style", "compact", "--info", "--debug", "--predicate", 'process == "ClashX Meta"'
+    )
+    return false unless status.success?
+
+    !output.match?(/DDFileLogManagerDefault.*(?:Cocoa\D+(?:257|513)|POSIX\D+13)/im)
+  rescue StandardError
+    false
+  end
+
   def create_log_tree(path, session_name:, username:, runner:)
     Dir.mkdir(path, 0o700)
     File.chmod(0o700, path)
@@ -90,7 +173,8 @@ module ClaudeEasy
       current = File.lstat(log_root)
       raise UnsafeLogPathError, "日志路径不是安全目录" unless current.directory? && !current.symlink?
 
-      if File.writable?(log_root) && File.executable?(log_root)
+      if File.writable?(log_root) && File.executable?(log_root) &&
+         current_log_session_writable?(log_root)
         return { status: :already_writable, backup_preserved: false } if
           log_acl_present?(log_root, username: username, runner: runner)
 

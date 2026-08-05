@@ -213,7 +213,7 @@ function Backup-Versioned(
     $createdBytes = $null
     $failure = $null
     try {
-        $backupStream = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $backupStream = New-PrivateFileStream $temporary
         $created = $true
         if ($UseSourceBytes) {
             if ($null -eq $SourceBytes) { $SourceBytes = [byte[]]@() }
@@ -240,7 +240,6 @@ function Backup-Versioned(
         throw $failure
     }
     try {
-        Protect-BackupAcl $temporary
         [System.IO.File]::Move($temporary, $destination)
     } catch {
         if (Test-Path -LiteralPath $temporary -PathType Leaf) {
@@ -749,6 +748,22 @@ function Set-VerifiedDeleteDisposition([System.IO.FileStream]$Stream, [bool]$Del
     [ClaudeEasy.VerifiedDeleteNative]::SetDeleteDisposition($Stream.SafeFileHandle, $DeleteFile)
 }
 
+function New-PrivateFileStream([string]$Path) {
+    Initialize-VerifiedFileNative
+    $handle = $null
+    try {
+        $handle = [ClaudeEasy.VerifiedDeleteNative]::CreatePrivateFile($Path)
+        $stream = New-Object System.IO.FileStream(
+            $handle,
+            [System.IO.FileAccess]::ReadWrite
+        )
+        $handle = $null
+        return $stream
+    } finally {
+        if ($null -ne $handle) { $handle.Dispose() }
+    }
+}
+
 function Write-FileTransactionPreparation(
     [object[]]$Actions,
     [string]$InterruptedRecoveryPolicy = "client_stopped"
@@ -780,18 +795,12 @@ function Write-FileTransactionPreparation(
     $stream = $null
     $moved = $false
     try {
-        $stream = [System.IO.File]::Open(
-            $temporary,
-            [System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::None
-        )
+        $stream = New-PrivateFileStream $temporary
         $stream.Write($bytes, 0, $bytes.Length)
         $stream.Flush($true)
         $stream.Dispose()
         $stream = $null
         [System.IO.File]::Move($temporary, $path)
-        Protect-BackupAcl $path
         $moved = $true
         return $bytes
     } finally {
@@ -1012,6 +1021,8 @@ function Repair-InterruptedFilePreparation {
     $directoryHandles = @()
     $operationFailure = $null
     $preCommitRejected = $false
+    $finalizeRejected = $false
+    $deleteMarked = $false
     foreach ($target in $targets) {
         $targetPath = [string]$target.Path
         $handle = $null
@@ -1047,9 +1058,29 @@ function Repair-InterruptedFilePreparation {
                 foreach ($entry in $opened) {
                     Set-VerifiedDeleteDisposition $entry.Stream $true
                 }
+                $deleteMarked = $true
+                $finalizeRejected = -not (
+                    Test-InterruptedRecoveryCommitCondition $preCommitCondition
+                )
+                if ($finalizeRejected) {
+                    foreach ($entry in $opened) {
+                        Set-VerifiedDeleteDisposition $entry.Stream $false
+                    }
+                    $deleteMarked = $false
+                }
             }
         } catch {
             $operationFailure = $_
+            if ($deleteMarked) {
+                try {
+                    foreach ($entry in $opened) {
+                        Set-VerifiedDeleteDisposition $entry.Stream $false
+                    }
+                    $deleteMarked = $false
+                } catch {
+                    $operationFailure = $_
+                }
+            }
         }
     }
     for ($index = $opened.Count - 1; $index -ge 0; $index--) {
@@ -1067,7 +1098,7 @@ function Repair-InterruptedFilePreparation {
         }
     }
     if ($null -ne $operationFailure) { throw $operationFailure }
-    if ($preCommitRejected) {
+    if ($preCommitRejected -or $finalizeRejected) {
         throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
     }
     Remove-FileTransactionPreparation $snapshot.Bytes
@@ -1113,18 +1144,12 @@ function Write-FileTransactionJournal(
     $stream = $null
     $moved = $false
     try {
-        $stream = [System.IO.File]::Open(
-            $temporary,
-            [System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::None
-        )
+        $stream = New-PrivateFileStream $temporary
         $stream.Write($bytes, 0, $bytes.Length)
         $stream.Flush($true)
         $stream.Dispose()
         $stream = $null
         [System.IO.File]::Move($temporary, $script:ClaudeEasyTransactionJournalPath)
-        Protect-BackupAcl $script:ClaudeEasyTransactionJournalPath
         $moved = $true
         return $bytes
     } finally {
@@ -1268,7 +1293,10 @@ function Get-InterruptedTransactionRecoveryPlan([object[]]$Actions) {
                 }
             }
         }
+        $differentIdentityIsRestoredOriginal = $action.Action -eq "write" -and
+            $action.Existed -and $snapshot.Exists -and $currentHash -eq $originalHash
         if ($snapshot.Exists -and $snapshot.Identity -cne $action.Identity -and
+            -not $differentIdentityIsRestoredOriginal -and
             ($action.Action -ne "delete" -or $currentHash -ne $originalHash)) {
             throw "中断事务目标已被同内容的其他文件替换：$($action.Path)"
         }
@@ -1280,6 +1308,8 @@ function Get-InterruptedTransactionRecoveryPlan([object[]]$Actions) {
             }
             if ($currentHash -ne $originalHash) {
                 $plan += [pscustomobject]@{ Operation = "write"; Action = $action; Snapshot = $snapshot }
+            } else {
+                $plan += [pscustomobject]@{ Operation = "verify"; Action = $action; Snapshot = $snapshot }
             }
         } elseif ($action.Action -eq "write") {
             if ($snapshot.Exists -and
@@ -1288,6 +1318,8 @@ function Get-InterruptedTransactionRecoveryPlan([object[]]$Actions) {
             }
             if ($snapshot.Exists) {
                 $plan += [pscustomobject]@{ Operation = "delete"; Action = $action; Snapshot = $snapshot }
+            } else {
+                $plan += [pscustomobject]@{ Operation = "verify_absent"; Action = $action; Snapshot = $snapshot }
             }
         } else {
             if ($snapshot.Exists -and $currentHash -ne $originalHash -and -not $isInterruptedOriginal) {
@@ -1297,6 +1329,8 @@ function Get-InterruptedTransactionRecoveryPlan([object[]]$Actions) {
                 $plan += [pscustomobject]@{ Operation = "create"; Action = $action; Snapshot = $snapshot }
             } elseif ($currentHash -ne $originalHash) {
                 $plan += [pscustomobject]@{ Operation = "write"; Action = $action; Snapshot = $snapshot }
+            } else {
+                $plan += [pscustomobject]@{ Operation = "verify"; Action = $action; Snapshot = $snapshot }
             }
         }
     }
@@ -1314,6 +1348,7 @@ function New-InterruptedRecoveryTemporaryFile(
     $stream = $null
     $handle = $null
     $completedBytes = $null
+    $completedIdentity = $null
     $failure = $null
     try {
         $handle = [ClaudeEasy.VerifiedDeleteNative]::CreatePrivateFile($temporary)
@@ -1334,6 +1369,9 @@ function New-InterruptedRecoveryTemporaryFile(
         $stream.SetLength($Bytes.Length)
         $stream.Flush($true)
         $completedBytes = Get-StreamBytes $stream
+        $completedIdentity = [ClaudeEasy.VerifiedDeleteNative]::GetIdentity(
+            $stream.SafeFileHandle
+        )
         if ((Get-BytesSha256 $completedBytes) -ne (Get-BytesSha256 $Bytes)) {
             throw "中断事务恢复临时文件内容不正确：$temporary"
         }
@@ -1357,6 +1395,7 @@ function New-InterruptedRecoveryTemporaryFile(
     return [pscustomobject]@{
         Path = $temporary
         Bytes = $completedBytes
+        Identity = $completedIdentity
     }
 }
 
@@ -1412,28 +1451,69 @@ function Remove-InterruptedRecoveryTemporaryFile([object]$Temporary) {
     }
 }
 
+function Undo-InterruptedTransactionRecovery([object[]]$Opened) {
+    foreach ($entry in @($Opened | Where-Object {
+        $_.Item.Operation -eq "delete"
+    })) {
+        Set-VerifiedDeleteDisposition $entry.Stream $false
+    }
+    foreach ($entry in @($Opened | Where-Object {
+        $_.Item.Operation -eq "write"
+    })) {
+        Write-LockedStreamBytes `
+            $entry.Stream `
+            $entry.Current `
+            $entry.Item.Action.Original
+    }
+    foreach ($entry in @($Opened | Where-Object {
+        $_.Item.Operation -eq "create" -and $_.Published
+    })) {
+        if ($null -ne $entry.Stream) {
+            Set-VerifiedDeleteDisposition $entry.Stream $true
+        } else {
+            Remove-InterruptedRecoveryTemporaryFile ([pscustomobject]@{
+                Path = $entry.Item.Action.Path
+                Bytes = $entry.Item.Action.Original
+            })
+        }
+    }
+    foreach ($entry in @($Opened | Where-Object {
+        $_.Item.Operation -eq "write"
+    })) {
+        if ((Get-BytesSha256 (Get-StreamBytes $entry.Stream)) -ne
+            (Get-BytesSha256 $entry.Current)) {
+            throw "中断事务末检拒绝后的回退失败：$($entry.Item.Action.Path)"
+        }
+    }
+}
+
 function Invoke-InterruptedTransactionRecovery(
     [object[]]$Plan,
-    [scriptblock]$PreCommitCondition = $null
+    [scriptblock]$PreCommitCondition = $null,
+    [scriptblock]$FinalizeCondition = $null
 ) {
     Initialize-VerifiedFileNative
     $opened = @()
     $directoryHandles = @()
     $operationFailure = $null
     $preCommitRejected = $false
+    $finalizeRejected = $false
+    $mutationsApplied = $false
+    $rollbackCompleted = $false
     $cleanupFailures = @()
     foreach ($item in @($Plan | Sort-Object { $_.Action.Path })) {
         $handle = $null
         $stream = $null
         $create = $item.Operation -eq "create"
+        $verifyAbsent = $item.Operation -eq "verify_absent"
         try {
             $directoryHandles += @(
                 Open-VerifiedDirectoryChain (Split-Path -Parent $item.Action.Path)
             )
-            if ($create -and (Test-Path -LiteralPath $item.Action.Path)) {
+            if (($create -or $verifyAbsent) -and (Test-Path -LiteralPath $item.Action.Path)) {
                 throw "中断事务待重建目标在恢复前出现：$($item.Action.Path)"
             }
-            if ($create) {
+            if ($create -or $verifyAbsent) {
                 $opened += [pscustomobject]@{
                     Item = $item
                     Stream = $null
@@ -1487,6 +1567,7 @@ function Invoke-InterruptedTransactionRecovery(
                 Test-InterruptedRecoveryCommitCondition $PreCommitCondition
             )
             if (-not $preCommitRejected) {
+                $mutationsApplied = $true
                 foreach ($entry in @($opened | Where-Object {
                     $_.Item.Operation -eq "create"
                 })) {
@@ -1521,11 +1602,20 @@ function Invoke-InterruptedTransactionRecovery(
                         $entry.Item.Action.Path
                     )
                     $entry.Published = $true
-                    $published = Get-OptionalFileSnapshot (
-                        $entry.Item.Action.Path
-                    ) "中断事务恢复结果"
-                    if (-not $published.Exists -or
-                        (Get-BytesSha256 $published.Bytes) -ne
+                    $publishedHandle = [ClaudeEasy.VerifiedDeleteNative]::Open(
+                        $entry.Item.Action.Path,
+                        $false,
+                        $false
+                    )
+                    $entry.Stream = New-Object System.IO.FileStream(
+                        $publishedHandle,
+                        [System.IO.FileAccess]::Read
+                    )
+                    $entry.Current = Get-StreamBytes $entry.Stream
+                    if ([ClaudeEasy.VerifiedDeleteNative]::GetIdentity(
+                            $entry.Stream.SafeFileHandle
+                        ) -cne $entry.Temporary.Identity -or
+                        (Get-BytesSha256 $entry.Current) -ne
                             (Get-BytesSha256 $entry.Item.Action.Original)) {
                         throw "中断事务重建目标发布后的内容不正确：$($entry.Item.Action.Path)"
                     }
@@ -1535,9 +1625,40 @@ function Invoke-InterruptedTransactionRecovery(
                 })) {
                     Set-VerifiedDeleteDisposition $entry.Stream $true
                 }
+                foreach ($entry in $opened) {
+                    if ($entry.Item.Operation -eq "verify_absent") {
+                        if (Test-Path -LiteralPath $entry.Item.Action.Path) {
+                            throw "中断事务缺失目标在最终核对前出现：$($entry.Item.Action.Path)"
+                        }
+                    } elseif ($entry.Item.Operation -ne "delete" -and
+                        (Get-BytesSha256 (Get-StreamBytes $entry.Stream)) -ne
+                            (Get-BytesSha256 $entry.Item.Action.Original)) {
+                        throw "中断事务最终核对失败：$($entry.Item.Action.Path)"
+                    }
+                }
+                if ($null -ne $FinalizeCondition) {
+                    $finalizeResults = @(& $FinalizeCondition)
+                    if ($finalizeResults.Count -ne 1 -or
+                        -not ($finalizeResults[0] -is [bool])) {
+                        throw "中断事务最终条件必须只返回一个布尔值。"
+                    }
+                    $finalizeRejected = -not [bool]$finalizeResults[0]
+                }
+                if ($finalizeRejected) {
+                    Undo-InterruptedTransactionRecovery $opened
+                    $rollbackCompleted = $true
+                }
             }
         } catch {
             $operationFailure = $_
+            if ($mutationsApplied -and -not $rollbackCompleted) {
+                try {
+                    Undo-InterruptedTransactionRecovery $opened
+                    $rollbackCompleted = $true
+                } catch {
+                    $operationFailure = $_
+                }
+            }
         }
     }
     foreach ($entry in @($opened | Where-Object {
@@ -1568,7 +1689,7 @@ function Invoke-InterruptedTransactionRecovery(
         throw ("中断事务恢复清理失败：" + ($cleanupFailures -join "；"))
     }
     if ($null -ne $operationFailure) { throw $operationFailure }
-    return (-not $preCommitRejected)
+    return (-not $preCommitRejected -and -not $finalizeRejected)
 }
 
 function Assert-InterruptedTransactionRecovered([object[]]$Actions) {
@@ -1612,12 +1733,20 @@ function Repair-InterruptedFileTransaction {
         }
         $preCommitCondition = { -not (Test-ClashVergeRunning) }
     }
-    $recovered = Invoke-InterruptedTransactionRecovery $plan $preCommitCondition
+    $finalizeCondition = {
+        if (-not (Test-InterruptedRecoveryCommitCondition $preCommitCondition)) {
+            return $false
+        }
+        Remove-FileTransactionJournal $snapshot.Bytes
+        return $true
+    }
+    $recovered = Invoke-InterruptedTransactionRecovery `
+        $plan `
+        $preCommitCondition `
+        $finalizeCondition
     if (-not $recovered) {
         throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
     }
-    Assert-InterruptedTransactionRecovered $actions
-    Remove-FileTransactionJournal $snapshot.Bytes
 }
 
 function Invoke-VerifiedPathTransaction(
