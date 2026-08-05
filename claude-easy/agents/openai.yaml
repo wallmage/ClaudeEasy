@@ -1,4 +1,4 @@
 interface:
   display_name: "ClaudeEasy 配置与诊断"
   short_description: "按用途配置、诊断或安全更新 Clash 订阅"
-  default_prompt: "使用 $claude-easy 配置、诊断并修复或安全更新网络；诊断前读取用途档位，只处理当前存储位置。诊断要完成取证、修复、复测和必要迭代，不停在解释或方案。用户要求更新节点时更新全部远程订阅，档位 3 保持自动更新关闭；绝对不要退出、停止或重启 Clash 客户端。"
+  default_prompt: "使用 $claude-easy 按用户要求分析、复核、修复、配置、监测或安全更新 Clash；诊断前读取用途档位并只处理当前存储位置，未获授权不写入，绝对不要退出、停止或重启 Clash 客户端。"

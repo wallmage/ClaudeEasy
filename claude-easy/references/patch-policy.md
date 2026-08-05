@@ -28,7 +28,7 @@
 1. 本文件定义产品行为、授权边界、平台差异、异常处理和人类可读状态。
 2. [`policy.json`](policy.json) 定义解析器、规则集、分组候选和 AI 规则等配置常量；本文件只解释用途，不复制常量清单。
 3. [`result-contract.json`](result-contract.json) 定义机器输出字段、类型和状态枚举；本文件只定义脱敏与语义约束。
-4. `SKILL.md` 只保留代理入口、模块选择和执行顺序；README 只解释用户可见行为，不重新定义执行规则；设计文档只定义产品目标、组件边界和规则归属；`tests/baseline.md` 只记录测试覆盖范围。
+4. `SKILL.md` 保留触发后必须立即可见的安全边界、代理入口、模块选择和执行顺序；README 只解释用户可见行为，不重新定义执行规则；设计文档只定义产品目标、组件边界和规则归属；`tests/baseline.md` 只记录测试覆盖范围。
 
 冲突按以下顺序处理：用户当次明确授权和用途档位先限定可做范围；随后具体场景规则优先于通用规则，平台规则优先于跨平台摘要，事务安全规则优先于一般失败恢复规则，隐私规则优先于展示便利。仍无法唯一判断时停止对应写入并报告规则冲突，不自行挑选较宽松解释。
 
@@ -132,6 +132,17 @@ macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，Windows 用
 **使用 Skill 不等于授权修改 Skill。** 网络诊断、修复请求、产品反馈或发现保护缺口，都不授权修改仓库、提交或发布。只有用户**明确要求维护本项目**并把仓库置于范围时才进入产品改动；即使已有授权，也只能固化已经证实且可复用的问题，不能把事故候选写成产品规则。
 
 持久修复必须以已经确认的问题为依据，并同时具备修改权限和明确对象。为取得证据而做的隔离实验，或用户已授权、单变量、可完整恢复的现场对照可以在确认前执行；**诊断对照不是持久修复**，只产生证据，不能写成问题已经解决。产品维护只固化已经由规则冲突、失败合同测试或可重复行为证实的通用问题，不把尚未证实的事故猜测写进代码、Skill 或项目规则。
+
+### 交付类型决策表
+
+| 交付类型 | 允许动作 | 完成条件 |
+| --- | --- | --- |
+| 分析或复核 | 只读 | 结论、证据、反证和未知项完整 |
+| 修复 | 已确认的问题、明确对象和写入授权 | 最小修复、原场景复测和受影响能力回归 |
+| 更新 | 用户明确要求安全更新全部订阅 | 全部远程订阅逐份验收并报告生效状态 |
+| 监测 | 只读采集；内容采集另需授权 | 确认采集运行、记录范围并提供停止方法 |
+
+配置、用途档位变更和完整安全增强归入 Patch，完成条件按所选档位的验收规则执行。交付类型不能在执行中自行扩大；发现另一个值得处理的问题时，只记录并继续完成本次合同。
 
 ### 外部服务状态
 
@@ -356,32 +367,7 @@ ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持
 
 ## DNS 与 TUN
 
-档位 1、2、3 的共同国内域名直连基线：
-
-```yaml
-rule-providers:
-  claude-easy-cn-domain:
-    type: http
-    behavior: domain
-    format: mrs
-    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs
-    path: ./ruleset/claude-easy-cn-domain.mrs
-    interval: 86400
-    proxy: <主代理组>
-dns:
-  enable: true
-  respect-rules: true
-  direct-nameserver:
-    - https://223.5.5.5/dns-query#DIRECT
-    - https://1.12.12.12/dns-query#DIRECT
-  direct-nameserver-follow-policy: false
-  nameserver-policy:
-    rule-set:claude-easy-cn-domain:
-      - https://223.5.5.5/dns-query#DIRECT
-      - https://1.12.12.12/dns-query#DIRECT
-rules:
-  - RULE-SET,claude-easy-cn-domain,DIRECT
-```
+档位 1、2、3 的共同国内域名直连基线由 `policy.json` 的 `cn_domain_provider` 和 `direct_resolvers` 生成：安装受管国内域名规则提供器，让该规则提供器通过当前主代理组更新；国内域名路由到 `DIRECT`，其 `nameserver-policy` 与 `direct-nameserver` 使用同一组直连解析器，并关闭 `direct-nameserver-follow-policy`。具体名称、地址、路径、更新间隔和解析器值不得在本文复制。
 
 档位 3 的追加策略：
 
@@ -406,7 +392,7 @@ dns:
 
 补丁不创建安全代理组。`DNS` 出站只把请求交给 Mihomo 内部 DNS 模块，不是远端代理。Fake-IP 模式会在连接规则判定前解析域名，因此三个档位都必须让 `nameserver-policy` 与路由引用同一个受管规则提供器，不能只设置 `direct-nameserver`。档位 3 另保留 `geosite:cn` 后备；普通国外查询使用带原主代理组标签的受管 DoH，AI 域名查询使用带 AI 分组标签的同一套受管 DoH。这样国内直连网站获得大陆 CDN，AI 的解析请求和网页连接使用同一个 AI 出口。
 
-两组 DoH 都直接连接解析器 IP，无需先解析解析器域名，避免解析器域名错误引发证书失败。代理侧使用 AdGuard 的两个非过滤地址和 TWNIC Quad 101；直连侧使用阿里 `223.5.5.5` 和 DNSPod `1.12.12.12`。所有查询都使用 HTTPS，不加入广告拦截，不发送 ECS。
+`policy.json` 的 `resolvers` 与 `direct_resolvers` 都直接连接解析器 IP，无需先解析解析器域名，避免引导解析错误引发证书失败。所有查询都使用 HTTPS，不加入广告拦截，不发送 ECS。
 
 `default-nameserver` 和 `proxy-server-nameserver` 属于网络启动边界，存在时必须是列表，安全用户值必须保留。`proxy-server-nameserver` 缺失、类型不对，或任一值使用 `system`、明文 DNS、旧版补丁写入的固定境外组合时，统一迁移到策略中的大陆 IP DoH，并带 `#DIRECT` 直接连接；这组解析器不依赖系统 DNS、明文 53 或解析器域名引导。已有 `default-nameserver` 类型不对或含同类危险值时也迁移，字段缺失时不新增。这样节点域名解析不会重进 AdGuard、TUN `dns-hijack` 和 Mihomo Fake-IP 链。
 
@@ -449,24 +435,10 @@ AI 分组的用途是分开普通流量和 AI 流量：主代理组可以选择�
 
 唯一数据来源是 [policy.json](policy.json)。Windows 脚本中的策略块由本地生成器写入，并由一致性测试检查，不能手工维护另一份规则。
 
-规则覆盖：
-
-- `anthropic.com`、Claude 应用、内容、MCP 和静态服务；
-- `openai.com`、`chatgpt.com`、Codex 所使用的 OpenAI 域名；
-- OpenAI 实时语音、静态资源、上传和明确属于 OpenAI 的验证服务；
-- 已有补丁中的 Google AI 和 Gemini 域名；
-- Anthropic 官方公布的入站 IPv4 `160.79.104.0/23` 与 IPv6 `2607:6bc0::/48`，并使用 `no-resolve`；
-- `DOMAIN-KEYWORD,openai` 后备规则。
-
-明确禁止把以下通用域名整体交给 AI 组：
-
-- `raw.githubusercontent.com`
-- `storage.googleapis.com`
+规则覆盖范围、当前规则、迁移规则和禁止整体交给 AI 组的通用域名，分别只读取 `policy.json` 的 `ai_rules`、`legacy_ai_rules` 与 `forbidden_ai_domains`；本文不复制具体域名、网段或规则文本。
 
 不得把整站 `sentry.io`、`auth0.com`、`segment.io`、`intercom.io`、Stripe、Cloudflare Challenge、SendGrid、WorkOS 等共享服务交给 AI 组。只保留第一方域名和能确认专门服务于 AI 产品的精确主机名。
-`ai.com` 属于无关产品，也不得加入 AI 规则。
-
-从旧策略升级时，把目标仍是补丁自有 AI 组的 `DOMAIN-SUFFIX,ai.com` 和 `IP-CIDR,160.79.104.0/21` 当作迁移项删除，并写入当前的 `/23`。相同旧规则若指向用户组，必须保留；DNS 中旧的 `+.ai.com` 也只在解析器仍指向补丁自有安全组时删除。
+从旧策略升级时，只迁移 `legacy_ai_rules` 指定、且目标仍是补丁自有 AI 组的规则，并写入 `ai_rules` 的当前值。相同旧规则若指向用户组，必须保留；对应 DNS 旧键也只在解析器仍指向补丁自有安全组时删除。
 
 只删除目标为受管 AI 组的上述规则。其他用途的规则保持不变。
 

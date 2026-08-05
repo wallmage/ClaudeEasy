@@ -6,7 +6,7 @@
 - 始终在 `main` 上工作，不使用 worktree、功能分支或 PR。
 - 实际修改项目后，除非用户明确要求不要提交，否则自动完成本地测试、commit 和 push，让 GitHub CI 自动运行。不得把“尚未 commit 或 push”作为常规收尾。
 - 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。如果 `~/.agents/skills/claude-easy/` 存在，也要同步安装 Agents 副本。新副本必须逐文件校验一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动处理。
-- 文档位置和职责固定，不得自行新增需求汇总、入口、方案或计划文档：`README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 只规定代理入口与执行顺序，`claude-easy/references/patch-policy.md` 是详细产品行为的唯一权威来源，`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同，设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
+- 文档位置和职责固定，不得自行新增需求汇总、入口、方案或计划文档：`README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 规定触发后必须立即可见的安全边界、代理入口与执行顺序，`claude-easy/references/patch-policy.md` 是详细产品行为的唯一权威来源，`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同，设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
 - 功能需求变化时，先修改所属权威来源、代码和测试；其他文档只同步用户摘要、执行入口或架构影响，不重复整套规则。
 
 ## 项目边界

@@ -7,7 +7,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 ## 先读规则
 
-开始前完整阅读 [references/patch-policy.md](references/patch-policy.md)。本文件只保留代理入口、模块选择和执行顺序；详细产品行为、平台差异、异常处理和状态文案只在该策略文件定义。配置常量以 `references/policy.json` 为准；全部状态以策略文件的“输出格式”和 `references/result-contract.json` 为准。
+开始前完整阅读 [references/patch-policy.md](references/patch-policy.md)。本文件保留代理入口、模块选择、执行顺序和不可突破的安全边界；详细产品行为、平台差异、异常处理和状态文案只在该策略文件定义。配置常量以 `references/policy.json` 为准；全部状态以策略文件的“输出格式”和 `references/result-contract.json` 为准。
 
 ## 不可突破的边界
 

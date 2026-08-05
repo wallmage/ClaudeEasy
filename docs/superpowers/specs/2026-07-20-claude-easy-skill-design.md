@@ -8,7 +8,7 @@
 本文只定义产品目标、组件边界和规则归属，不复制操作步骤、配置常量或状态文案：
 
 - `README.md`：用户可见能力、命令和限制。
-- `claude-easy/SKILL.md`：代理入口、模块选择和执行顺序。
+- `claude-easy/SKILL.md`：触发后必须立即可见的安全边界、代理入口、模块选择和执行顺序。
 - `claude-easy/references/patch-policy.md`：产品行为、授权边界、平台差异、异常和人类可读状态的唯一权威来源。
 - `claude-easy/references/policy.json`：解析器、规则集、分组候选和 AI 规则等配置常量。
 - `claude-easy/references/result-contract.json`：JSON v1 字段、类型和状态枚举。
