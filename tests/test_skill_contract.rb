@@ -35,6 +35,7 @@ class SkillContractTest < Minitest::Test
     claude-easy/scripts/macos/patch_profiles/profile_writer.rb
     claude-easy/scripts/macos/patch_profiles/subscriptions.rb
     claude-easy/scripts/macos/patch_profiles/runtime.rb
+    claude-easy/scripts/macos/patch_profiles/log_repair.rb
     claude-easy/scripts/macos/patch_profiles/cli.rb
     claude-easy/scripts/macos/result_contract.rb
     claude-easy/scripts/macos/verify_routes.rb
@@ -1111,6 +1112,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "逐份订阅取证"
       assert_includes document, "Fake-IP 地址"
       assert_includes document, "不得共用结论"
+      assert_includes document, "--repair-clashx-logs"
+      assert_includes document, "保留旧日志"
+      assert_includes document, "不停止或重启 Clash"
     end
     [skill, policy].each do |document|
       assert_includes document, "控制器实时日志"

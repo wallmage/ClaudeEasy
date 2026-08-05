@@ -114,6 +114,271 @@ class MacosPatcherTest < Minitest::Test
     )
   end
 
+  def run_log_repair_command(home, json: true)
+    arguments = ["--repair-clashx-logs"]
+    arguments << "--json" if json
+    capture_ruby_entrypoint(PATCHER_PATH, *arguments, environment: { "HOME" => home })
+  end
+
+  def test_log_repair_public_command_preserves_unwritable_tree_and_recreates_session
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, ".config", "clash.meta")
+      session = File.join(config_root, "logs", "2026-08-05_00-59-57")
+      FileUtils.mkdir_p(session, mode: 0o700)
+      File.binwrite(File.join(session, "old.log"), "incident evidence")
+      File.chmod(0o400, session)
+      File.chmod(0o500, File.dirname(session))
+
+      begin
+        stdout, stderr, status = run_log_repair_command(home)
+        assert status.success?, "#{stdout}\n#{stderr}"
+        assert_empty stderr
+        result = JSON.parse(stdout)
+        assert_equal "logs_repaired", result.fetch("code")
+        assert_equal ["clashx_file_logging"], result.fetch("changes")
+        assert File.writable?(File.join(config_root, "logs"))
+        assert File.executable?(File.join(config_root, "logs"))
+        assert Dir.exist?(File.join(config_root, "logs", "2026-08-05_00-59-57"))
+        backups = Dir.glob(File.join(config_root, "logs.permission-backup-*"))
+        assert_equal 1, backups.length
+        FileUtils.chmod_R(0o700, backups.fetch(0))
+        assert_equal "incident evidence", File.binread(
+          File.join(backups.fetch(0), "2026-08-05_00-59-57", "old.log")
+        )
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_public_command_creates_missing_tree_and_is_idempotent
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, ".config", "clash.meta")
+      FileUtils.mkdir_p(config_root, mode: 0o700)
+
+      first_stdout, first_stderr, first_status = run_log_repair_command(home)
+      assert first_status.success?, "#{first_stdout}\n#{first_stderr}"
+      assert_empty first_stderr
+      assert_equal "logs_repaired", JSON.parse(first_stdout).fetch("code")
+      logs = File.join(config_root, "logs")
+      before = File.stat(logs)
+
+      stdout, stderr, status = run_log_repair_command(home)
+      assert status.success?, "#{stdout}\n#{stderr}"
+      assert_empty stderr
+      assert_equal "logs_already_writable", JSON.parse(stdout).fetch("code")
+      after = File.stat(logs)
+      assert_equal [before.dev, before.ino], [after.dev, after.ino]
+    end
+  end
+
+  def test_log_repair_public_command_rejects_symlink
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, ".config", "clash.meta")
+      outside = File.join(home, "outside")
+      FileUtils.mkdir_p(config_root)
+      FileUtils.mkdir_p(outside)
+      File.binwrite(File.join(outside, "keep"), "unchanged")
+      File.symlink(outside, File.join(config_root, "logs"))
+
+      stdout, stderr, status = run_log_repair_command(home)
+      assert_equal 1, status.exitstatus
+      assert_empty stderr
+      assert_equal "unsafe_log_path", JSON.parse(stdout).fetch("code")
+      assert_equal "unchanged", File.binread(File.join(outside, "keep"))
+    end
+  end
+
+  def test_log_repair_helpers_reject_bad_acl_and_paths
+    assert_equal File.expand_path("~/.config/clash.meta/logs"), ClaudeEasy.clashx_log_root
+    status = Struct.new(:success?)
+    failed_runner = ->(*_arguments) { ["", "", status.new(false)] }
+    assert_raises(ClaudeEasy::LogRepairError) do
+      ClaudeEasy.add_log_acl("ignored", username: "tester", runner: failed_runner)
+    end
+
+    calls = 0
+    unreadable_runner = lambda do |*_arguments|
+      calls += 1
+      [calls == 1 ? "" : "no acl", "", status.new(true)]
+    end
+    assert_raises(ClaudeEasy::LogRepairError) do
+      ClaudeEasy.add_log_acl("ignored", username: "tester", runner: unreadable_runner)
+    end
+
+    Dir.mktmpdir do |home|
+      missing = File.join(home, "missing", "logs")
+      assert_raises(ClaudeEasy::UnsafeLogPathError) do
+        ClaudeEasy.validate_log_config_root(missing)
+      end
+
+      outside = File.join(home, "outside")
+      FileUtils.mkdir_p(outside)
+      config_link = File.join(home, "clash.meta")
+      File.symlink(outside, config_link)
+      assert_raises(ClaudeEasy::UnsafeLogPathError) do
+        ClaudeEasy.validate_log_config_root(File.join(config_link, "logs"))
+      end
+
+      log_link = File.join(outside, "logs-link")
+      File.symlink(home, log_link)
+      assert_raises(ClaudeEasy::UnsafeLogPathError) do
+        ClaudeEasy.repair_clashx_logs(log_root: log_link)
+      end
+    end
+
+    Dir.stub(:children, ->(_path) { raise Errno::EACCES }) do
+      assert_equal [], ClaudeEasy.log_session_names("ignored")
+    end
+  end
+
+  def test_log_repair_directly_covers_missing_healthy_and_inaccessible_trees
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(config_root)
+
+      result = ClaudeEasy.repair_clashx_logs(log_root: logs)
+      assert_equal :repaired, result.fetch(:status)
+      assert_equal false, result.fetch(:backup_preserved)
+
+      FileUtils.rm_rf(logs)
+      FileUtils.mkdir_p(logs, mode: 0o700)
+      result = ClaudeEasy.repair_clashx_logs(log_root: logs)
+      assert_equal :repaired, result.fetch(:status)
+      result = ClaudeEasy.repair_clashx_logs(log_root: logs)
+      assert_equal :already_writable, result.fetch(:status)
+
+      FileUtils.rm_rf(logs)
+      session = File.join(logs, "2026-08-05_00-59-57")
+      FileUtils.mkdir_p(session, mode: 0o700)
+      File.chmod(0o500, logs)
+      begin
+        result = ClaudeEasy.repair_clashx_logs(log_root: logs)
+        assert_equal :repaired, result.fetch(:status)
+        assert_equal true, result.fetch(:backup_preserved)
+        assert_equal true, result.fetch(:session_recreated)
+        assert Dir.exist?(File.join(logs, "2026-08-05_00-59-57"))
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_rejects_root_and_invalid_acl_username
+    Process.stub(:uid, 0) do
+      assert_raises(ClaudeEasy::UnsafeLogPathError) do
+        ClaudeEasy.repair_clashx_logs(log_root: "/unused")
+      end
+    end
+
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      FileUtils.mkdir_p(config_root)
+      account = Struct.new(:name).new("bad user")
+      Etc.stub(:getpwuid, account) do
+        assert_raises(ClaudeEasy::UnsafeLogPathError) do
+          ClaudeEasy.repair_clashx_logs(log_root: File.join(config_root, "logs"))
+        end
+      end
+    end
+  end
+
+  def test_log_repair_restores_old_tree_if_replacement_publish_fails
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(logs)
+      File.chmod(0o500, logs)
+      calls = 0
+      renamer = lambda do |source, destination|
+        calls += 1
+        raise IOError, "injected publish failure" if calls == 2
+
+        File.rename(source, destination)
+        true
+      end
+
+      begin
+        ClaudeEasyOperationLock.stub(:rename_exclusive, renamer) do
+          assert_raises(ClaudeEasy::LogRepairError) do
+            ClaudeEasy.repair_clashx_logs(log_root: logs)
+          end
+        end
+        assert_equal 3, calls
+        assert Dir.exist?(logs)
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_fails_if_replacement_permissions_cannot_be_verified
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(logs)
+      File.chmod(0o500, logs)
+      checks = 0
+      acl_check = lambda do |*_arguments, **_keywords|
+        checks += 1
+        checks == 1
+      end
+
+      begin
+        ClaudeEasy.stub(:log_acl_present?, acl_check) do
+          assert_raises(ClaudeEasy::LogRepairError) do
+            ClaudeEasy.repair_clashx_logs(log_root: logs)
+          end
+        end
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_cli_covers_human_success_and_failure_messages
+    stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, { status: :repaired, backup_preserved: false }) do
+        assert_equal 0, ClaudeEasy.cli(["--repair-clashx-logs"])
+      end
+    end
+    assert_includes stdout, "已恢复写入"
+    assert_empty stderr
+
+    _stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, -> { raise ClaudeEasy::UnsafeLogPathError }) do
+        assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs"])
+      end
+    end
+    assert_includes stderr, "路径不安全"
+
+    _stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, -> { raise ClaudeEasy::LogRepairError }) do
+        assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs"])
+      end
+    end
+    assert_includes stderr, "修复失败"
+
+    stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, -> { raise ClaudeEasy::LogRepairError }) do
+        assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs", "--json"])
+      end
+    end
+    assert_empty stderr
+    assert_equal "log_repair_failed", JSON.parse(stdout).fetch("code")
+
+    stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, { status: :repaired, backup_preserved: true }) do
+        assert_equal 0, ClaudeEasy.cli(["--repair-clashx-logs", "--json"])
+      end
+    end
+    assert_empty stderr
+    result = JSON.parse(stdout)
+    assert_equal "logs_repaired", result.fetch("code")
+    assert_equal ["clashx_file_logging"], result.fetch("changes")
+  end
+
   def test_wrapper_operation_lock_serializes_mutations_and_uses_private_permissions
     Dir.mktmpdir do |directory|
       path = File.join(directory, "backups", ".claude-easy-wrapper.lock")

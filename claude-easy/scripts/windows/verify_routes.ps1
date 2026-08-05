@@ -8,6 +8,7 @@
     [switch]$Json
 )
 
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path $PSScriptRoot "result_contract.ps1"
 $resultContractLoaded = $false

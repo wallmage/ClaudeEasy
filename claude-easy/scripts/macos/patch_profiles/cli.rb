@@ -293,6 +293,7 @@ module ClaudeEasy
       expected_current_sha256: nil,
       safe_update_all: false,
       recover_profile_transaction: false,
+      repair_clashx_logs: false,
       usage_profile: nil,
       uninstall_recovery_state: nil,
       wrapper_commit_receipt: nil,
@@ -321,6 +322,7 @@ module ClaudeEasy
       opts.on("--expected-current-sha256 SHA256", "恢复前要求当前配置哈希匹配") { |value| options[:expected_current_sha256] = value }
       opts.on("--safe-update-all", "安全更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
       opts.on("--recover-profile-transaction", "恢复未完成的配置事务及当前运行配置") { options[:recover_profile_transaction] = true }
+      opts.on("--repair-clashx-logs", "修复 ClashX Meta 文件日志目录权限") { options[:repair_clashx_logs] = true }
       opts.on("--usage-profile N", Integer, "补丁与安全更新采用的用途档位") { |value| options[:usage_profile] = value }
       opts.on("--internal-uninstall-recovery-state PATH") do |value|
         options[:uninstall_recovery_state] = File.expand_path(value)
@@ -349,7 +351,7 @@ module ClaudeEasy
       options[:disable_subscription_auto_update], options[:enable_subscription_auto_update],
       options[:restore_owned_subscription_auto_update], options[:snapshot_initial],
       options[:list_backups], options[:compare_backup], options[:restore_backup],
-      options[:safe_update_all], options[:recover_profile_transaction]
+      options[:safe_update_all], options[:recover_profile_transaction], options[:repair_clashx_logs]
     ].compact.reject { |value| value == false }
     incompatible_options = explicit_operations.length > 1 ||
                            (!explicit_operations.empty? &&
@@ -418,6 +420,41 @@ module ClaudeEasy
 
     lock_status = enter_outer_wrapper_lock(original_arguments, options)
     return lock_status if lock_status
+
+    if options[:repair_clashx_logs]
+      begin
+        result = repair_clashx_logs
+        changed = result.fetch(:status) == :repaired
+        return emit_cli_result(
+          operation: "repair_clashx_logs", exit_code: 0,
+          status: changed ? "ok" : "no_change",
+          code: changed ? "logs_repaired" : "logs_already_writable",
+          summary_zh: changed ? "ClashX Meta 文件日志已恢复写入。" : "ClashX Meta 文件日志目录可以正常写入。",
+          changes: changed ? ["clashx_file_logging"] : [],
+          checks: [
+            { "name" => "log_directory_writable", "ok" => true },
+            { "name" => "old_logs_preserved", "ok" => true,
+              "value" => result.fetch(:backup_preserved) }
+          ]
+        ) if options[:json]
+        puts(changed ? "ClashX Meta 文件日志已恢复写入。" : "ClashX Meta 文件日志目录可以正常写入。")
+        return 0
+      rescue UnsafeLogPathError
+        return emit_cli_result(
+          operation: "repair_clashx_logs", exit_code: 1, status: "failed",
+          code: "unsafe_log_path", summary_zh: "ClashX Meta 日志路径不安全，未执行修改。"
+        ) if options[:json]
+        warn "ClashX Meta 日志路径不安全，未执行修改。"
+        return 1
+      rescue LogRepairError
+        return emit_cli_result(
+          operation: "repair_clashx_logs", exit_code: 1, status: "failed",
+          code: "log_repair_failed", summary_zh: "ClashX Meta 文件日志修复失败。"
+        ) if options[:json]
+        warn "ClashX Meta 文件日志修复失败。"
+        return 1
+      end
+    end
 
     if options[:disable_subscription_auto_update]
       unless internal_wrapper_operation?(options[:backup_root])

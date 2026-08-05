@@ -31,6 +31,7 @@ class MacosWrapperTest < Minitest::Test
     macos/patch_profiles/profile_writer.rb
     macos/patch_profiles/subscriptions.rb
     macos/patch_profiles/runtime.rb
+    macos/patch_profiles/log_repair.rb
     macos/patch_profiles/cli.rb
     ../references/policy.json
   ].freeze

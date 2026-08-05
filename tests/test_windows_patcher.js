@@ -1427,10 +1427,16 @@ test('Windows public commands share the JSON v1 result contract', () => {
   assert.match(contract, /ConvertTo-Json -Depth/);
 
   for (const entry of [installerPath, uninstallerPath, routeVerifierPath]) {
-    const source = entry === installerPath ? readInstallerBundle() : fs.readFileSync(entry, 'utf8');
+    const entrypoint = fs.readFileSync(entry, 'utf8');
+    const source = entry === installerPath ? readInstallerBundle() : entrypoint;
     assert.match(source, /\[switch\]\$Json/, entry);
     assert.match(source, /result_contract\.ps1/, entry);
     assert.match(source, /Write-ClaudeEasyResult/, entry);
+    assert.match(
+      entrypoint,
+      /\[Console\]::OutputEncoding\s*=\s*New-Object System\.Text\.UTF8Encoding\(\$false\)/,
+      entry
+    );
   }
 
   assert.match(fs.readFileSync(path.join(installerModuleDir, 'common.ps1'), 'utf8'), /-Command "install"/);

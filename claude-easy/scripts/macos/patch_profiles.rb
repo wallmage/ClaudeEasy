@@ -37,7 +37,8 @@ module ClaudeEasyBootstrap
 
   DEPENDENCIES = %w[
     result_contract operation_lock patch_profiles/transform patch_profiles/backups patch_profiles/mihomo
-    patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime patch_profiles/cli
+    patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime
+    patch_profiles/log_repair patch_profiles/cli
   ].freeze
 
   def load_dependencies(loader:, argv:, output:)
