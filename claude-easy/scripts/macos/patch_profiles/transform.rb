@@ -171,7 +171,13 @@ module ClaudeEasy
     config["dns"] = dns
     dns["enable"] = true
     dns["respect-rules"] = true
-    dns["proxy-server-nameserver"] = deep_copy(policy["bootstrap_fallback_resolvers"]) if Array(dns["proxy-server-nameserver"]).empty?
+    fallback_bootstrap = deep_copy(policy["bootstrap_fallback_resolvers"])
+    if unsafe_proxy_bootstrap?(dns["proxy-server-nameserver"])
+      dns["proxy-server-nameserver"] = fallback_bootstrap
+    end
+    if dns.key?("default-nameserver") && unsafe_default_bootstrap?(dns["default-nameserver"])
+      dns["default-nameserver"] = deep_copy(fallback_bootstrap)
+    end
     dns["nameserver"] = tagged_resolvers(policy, route_group) if Array(dns["nameserver"]).empty?
     dns["direct-nameserver"] = deep_copy(policy["direct_resolvers"])
     dns["direct-nameserver-follow-policy"] = false
@@ -613,6 +619,26 @@ module ClaudeEasy
     end.uniq
   end
 
+  def unsafe_proxy_bootstrap?(values)
+    normalized = Array(values)
+    return true if normalized.empty? || normalized.any? { |value| unsafe_plaintext_bootstrap_value?(value) }
+
+    [
+      ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
+    ].include?(normalized)
+  end
+
+  def unsafe_default_bootstrap?(values)
+    Array(values).any? { |value| unsafe_plaintext_bootstrap_value?(value) }
+  end
+
+  def unsafe_plaintext_bootstrap_value?(value)
+    text = value.to_s
+    text == "system" ||
+      text.match?(%r{\A(?:udp|tcp|dhcp)://}i) ||
+      text.match?(%r{\A\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:#.*)?\z})
+  end
+
   def patch_dns(config, policy, route_group, ai_group, owned_safe_names = [], cn_provider_name = nil)
     dns = config["dns"].is_a?(Hash) ? config["dns"] : {}
     config["dns"] = dns
@@ -624,19 +650,6 @@ module ClaudeEasy
 
     safe_resolvers = tagged_resolvers(policy, route_group)
     ai_resolvers = tagged_resolvers(policy, ai_group)
-    fallback_bootstrap = deep_copy(policy["bootstrap_fallback_resolvers"])
-    legacy_default = ["1.1.1.1", "8.8.8.8"]
-    legacy_proxy = [
-      ["1.1.1.1", "8.8.8.8"],
-      ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
-    ]
-    current_proxy = Array(dns["proxy-server-nameserver"])
-    if current_proxy.empty? || legacy_proxy.include?(current_proxy)
-      dns["proxy-server-nameserver"] = fallback_bootstrap
-    end
-    if Array(dns["default-nameserver"]) == legacy_default
-      dns["default-nameserver"] = deep_copy(fallback_bootstrap)
-    end
     dns["nameserver"] = deep_copy(safe_resolvers)
     dns["fallback"] = deep_copy(safe_resolvers) if dns.key?("fallback")
     dns["direct-nameserver"] = deep_copy(policy["direct_resolvers"])

@@ -386,16 +386,16 @@ test('removes groups created by an older patch', { skip: !available }, () => {
   assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,AI', 'NETWORK,UDP,REJECT']);
 });
 
-test('preserves bootstrap and replaces direct resolvers with managed mainland DoH', { skip: !available }, () => {
+test('preserves encrypted IP bootstrap and replaces direct resolvers with managed mainland DoH', { skip: !available }, () => {
   const config = baseConfig();
-  config.dns['default-nameserver'] = ['223.5.5.5', '119.29.29.29'];
-  config.dns['proxy-server-nameserver'] = ['223.5.5.5', '120.53.53.53'];
+  config.dns['default-nameserver'] = ['tls://223.5.5.5', 'tls://1.12.12.12'];
+  config.dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query', 'tls://1.12.12.12'];
   config.dns['direct-nameserver'] = ['system'];
 
   const dns = engine.claudeEasyTransform(config, 'fixture').dns;
 
-  assert.deepEqual(dns['default-nameserver'], ['223.5.5.5', '119.29.29.29']);
-  assert.deepEqual(dns['proxy-server-nameserver'], ['223.5.5.5', '120.53.53.53']);
+  assert.deepEqual(dns['default-nameserver'], ['tls://223.5.5.5', 'tls://1.12.12.12']);
+  assert.deepEqual(dns['proxy-server-nameserver'], ['https://223.5.5.5/dns-query', 'tls://1.12.12.12']);
   assert.deepEqual(dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.equal(dns['direct-nameserver-follow-policy'], false);
 });
@@ -427,27 +427,63 @@ test('managed DNS uses bootstrap-free IP DoH and rewrites other endpoints', { sk
   assert.deepEqual(policies['+.hostname-resolver.example'], managed);
   assert.deepEqual(policies['+.blocked-prone.example'], managed);
   assert.deepEqual(policies['+.managed.example'], managed);
-  assert.deepEqual(patched.dns['proxy-server-nameserver'], ['223.5.5.5', '120.53.53.53']);
+  assert.deepEqual(patched.dns['proxy-server-nameserver'], engine.CLAUDE_EASY_POLICY.bootstrapFallbackResolvers);
 });
 
-test('uses system only when proxy bootstrap is missing', { skip: !available }, () => {
-  const dns = engine.claudeEasyTransform(baseConfig(), 'fixture').dns;
+test('uses bootstrap-free mainland DoH when proxy bootstrap is missing', { skip: !available }, () => {
+  for (const usageProfile of [1, 2, 3]) {
+    const dns = engine.claudeEasyTransform(baseConfig(), 'fixture', usageProfile).dns;
 
-  assert.equal(Object.hasOwn(dns, 'default-nameserver'), false);
-  assert.deepEqual(dns['proxy-server-nameserver'], ['system']);
-  assert.deepEqual(dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
-  assert.equal(dns['direct-nameserver-follow-policy'], false);
+    assert.equal(Object.hasOwn(dns, 'default-nameserver'), false);
+    assert.deepEqual(dns['proxy-server-nameserver'], [
+      'https://223.5.5.5/dns-query#DIRECT',
+      'https://1.12.12.12/dns-query#DIRECT'
+    ]);
+    assert.deepEqual(dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
+    assert.equal(dns['direct-nameserver-follow-policy'], false);
+  }
 });
 
-test('migrates the old unsafe bootstrap signature to system', { skip: !available }, () => {
+test('migrates system proxy bootstrap to bootstrap-free mainland DoH', { skip: !available }, () => {
+  const config = baseConfig();
+  config.dns['proxy-server-nameserver'] = ['system'];
+
+  for (const usageProfile of [1, 2, 3]) {
+    const dns = engine.claudeEasyTransform(config, 'fixture', usageProfile).dns;
+
+    assert.deepEqual(dns['proxy-server-nameserver'], [
+      'https://223.5.5.5/dns-query#DIRECT',
+      'https://1.12.12.12/dns-query#DIRECT'
+    ]);
+  }
+});
+
+test('migrates mixed system and plaintext bootstrap to bootstrap-free mainland DoH', { skip: !available }, () => {
+  const config = baseConfig();
+  config.dns['default-nameserver'] = ['223.5.5.5', 'system', 'tls://1.12.12.12'];
+  config.dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query', 'system'];
+
+  for (const usageProfile of [1, 2, 3]) {
+    const dns = engine.claudeEasyTransform(config, 'fixture', usageProfile).dns;
+
+    assert.deepEqual(dns['default-nameserver'], engine.CLAUDE_EASY_POLICY.bootstrapFallbackResolvers);
+    assert.deepEqual(dns['proxy-server-nameserver'], engine.CLAUDE_EASY_POLICY.bootstrapFallbackResolvers);
+  }
+});
+
+test('migrates the old unsafe bootstrap signature to bootstrap-free mainland DoH', { skip: !available }, () => {
   const config = baseConfig();
   config.dns['default-nameserver'] = ['1.1.1.1', '8.8.8.8'];
   config.dns['proxy-server-nameserver'] = ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'];
 
   const dns = engine.claudeEasyTransform(config, 'fixture').dns;
 
-  assert.deepEqual(dns['default-nameserver'], ['system']);
-  assert.deepEqual(dns['proxy-server-nameserver'], ['system']);
+  const expected = [
+    'https://223.5.5.5/dns-query#DIRECT',
+    'https://1.12.12.12/dns-query#DIRECT'
+  ];
+  assert.deepEqual(dns['default-nameserver'], expected);
+  assert.deepEqual(dns['proxy-server-nameserver'], expected);
 });
 
 test('main delegates to the same transform', { skip: !available }, () => {

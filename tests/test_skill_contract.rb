@@ -1067,7 +1067,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不得把完整补丁验收当成每次诊断的固定步骤"
   end
 
-  def test_ai_availability_diagnostics_check_official_incidents_before_local_state
+  def test_ai_availability_diagnostics_checks_scope_before_official_incidents
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
@@ -1078,6 +1078,9 @@ class SkillContractTest < Minitest::Test
     [readme, skill, policy, design].each do |document|
       assert_includes document, "AI 服务状态前置检查"
       assert_includes document, "对应提供商的官方状态页和事件历史"
+      assert_includes document, "只有故障范围仍局限于单个 AI 服务"
+      assert_includes document, "多个订阅"
+      assert_includes document, "不得查询 AI 服务状态"
     end
     [skill, policy].each do |document|
       assert_includes document, "https://status.openai.com/"
@@ -1094,6 +1097,25 @@ class SkillContractTest < Minitest::Test
       :<,
       policy.index("### 通用工作循环")
     )
+  end
+
+  def test_multi_subscription_failures_require_per_profile_evidence
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    )
+
+    [readme, skill, policy, design].each do |document|
+      assert_includes document, "逐份订阅取证"
+      assert_includes document, "Fake-IP 地址"
+      assert_includes document, "不得共用结论"
+    end
+    [skill, policy].each do |document|
+      assert_includes document, "控制器实时日志"
+      assert_includes document, "不得直接强制加载"
+    end
   end
 
   def test_diagnostics_finishes_with_repair_explanation_and_verification

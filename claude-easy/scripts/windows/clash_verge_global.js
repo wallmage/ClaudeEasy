@@ -14,7 +14,8 @@ const CLAUDE_EASY_POLICY = {
     "https://1.12.12.12/dns-query#DIRECT"
   ],
   "bootstrapFallbackResolvers": [
-    "system"
+    "https://223.5.5.5/dns-query#DIRECT",
+    "https://1.12.12.12/dns-query#DIRECT"
   ],
   "cnDomainProvider": {
     "name": "claude-easy-cn-domain",
@@ -545,6 +546,26 @@ function claudeEasyNormalizedResolverEndpoints(config, values) {
   return normalized;
 }
 
+function claudeEasyUnsafeProxyBootstrap(values) {
+  const normalized = Array.isArray(values) ? values : [];
+  if (normalized.length === 0 || normalized.some(claudeEasyUnsafePlaintextBootstrapValue)) return true;
+  const serialized = JSON.stringify(normalized);
+  return [
+    JSON.stringify(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"])
+  ].indexOf(serialized) !== -1;
+}
+
+function claudeEasyUnsafeDefaultBootstrap(values) {
+  return (Array.isArray(values) ? values : []).some(claudeEasyUnsafePlaintextBootstrapValue);
+}
+
+function claudeEasyUnsafePlaintextBootstrapValue(value) {
+  const text = String(value);
+  return text === "system" ||
+    /^(?:udp|tcp|dhcp):\/\//i.test(text) ||
+    /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:#.*)?$/.test(text);
+}
+
 function claudeEasyDns(config, routeGroup, aiGroup, ownedSafeNames, cnProviderName) {
   const dns = config.dns && typeof config.dns === "object" && !Array.isArray(config.dns) ? config.dns : {};
   config.dns = dns;
@@ -555,19 +576,6 @@ function claudeEasyDns(config, routeGroup, aiGroup, ownedSafeNames, cnProviderNa
   dns["use-system-hosts"] = true;
   const safeResolvers = claudeEasyTaggedResolvers(routeGroup);
   const aiResolvers = claudeEasyTaggedResolvers(aiGroup);
-  const fallbackBootstrap = CLAUDE_EASY_POLICY.bootstrapFallbackResolvers.slice();
-  const currentProxyBootstrap = Array.isArray(dns["proxy-server-nameserver"]) ? dns["proxy-server-nameserver"] : [];
-  const serializedProxyBootstrap = JSON.stringify(currentProxyBootstrap);
-  const legacyProxyBootstraps = [
-    JSON.stringify(["1.1.1.1", "8.8.8.8"]),
-    JSON.stringify(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"])
-  ];
-  if (currentProxyBootstrap.length === 0 || legacyProxyBootstraps.indexOf(serializedProxyBootstrap) !== -1) {
-    dns["proxy-server-nameserver"] = fallbackBootstrap.slice();
-  }
-  if (JSON.stringify(dns["default-nameserver"]) === JSON.stringify(["1.1.1.1", "8.8.8.8"])) {
-    dns["default-nameserver"] = fallbackBootstrap.slice();
-  }
   dns.nameserver = safeResolvers.slice();
   if (Object.prototype.hasOwnProperty.call(dns, "fallback")) dns.fallback = safeResolvers.slice();
   dns["direct-nameserver"] = CLAUDE_EASY_POLICY.directResolvers.slice();
@@ -758,8 +766,12 @@ function claudeEasyCommonCn(config, routeGroup) {
   config.dns = dns;
   dns.enable = true;
   dns["respect-rules"] = true;
-  if (!Array.isArray(dns["proxy-server-nameserver"]) || dns["proxy-server-nameserver"].length === 0) {
+  if (claudeEasyUnsafeProxyBootstrap(dns["proxy-server-nameserver"])) {
     dns["proxy-server-nameserver"] = CLAUDE_EASY_POLICY.bootstrapFallbackResolvers.slice();
+  }
+  if (Object.prototype.hasOwnProperty.call(dns, "default-nameserver") &&
+      claudeEasyUnsafeDefaultBootstrap(dns["default-nameserver"])) {
+    dns["default-nameserver"] = CLAUDE_EASY_POLICY.bootstrapFallbackResolvers.slice();
   }
   if (!Array.isArray(dns.nameserver) || dns.nameserver.length === 0) {
     dns.nameserver = claudeEasyTaggedResolvers(routeGroup);

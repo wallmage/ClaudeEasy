@@ -1858,16 +1858,16 @@ class MacosPatcherTest < Minitest::Test
     assert_equal ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT"], patched.fetch("rules").first(2)
   end
 
-  def test_preserves_bootstrap_and_replaces_direct_resolvers_with_managed_mainland_doh
+  def test_preserves_encrypted_ip_bootstrap_and_replaces_direct_resolvers_with_managed_mainland_doh
     config = base_config
-    config["dns"]["default-nameserver"] = ["223.5.5.5", "119.29.29.29"]
-    config["dns"]["proxy-server-nameserver"] = ["223.5.5.5", "120.53.53.53"]
+    config["dns"]["default-nameserver"] = ["tls://223.5.5.5", "tls://1.12.12.12"]
+    config["dns"]["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query", "tls://1.12.12.12"]
     config["dns"]["direct-nameserver"] = ["system"]
 
     patched = ClaudeEasy.patch(config, @policy).fetch(:config).fetch("dns")
 
-    assert_equal ["223.5.5.5", "119.29.29.29"], patched.fetch("default-nameserver")
-    assert_equal ["223.5.5.5", "120.53.53.53"], patched.fetch("proxy-server-nameserver")
+    assert_equal ["tls://223.5.5.5", "tls://1.12.12.12"], patched.fetch("default-nameserver")
+    assert_equal ["https://223.5.5.5/dns-query", "tls://1.12.12.12"], patched.fetch("proxy-server-nameserver")
     assert_equal @policy.fetch("direct_resolvers"), patched.fetch("direct-nameserver")
     assert_equal false, patched.fetch("direct-nameserver-follow-policy")
   end
@@ -1899,27 +1899,63 @@ class MacosPatcherTest < Minitest::Test
     assert_equal managed, policies.fetch("+.hostname-resolver.example")
     assert_equal managed, policies.fetch("+.blocked-prone.example")
     assert_equal managed, policies.fetch("+.managed.example")
-    assert_equal ["223.5.5.5", "120.53.53.53"], result.fetch(:config).dig("dns", "proxy-server-nameserver")
+    assert_equal @policy.fetch("bootstrap_fallback_resolvers"), result.fetch(:config).dig("dns", "proxy-server-nameserver")
   end
 
-  def test_uses_system_only_when_proxy_bootstrap_is_missing
-    patched = ClaudeEasy.patch(base_config, @policy).fetch(:config).fetch("dns")
+  def test_uses_bootstrap_free_mainland_doh_when_proxy_bootstrap_is_missing
+    [1, 2, 3].each do |usage_profile|
+      patched = ClaudeEasy.patch(base_config, @policy, usage_profile: usage_profile).fetch(:config).fetch("dns")
 
-    refute patched.key?("default-nameserver")
-    assert_equal ["system"], patched.fetch("proxy-server-nameserver")
-    assert_equal @policy.fetch("direct_resolvers"), patched.fetch("direct-nameserver")
-    assert_equal false, patched.fetch("direct-nameserver-follow-policy")
+      refute patched.key?("default-nameserver")
+      assert_equal [
+        "https://223.5.5.5/dns-query#DIRECT",
+        "https://1.12.12.12/dns-query#DIRECT"
+      ], patched.fetch("proxy-server-nameserver")
+      assert_equal @policy.fetch("direct_resolvers"), patched.fetch("direct-nameserver")
+      assert_equal false, patched.fetch("direct-nameserver-follow-policy")
+    end
   end
 
-  def test_migrates_the_old_unsafe_bootstrap_signature_to_system
+  def test_migrates_system_proxy_bootstrap_to_bootstrap_free_mainland_doh
+    config = base_config
+    config["dns"]["proxy-server-nameserver"] = ["system"]
+
+    [1, 2, 3].each do |usage_profile|
+      patched = ClaudeEasy.patch(config, @policy, usage_profile: usage_profile).fetch(:config).fetch("dns")
+
+      assert_equal [
+        "https://223.5.5.5/dns-query#DIRECT",
+        "https://1.12.12.12/dns-query#DIRECT"
+      ], patched.fetch("proxy-server-nameserver")
+    end
+  end
+
+  def test_migrates_mixed_system_and_plaintext_bootstrap_to_bootstrap_free_mainland_doh
+    config = base_config
+    config["dns"]["default-nameserver"] = ["223.5.5.5", "system", "tls://1.12.12.12"]
+    config["dns"]["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query", "system"]
+
+    [1, 2, 3].each do |usage_profile|
+      patched = ClaudeEasy.patch(config, @policy, usage_profile: usage_profile).fetch(:config).fetch("dns")
+
+      assert_equal @policy.fetch("bootstrap_fallback_resolvers"), patched.fetch("default-nameserver")
+      assert_equal @policy.fetch("bootstrap_fallback_resolvers"), patched.fetch("proxy-server-nameserver")
+    end
+  end
+
+  def test_migrates_the_old_unsafe_bootstrap_signature_to_bootstrap_free_mainland_doh
     config = base_config
     config["dns"]["default-nameserver"] = ["1.1.1.1", "8.8.8.8"]
     config["dns"]["proxy-server-nameserver"] = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
 
     patched = ClaudeEasy.patch(config, @policy).fetch(:config).fetch("dns")
 
-    assert_equal ["system"], patched.fetch("default-nameserver")
-    assert_equal ["system"], patched.fetch("proxy-server-nameserver")
+    expected = [
+      "https://223.5.5.5/dns-query#DIRECT",
+      "https://1.12.12.12/dns-query#DIRECT"
+    ]
+    assert_equal expected, patched.fetch("default-nameserver")
+    assert_equal expected, patched.fetch("proxy-server-nameserver")
   end
 
   def test_does_not_select_japan_home_automatically
@@ -4572,6 +4608,10 @@ class MacosPatcherTest < Minitest::Test
         assert_equal "new-#{target.fetch(:name)}", config.fetch("subscription-marker")
         assert_equal false, config.fetch("ipv6")
         assert_equal true, config.dig("tun", "enable")
+        assert_equal [
+          "https://223.5.5.5/dns-query#DIRECT",
+          "https://1.12.12.12/dns-query#DIRECT"
+        ], config.dig("dns", "proxy-server-nameserver")
       end
       assert_equal 3, Dir.glob(File.join(backup_root, "*--pre-update--*.backup")).length
     end
@@ -10314,12 +10354,14 @@ class MacosPatcherTest < Minitest::Test
         assert_includes output, "[已隐藏]"
         assert_empty error
       end
-      ClaudeEasy.stub(:restore_backup, { status: :updated }) do
-        ClaudeEasy.stub(:selected_profile_name, "friend") do
-          output, = capture_io do
-            assert_equal 0, ClaudeEasy.cli(["--json", "--profile-dir", directory, "--restore-backup", "id"])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:restore_backup, { status: :updated }) do
+          ClaudeEasy.stub(:selected_profile_name, "friend") do
+            output, = capture_io do
+              assert_equal 0, ClaudeEasy.cli(["--json", "--profile-dir", directory, "--restore-backup", "id"])
+            end
+            assert_equal "updated", JSON.parse(output).fetch("code")
           end
-          assert_equal "updated", JSON.parse(output).fetch("code")
         end
       end
       ClaudeEasy.stub(:disable_subscription_auto_update, { status: :already_disabled }) do
@@ -10537,18 +10579,20 @@ class MacosPatcherTest < Minitest::Test
         :invalid_backup
       ].each do |status|
         private_id = "11111111-2222-3333-4444-555555555555"
-        ClaudeEasy.stub(:restore_backup, {
-          status: status, path: "/private/#{private_id}.yaml",
-          restored_backup: "physical-#{private_id}.backup"
-        }) do
-          ClaudeEasy.stub(:selected_profile_name, "friend") do
-            output, error = capture_io do
-              assert_equal 1, ClaudeEasy.cli(["--profile-dir", directory, "--restore-backup", "backup-id"])
+        ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:restore_backup, {
+            status: status, path: "/private/#{private_id}.yaml",
+            restored_backup: "physical-#{private_id}.backup"
+          }) do
+            ClaudeEasy.stub(:selected_profile_name, "friend") do
+              output, error = capture_io do
+                assert_equal 1, ClaudeEasy.cli(["--profile-dir", directory, "--restore-backup", "backup-id"])
+              end
+              assert_includes output, status.to_s
+              refute_includes output, private_id
+              refute_includes output, "/private/"
+              assert_empty error
             end
-            assert_includes output, status.to_s
-            refute_includes output, private_id
-            refute_includes output, "/private/"
-            assert_empty error
           end
         end
       end
@@ -10718,8 +10762,10 @@ class MacosPatcherTest < Minitest::Test
           "--expected-current-sha256", "0" * 64
         ]
         arguments.unshift("--json") if json
-        output, error = ClaudeEasy.stub(:capture_runtime_profile_context, nil) do
-          capture_io { assert_equal 1, ClaudeEasy.cli(arguments) }
+        output, error = ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:capture_runtime_profile_context, nil) do
+            capture_io { assert_equal 1, ClaudeEasy.cli(arguments) }
+          end
         end
         if json
           result = JSON.parse(output)
@@ -10747,19 +10793,21 @@ class MacosPatcherTest < Minitest::Test
         keywords.fetch(:activation).call(restore_result)
       end
 
-      ClaudeEasy.stub(:restore_backup, restore) do
-        ClaudeEasy.stub(:selected_profile_name, "other") do
-          output, error = capture_io do
-            assert_equal 0, ClaudeEasy.cli([
-              "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
-              "--expected-current-sha256", "0" * 64
-            ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:restore_backup, restore) do
+          ClaudeEasy.stub(:selected_profile_name, "other") do
+            output, error = capture_io do
+              assert_equal 0, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                "--expected-current-sha256", "0" * 64
+              ])
+            end
+            assert_empty error
+            result = JSON.parse(output)
+            assert_equal "ok", result.fetch("status")
+            assert_equal "updated", result.fetch("code")
+            assert_equal "备份已恢复。", result.fetch("summary_zh")
           end
-          assert_empty error
-          result = JSON.parse(output)
-          assert_equal "ok", result.fetch("status")
-          assert_equal "updated", result.fetch("code")
-          assert_equal "备份已恢复。", result.fetch("summary_zh")
         end
       end
     end
@@ -10914,21 +10962,23 @@ class MacosPatcherTest < Minitest::Test
       restore = lambda do |*_arguments, **keywords|
         keywords.fetch(:activation).call(restore_result)
       end
-      ClaudeEasy.stub(:restore_backup, restore) do
-        ClaudeEasy.stub(:selected_profile_name, "friend") do
-          ClaudeEasy.stub(:active_profile_root, directory) do
-            ClaudeEasy.stub(:activate_updated_profile, activation_result) do
-              output, error = capture_io do
-                assert_equal 1, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
-                  "--expected-current-sha256", "0" * 64
-                ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:restore_backup, restore) do
+          ClaudeEasy.stub(:selected_profile_name, "friend") do
+            ClaudeEasy.stub(:active_profile_root, directory) do
+              ClaudeEasy.stub(:activate_updated_profile, activation_result) do
+                output, error = capture_io do
+                  assert_equal 1, ClaudeEasy.cli([
+                    "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                    "--expected-current-sha256", "0" * 64
+                  ])
+                end
+                assert_empty error
+                result = JSON.parse(output)
+                assert_equal "partial", result.fetch("status")
+                assert_equal "restore_runtime_pending", result.fetch("code")
+                assert_includes result.fetch("summary_zh"), "运行内核"
               end
-              assert_empty error
-              result = JSON.parse(output)
-              assert_equal "partial", result.fetch("status")
-              assert_equal "restore_runtime_pending", result.fetch("code")
-              assert_includes result.fetch("summary_zh"), "运行内核"
             end
           end
         end
@@ -10971,17 +11021,19 @@ class MacosPatcherTest < Minitest::Test
       end
 
       output = nil
-      ClaudeEasy.stub(:restore_backup, restore) do
-        ClaudeEasy.stub(:selected_profile_name, -> { selected }) do
-          ClaudeEasy.stub(:controller_socket, "socket") do
-            ClaudeEasy.stub(:controller_request, controller) do
-              output, error = capture_io do
-                assert_equal 1, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
-                  "--expected-current-sha256", "0" * 64
-                ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:restore_backup, restore) do
+          ClaudeEasy.stub(:selected_profile_name, -> { selected }) do
+            ClaudeEasy.stub(:controller_socket, "socket") do
+              ClaudeEasy.stub(:controller_request, controller) do
+                output, error = capture_io do
+                  assert_equal 1, ClaudeEasy.cli([
+                    "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                    "--expected-current-sha256", "0" * 64
+                  ])
+                end
+                assert_empty error
               end
-              assert_empty error
             end
           end
         end
@@ -11013,20 +11065,22 @@ class MacosPatcherTest < Minitest::Test
       restore = lambda do |*_arguments, **keywords|
         keywords.fetch(:activation).call(restore_result)
       end
-      ClaudeEasy.stub(:restore_backup, restore) do
-        ClaudeEasy.stub(:selected_profile_name, "friend") do
-          ClaudeEasy.stub(:active_profile_root, directory) do
-            ClaudeEasy.stub(:activate_updated_profile, activation) do
-              output, error = capture_io do
-                assert_equal 0, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
-                  "--expected-current-sha256", "0" * 64
-                ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:restore_backup, restore) do
+          ClaudeEasy.stub(:selected_profile_name, "friend") do
+            ClaudeEasy.stub(:active_profile_root, directory) do
+              ClaudeEasy.stub(:activate_updated_profile, activation) do
+                output, error = capture_io do
+                  assert_equal 0, ClaudeEasy.cli([
+                    "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                    "--expected-current-sha256", "0" * 64
+                  ])
+                end
+                assert_empty error
+                result = JSON.parse(output)
+                assert_equal "no_change", result.fetch("status")
+                assert_includes result.fetch("summary_zh"), "运行检查"
               end
-              assert_empty error
-              result = JSON.parse(output)
-              assert_equal "no_change", result.fetch("status")
-              assert_includes result.fetch("summary_zh"), "运行检查"
             end
           end
         end
