@@ -556,7 +556,7 @@ function claudeEasyUnsafeProxyBootstrap(values) {
 }
 
 function claudeEasyUnsafeDefaultBootstrap(values) {
-  return (Array.isArray(values) ? values : []).some(claudeEasyUnsafePlaintextBootstrapValue);
+  return !Array.isArray(values) || values.some(claudeEasyUnsafePlaintextBootstrapValue);
 }
 
 function claudeEasyUnsafePlaintextBootstrapValue(value) {

@@ -620,7 +620,9 @@ module ClaudeEasy
   end
 
   def unsafe_proxy_bootstrap?(values)
-    normalized = Array(values)
+    return true unless values.is_a?(Array)
+
+    normalized = values
     return true if normalized.empty? || normalized.any? { |value| unsafe_plaintext_bootstrap_value?(value) }
 
     [
@@ -629,7 +631,9 @@ module ClaudeEasy
   end
 
   def unsafe_default_bootstrap?(values)
-    Array(values).any? { |value| unsafe_plaintext_bootstrap_value?(value) }
+    return true unless values.is_a?(Array)
+
+    values.any? { |value| unsafe_plaintext_bootstrap_value?(value) }
   end
 
   def unsafe_plaintext_bootstrap_value?(value)

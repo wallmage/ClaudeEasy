@@ -458,6 +458,21 @@ test('migrates system proxy bootstrap to bootstrap-free mainland DoH', { skip: !
   }
 });
 
+test('migrates non-list bootstrap fields in every usage profile', { skip: !available }, () => {
+  for (const value of ['system', 'https://223.5.5.5/dns-query']) {
+    const config = baseConfig();
+    config.dns['default-nameserver'] = value;
+    config.dns['proxy-server-nameserver'] = value;
+
+    for (const usageProfile of [1, 2, 3]) {
+      const dns = engine.claudeEasyTransform(config, 'fixture', usageProfile).dns;
+
+      assert.deepEqual(dns['default-nameserver'], engine.CLAUDE_EASY_POLICY.bootstrapFallbackResolvers);
+      assert.deepEqual(dns['proxy-server-nameserver'], engine.CLAUDE_EASY_POLICY.bootstrapFallbackResolvers);
+    }
+  }
+});
+
 test('migrates mixed system and plaintext bootstrap to bootstrap-free mainland DoH', { skip: !available }, () => {
   const config = baseConfig();
   config.dns['default-nameserver'] = ['223.5.5.5', 'system', 'tls://1.12.12.12'];

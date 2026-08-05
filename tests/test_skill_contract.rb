@@ -1194,6 +1194,29 @@ class SkillContractTest < Minitest::Test
     end
   end
 
+  def test_diagnostics_method_and_evidence_contract_cover_both_supported_platforms
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    )
+
+    [readme, skill, policy, design].each do |document|
+      assert_includes document, "macOS 与 Windows"
+      assert_includes document, "平台只改变证据来源和安全写入方式"
+      assert_includes document, "不改变判断标准"
+    end
+
+    [skill, policy].each do |document|
+      assert_includes document, "Windows 文件或应用日志缺失"
+      assert_includes document, "控制器记录"
+      assert_includes document, "pktmon"
+      assert_includes document, "一种采集方法失败"
+      assert_includes document, "不能宣布没有历史证据"
+    end
+  end
+
   def test_diagnostics_finishes_with_repair_explanation_and_verification
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
 

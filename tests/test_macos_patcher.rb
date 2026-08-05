@@ -2324,6 +2324,74 @@ class MacosPatcherTest < Minitest::Test
     assert_equal expected, patched.fetch("proxy-server-nameserver")
   end
 
+  def test_bootstrap_dns_outputs_match_windows_in_every_usage_profile
+    cases = [
+      ["missing", {}],
+      ["scalar system", { "default-nameserver" => "system", "proxy-server-nameserver" => "system" }],
+      [
+        "scalar encrypted",
+        {
+          "default-nameserver" => "tls://223.5.5.5",
+          "proxy-server-nameserver" => "https://223.5.5.5/dns-query"
+        }
+      ],
+      [
+        "mixed unsafe",
+        {
+          "default-nameserver" => ["tls://1.12.12.12", "223.5.5.5"],
+          "proxy-server-nameserver" => ["https://223.5.5.5/dns-query", "system"]
+        }
+      ]
+    ]
+    inputs = cases.flat_map do |name, bootstrap|
+      [1, 2, 3].map do |usage_profile|
+        config = base_config
+        config.fetch("dns").merge!(bootstrap)
+        { "name" => name, "usage_profile" => usage_profile, "config" => config }
+      end
+    end
+    engine_path = File.join(ROOT, "claude-easy/scripts/windows/clash_verge_global.js")
+    javascript = <<~'JS'
+      const fs = require('node:fs');
+      const engine = require(process.argv[1]);
+      const inputs = JSON.parse(fs.readFileSync(0, 'utf8'));
+      const keys = [
+        'default-nameserver',
+        'proxy-server-nameserver',
+        'direct-nameserver',
+        'direct-nameserver-follow-policy'
+      ];
+      const outputs = inputs.map(({ config, usage_profile: usageProfile }) => {
+        const dns = engine.claudeEasyTransform(config, 'fixture', usageProfile).dns;
+        return Object.fromEntries(keys.filter((key) => Object.hasOwn(dns, key)).map((key) => [key, dns[key]]));
+      });
+      process.stdout.write(JSON.stringify(outputs));
+    JS
+    stdout, stderr, status = Open3.capture3(
+      "node", "-e", javascript, engine_path, stdin_data: JSON.generate(inputs)
+    )
+    assert status.success?, stderr
+    windows = JSON.parse(stdout)
+    keys = %w[
+      default-nameserver
+      proxy-server-nameserver
+      direct-nameserver
+      direct-nameserver-follow-policy
+    ]
+
+    inputs.each_with_index do |entry, index|
+      dns = ClaudeEasy.patch(
+        entry.fetch("config"), @policy, usage_profile: entry.fetch("usage_profile")
+      ).fetch(:config).fetch("dns")
+      macos = dns.select { |key, _value| keys.include?(key) }
+      assert_equal macos, windows.fetch(index), "#{entry.fetch('name')} profile #{entry.fetch('usage_profile')}"
+      next unless entry.fetch("name").start_with?("scalar")
+
+      assert_equal @policy.fetch("bootstrap_fallback_resolvers"), macos.fetch("default-nameserver")
+      assert_equal @policy.fetch("bootstrap_fallback_resolvers"), macos.fetch("proxy-server-nameserver")
+    end
+  end
+
   def test_does_not_select_japan_home_automatically
     config = base_config
     config["proxies"].reject! { |proxy| proxy["name"].include?("台湾") }
