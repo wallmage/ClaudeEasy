@@ -67,6 +67,18 @@ module ClaudeEasy
     true
   end
 
+  def chmod_log_directory(path, mode, identity)
+    flags = File::RDONLY
+    flags |= File::NOFOLLOW if File.const_defined?(:NOFOLLOW)
+    File.open(path, flags) do |handle|
+      stat = handle.stat
+      raise UnsafeLogPathError, "日志目录在修复期间被替换" unless
+        stat.directory? && [stat.dev, stat.ino] == identity
+
+      handle.chmod(mode)
+    end
+  end
+
   def repair_clashx_logs(log_root: clashx_log_root, runner: Open3.method(:capture3), now: Time.now)
     raise UnsafeLogPathError, "不能以 root 身份修复用户日志" if Process.uid.zero?
 
@@ -96,13 +108,33 @@ module ClaudeEasy
     staging = File.join(config_root, ".logs.permission-repair-#{timestamp}-#{nonce}")
     backup = File.join(config_root, "logs.permission-backup-#{timestamp}-#{nonce}")
     create_log_tree(staging, session_name: session_name, username: username, runner: runner)
-    ClaudeEasyOperationLock.rename_exclusive(log_root, backup)
+    original_mode = current.mode & 0o7777
+    original_identity = [current.dev, current.ino]
+    relaxed_owner_mode = current.uid == Process.uid && (original_mode & 0o300) != 0o300
+    chmod_log_directory(log_root, original_mode | 0o700, original_identity) if relaxed_owner_mode
+    begin
+      ClaudeEasyOperationLock.rename_exclusive(log_root, backup)
+    rescue StandardError
+      chmod_log_directory(log_root, original_mode, original_identity) if
+        relaxed_owner_mode && File.exist?(log_root)
+      raise
+    end
     begin
       ClaudeEasyOperationLock.rename_exclusive(staging, log_root)
     rescue StandardError
-      ClaudeEasyOperationLock.rename_exclusive(backup, log_root) unless File.exist?(log_root)
+      restored_path = backup
+      begin
+        unless File.exist?(log_root)
+          ClaudeEasyOperationLock.rename_exclusive(backup, log_root)
+          restored_path = log_root
+        end
+      ensure
+        chmod_log_directory(restored_path, original_mode, original_identity) if
+          relaxed_owner_mode && File.exist?(restored_path)
+      end
       raise
     end
+    chmod_log_directory(backup, original_mode, original_identity) if relaxed_owner_mode
     raise LogRepairError, "日志目录仍不可写" unless
       File.writable?(log_root) && File.executable?(log_root) &&
       log_acl_present?(log_root, username: username, runner: runner)

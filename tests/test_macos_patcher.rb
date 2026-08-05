@@ -207,6 +207,11 @@ class MacosPatcherTest < Minitest::Test
     end
 
     Dir.mktmpdir do |home|
+      home_stat = File.stat(home)
+      assert_raises(ClaudeEasy::UnsafeLogPathError) do
+        ClaudeEasy.chmod_log_directory(home, 0o700, [home_stat.dev, home_stat.ino + 1])
+      end
+
       missing = File.join(home, "missing", "logs")
       assert_raises(ClaudeEasy::UnsafeLogPathError) do
         ClaudeEasy.validate_log_config_root(missing)
@@ -307,6 +312,55 @@ class MacosPatcherTest < Minitest::Test
         end
         assert_equal 3, calls
         assert Dir.exist?(logs)
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_temporarily_restores_owner_access_before_renaming_unwritable_tree
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(logs)
+      File.chmod(0o500, logs)
+      renamed_mode = nil
+      renamer = lambda do |source, destination|
+        renamed_mode = File.stat(source).mode & 0o777 if source == logs
+        raise Errno::EACCES, source unless (renamed_mode & 0o300) == 0o300
+
+        File.rename(source, destination)
+        true
+      end
+
+      begin
+        ClaudeEasyOperationLock.stub(:rename_exclusive, renamer) do
+          result = ClaudeEasy.repair_clashx_logs(log_root: logs)
+          assert_equal :repaired, result.fetch(:status)
+        end
+        assert_equal 0o700, renamed_mode
+        backup = Dir.glob(File.join(config_root, "logs.permission-backup-*")).fetch(0)
+        assert_equal 0o500, File.stat(backup).mode & 0o777
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_restores_original_mode_if_preserving_old_tree_fails
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(logs)
+      File.chmod(0o500, logs)
+
+      begin
+        ClaudeEasyOperationLock.stub(:rename_exclusive, ->(*_arguments) { raise IOError, "injected" }) do
+          assert_raises(ClaudeEasy::LogRepairError) do
+            ClaudeEasy.repair_clashx_logs(log_root: logs)
+          end
+        end
+        assert_equal 0o500, File.stat(logs).mode & 0o777
       ensure
         FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
       end

@@ -330,7 +330,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "Patch 模块"
     assert_includes skill, "Diagnostics 模块"
     assert_includes skill, "不能因为用户提到 Clash 就先运行补丁"
-    assert_includes skill, "Diagnostics 默认只读"
+    assert_includes skill, "故障原因未确认前，不得修改配置、代码、Skill 或项目规则"
   end
 
   def test_patch_module_selects_and_remembers_the_minimum_usage_profile
@@ -653,12 +653,13 @@ class SkillContractTest < Minitest::Test
       assert_includes policy, term
     end
     assert_includes policy, "不要求用户先知道该查什么"
-    assert_includes policy, "任何外部记录都不是诊断前提"
+    assert_includes policy, "原始证据清单"
+    assert_includes policy, "已有历史证据"
     assert_includes policy, "没有证据不能下结论"
     assert_includes policy, "按现象选择必要层级，不是每次全部执行"
     assert_includes policy, "始终记录时间、操作系统、活动网络和原始症状"
     assert_includes policy, "只有影响范围或证据指向共同网络路径时"
-    assert_includes policy, "保留所有尚未证实的解释"
+    assert_includes policy, "每个候选解释都记录支持证据、反证"
     assert_includes policy, "只有充分反证"
   end
 
@@ -1068,7 +1069,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不得把完整补丁验收当成每次诊断的固定步骤"
   end
 
-  def test_ai_availability_diagnostics_checks_scope_before_official_incidents
+  def test_external_service_status_is_only_used_after_scope_isolated
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
@@ -1077,27 +1078,60 @@ class SkillContractTest < Minitest::Test
     )
 
     [readme, skill, policy, design].each do |document|
-      assert_includes document, "AI 服务状态前置检查"
-      assert_includes document, "对应提供商的官方状态页和事件历史"
-      assert_includes document, "只有故障范围仍局限于单个 AI 服务"
-      assert_includes document, "多个订阅"
-      assert_includes document, "不得查询 AI 服务状态"
-    end
-    [skill, policy].each do |document|
-      assert_includes document, "https://status.openai.com/"
-      assert_includes document, "https://status.anthropic.com/"
+      assert_includes document, "外部服务状态"
+      assert_includes document, "单个外部服务"
+      assert_includes document, "跨应用"
+      assert_includes document, "不查询"
     end
 
     assert_operator(
-      skill.index("AI 服务状态前置检查"),
+      skill.index("任务合同"),
       :<,
-      skill.index("Diagnostics 每次开始都先读取本机保存的档位")
+      skill.index("外部服务状态")
     )
     assert_operator(
-      policy.index("### AI 服务状态前置检查"),
+      policy.index("任务合同"),
       :<,
-      policy.index("### 通用工作循环")
+      policy.index("外部服务状态")
     )
+  end
+
+  def test_diagnostics_starts_from_a_general_task_contract_evidence_inventory_and_authority_boundary
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    )
+
+    [readme, skill, policy, design].each do |document|
+      assert_includes document, "任务合同"
+      assert_includes document, "任务对象"
+      assert_includes document, "交付类型"
+      assert_includes document, "完成条件"
+      assert_includes document, "下游症状"
+      assert_includes document, "原始证据清单"
+      assert_includes document, "已有历史证据"
+      assert_includes document, "每项新检查必须区分"
+      assert_includes document, "状态回执不能代替完整交付"
+      assert_includes document, "使用 Skill 不等于授权修改 Skill"
+      assert_includes document, "明确要求维护本项目"
+      assert_includes document, "故障原因未确认前"
+      assert_includes document, "不得修改配置、代码、Skill 或项目规则"
+      assert_includes document, "不得用长篇可能性列表代替结论"
+      assert_includes document, "已确认、尚缺证据和下一项验证"
+      assert_includes document, "结论台账"
+      assert_includes document, "故障机制"
+      assert_includes document, "恢复原因"
+      assert_includes document, "工具调用失败只说明取证方法失败"
+      assert_includes document, "连续两次工具调用失败"
+    end
+
+    assert_operator skill.index("任务合同"), :<, skill.index("外部服务状态")
+    assert_operator policy.index("任务合同"), :<, policy.index("外部服务状态")
+
+    public_contract = [readme, skill, policy, design].join("\n")
+    refute_match(/Workbuddy|Work Body|MESL|Yue\.to|月点兔/, public_contract)
   end
 
   def test_multi_subscription_failures_require_per_profile_evidence
@@ -1140,7 +1174,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "多订阅故障的证据顺序"
       assert_includes document, "原始会话或审计记录"
       assert_includes document, "故障原因与恢复原因"
-      assert_includes document, "原因分类前不得修改 Skill"
+      assert_includes document, "使用 Skill 不等于授权修改 Skill"
       assert_includes document, "同一份配置未修改而恢复"
       assert_includes document, "外部状态恢复"
       assert_includes document, "能立即定性就立即给结论"
@@ -1175,7 +1209,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "为什么会这样"
   end
 
-  def test_diagnostics_drives_through_repair_and_iteration
+  def test_diagnostics_delivery_follows_the_task_contract
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
@@ -1183,10 +1217,10 @@ class SkillContractTest < Minitest::Test
 
     [readme, skill, policy, design].each do |document|
       assert_includes document, "解决原始问题是 Diagnostics 的结束目标"
-      assert_includes document, "只读检查是第一阶段，不是交付结果"
-      assert_includes document, "诊断结论不是完成"
-      assert_includes document, "修复、复测、继续迭代"
-      assert_includes document, "状态说明不能代替行动"
+      assert_includes document, "分析或复核任务"
+      assert_includes document, "修复任务"
+      assert_includes document, "任务合同"
+      assert_includes document, "状态回执不能代替完整交付"
     end
 
     [skill, policy].each do |document|
@@ -1200,7 +1234,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不得把“请回复继续”当成常规收尾"
     end
 
-    assert_includes policy, "解释和建议不算修复"
+    assert_includes policy, "故障原因未确认前，不得修改配置、代码、Skill 或项目规则"
     assert_includes policy, "只有问题已经解决或遇到真实阻塞"
     assert_includes policy, "诊断重置后继续"
     assert_includes policy, "同一原始动作"
