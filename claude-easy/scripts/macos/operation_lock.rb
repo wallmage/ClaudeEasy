@@ -154,7 +154,40 @@ module ClaudeEasyOperationLock
     rescue Errno::ENOENT
       nil
     end
-    ClaudeEasyExclusiveRename.call(expanded_source, expanded_destination)
+    begin
+      ClaudeEasyExclusiveRename.call(expanded_source, expanded_destination)
+    rescue Errno::EACCES, Errno::EINVAL, Errno::ENOTSUP
+      # Some macOS volumes reject RENAME_EXCL for directories even though an
+      # ordinary atomic directory rename is supported. Reserve the destination
+      # first so another normal writer cannot appear in the fallback window.
+      # Files still fail closed because they cannot use this directory guard.
+      raise unless source_stat.directory?
+
+      placeholder_stat = nil
+      begin
+        begin
+          Dir.mkdir(expanded_destination, 0o700)
+        rescue Errno::EEXIST
+          raise IOError, "rename destination already exists"
+        end
+        placeholder_stat = File.lstat(expanded_destination)
+        raise IOError, "rename destination reservation is unsafe" unless
+          placeholder_stat.directory? && !placeholder_stat.symlink?
+        File.rename(expanded_source, expanded_destination)
+      rescue StandardError
+        if placeholder_stat
+          begin
+            current = File.lstat(expanded_destination)
+            Dir.rmdir(expanded_destination) if
+              current.directory? && !current.symlink? &&
+              [current.dev, current.ino] == [placeholder_stat.dev, placeholder_stat.ino]
+          rescue Errno::ENOENT, Errno::ENOTEMPTY
+            nil
+          end
+        end
+        raise
+      end
+    end
     destination_stat = File.lstat(expanded_destination)
     raise IOError, "renamed path identity changed" unless
       [source_stat.dev, source_stat.ino] == [destination_stat.dev, destination_stat.ino]

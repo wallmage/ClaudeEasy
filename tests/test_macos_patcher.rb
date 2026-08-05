@@ -551,6 +551,83 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_wrapper_operation_lock_falls_back_when_a_volume_rejects_exclusive_directory_rename
+    Dir.mktmpdir do |directory|
+      source = File.join(directory, "source")
+      destination = File.join(directory, "destination")
+      Dir.mkdir(source)
+
+      original_rename = File.method(:rename)
+      destination_reserved = false
+      guarded_rename = lambda do |from, to|
+        destination_reserved = Dir.exist?(to)
+        original_rename.call(from, to)
+      end
+      File.stub(:rename, guarded_rename) do
+        ClaudeEasyExclusiveRename.stub(:call, ->(*_arguments) { raise Errno::EACCES }) do
+          assert ClaudeEasyOperationLock.rename_exclusive(source, destination)
+        end
+      end
+      assert destination_reserved, "directory fallback did not reserve the destination before rename"
+      assert Dir.exist?(destination)
+      refute File.exist?(source)
+
+      file_source = File.join(directory, "file-source")
+      File.binwrite(file_source, "preserve")
+      ClaudeEasyExclusiveRename.stub(:call, ->(*_arguments) { raise Errno::EACCES }) do
+        assert_raises(Errno::EACCES) do
+          ClaudeEasyOperationLock.rename_exclusive(file_source, File.join(directory, "file-destination"))
+        end
+      end
+      assert_equal "preserve", File.binread(file_source)
+
+      raced_source = File.join(directory, "raced-source")
+      raced_destination = File.join(directory, "raced-destination")
+      Dir.mkdir(raced_source)
+      reject_race = lambda do |*_arguments|
+        Dir.mkdir(raced_destination)
+        raise Errno::EACCES
+      end
+      ClaudeEasyExclusiveRename.stub(:call, reject_race) do
+        assert_raises(IOError) do
+          ClaudeEasyOperationLock.rename_exclusive(raced_source, raced_destination)
+        end
+      end
+      assert Dir.exist?(raced_source)
+      assert Dir.exist?(raced_destination)
+
+      failed_source = File.join(directory, "failed-source")
+      failed_destination = File.join(directory, "failed-destination")
+      Dir.mkdir(failed_source)
+      File.stub(:rename, ->(*_arguments) { raise IOError, "rename failed" }) do
+        ClaudeEasyExclusiveRename.stub(:call, ->(*_arguments) { raise Errno::EACCES }) do
+          assert_raises(IOError) do
+            ClaudeEasyOperationLock.rename_exclusive(failed_source, failed_destination)
+          end
+        end
+      end
+      assert Dir.exist?(failed_source)
+      refute File.exist?(failed_destination)
+
+      vanished_source = File.join(directory, "vanished-source")
+      vanished_destination = File.join(directory, "vanished-destination")
+      Dir.mkdir(vanished_source)
+      remove_reservation = lambda do |_from, to|
+        Dir.rmdir(to)
+        raise IOError, "rename failed"
+      end
+      File.stub(:rename, remove_reservation) do
+        ClaudeEasyExclusiveRename.stub(:call, ->(*_arguments) { raise Errno::EACCES }) do
+          assert_raises(IOError) do
+            ClaudeEasyOperationLock.rename_exclusive(vanished_source, vanished_destination)
+          end
+        end
+      end
+      assert Dir.exist?(vanished_source)
+      refute File.exist?(vanished_destination)
+    end
+  end
+
   def test_wrapper_operation_lock_executes_with_an_inherited_descriptor
     Dir.mktmpdir do |directory|
       lock_path = File.join(directory, "lock")

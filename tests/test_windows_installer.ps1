@@ -395,7 +395,13 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
     $text = $Invocation.Output.Trim()
     $diagnostic = Get-TestOutputDiagnostic $text
     Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic"
-    try { $result = $text | ConvertFrom-Json } catch { throw "JSON mode emitted invalid JSON: $diagnostic" }
+    try {
+        if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
+            $result = $text | ConvertFrom-Json -DateKind String
+        } else {
+            $result = $text | ConvertFrom-Json
+        }
+    } catch { throw "JSON mode emitted invalid JSON: $diagnostic" }
     foreach ($field in @("schema", "version", "command", "platform", "client", "operation", "ok", "status", "code", "exit_code", "summary_zh", "profile", "changes", "checks", "items", "messages", "warnings")) {
         Assert-True ($null -ne $result.PSObject.Properties[$field]) "JSON result omitted $field"
     }

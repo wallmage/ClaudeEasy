@@ -1112,6 +1112,12 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "逐份订阅取证"
       assert_includes document, "Fake-IP 地址"
       assert_includes document, "不得共用结论"
+      assert_includes document, "共用运行状态"
+      assert_includes document, "组合操作"
+      assert_includes document, "同一份配置未修改而恢复"
+      assert_includes document, "不得把恢复归给改过的配置文件"
+      assert_includes document, "最后一次确认失败到首次确认恢复"
+      assert_includes document, "订阅名称只用于当次事故标签"
       assert_includes document, "--repair-clashx-logs"
       assert_includes document, "保留旧日志"
       assert_includes document, "不停止或重启 Clash"
@@ -1119,6 +1125,35 @@ class SkillContractTest < Minitest::Test
     [skill, policy].each do |document|
       assert_includes document, "控制器实时日志"
       assert_includes document, "不得直接强制加载"
+    end
+  end
+
+  def test_multi_subscription_triage_prioritizes_timeline_transport_evidence_and_recovery_attribution
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/patch-policy.md"))
+    design = File.read(
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    )
+
+    [readme, skill, policy, design].each do |document|
+      assert_includes document, "30 分钟首轮定性"
+      assert_includes document, "原始会话或审计记录"
+      assert_includes document, "故障原因与恢复原因"
+      assert_includes document, "原因分类前不得修改 Skill"
+      assert_includes document, "同一份配置未修改而恢复"
+      assert_includes document, "外部状态恢复"
+    end
+
+    [skill, policy].each do |document|
+      assert_includes document, "/usr/bin/log show"
+      assert_includes document, "process == \"kernel\""
+      assert_includes document, "eventMessage"
+      assert_includes document, "--info --debug"
+      assert_includes document, "SYN in/out: 0/1"
+      assert_includes document, "RST in/out: 1/0"
+      assert_includes document, "Fake-IP 模式的正常应答"
+      assert_includes document, "不能证明缓存污染"
     end
   end
 
