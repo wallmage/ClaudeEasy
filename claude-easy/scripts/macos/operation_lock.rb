@@ -158,35 +158,19 @@ module ClaudeEasyOperationLock
       ClaudeEasyExclusiveRename.call(expanded_source, expanded_destination)
     rescue Errno::EACCES, Errno::EINVAL, Errno::ENOTSUP
       # Some macOS volumes reject RENAME_EXCL for directories even though an
-      # ordinary atomic directory rename is supported. Reserve the destination
-      # first so another normal writer cannot appear in the fallback window.
-      # Files still fail closed because they cannot use this directory guard.
+      # ordinary atomic directory rename to an absent path is supported. Check
+      # the destination again after the failed syscall; the operation lock and
+      # post-rename inode check guard this directory-only compatibility path.
+      # Files still fail closed.
       raise unless source_stat.directory?
 
-      placeholder_stat = nil
       begin
-        begin
-          Dir.mkdir(expanded_destination, 0o700)
-        rescue Errno::EEXIST
-          raise IOError, "rename destination already exists"
-        end
-        placeholder_stat = File.lstat(expanded_destination)
-        raise IOError, "rename destination reservation is unsafe" unless
-          placeholder_stat.directory? && !placeholder_stat.symlink?
-        File.rename(expanded_source, expanded_destination)
-      rescue StandardError
-        if placeholder_stat
-          begin
-            current = File.lstat(expanded_destination)
-            Dir.rmdir(expanded_destination) if
-              current.directory? && !current.symlink? &&
-              [current.dev, current.ino] == [placeholder_stat.dev, placeholder_stat.ino]
-          rescue Errno::ENOENT, Errno::ENOTEMPTY
-            nil
-          end
-        end
-        raise
+        File.lstat(expanded_destination)
+        raise IOError, "rename destination already exists"
+      rescue Errno::ENOENT
+        nil
       end
+      File.rename(expanded_source, expanded_destination)
     end
     destination_stat = File.lstat(expanded_destination)
     raise IOError, "renamed path identity changed" unless

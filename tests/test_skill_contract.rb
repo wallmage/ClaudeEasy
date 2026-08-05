@@ -1137,12 +1137,15 @@ class SkillContractTest < Minitest::Test
     )
 
     [readme, skill, policy, design].each do |document|
-      assert_includes document, "30 分钟首轮定性"
+      assert_includes document, "多订阅故障的证据顺序"
       assert_includes document, "原始会话或审计记录"
       assert_includes document, "故障原因与恢复原因"
       assert_includes document, "原因分类前不得修改 Skill"
       assert_includes document, "同一份配置未修改而恢复"
       assert_includes document, "外部状态恢复"
+      assert_includes document, "能立即定性就立即给结论"
+      assert_includes document, "不得为诊断阶段设置任意分钟数"
+      refute_match(/30 分钟首轮定性|前 5 分钟|25 分钟前|0–5 分钟|5–15 分钟|15–25 分钟|25–30 分钟/, document)
     end
 
     [skill, policy].each do |document|
