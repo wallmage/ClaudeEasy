@@ -70,13 +70,19 @@ try {
         $null = . $installerModulePath
     }
     foreach ($requiredInstallerFunction in @(
-        "Complete-InstallResult",
-        "Split-YamlLines",
-        "Get-RemoteSubscriptionProfileItems",
-        "Find-MihomoCore",
-        "Invoke-VerifiedFileTransaction",
-        "Build-GlobalScript",
-        "Get-SafeUpdateRecoveryItems"
+        "Complete-InstallResult", "Write-Info", "Write-ClaudeEasyHumanText", "Get-SavedUsageProfile", "Resolve-ClashVergeAppHome", "ConvertTo-NormalizedWindowsPath",
+        "Enter-AppHomeMutationLock", "Exit-AppHomeMutationLock", "Assert-NoReparsePointPath", "Get-OptionalFileSnapshot",
+        "ConvertTo-Utf8Bytes", "Get-BytesSha256", "Get-FileSha256", "Get-StreamBytes", "Remove-VerifiedOwnedFile",
+        "Backup-InitialOnce", "Backup-Versioned", "Invoke-VerifiedFileTransaction", "Get-BackupTarget", "Get-PublicBackupDescriptor", "Test-RestoreCandidate",
+        "Get-InstallStateEntry", "Assert-InstallState", "Assert-StateSnapshotUnchanged", "New-InstallStateEntry",
+        "Split-YamlLines", "Set-YamlTopLevelScalar", "Set-YamlTunMapping", "Test-GeneratedYaml", "Get-RedactedYamlChangedPaths",
+        "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionResult",
+        "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Merge-RemoteSubscriptionAutoUpdateOwnership", "Assert-ClaudeEasyProxyGroupCollection",
+        "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
+        "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning",
+        "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
+        "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
+        "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
     )) {
         if ($null -eq (Get-Command $requiredInstallerFunction -CommandType Function -ErrorAction SilentlyContinue)) {
             throw "安装包不完整：安装模块缺少必要接口。"
@@ -410,7 +416,7 @@ if ($VerifySafeUpdate) {
         Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")
     }
     foreach ($entry in $validated) {
-        $changed = (Get-FileSha256 $entry.Target.Path) -ne [string]$entry.Manifest.BeforeSha256
+        $changed = [string]$entry.ValidatedSha256 -ne [string]$entry.Manifest.BeforeSha256
         Write-Info ($(if ($changed) { "已更新并通过检查：" } else { "内容未变化并通过检查：" }) + $(if ([string]::IsNullOrWhiteSpace($entry.Target.Name)) { $entry.Target.Uid } else { $entry.Target.Name }))
     }
     Write-Info "全部远程订阅已逐份通过全局脚本、代理组、YAML 与 Mihomo 检查。"
@@ -418,7 +424,12 @@ if ($VerifySafeUpdate) {
         Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v2 快照后再更新。" @() @("legacy_manifest_retired")
     }
     $verifiedItems = @($validated | ForEach-Object {
-        Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) "verified"
+        $itemStatus = if ([string]$_.ValidatedSha256 -ne [string]$_.Manifest.BeforeSha256) {
+            "updated"
+        } else {
+            "unchanged"
+        }
+        Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) $itemStatus
     })
     Complete-InstallResult 0 "ok" "safe_update_verified" "全部远程订阅已逐份通过检查。" @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems
 }
@@ -535,7 +546,8 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     Complete-InstallResult 1 $operationStatus "operation_failed" ("操作失败：" + $_.Exception.Message)
 }
 try {
-    $savedUsageProfile = Get-SavedUsageProfile $usageStatePath
+    $usageProfileSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
+    $savedUsageProfile = Get-SavedUsageProfile $usageStatePath $usageProfileSnapshot
 } catch {
     Complete-InstallResult 1 "failed" "usage_profile_read_failed" ("读取用途档位失败：" + $_.Exception.Message)
 }
@@ -574,7 +586,15 @@ try {
     $clientRunning = Test-ClashVergeRunning
     $corePath = Find-MihomoCore $MihomoPath
     Test-MihomoVersion $corePath | Out-Null
-    if ($savedUsageProfile -eq 3 -and $resolvedUsageProfile -ne 3 -and $profileSource -ne "saved") {
+    $installState = $null
+    $stateSnapshot = Get-OptionalFileSnapshot $statePath "安装状态"
+    $stateExisted = [bool]$stateSnapshot.Exists
+    $stateOriginalBytes = $stateSnapshot.Bytes
+    if ($stateExisted) {
+        $installState = $strictUtf8.GetString($stateOriginalBytes) | ConvertFrom-Json
+        Assert-InstallState $installState
+    }
+    if (($savedUsageProfile -eq 3 -or $stateExisted) -and $resolvedUsageProfile -ne 3) {
         throw "从档位 3 改为轻量档位前，必须先运行安全卸载。"
     }
     if ($clientRunning) {
@@ -584,21 +604,6 @@ try {
             "client_running_auto_update_deferred"
         }
         Complete-InstallResult 1 "partial" $runningCode "客户端正在运行；本次未修改用途档位、自动更新所有权、脚本或客户端配置，请在客户端未运行时按当前档位重试。"
-    }
-    $usageProfileTarget = $null
-    if ($profileSource -ne "saved") {
-        $usageProfileSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
-        $usageProfileBytes = ConvertTo-Utf8Bytes ((([ordered]@{
-            Version = 1
-            Profile = $resolvedUsageProfile
-        }) | ConvertTo-Json -Compress) + "`r`n")
-        $usageProfileTarget = [pscustomobject]@{
-            Path = $usageStatePath
-            Bytes = $usageProfileBytes
-            Existed = [bool]$usageProfileSnapshot.Exists
-            OriginalBytes = $usageProfileSnapshot.Bytes
-            OriginalIdentity = $usageProfileSnapshot.Identity
-        }
     }
     $profilesIndexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"
     if (-not $profilesIndexSnapshot.Exists) {
@@ -643,13 +648,27 @@ try {
     Assert-RemoteSubscriptionAutoUpdateDisabled $profilesIndexOutput | Out-Null
     $profilesIndexBytes = ConvertTo-Utf8Bytes $profilesIndexOutput
 
+    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "Script.js"
+    $scriptExisted = [bool]$scriptSnapshot.Exists
+    $scriptOriginalBytes = $scriptSnapshot.Bytes
+    $scriptCurrentText = if ($scriptExisted) { $strictUtf8.GetString($scriptOriginalBytes) } else { $null }
+    $scriptOutput = Build-GlobalScript $enginePath $targetScript $resolvedUsageProfile $scriptCurrentText
+    $scriptBytes = ConvertTo-Utf8Bytes $scriptOutput
+    $managedScriptBytes = ConvertTo-Utf8Bytes (Get-ClaudeEasyManagedScriptEnvelope $scriptOutput $resolvedUsageProfile)
+    $usageProfileBytes = ConvertTo-Utf8Bytes ((([ordered]@{
+        Version = 2
+        Profile = $resolvedUsageProfile
+        ManagedScriptSha256 = (Get-BytesSha256 $managedScriptBytes)
+    }) | ConvertTo-Json -Compress) + "`r`n")
+    $usageProfileTarget = [pscustomobject]@{
+        Path = $usageStatePath
+        Bytes = $usageProfileBytes
+        Existed = [bool]$usageProfileSnapshot.Exists
+        OriginalBytes = $usageProfileSnapshot.Bytes
+        OriginalIdentity = $usageProfileSnapshot.Identity
+    }
+
     if ($resolvedUsageProfile -ne 3) {
-        $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "Script.js"
-        $scriptExisted = [bool]$scriptSnapshot.Exists
-        $scriptOriginalBytes = $scriptSnapshot.Bytes
-        $scriptCurrentText = if ($scriptExisted) { $strictUtf8.GetString($scriptOriginalBytes) } else { $null }
-        $scriptOutput = Build-GlobalScript $enginePath $targetScript $resolvedUsageProfile $scriptCurrentText
-        $scriptBytes = ConvertTo-Utf8Bytes $scriptOutput
         $scriptTarget = [pscustomobject]@{
             Path = $targetScript
             Bytes = $scriptBytes
@@ -668,7 +687,7 @@ try {
             }
         )
         if ($null -ne $autoUpdateStateTarget) { $lightTargets += $autoUpdateStateTarget }
-        if ($null -ne $usageProfileTarget) { $lightTargets += $usageProfileTarget }
+        $lightTargets += $usageProfileTarget
         foreach ($target in $lightTargets) {
             if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
             Backup-InitialOnce $target.Path $backupRoot | Out-Null
@@ -678,27 +697,14 @@ try {
         if (-not $lightCommitted) {
             throw "检测到 Clash Verge Rev 在安装期间启动；已撤销本次文件修改。"
         }
-        if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
+        if ($profileSource -ne "saved") { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
         Write-Info "已为全部订阅安装共享国内域名直连规则，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
         Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则，并关闭订阅自动更新。" @("global_script", "cn_domain_baseline", "auto_update")
     }
 
-    $installState = $null
-    $stateSnapshot = Get-OptionalFileSnapshot $statePath "安装状态"
-    $stateExisted = [bool]$stateSnapshot.Exists
-    $stateOriginalBytes = $stateSnapshot.Bytes
-    if ($stateExisted) {
-        $installState = $strictUtf8.GetString($stateOriginalBytes) | ConvertFrom-Json
-        Assert-InstallState $installState
-    }
     $previousVerge = Get-InstallStateEntry $installState "VergeYaml"
     $previousConfig = Get-InstallStateEntry $installState "ConfigYaml"
 
-    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "Script.js"
-    $scriptExisted = [bool]$scriptSnapshot.Exists
-    $scriptOriginalBytes = $scriptSnapshot.Bytes
-    $scriptCurrentText = if ($scriptExisted) { $strictUtf8.GetString($scriptOriginalBytes) } else { $null }
-    $scriptOutput = Build-GlobalScript $enginePath $targetScript $resolvedUsageProfile $scriptCurrentText
     $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
     $vergeExisted = [bool]$vergeSnapshot.Exists
     $vergeOriginalBytes = $vergeSnapshot.Bytes
@@ -718,7 +724,6 @@ try {
     Test-GeneratedYaml $configOutput "config.yaml" | Out-Null
     Test-MihomoCandidate $corePath $configOutput $AppHome
 
-    $scriptBytes = ConvertTo-Utf8Bytes $scriptOutput
     $vergeBytes = ConvertTo-Utf8Bytes $vergeOutput
     $configBytes = ConvertTo-Utf8Bytes $configOutput
     $stateObject = [ordered]@{
@@ -736,7 +741,7 @@ try {
         [pscustomobject]@{ Path = $statePath; Bytes = $stateBytes; Existed = $stateExisted; OriginalBytes = $stateOriginalBytes; OriginalIdentity = $stateSnapshot.Identity }
     )
     if ($null -ne $autoUpdateStateTarget) { $targets += $autoUpdateStateTarget }
-    if ($null -ne $usageProfileTarget) { $targets += $usageProfileTarget }
+    $targets += $usageProfileTarget
     foreach ($target in $targets) {
         if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
         Backup-InitialOnce $target.Path $backupRoot | Out-Null

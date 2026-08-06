@@ -175,10 +175,13 @@ function Assert-ClaudeEasyManagedScriptCurrent(
     [string]$ScriptText,
     [int]$UsageProfile,
     [string]$EnginePath,
-    [string]$TargetPath
+    [string]$TargetPath,
+    [switch]$AllowOutsideCode
 ) {
     $managed = Get-ClaudeEasyManagedScriptEnvelope $ScriptText $UsageProfile
-    Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive $ScriptText
+    if (-not $AllowOutsideCode) {
+        Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive $ScriptText
+    }
     $expectedScript = Build-GlobalScript $EnginePath $TargetPath $UsageProfile $ScriptText
     $expectedManaged = Get-ClaudeEasyManagedScriptEnvelope $expectedScript $UsageProfile
     if ($managed -cne $expectedManaged) {

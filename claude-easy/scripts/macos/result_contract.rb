@@ -11,7 +11,12 @@ module ClaudeEasyResult
   PLATFORM = "macos".freeze
   CLIENT = "clashx-meta".freeze
   STATUSES = %w[ok no_change skipped failed rolled_back partial invalid_request unsupported].freeze
+  ITEM_STATUSES = %w[updated unchanged skipped failed rolled_back pending].freeze
   COMMANDS = %w[install uninstall patch verify_routes].freeze
+  REQUIRED_FIELDS = %w[
+    schema version command platform client operation ok status code exit_code summary_zh
+    profile changes checks items messages warnings
+  ].freeze
 
   def sanitize_text(value)
     text = value.to_s.encode("UTF-8", invalid: :replace, undef: :replace, replace: "�")
@@ -65,6 +70,25 @@ module ClaudeEasyResult
       "messages" => sanitize(Array(messages)),
       "warnings" => sanitize(Array(warnings))
     }
+  end
+
+  def valid_child_json?(text)
+    result = JSON.parse(text)
+    return false unless result.is_a?(Hash) && (REQUIRED_FIELDS - result.keys).empty?
+    return false unless result["schema"] == SCHEMA && result["version"] == VERSION
+    return false unless COMMANDS.include?(result["command"]) && result["platform"] == PLATFORM
+    return false unless result["client"] == CLIENT && result["operation"].is_a?(String)
+    return false unless [true, false].include?(result["ok"]) && STATUSES.include?(result["status"])
+    return false unless result["code"].is_a?(String) && result["exit_code"].is_a?(Integer)
+    return false unless result["summary_zh"].is_a?(String) &&
+                        (result["profile"].nil? || [1, 2, 3].include?(result["profile"]))
+    return false unless %w[changes checks items messages warnings].all? { |key| result[key].is_a?(Array) }
+
+    result["items"].all? do |item|
+      !item.is_a?(Hash) || !item.key?("status") || ITEM_STATUSES.include?(item["status"])
+    end
+  rescue JSON::ParserError, TypeError
+    false
   end
 
   def write(output:, **attributes)

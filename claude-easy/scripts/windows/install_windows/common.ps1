@@ -36,8 +36,11 @@ function Complete-InstallResult(
     exit $ExitCode
 }
 
-function Get-SavedUsageProfile([string]$Path) {
-    $snapshot = Get-OptionalFileSnapshot $Path "用途档位状态"
+function Get-SavedUsageProfile([string]$Path, [object]$Snapshot = $null) {
+    $snapshot = $Snapshot
+    if ($null -eq $snapshot) {
+        $snapshot = Get-OptionalFileSnapshot $Path "用途档位状态"
+    }
     if (-not $snapshot.Exists) { return 0 }
     try {
         $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($snapshot.Bytes)
@@ -49,17 +52,27 @@ function Get-SavedUsageProfile([string]$Path) {
     } catch {
         throw "用途档位文件无效，无法确认之前的选择。"
     }
-    $propertyNames = @($state.PSObject.Properties.Name)
-    if ($propertyNames.Count -ne 2 -or
-        $propertyNames -notcontains "Version" -or
-        $propertyNames -notcontains "Profile") {
-        throw "用途档位文件无效，无法确认之前的选择。"
-    }
     $version = $state.Version
     $profile = $state.Profile
     $numericVersion = $version -is [int] -or $version -is [long]
     $numericProfile = $profile -is [int] -or $profile -is [long]
-    if (-not $numericVersion -or [long]$version -ne 1 -or -not $numericProfile -or [long]$profile -notin @(1, 2, 3)) {
+    $propertyNames = @($state.PSObject.Properties.Name | Sort-Object)
+    $expectedProperties = if ($numericVersion -and [long]$version -eq 1) {
+        "Profile,Version"
+    } elseif ($numericVersion -and [long]$version -eq 2) {
+        "ManagedScriptSha256,Profile,Version"
+    } else {
+        ""
+    }
+    if (($propertyNames -join ",") -cne $expectedProperties -or
+        -not $numericProfile -or [long]$profile -notin @(1, 2, 3)) {
+        throw "用途档位文件无效，无法确认之前的选择。"
+    }
+    if ([long]$version -eq 2 -and (
+        [regex]::Matches($text, '(?i)"ManagedScriptSha256"\s*:').Count -ne 1 -or
+        -not ($state.ManagedScriptSha256 -is [string]) -or
+        [string]$state.ManagedScriptSha256 -notmatch '^[0-9a-f]{64}$'
+    )) {
         throw "用途档位文件无效，无法确认之前的选择。"
     }
     return [int]$profile

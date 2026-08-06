@@ -583,12 +583,25 @@ module ClaudeEasy
     end
   end
 
-  def resolver_target(endpoint)
+  def decoded_resolver_fragment(endpoint)
     fragment = endpoint.to_s.split("#", 2)[1]
+    return "" if fragment.nil?
+    return nil if fragment.match?(/%(?![0-9a-f]{2})/i)
+
+    decoded = fragment.gsub(/%([0-9a-f]{2})/i) { [$1.to_i(16)].pack("C") }
+    decoded.force_encoding(Encoding::UTF_8)
+    decoded if decoded.valid_encoding?
+  end
+
+  def resolver_target(endpoint)
+    fragment = decoded_resolver_fragment(endpoint)
     return nil if fragment.nil? || fragment.empty?
 
-    target = fragment.split("&", 2).first.to_s
-    return nil if target.empty? || target.include?("=")
+    targets = fragment.split("&", -1).reject { |part| part.include?("=") }
+    return nil unless targets.length == 1
+
+    target = targets.first.to_s
+    return nil if target.empty?
 
     target
   end
@@ -596,7 +609,10 @@ module ClaudeEasy
   def safe_resolver_endpoint?(config, endpoint)
     return false unless endpoint.to_s.match?(/\A(?:https|tls|quic):\/\//i)
 
-    options = endpoint.to_s.split("#", 2)[1].to_s.split("&").drop(1)
+    fragment = decoded_resolver_fragment(endpoint)
+    return false if fragment.nil?
+
+    options = fragment.split("&", -1).select { |part| part.include?("=") }
     options.each do |option|
       key, value = option.split("=", 2)
       normalized = key.to_s.downcase
@@ -623,7 +639,7 @@ module ClaudeEasy
     return true unless values.is_a?(Array)
 
     normalized = values
-    return true if normalized.empty? || normalized.any? { |value| unsafe_plaintext_bootstrap_value?(value) }
+    return true if normalized.empty? || normalized.any? { |value| unsafe_bootstrap_value?(value) }
 
     [
       ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
@@ -633,14 +649,23 @@ module ClaudeEasy
   def unsafe_default_bootstrap?(values)
     return true unless values.is_a?(Array)
 
-    values.any? { |value| unsafe_plaintext_bootstrap_value?(value) }
+    values.any? { |value| unsafe_bootstrap_value?(value) }
   end
 
-  def unsafe_plaintext_bootstrap_value?(value)
+  def unsafe_bootstrap_value?(value)
     text = value.to_s
-    text == "system" ||
-      text.match?(%r{\A(?:udp|tcp|dhcp)://}i) ||
-      text.match?(%r{\A\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:#.*)?\z})
+    scheme = text[%r{\A([a-z][a-z0-9+.-]*):\/\/}i, 1]
+    return true if scheme.nil? || !%w[https tls quic ts tailscale].include?(scheme.downcase)
+
+    fragment = decoded_resolver_fragment(text)
+    return true if fragment.nil?
+
+    fragment.split("&").any? do |option|
+      key, option_value = option.split("=", 2)
+      normalized = key.to_s.downcase
+      (!option_value.nil? && %w[ecs ecs-override].include?(normalized)) ||
+        (normalized == "skip-cert-verify" && option_value.to_s.casecmp("true").zero?)
+    end
   end
 
   def patch_dns(config, policy, route_group, ai_group, owned_safe_names = [], cn_provider_name = nil)

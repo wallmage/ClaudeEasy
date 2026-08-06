@@ -6,7 +6,7 @@
 
 ### 选择与保存
 
-首次在一台电脑上进入 Patch 时，先读取本机档位。macOS 固定保存于 `~/Library/Application Support/ClaudeEasy/usage-profile.plist`，安装和卸载不得接受环境变量把这个内部状态文件改到其他位置；Windows 保存于 Clash Verge Rev 应用目录中的 `claude-easy-usage-profile.json`。两个文件都只记录版本和数字档位。没有已保存档位时，必须先问“你使用网络代理主要用于哪些用途？”，展示以下三项及改动差异，得到选择后才保存和修改。
+首次在一台电脑上进入 Patch 时，先读取本机档位。macOS 固定保存于 `~/Library/Application Support/ClaudeEasy/usage-profile.plist`，安装和卸载不得接受环境变量把这个内部状态文件改到其他位置；Windows 保存于 Clash Verge Rev 应用目录中的 `claude-easy-usage-profile.json`。macOS 文件只记录版本和数字档位；Windows 文件还记录安装时受管脚本区块的哈希，用于确认卸载没有删除后续改动。没有已保存档位时，必须先问“你使用网络代理主要用于哪些用途？”，展示以下三项及改动差异，得到选择后才保存和修改。
 
 用户明确说要配置 Claude 或 Claude Code 时，该表达本身就是档位 3 的选择；明确说要配置 ChatGPT、Codex、Gemini、Perplexity 等其他海外 AI，且排除 Claude 时，就是档位 2。
 

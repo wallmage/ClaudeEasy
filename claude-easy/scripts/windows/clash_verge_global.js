@@ -356,12 +356,23 @@ function claudeEasyOwnedAiGroup(config, name) {
   return matches.length >= 2;
 }
 
+function claudeEasyDecodedResolverFragment(endpoint) {
+  const value = String(endpoint);
+  const separator = value.indexOf("#");
+  if (separator === -1) return "";
+  try {
+    return decodeURIComponent(value.slice(separator + 1));
+  } catch (_error) {
+    return null;
+  }
+}
+
 function claudeEasyResolverTarget(endpoint) {
-  const parts = String(endpoint).split("#", 2);
-  if (parts.length < 2 || !parts[1]) return null;
-  const target = parts[1].split("&", 1)[0];
-  if (!target || target.indexOf("=") !== -1) return null;
-  return target;
+  const fragment = claudeEasyDecodedResolverFragment(endpoint);
+  if (!fragment) return null;
+  const targets = fragment.split("&").filter(function (part) { return part.indexOf("=") === -1; });
+  if (targets.length !== 1 || !targets[0]) return null;
+  return targets[0];
 }
 
 function claudeEasyResolverTargets(config) {
@@ -519,8 +530,9 @@ function claudeEasyGroupCannotReachDirect(config, target, visiting) {
 
 function claudeEasySafeResolverEndpoint(config, endpoint) {
   if (!/^(?:https|tls|quic):\/\//i.test(String(endpoint))) return false;
-  const fragment = String(endpoint).split("#", 2)[1] || "";
-  const options = fragment.split("&").slice(1);
+  const fragment = claudeEasyDecodedResolverFragment(endpoint);
+  if (fragment === null) return false;
+  const options = fragment.split("&").filter(function (part) { return part.indexOf("=") !== -1; });
   for (let index = 0; index < options.length; index += 1) {
     const pieces = options[index].split("=", 2);
     const key = String(pieces[0] || "").toLowerCase();
@@ -537,7 +549,8 @@ function claudeEasyNormalizedResolverEndpoints(config, values) {
   if (!values.every(function (value) { return claudeEasySafeResolverEndpoint(config, value); })) return null;
   const normalized = [];
   values.forEach(function (value) {
-    const fragment = String(value).split("#", 2)[1];
+    const endpoint = String(value);
+    const fragment = endpoint.slice(endpoint.indexOf("#") + 1);
     CLAUDE_EASY_POLICY.resolvers.forEach(function (resolver) {
       const endpoint = resolver + "#" + fragment;
       if (normalized.indexOf(endpoint) === -1) normalized.push(endpoint);
@@ -548,7 +561,7 @@ function claudeEasyNormalizedResolverEndpoints(config, values) {
 
 function claudeEasyUnsafeProxyBootstrap(values) {
   const normalized = Array.isArray(values) ? values : [];
-  if (normalized.length === 0 || normalized.some(claudeEasyUnsafePlaintextBootstrapValue)) return true;
+  if (normalized.length === 0 || normalized.some(claudeEasyUnsafeBootstrapValue)) return true;
   const serialized = JSON.stringify(normalized);
   return [
     JSON.stringify(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"])
@@ -556,14 +569,22 @@ function claudeEasyUnsafeProxyBootstrap(values) {
 }
 
 function claudeEasyUnsafeDefaultBootstrap(values) {
-  return !Array.isArray(values) || values.some(claudeEasyUnsafePlaintextBootstrapValue);
+  return !Array.isArray(values) || values.some(claudeEasyUnsafeBootstrapValue);
 }
 
-function claudeEasyUnsafePlaintextBootstrapValue(value) {
+function claudeEasyUnsafeBootstrapValue(value) {
   const text = String(value);
-  return text === "system" ||
-    /^(?:udp|tcp|dhcp):\/\//i.test(text) ||
-    /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:#.*)?$/.test(text);
+  const scheme = text.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+  if (!scheme || ["https", "tls", "quic", "ts", "tailscale"].indexOf(scheme[1].toLowerCase()) === -1) return true;
+  const fragment = claudeEasyDecodedResolverFragment(text);
+  if (fragment === null) return true;
+  return fragment.split("&").some(function (option) {
+    const pieces = option.split("=", 2);
+    const key = String(pieces[0] || "").toLowerCase();
+    const optionValue = String(pieces[1] || "").toLowerCase();
+    return (pieces.length > 1 && (key === "ecs" || key === "ecs-override")) ||
+      (key === "skip-cert-verify" && optionValue === "true");
+  });
 }
 
 function claudeEasyDns(config, routeGroup, aiGroup, ownedSafeNames, cnProviderName) {

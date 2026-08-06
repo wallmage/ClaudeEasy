@@ -1418,19 +1418,23 @@ class MacosWrapperTest < Minitest::Test
   end
 
   def test_installer_rejects_a_loadable_module_missing_its_api_before_creating_state
-    with_real_installer_package do |installer|
-      scripts = File.dirname(installer)
-      File.binwrite(File.join(scripts, "macos", "patch_profiles", "runtime.rb"), "# truncated\n")
-      Dir.mktmpdir do |home|
-        with_supported_app(home) do
-          stdout, stderr, status = run_script(installer, "--profile", "1", "--json", home: home)
-
-          assert_equal 6, status.exitstatus
-          assert_empty stderr
-          assert_equal "incomplete_package", assert_json_result(
-            stdout, status, command: "install"
-          ).fetch("code")
-          refute Dir.exist?(File.join(home, "Library", "Application Support", "ClaudeEasy"))
+    cases = {
+      "macos/patch_profiles/runtime.rb" => "\nmodule ClaudeEasy\n singleton_class.send(:undef_method, :controller_socket)\nend\n",
+      "macos/patch_profiles/mihomo.rb" => "\nmodule ClaudeEasy\n singleton_class.send(:undef_method, :mihomo_core_paths)\nend\n",
+      "macos/result_contract.rb" => "\nmodule ClaudeEasyResult\n singleton_class.send(:undef_method, :valid_child_json?)\nend\n"
+    }
+    cases.each do |relative_path, mutation|
+      with_real_installer_package do |installer|
+        dependency = File.join(File.dirname(installer), relative_path)
+        File.open(dependency, "a") { |file| file.write(mutation) }
+        Dir.mktmpdir do |home|
+          with_supported_app(home) do
+            stdout, stderr, status = run_script(installer, "--profile", "1", "--json", home: home)
+            assert_equal 6, status.exitstatus, relative_path
+            assert_empty stderr
+            assert_equal "incomplete_package", assert_json_result(stdout, status, command: "install").fetch("code")
+            refute Dir.exist?(File.join(home, "Library", "Application Support", "ClaudeEasy"))
+          end
         end
       end
     end
@@ -2077,6 +2081,7 @@ class MacosWrapperTest < Minitest::Test
           "1:#{ARGV.fetch(nonce_index + 1)}\n"
         )
       end
+      print '{"items":[' if ARGV.include?("--json")
       raise Errno::ENOSPC, "injected result write failure"
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
@@ -2680,13 +2685,19 @@ class MacosWrapperTest < Minitest::Test
         exit 0
       end
       if ARGV.include?("--safe-update-all")
-        puts JSON.generate(
+        result = {
+          "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+          "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
+          "ok" => false, "exit_code" => 1, "profile" => 1,
+          "changes" => [], "checks" => [], "messages" => []
+        }
+        puts JSON.generate(result.merge(
           "status" => "partial",
           "code" => "safe_update_runtime_pending",
           "summary_zh" => "订阅文件已恢复，但运行内核恢复失败。",
           "items" => [{ "id" => "ce-subscription-v1-#{"a" * 64}", "label" => "订阅 A", "status" => "failed" }],
           "warnings" => ["运行内核未恢复"]
-        )
+        ))
         exit 1
       end
       exit 0
@@ -2705,6 +2716,39 @@ class MacosWrapperTest < Minitest::Test
           assert_equal "safe_update_runtime_pending", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
           assert_includes result.fetch("warnings"), "运行内核未恢复"
+        end
+      end
+    end
+  end
+
+  def test_json_wrapper_preserves_patch_profile_items
+    child = {
+      "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+      "platform" => "macos", "client" => "clashx-meta", "operation" => "patch_profiles",
+      "ok" => false, "status" => "partial", "code" => "patch_partial", "exit_code" => 1,
+      "summary_zh" => "部分失败", "profile" => 1, "changes" => [], "checks" => [],
+      "items" => [{ "status" => "rolled_back" }, { "status" => "failed" }],
+      "messages" => [], "warnings" => []
+    }
+    patcher = <<~RUBY
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+      elsif ARGV.include?("--disable-subscription-auto-update")
+        puts "already_disabled"
+      elsif ARGV.include?("--snapshot-initial")
+      else
+        puts #{JSON.generate(child).dump}
+        exit 1
+      end
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, stderr, status = run_script(installer, "--profile", "1", "--json", home: home)
+          assert_equal 1, status.exitstatus
+          assert_empty stderr
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal %w[rolled_back failed], result.fetch("items").map { |item| item.fetch("status") }
         end
       end
     end

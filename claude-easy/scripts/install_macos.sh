@@ -42,6 +42,13 @@ PROFILE_OPERATION_RESULT_UNKNOWN=0
 OPERATION_LOCK_REQUIRED=1
 child_json=""
 
+valid_child_json() {
+  /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -e '
+    require ARGV.fetch(0)
+    exit ClaudeEasyResult.valid_child_json?(STDIN.read) ? 0 : 1
+  ' "$RESULT_CONTRACT_SOURCE"
+}
+
 restore_auto_update_if_required() {
   [ "$AUTO_UPDATE_RECOVERY_REQUIRED" -eq 1 ] || return 0
   restore_result=$(/usr/bin/ruby "$PATCHER_SOURCE" \
@@ -172,12 +179,15 @@ finish() {
   fi
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if [ -x /usr/bin/ruby ] && [ -f "$RESULT_CONTRACT_SOURCE" ]; then
-      if [ "$finish_operation" = "safe_update" ] && [ -n "$child_json" ] && [ -n "$finish_profile" ]; then
+      if [ -n "$child_json" ] && ! valid_child_json; then
+        child_json=""
+      fi
+      if [ -n "$child_json" ] && [ -n "$finish_profile" ]; then
         /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$finish_operation" --ok "$([ "$finish_exit" -eq 0 ] && /usr/bin/printf true || /usr/bin/printf false)" \
           --status "$finish_status" --code "$finish_code" --exit-code "$finish_exit" --summary "$finish_summary" \
           --profile "$finish_profile" --merge-child-stdin
-      elif [ "$finish_operation" = "safe_update" ] && [ -n "$child_json" ]; then
+      elif [ -n "$child_json" ]; then
         /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$finish_operation" --ok "$([ "$finish_exit" -eq 0 ] && /usr/bin/printf true || /usr/bin/printf false)" \
           --status "$finish_status" --code "$finish_code" --exit-code "$finish_exit" --summary "$finish_summary" \
@@ -291,6 +301,7 @@ finish_json_child_failure() {
   if [ -n "$child_status" ] && [ -n "$child_code" ] && [ -n "$child_summary" ]; then
     finish 1 "$child_status" "$child_code" "$child_summary" "$child_operation"
   fi
+  child_json=""
   finish 1 "$fallback_status" "$fallback_code" "$fallback_summary" "$child_operation"
 }
 
@@ -828,6 +839,8 @@ else
       { say "无法创建初始快照。"; finish 1 failed snapshot_failed "无法创建初始快照。" snapshot_initial; }
   fi
 fi
+
+child_json=""
 
 stage_profile_selection
 

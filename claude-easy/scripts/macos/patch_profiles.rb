@@ -41,11 +41,12 @@ module ClaudeEasyBootstrap
     patch_profiles/log_repair patch_profiles/cli
   ].freeze
   REQUIRED_APIS = {
-    "ClaudeEasyResult" => [:build],
+    "ClaudeEasyResult" => %i[build valid_child_json?],
     "ClaudeEasyOperationLock" => [:acquire],
     "ClaudeEasy" => %i[
       patch profile_paths validate_with_mihomo transactional_compare_and_write_bytes
-      safe_update_all controller_request repair_clashx_logs cli saved_usage_profile
+      safe_update_all controller_socket controller_request running_mihomo_config_paths
+      mihomo_core_paths repair_clashx_logs cli saved_usage_profile
     ]
   }.freeze
 

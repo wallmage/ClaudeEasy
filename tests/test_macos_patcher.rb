@@ -1956,6 +1956,10 @@ class MacosPatcherTest < Minitest::Test
     refute_includes output.string, "private"
     refute_includes output.string, "secret.invalid"
     refute_includes output.string, "11111111-2222-3333-4444-555555555555"
+    assert ClaudeEasyResult.valid_child_json?(output.string)
+    refute ClaudeEasyResult.valid_child_json?('{"items":[')
+    refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.reject { |key, _| key == "checks" }))
+    refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("items" => [{ "status" => "verified" }])))
   end
 
   def test_result_contract_redacts_a_uuid_next_to_unicode_text
@@ -2421,14 +2425,15 @@ class MacosPatcherTest < Minitest::Test
 
   def test_preserves_encrypted_ip_bootstrap_and_replaces_direct_resolvers_with_managed_mainland_doh
     config = base_config
+    config["proxies"] << { "name" => "ecs", "type" => "ss", "server" => "proxy.invalid" }
     config["dns"]["default-nameserver"] = ["tls://223.5.5.5", "tls://1.12.12.12"]
-    config["dns"]["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query", "tls://1.12.12.12"]
+    config["dns"]["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query", "https://1.1.1.1/dns-query#ecs"]
     config["dns"]["direct-nameserver"] = ["system"]
 
     patched = ClaudeEasy.patch(config, @policy).fetch(:config).fetch("dns")
 
     assert_equal ["tls://223.5.5.5", "tls://1.12.12.12"], patched.fetch("default-nameserver")
-    assert_equal ["https://223.5.5.5/dns-query", "tls://1.12.12.12"], patched.fetch("proxy-server-nameserver")
+    assert_equal ["https://223.5.5.5/dns-query", "https://1.1.1.1/dns-query#ecs"], patched.fetch("proxy-server-nameserver")
     assert_equal @policy.fetch("direct_resolvers"), patched.fetch("direct-nameserver")
     assert_equal false, patched.fetch("direct-nameserver-follow-policy")
   end
@@ -2493,8 +2498,8 @@ class MacosPatcherTest < Minitest::Test
 
   def test_migrates_mixed_system_and_plaintext_bootstrap_to_bootstrap_free_mainland_doh
     config = base_config
-    config["dns"]["default-nameserver"] = ["223.5.5.5", "system", "tls://1.12.12.12"]
-    config["dns"]["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query", "system"]
+    config["dns"]["default-nameserver"] = ["udp://223.5.5.5", "system", "tls://1.12.12.12"]
+    config["dns"]["proxy-server-nameserver"] = ["https://1.1.1.1/dns-query#h3=true#&skip-cert-verify=true&DIRECT"]
 
     [1, 2, 3].each do |usage_profile|
       patched = ClaudeEasy.patch(config, @policy, usage_profile: usage_profile).fetch(:config).fetch("dns")
@@ -8182,14 +8187,20 @@ class MacosPatcherTest < Minitest::Test
       "+.group.example" => ["https://1.1.1.1/dns-query#SafeExisting"],
       "+.direct.example" => ["https://1.1.1.1/dns-query#CanDirect"],
       "+.option.example" => ["https://1.1.1.1/dns-query#h3=true"],
-      "+.interface.example" => ["https://1.1.1.1/dns-query#en0"]
+      "+.interface.example" => ["https://1.1.1.1/dns-query#en0"],
+      "+.overridden.example" => ["https://1.1.1.1/dns-query#SafeExisting&DIRECT"],
+      "+.encoded-overridden.example" => ["https://1.1.1.1/dns-query#SafeExisting&%44IRECT"],
+      "+.multi-fragment.example" => ["https://1.1.1.1/dns-query#h3=true#&skip-cert-verify=true&SafeExisting"]
     }
     result = ClaudeEasy.patch(config, @policy)
     policies = result.fetch(:config).dig("dns", "nameserver-policy")
 
     assert_equal @policy.fetch("resolvers").map { |resolver| "#{resolver}#台湾家宽 01" }, policies.fetch("+.proxy.example")
     assert_equal @policy.fetch("resolvers").map { |resolver| "#{resolver}#SafeExisting" }, policies.fetch("+.group.example")
-    %w[+.direct.example +.option.example +.interface.example].each do |pattern|
+    %w[
+      +.direct.example +.option.example +.interface.example
+      +.overridden.example +.encoded-overridden.example +.multi-fragment.example
+    ].each do |pattern|
       assert policies.fetch(pattern).all? { |value| value.end_with?("##{result.fetch(:route_group)}") }, pattern
     end
   end
@@ -8257,7 +8268,9 @@ class MacosPatcherTest < Minitest::Test
     config["dns"]["nameserver-policy"] = {
       "+.h3.example" => ["https://1.1.1.1/dns-query##{target}&h3=true"],
       "+.skip-cert.example" => ["https://1.1.1.1/dns-query##{target}&skip-cert-verify=true"],
-      "+.ecs.example" => ["https://1.1.1.1/dns-query##{target}&ecs=203.0.113.0/24&ecs-override=true"]
+      "+.ecs.example" => ["https://1.1.1.1/dns-query##{target}&ecs=203.0.113.0/24&ecs-override=true"],
+      "+.encoded-skip-cert.example" => ["https://1.1.1.1/dns-query##{target}&skip-cert-verify%3Dtrue"],
+      "+.encoded-ecs.example" => ["https://1.1.1.1/dns-query##{target}&%65cs=203.0.113.0/24"]
     }
 
     result = ClaudeEasy.patch(config, @policy)
@@ -8265,7 +8278,7 @@ class MacosPatcherTest < Minitest::Test
     safe_suffix = "##{result.fetch(:route_group)}"
 
     assert_equal @policy.fetch("resolvers").map { |resolver| "#{resolver}##{target}&h3=true" }, policies.fetch("+.h3.example")
-    %w[+.skip-cert.example +.ecs.example].each do |pattern|
+    %w[+.skip-cert.example +.ecs.example +.encoded-skip-cert.example +.encoded-ecs.example].each do |pattern|
       assert policies.fetch(pattern).all? { |endpoint| endpoint.end_with?(safe_suffix) }, pattern
     end
   end
@@ -10089,6 +10102,16 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_runtime_helpers_cover_socket_discovery_and_exception_boundaries
+    status = Struct.new(:success?).new(true)
+    ClaudeEasy.stub(:mihomo_core_paths, [RbConfig.ruby]) do
+      Open3.stub(:capture2, ["#{RbConfig.ruby} -f /tmp/active.yaml\n/untrusted/mihomo -f /tmp/no.yaml\n", status]) do
+        assert_equal ["/tmp/active.yaml"], ClaudeEasy.running_mihomo_config_paths
+      end
+    end
+    Open3.stub(:capture2, ->(*_args) { raise IOError }) do
+      assert_empty ClaudeEasy.running_mihomo_config_paths
+    end
+
     Dir.mktmpdir do |home|
       old_home = ENV["HOME"]
       ENV["HOME"] = home
@@ -10096,8 +10119,11 @@ class MacosPatcherTest < Minitest::Test
       FileUtils.mkdir_p(cache)
       socket_path = File.join(home, "controller.sock")
       server = UNIXServer.new(socket_path)
-      File.write(File.join(cache, "active.yaml"), YAML.dump("external-controller-unix" => socket_path))
-      assert_equal socket_path, ClaudeEasy.controller_socket
+      active_config = File.join(cache, "active.yaml")
+      File.write(active_config, YAML.dump("external-controller-unix" => socket_path))
+      ClaudeEasy.stub(:running_mihomo_config_paths, [active_config]) do
+        assert_equal socket_path, ClaudeEasy.controller_socket
+      end
     ensure
       server&.close
       ENV["HOME"] = old_home
@@ -10130,6 +10156,44 @@ class MacosPatcherTest < Minitest::Test
     })
     Open3.stub(:capture2e, ->(*_args) { raise IOError }) do
       refute ClaudeEasy.default_connectivity_healthy?
+    end
+  end
+
+  def test_controller_socket_refuses_ambiguous_live_cache_controllers
+    Dir.mktmpdir do |home|
+      old_home = ENV["HOME"]
+      ENV["HOME"] = home
+      cache = File.join(home, "Library", "Caches", "com.MetaCubeX.ClashX.meta", "cacheConfigs")
+      FileUtils.mkdir_p(cache)
+      first_path = File.join(home, "first.sock")
+      second_path = File.join(home, "second.sock")
+      first_server = UNIXServer.new(first_path)
+      second_server = UNIXServer.new(second_path)
+      first_config = File.join(cache, "first.yaml")
+      first_alias = File.join(cache, "first-alias.yaml")
+      second_config = File.join(cache, "second.yaml")
+      File.write(first_config, YAML.dump("external-controller-unix" => first_path))
+      File.write(first_alias, YAML.dump("external-controller-unix" => first_path))
+      File.write(second_config, YAML.dump("external-controller-unix" => second_path))
+
+      ClaudeEasy.stub(:running_mihomo_config_paths, []) do
+        assert_nil ClaudeEasy.controller_socket
+      end
+      ClaudeEasy.stub(:running_mihomo_config_paths, [first_alias]) do
+        assert_equal first_path, ClaudeEasy.controller_socket
+      end
+      ClaudeEasy.stub(:running_mihomo_config_paths, [second_config]) do
+        assert_equal second_path, ClaudeEasy.controller_socket
+      end
+      ClaudeEasy.stub(:running_mihomo_config_paths, [first_config, second_config]) do
+        assert_nil ClaudeEasy.controller_socket
+      end
+      FileUtils.rm_f(second_config)
+      ClaudeEasy.stub(:running_mihomo_config_paths, []) { assert_nil ClaudeEasy.controller_socket }
+    ensure
+      first_server&.close
+      second_server&.close
+      ENV["HOME"] = old_home
     end
   end
 

@@ -122,12 +122,15 @@ module ClaudeEasy
   end
 
   def mihomo_core_path
-    candidates = [
+    mihomo_core_paths.find { |path| File.file?(path) && File.executable?(path) }
+  end
+
+  def mihomo_core_paths
+    [
       File.expand_path("~/Library/Application Support/com.metacubex.ClashX.meta/.private_core/com.metacubex.ClashX.ProxyConfigHelper.meta"),
       "/Applications/ClashX Meta.app/Contents/Resources/com.metacubex.ClashX.ProxyConfigHelper.meta",
       File.expand_path("~/Applications/ClashX Meta.app/Contents/Resources/com.metacubex.ClashX.ProxyConfigHelper.meta")
     ]
-    candidates.find { |path| File.file?(path) && File.executable?(path) }
   end
 
 end

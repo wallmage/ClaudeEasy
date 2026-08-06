@@ -38,8 +38,9 @@ $installerModules = @(
     "transaction.ps1", "script_js.ps1", "safe_update.ps1"
 ) | ForEach-Object { Join-Path $installerModuleRoot $_ }
 $uninstallerModules = @(
-    "yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1"
+    "yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1", "safe_update.ps1"
 ) | ForEach-Object { Join-Path $installerModuleRoot $_ }
+$resultItemStatuses = @((Get-Content -LiteralPath (Join-Path (Join-Path $root "claude-easy/references") "result-contract.json") -Raw | ConvertFrom-Json).item_statuses)
 $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("claude-easy-windows-test-" + [System.Guid]::NewGuid().ToString("N"))
 $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 $previousUsageProfile = $env:CLAUDE_EASY_USAGE_PROFILE
@@ -410,6 +411,11 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
     Assert-True ($result.command -eq $Command) "JSON result command mismatch"
     Assert-True ($result.platform -eq "windows") "JSON result platform mismatch"
     Assert-True ($result.client -eq "clash-verge-rev") "JSON result client mismatch"
+    foreach ($item in @($result.items)) {
+        if ($null -ne $item.PSObject.Properties["status"]) {
+            Assert-True ([string]$item.status -in $resultItemStatuses) "JSON item status violates the result contract: $($item.status)"
+        }
+    }
     Assert-True (
         $text -notmatch '(?i)\b[A-Za-z][A-Za-z0-9+.-]*://|Bearer\s+|password\s*[:=]|secret\s*[:=]|token\s*[:=]|uuid\s*[:=]|private[_-]?key\s*[:=]|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
     ) "JSON result leaked a secret, credential, identifier, or URL"
@@ -1225,6 +1231,13 @@ try {
     $unknownScalarResult = New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Items @([Guid]"11111111-2222-4333-8444-555555555555")
     $unknownScalarJson = $unknownScalarResult | ConvertTo-Json -Depth 8 -Compress
     Assert-True ($unknownScalarJson -notmatch '11111111-2222-4333-8444-555555555555') "result contract left an unknown scalar unsanitized"
+    $invalidItemStatusRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" -Items @([pscustomobject]@{ status = "verified" }) | Out-Null
+    } catch {
+        $invalidItemStatusRejected = $true
+    }
+    Assert-True $invalidItemStatusRejected "result contract accepted an unknown item status"
 
     $progressProbePath = Join-Path $sandbox "result-progress-probe.ps1"
     $progressProbeSource = @'
@@ -2258,6 +2271,24 @@ public static class FakeCurl {
     Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $corruptModulePackageParent -Recurse
     $corruptModulePackage = Join-Path $corruptModulePackageParent "claude-easy"
     $corruptModuleScripts = Join-Path $corruptModulePackage "scripts"
+    $corruptModuleCommon = Join-Path (Join-Path $corruptModuleScripts "windows/install_windows") "common.ps1"
+    $corruptModuleCommonText = [System.IO.File]::ReadAllText($corruptModuleCommon)
+    foreach ($missingApi in @("Write-Info", "Write-ClaudeEasyHumanText")) {
+        [System.IO.File]::WriteAllText(
+            $corruptModuleCommon,
+            $corruptModuleCommonText.Replace("function $missingApi", "function Missing-$missingApi")
+        )
+        $missingApiHome = Join-Path $sandbox ("missing-api-" + $missingApi)
+        New-Item -ItemType Directory -Path $missingApiHome -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $missingApiHome "keep.txt"), "unchanged")
+        $missingApiBefore = Get-TreeContentSnapshot $missingApiHome
+        $missingApiResult = Assert-JsonResult (Invoke-TestPowerShell (Join-Path $corruptModuleScripts "install_windows.ps1") @(
+            "-AppHome", $missingApiHome, "-Json"
+        )) "install" 6
+        Assert-True ($missingApiResult.code -eq "incomplete_package") "missing $missingApi did not report incomplete_package"
+        Assert-True ((Get-TreeContentSnapshot $missingApiHome) -ceq $missingApiBefore) "missing $missingApi changed AppHome"
+    }
+    [System.IO.File]::WriteAllText($corruptModuleCommon, $corruptModuleCommonText)
     [System.IO.File]::WriteAllText(
         (Join-Path (Join-Path $corruptModuleScripts "windows/install_windows") "profiles.ps1"),
         'throw "C:\Users\private\module-load-canary"'
@@ -3013,6 +3044,9 @@ rules: ["MATCH,AI"]
     Assert-True (
         $legacyRecoveryRetryJson.code -eq "safe_update_verified"
     ) "legacy recovery could not complete after every subscription was refreshed"
+    Assert-True (
+        @($legacyRecoveryRetryJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "updated" }).Count -eq 0
+    ) "changed safe-update subscriptions were not reported as updated"
     Assert-True (-not (
         Test-Path -LiteralPath $legacyManifestPath
     )) "successful legacy recovery retry retained its manifest"
@@ -3077,6 +3111,9 @@ rules: ["MATCH,AI"]
     Assert-True (
         $unchangedVerifyJson.code -eq "safe_update_verified"
     ) "safe update rejected unchanged subscription content with a newer client update timestamp"
+    Assert-True (
+        @($unchangedVerifyJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "unchanged" }).Count -eq 0
+    ) "timestamp-only safe-update refreshes were not reported as unchanged"
     Assert-True (-not (Test-Path -LiteralPath $noActionManifestPath)) "verified unchanged refresh retained the safe-update manifest"
 
     if ($onWindows) {
@@ -5828,6 +5865,7 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
         Assert-True ($concurrentInstall.ExitCode -eq 1) "installer overwrote a config change made while the candidate was being validated"
         Assert-True ((Get-Content -LiteralPath (Join-Path $concurrentInstallCase "config.yaml") -Raw).Contains("friend_concurrent: true")) "installer did not preserve concurrent config content"
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $concurrentInstallCase "claude-easy-auto-update-state.json"))) "rejected concurrent install created auto-update ownership"
+
     }
 
     $nullCase = Join-Path $sandbox "null-case"
@@ -5847,6 +5885,13 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
     $nullAutoUpdateStateBeforeReinstall = [System.IO.File]::ReadAllBytes($nullAutoUpdateStatePath)
     $profilesBackups = @(Get-ChildItem -LiteralPath (Join-Path $nullCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--profiles.yaml.backup" })
     Assert-True ($profilesBackups.Count -ge 1) "profiles.yaml was changed without a dated backup"
+    $nullUsageStatePath = Join-Path $nullCase "claude-easy-usage-profile.json"
+    $nullUsageStateBytes = [System.IO.File]::ReadAllBytes($nullUsageStatePath)
+    Remove-Item -LiteralPath $nullUsageStatePath -Force
+    $missingUsageBefore = Get-TreeContentSnapshot $nullCase
+    $missingUsageDowngrade = Invoke-TestPowerShell $installer @("-AppHome", $nullCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore)
+    Assert-True ($missingUsageDowngrade.ExitCode -eq 1 -and (Get-TreeContentSnapshot $nullCase) -ceq $missingUsageBefore) "missing usage state bypassed profile 3 safe uninstall"
+    [System.IO.File]::WriteAllBytes($nullUsageStatePath, $nullUsageStateBytes)
     $nullCaseJson = Invoke-TestPowerShell $installer @("-AppHome", $nullCase, "-MihomoPath", $fakeCore, "-Json")
     Assert-JsonResult $nullCaseJson "install" 0 | Out-Null
     Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($nullAutoUpdateStatePath))) -eq ([Convert]::ToBase64String($nullAutoUpdateStateBeforeReinstall))) "reinstall replaced the original auto-update ownership with the already-disabled state"
@@ -5992,6 +6037,45 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
         Assert-True (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($conflictAutoUpdateStatePath))) -eq ([Convert]::ToBase64String($conflictAutoUpdateStateBefore))) "conflicting uninstall removed auto-update recovery state"
         Assert-True (Test-Path -LiteralPath (Join-Path $uninstallConflictCase "claude-easy-install-state.json") -PathType Leaf) "conflicting uninstall removed its recovery state"
         Assert-True (Test-Path -LiteralPath (Join-Path $uninstallConflictCase "claude-easy-usage-profile.json") -PathType Leaf) "conflicting uninstall removed the profile 3 gate"
+
+        $scriptOwnershipCases = @{}
+        foreach ($name in @("managed-edit", "restored-main", "package-upgrade")) {
+            $case = Join-Path $sandbox $name
+            New-Item -ItemType Directory -Path (Join-Path $case "profiles") -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $case "profiles.yaml"), "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n")
+            [System.IO.File]::WriteAllText((Join-Path $case "config.yaml"), "ipv6: true`ntun: null`n")
+            [System.IO.File]::WriteAllText((Join-Path $case "verge.yaml"), "enable_tun_mode: false`n")
+            if ($name -eq "restored-main") {
+                [System.IO.File]::WriteAllText((Join-Path (Join-Path $case "profiles") "Script.js"), "function main(config) { return config; }`n")
+            }
+            Invoke-Installer $case
+            $scriptOwnershipCases[$name] = $case
+        }
+
+        $managedEdit = $scriptOwnershipCases["managed-edit"]
+        $managedEditScript = Join-Path (Join-Path $managedEdit "profiles") "Script.js"
+        $managedEditText = [System.IO.File]::ReadAllText($managedEditScript).Replace(
+            "function claudeEasyTransform(config, configName, usageProfile) {",
+            "function claudeEasyTransform(config, configName, usageProfile) {`n// user edit"
+        )
+        [System.IO.File]::WriteAllText($managedEditScript, $managedEditText)
+        $managedEditBefore = Get-TreeContentSnapshot $managedEdit
+        Assert-JsonResult (Invoke-TestPowerShell $uninstaller @("-AppHome", $managedEdit, "-Json")) "uninstall" 1 | Out-Null
+        Assert-True ((Get-TreeContentSnapshot $managedEdit) -ceq $managedEditBefore) "modified managed script changed during uninstall"
+
+        $restoredMain = $scriptOwnershipCases["restored-main"]
+        [System.IO.File]::AppendAllText((Join-Path (Join-Path $restoredMain "profiles") "Script.js"), "`nconst main = config => config;`n")
+        $restoredMainBefore = Get-TreeContentSnapshot $restoredMain
+        Assert-JsonResult (Invoke-TestPowerShell $uninstaller @("-AppHome", $restoredMain, "-Json")) "uninstall" 1 | Out-Null
+        Assert-True ((Get-TreeContentSnapshot $restoredMain) -ceq $restoredMainBefore) "conflicting restored main changed during uninstall"
+
+        $versionedPackage = Join-Path $sandbox "versioned-uninstall-package"
+        Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $versionedPackage -Recurse
+        [System.IO.File]::AppendAllText((Join-Path $versionedPackage "scripts/windows/clash_verge_global.js"), "`n// next version`n")
+        $versionedUninstaller = Join-Path $versionedPackage "scripts/uninstall_windows.ps1"
+        Assert-JsonResult (Invoke-TestPowerShell $versionedUninstaller @(
+            "-AppHome", $scriptOwnershipCases["package-upgrade"], "-Json"
+        )) "uninstall" 0 | Out-Null
 
         $invalidOwnershipCase = Join-Path $sandbox "invalid-auto-update-ownership-case"
         New-Item -ItemType Directory -Path $invalidOwnershipCase -Force | Out-Null

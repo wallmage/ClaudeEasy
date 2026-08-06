@@ -1,6 +1,7 @@
 ﻿$script:ClaudeEasyResultSchema = "claude-easy.result"
 $script:ClaudeEasyResultVersion = 1
 $script:ClaudeEasyResultCommands = @("install", "uninstall", "patch", "verify_routes")
+$script:ClaudeEasyResultItemStatuses = @("updated", "unchanged", "skipped", "failed", "rolled_back", "pending")
 $script:ClaudeEasyResultTextLimit = 240
 
 function Protect-ClaudeEasyResultText([object]$Value) {
@@ -84,6 +85,14 @@ function New-ClaudeEasyResult(
 ) {
     if ($Command -notin $script:ClaudeEasyResultCommands) { throw "结果命令无效。" }
     if ($Status -notin @("ok", "no_change", "skipped", "failed", "rolled_back", "partial", "invalid_request", "unsupported")) { throw "结果状态无效。" }
+    $protectedItems = @(ConvertTo-ClaudeEasyResultArray $Items)
+    foreach ($item in $protectedItems) {
+        if ($item -is [System.Collections.IDictionary] -and
+            $item.Contains("status") -and
+            [string]$item["status"] -notin $script:ClaudeEasyResultItemStatuses) {
+            throw "结果项目状态无效。"
+        }
+    }
     return [pscustomobject][ordered]@{
         schema = $script:ClaudeEasyResultSchema
         version = $script:ClaudeEasyResultVersion
@@ -99,7 +108,7 @@ function New-ClaudeEasyResult(
         profile = Protect-ClaudeEasyResultValue $Profile
         changes = @(ConvertTo-ClaudeEasyResultArray $Changes)
         checks = @(ConvertTo-ClaudeEasyResultArray $Checks)
-        items = @(ConvertTo-ClaudeEasyResultArray $Items)
+        items = $protectedItems
         messages = @(ConvertTo-ClaudeEasyResultArray $Messages)
         warnings = @(ConvertTo-ClaudeEasyResultArray $Warnings)
     }

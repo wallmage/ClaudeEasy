@@ -388,14 +388,15 @@ test('removes groups created by an older patch', { skip: !available }, () => {
 
 test('preserves encrypted IP bootstrap and replaces direct resolvers with managed mainland DoH', { skip: !available }, () => {
   const config = baseConfig();
+  config.proxies.push({ name: 'ecs', type: 'ss', server: 'proxy.invalid' });
   config.dns['default-nameserver'] = ['tls://223.5.5.5', 'tls://1.12.12.12'];
-  config.dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query', 'tls://1.12.12.12'];
+  config.dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query', 'https://1.1.1.1/dns-query#ecs'];
   config.dns['direct-nameserver'] = ['system'];
 
   const dns = engine.claudeEasyTransform(config, 'fixture').dns;
 
   assert.deepEqual(dns['default-nameserver'], ['tls://223.5.5.5', 'tls://1.12.12.12']);
-  assert.deepEqual(dns['proxy-server-nameserver'], ['https://223.5.5.5/dns-query', 'tls://1.12.12.12']);
+  assert.deepEqual(dns['proxy-server-nameserver'], ['https://223.5.5.5/dns-query', 'https://1.1.1.1/dns-query#ecs']);
   assert.deepEqual(dns['direct-nameserver'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.equal(dns['direct-nameserver-follow-policy'], false);
 });
@@ -475,8 +476,8 @@ test('migrates non-list bootstrap fields in every usage profile', { skip: !avail
 
 test('migrates mixed system and plaintext bootstrap to bootstrap-free mainland DoH', { skip: !available }, () => {
   const config = baseConfig();
-  config.dns['default-nameserver'] = ['223.5.5.5', 'system', 'tls://1.12.12.12'];
-  config.dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query', 'system'];
+  config.dns['default-nameserver'] = ['udp://223.5.5.5', 'system', 'tls://1.12.12.12'];
+  config.dns['proxy-server-nameserver'] = ['https://1.1.1.1/dns-query#h3=true#&skip-cert-verify=true&DIRECT'];
 
   for (const usageProfile of [1, 2, 3]) {
     const dns = engine.claudeEasyTransform(config, 'fixture', usageProfile).dns;
@@ -845,6 +846,34 @@ test('PowerShell installer uses the documented global script and app settings', 
   assert.ok(preflight !== -1 && firstBackup !== -1 && preflight < firstBackup, 'all transformations must be prepared before files change');
 });
 
+test('PowerShell installer reuses the usage-profile snapshot for decisions and commit checks', () => {
+  const source = fs.readFileSync(installerPath, 'utf8');
+  assert.equal(
+    (source.match(/Get-OptionalFileSnapshot\s+\$usageStatePath\s+"用途档位状态"/g) || []).length,
+    1
+  );
+  assert.match(
+    source,
+    /\$savedUsageProfile\s*=\s*Get-SavedUsageProfile\s+\$usageStatePath\s+\$usageProfileSnapshot/
+  );
+  assert.match(source, /OriginalIdentity\s*=\s*\$usageProfileSnapshot\.Identity/);
+});
+
+test('Windows entrypoints validate new cross-module APIs before AppHome access', () => {
+  for (const [file, api] of [[installerPath, 'Get-BytesSha256'], [uninstallerPath, 'Get-ClaudeEasyManagedScriptEnvelope']]) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.ok(source.indexOf(`"${api}"`) < source.indexOf('$AppHome = Resolve-ClashVergeAppHome'));
+  }
+});
+
+test('PowerShell uninstaller validates the complete restored JavaScript before commit', () => {
+  const source = fs.readFileSync(uninstallerPath, 'utf8');
+  const restore = source.indexOf('$previous = (Rename-JavaScriptMain');
+  const validation = source.indexOf('Assert-JavaScriptCanCompose $remainingText');
+  const transaction = source.indexOf('$transactionCommitted = Invoke-VerifiedWriteDeleteTransaction');
+  assert.ok(restore >= 0 && validation > restore && transaction > validation);
+});
+
 test('PowerShell safe update checks installed script and proxy-group prerequisites before acceptance', () => {
   const installer = fs.readFileSync(installerPath, 'utf8');
   const safeUpdateModule = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
@@ -862,6 +891,9 @@ test('PowerShell safe update checks installed script and proxy-group prerequisit
   assert.ok(profileCheck > scriptCheck, 'proxy-group prerequisites are not checked after the installed script');
   assert.ok(mihomoCheck > profileCheck, 'Mihomo validation does not run after proxy-group checks');
   assert.ok(manifestRemoval > mihomoCheck, 'safe-update manifest is removed before validation finishes');
+  const postVerification = installer.slice(installer.indexOf('foreach ($entry in $validated)'));
+  assert.doesNotMatch(postVerification, /Get-FileSha256\s+\$[^\r\n]*Target\.Path/);
+  assert.match(postVerification, /ValidatedSha256/);
   assert.match(
     safeUpdateModule,
     /\$flowLines \+= @\(\$lines\[\(\$groupsNode\.Start \+ 1\)\.\.\(\$lines\.Count - 1\)\]\)/,
@@ -902,13 +934,20 @@ test('DNS fragments must resolve to a non-direct proxy or group', { skip: !avail
     '+.group.example': ['https://1.1.1.1/dns-query#SafeExisting'],
     '+.direct.example': ['https://1.1.1.1/dns-query#CanDirect'],
     '+.option.example': ['https://1.1.1.1/dns-query#h3=true'],
-    '+.interface.example': ['https://1.1.1.1/dns-query#en0']
+    '+.interface.example': ['https://1.1.1.1/dns-query#en0'],
+    '+.overridden.example': ['https://1.1.1.1/dns-query#SafeExisting&DIRECT'],
+    '+.encoded-overridden.example': ['https://1.1.1.1/dns-query#SafeExisting&%44IRECT'],
+    '+.invalid-percent.example': ['https://1.1.1.1/dns-query#SafeExisting&ecs%ZZvalue'],
+    '+.multi-fragment.example': ['https://1.1.1.1/dns-query#h3=true#&skip-cert-verify=true&SafeExisting']
   };
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const policy = patched.dns['nameserver-policy'];
   assert.deepEqual(policy['+.proxy.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#台湾家宽 01`));
   assert.deepEqual(policy['+.group.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#SafeExisting`));
-  for (const pattern of ['+.direct.example', '+.option.example', '+.interface.example']) {
+  for (const pattern of [
+    '+.direct.example', '+.option.example', '+.interface.example',
+    '+.overridden.example', '+.encoded-overridden.example', '+.invalid-percent.example', '+.multi-fragment.example'
+  ]) {
     assert.ok(policy[pattern].every((value) => value.endsWith(`#${engine.claudeEasyRouteGroupName(patched)}`)), pattern);
   }
 });
@@ -1021,14 +1060,16 @@ test('DNS policy rejects privacy-weakening resolver options', { skip: !available
   config.dns['nameserver-policy'] = {
     '+.h3.example': [`https://1.1.1.1/dns-query#${target}&h3=true`],
     '+.skip-cert.example': [`https://1.1.1.1/dns-query#${target}&skip-cert-verify=true`],
-    '+.ecs.example': [`https://1.1.1.1/dns-query#${target}&ecs=203.0.113.0/24&ecs-override=true`]
+    '+.ecs.example': [`https://1.1.1.1/dns-query#${target}&ecs=203.0.113.0/24&ecs-override=true`],
+    '+.encoded-skip-cert.example': [`https://1.1.1.1/dns-query#${target}&skip-cert-verify%3Dtrue`],
+    '+.encoded-ecs.example': [`https://1.1.1.1/dns-query#${target}&%65cs=203.0.113.0/24`]
   };
 
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const policies = patched.dns['nameserver-policy'];
   const safeSuffix = `#${engine.claudeEasyRouteGroupName(patched)}`;
   assert.deepEqual(policies['+.h3.example'], engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#${target}&h3=true`));
-  for (const pattern of ['+.skip-cert.example', '+.ecs.example']) {
+  for (const pattern of ['+.skip-cert.example', '+.ecs.example', '+.encoded-skip-cert.example', '+.encoded-ecs.example']) {
     assert.ok(policies[pattern].every((endpoint) => endpoint.endsWith(safeSuffix)), pattern);
   }
 });

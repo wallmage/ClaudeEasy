@@ -7,8 +7,10 @@
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path (Join-Path $PSScriptRoot "windows") "result_contract.ps1"
 $uninstallerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
-$uninstallerModules = @("yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1")
-$packageComplete = Test-Path -LiteralPath $resultContractPath -PathType Leaf
+$enginePath = Join-Path (Join-Path $PSScriptRoot "windows") "clash_verge_global.js"
+$uninstallerModules = @("yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1", "safe_update.ps1")
+$packageComplete = (Test-Path -LiteralPath $resultContractPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $enginePath -PathType Leaf)
 foreach ($uninstallerModule in $uninstallerModules) {
     if (-not (Test-Path -LiteralPath (Join-Path $uninstallerModuleRoot $uninstallerModule) -PathType Leaf)) {
         $packageComplete = $false
@@ -51,6 +53,17 @@ if (-not $resultContractLoaded) {
 try {
     foreach ($uninstallerModule in $uninstallerModules) {
         $null = . (Join-Path $uninstallerModuleRoot $uninstallerModule)
+    }
+    foreach ($requiredUninstallerFunction in @(
+        "Resolve-ClashVergeAppHome", "ConvertTo-NormalizedWindowsPath", "Enter-AppHomeMutationLock", "Exit-AppHomeMutationLock",
+        "Get-OptionalFileSnapshot", "ConvertTo-Utf8Bytes", "Get-BytesSha256", "Backup-Versioned", "Invoke-VerifiedWriteDeleteTransaction",
+        "Assert-InstallState", "Get-JavaScriptAnalysis", "Rename-JavaScriptMain", "Assert-JavaScriptCanCompose",
+        "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
+        "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Restore-RemoteSubscriptionAutoUpdate"
+    )) {
+        if ($null -eq (Get-Command $requiredUninstallerFunction -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw "安装包不完整：卸载模块缺少必要接口。"
+        }
     }
 } catch {
     if ($Json) {
@@ -149,18 +162,24 @@ function Get-InstalledSettingRestorePlan([object]$Entry, [string]$Path, [string]
 
 function Assert-UsageProfileState([object]$State) {
     if ($null -eq $State) { throw "用途档位状态文件无效。" }
-    $propertyNames = @($State.PSObject.Properties.Name)
-    if ($propertyNames.Count -ne 2 -or
-        $propertyNames -notcontains "Version" -or
-        $propertyNames -notcontains "Profile") {
-        throw "用途档位状态文件结构无效。"
-    }
     $version = $State.Version
     $profile = $State.Profile
     $numericVersion = $version -is [int] -or $version -is [long]
     $numericProfile = $profile -is [int] -or $profile -is [long]
-    if (-not $numericVersion -or [long]$version -ne 1 -or
-        -not $numericProfile -or [long]$profile -notin @(1, 2, 3)) {
+    $propertyNames = @($State.PSObject.Properties.Name | Sort-Object)
+    $expectedProperties = if ($numericVersion -and [long]$version -eq 1) {
+        "Profile,Version"
+    } elseif ($numericVersion -and [long]$version -eq 2) {
+        "ManagedScriptSha256,Profile,Version"
+    } else {
+        ""
+    }
+    if (($propertyNames -join ",") -cne $expectedProperties -or
+        -not $numericProfile -or [long]$profile -notin @(1, 2, 3) -or
+        ([long]$version -eq 2 -and (
+            -not ($State.ManagedScriptSha256 -is [string]) -or
+            [string]$State.ManagedScriptSha256 -notmatch '^[0-9a-f]{64}$'
+        ))) {
         throw "用途档位状态文件内容无效。"
     }
 }
@@ -251,6 +270,11 @@ try {
                 throw "用途档位状态文件字段重复或缺失。"
             }
             $usageState = $usageStateText | ConvertFrom-Json
+            if (($usageState.Version -is [int] -or $usageState.Version -is [long]) -and
+                [long]$usageState.Version -eq 2 -and
+                [regex]::Matches($usageStateText, '(?i)"ManagedScriptSha256"\s*:').Count -ne 1) {
+                throw "用途档位状态文件字段重复或缺失。"
+            }
         } catch {
             throw "用途档位状态文件无效。"
         }
@@ -315,6 +339,26 @@ try {
             if (-not $managedBlock.Contains("CLAUDEEASY POLICY BEGIN") -or -not $managedBlock.Contains("function claudeEasyTransform")) {
                 throw "Script.js 中的同名标记不是本工具创建的，原文件未修改。"
             }
+            $managedProfileMatches = [regex]::Matches(
+                $managedBlock,
+                'const\s+CLAUDE_EASY_USAGE_PROFILE\s*=\s*([123])\s*;'
+            )
+            if ($managedProfileMatches.Count -ne 1) {
+                throw "Script.js 中的用途档位标记无效，原文件未修改。"
+            }
+            $managedProfile = [int]$managedProfileMatches[0].Groups[1].Value
+            if ($null -ne $usageState -and $managedProfile -ne [int]$usageState.Profile) {
+                throw "Script.js 中的用途档位与已保存状态不一致，原文件未修改。"
+            }
+            if ($null -ne $usageState -and [long]$usageState.Version -eq 2) {
+                $managedEnvelope = Get-ClaudeEasyManagedScriptEnvelope $current $managedProfile
+                $managedEnvelopeHash = Get-BytesSha256 (ConvertTo-Utf8Bytes $managedEnvelope)
+                if ($managedEnvelopeHash -cne [string]$usageState.ManagedScriptSha256) {
+                    throw "Script.js 中的 ClaudeEasy 区块在安装后有新改动，原文件未修改。"
+                }
+            } else {
+                Assert-ClaudeEasyManagedScriptCurrent $current $managedProfile $enginePath $target -AllowOutsideCode
+            }
 
             $outsidePrefix = $current.Substring(0, $beginMarkers[0].Start).Trim()
             $outsideSuffix = $current.Substring($endMarkers[0].End).Trim()
@@ -339,10 +383,14 @@ try {
             }
             $remaining = @($outsidePrefix, $previous, $outsideSuffix) |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            $remainingText = ($remaining -join "`r`n`r`n")
+            if (-not [string]::IsNullOrWhiteSpace($previous)) {
+                Assert-JavaScriptCanCompose $remainingText
+            }
             $scriptBytes = if ($remaining.Count -eq 0) {
                 [byte[]]@()
             } else {
-                (New-Object System.Text.UTF8Encoding($false)).GetBytes((($remaining -join "`r`n`r`n") + "`r`n"))
+                (New-Object System.Text.UTF8Encoding($false)).GetBytes(($remainingText + "`r`n"))
             }
             $scriptPlan = [pscustomobject]@{
                 Changed = $true

@@ -15,26 +15,51 @@ module ClaudeEasy
     "no_proxy" => nil, "NO_PROXY" => nil
   }.freeze
 
+  def running_mihomo_config_paths
+    output, status = Open3.capture2("/bin/ps", "ax", "-o", "command=")
+    return [] unless status.success?
+
+    cores = mihomo_core_paths.select { |path| File.file?(path) && File.executable?(path) }
+    output.each_line.each_with_object([]) do |line, paths|
+      core = cores.find { |path| line.start_with?("#{path} ") }
+      next unless core
+
+      match = line.match(/(?:\A|\s)-f\s+(.+?\.yaml)(?:\s|\z)/)
+      paths << File.expand_path(match[1]) if match
+    end.uniq
+  rescue SystemCallError, IOError
+    []
+  end
+
   def controller_socket
     cache_directories = [
       File.expand_path("~/Library/Caches/com.MetaCubeX.ClashX.meta/cacheConfigs"),
       File.expand_path("~/Library/Caches/com.metacubex.ClashX.meta/cacheConfigs")
     ]
-    cache_directories.each do |directory|
+    candidates = cache_directories.flat_map do |directory|
       candidates = Dir.glob(File.join(directory, "*.yaml")).each_with_object([]) do |path, entries|
         entries << [path, File.mtime(path)]
       rescue SystemCallError
         next
       end
-      candidates.sort_by { |_path, modified| modified }.reverse_each do |path, _modified|
-        config = load_yaml(File.read(path, encoding: "UTF-8"), path)
-        socket = config["external-controller-unix"] if config.is_a?(Hash)
-        return socket if socket.is_a?(String) && File.socket?(socket)
-      rescue StandardError
-        next
+      candidates.sort_by { |_path, modified| modified }.reverse_each.with_object([]) do |(path, _modified), entries|
+        begin
+          config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+          socket = config["external-controller-unix"] if config.is_a?(Hash)
+          entries << [path, socket] if socket.is_a?(String) && File.socket?(socket)
+        rescue StandardError
+          next
+        end
       end
     end
-    nil
+    candidates_by_socket = candidates.group_by { |_path, socket| socket }
+    return nil if candidates_by_socket.empty?
+
+    active_configs = running_mihomo_config_paths
+    active_sockets = candidates_by_socket.select do |_socket, entries|
+      entries.any? { |path, _candidate_socket| active_configs.include?(File.expand_path(path)) }
+    end.keys
+    active_sockets.length == 1 ? active_sockets.first : nil
   end
 
   def controller_request(socket, method, path, body = nil)

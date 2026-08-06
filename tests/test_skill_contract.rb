@@ -1950,7 +1950,7 @@ class SkillContractTest < Minitest::Test
     running_gate = windows_installer.index(
       'if ($clientRunning) {'
     )
-    first_install_target = windows_installer.index('$usageProfileTarget = $null')
+    first_install_target = windows_installer.index('$usageProfileTarget = [pscustomobject]@{')
     refute_nil running_gate
     refute_nil first_install_target
     assert_operator running_gate, :<, first_install_target
@@ -3183,8 +3183,8 @@ class SkillContractTest < Minitest::Test
     assert_includes transaction, "function Resolve-ClashVergeAppHome"
     assert_includes transaction, "Clash Verge Rev 配置目录不唯一"
     assert_includes transaction, 'if ($existing.Count -gt 1)'
-    assert_equal 1, installer.scan("Resolve-ClashVergeAppHome").length
-    assert_equal 1, uninstaller.scan("Resolve-ClashVergeAppHome").length
+    assert_equal 1, installer.scan(/Resolve-ClashVergeAppHome\s*$/).length
+    assert_equal 1, uninstaller.scan(/Resolve-ClashVergeAppHome\s*$/).length
     refute_includes installer, '$candidates | Where-Object'
     refute_includes uninstaller, '$candidates | Where-Object'
   end
