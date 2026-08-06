@@ -20,29 +20,17 @@
 
 ## 测试与发布
 
-提交前运行：
+修改过程中和提交前只运行与改动直接相关的测试、对应语法或静态检查，以及 `git diff --check`；不得为了声称“全套通过”重复运行无关测试。已有测试涉及变更后的合同或行为时必须同步更新；是否新增回归测试继续遵守 TDD 和本文件的精准修改要求。
 
-```sh
-ruby tests/test_macos_patcher.rb
-ruby tests/coverage_ruby.rb
-ruby tests/test_macos_wrappers.rb
-ruby tests/test_skill_contract.rb
-ruby tests/test_mutation_safety.rb
-node --test tests/test_region_fingerprint_page.js
-npm ci
-npx playwright install webkit
-node tests/test_region_fingerprint_browser.js
-node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
-ruby tests/generate_windows_policy.rb --check
-ruby -c claude-easy/scripts/macos/patch_profiles.rb
-ruby -c claude-easy/scripts/macos/verify_routes.rb
-node --check claude-easy/scripts/windows/clash_verge_global.js
-sh -n claude-easy/scripts/install_macos.sh
-sh -n claude-easy/scripts/uninstall_macos.sh
-git diff --check
-```
+常见映射：
 
-Windows PowerShell 5.1 的行为由 GitHub CI 验证。
+- macOS Ruby 逻辑运行对应测试名或相关测试文件；包装器只运行相关包装器测试。只有安全不变量变化时才运行相关变异测试。
+- 区域检测页运行对应 Node 测试；只有浏览器真实行为受影响时才运行浏览器测试。
+- Windows JavaScript 运行对应 Node 测试。Windows PowerShell 5.1 的行为由 GitHub CI 验证。
+- Skill、策略、结果合同或文档变化运行对应合同测试；只有 `policy.json` 变化时才检查生成的 Windows 策略。
+- 改过的 Ruby、JavaScript 或 Shell 文件分别运行对应语法检查。
+
+以下情况提交前仍须在本地运行完整测试矩阵：跨模块公共事务或文件写入、跨平台策略或结果合同、依赖、测试基础设施、构建发布流程、大范围重构，以及上一次 CI 失败或 CI 无法使用。其他改动由 push 后的 GitHub `Test` workflow 运行完整矩阵，不在本地重复。
 
 每次 commit 或 push 前读取 `main` 上一次 `Test` workflow：失败则查看日志并修复；仍在运行或暂时无法访问时如实记录，不等待。随后自动在 `main` 上 commit、push，由 GitHub 启动 CI。push 后不轮询 CI，下次提交前再检查。
 

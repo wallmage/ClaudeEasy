@@ -3245,13 +3245,16 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_every_local_test_entrypoint_is_in_the_precommit_release_list
+  def test_local_verification_is_targeted_and_ci_keeps_the_full_matrix
     instructions = File.read(File.join(ROOT, "AGENTS.md"))
+    workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
     local_entrypoints = Dir[File.join(ROOT, "tests/test_*.{rb,js}")].sort
 
+    assert_includes instructions, "只运行与改动直接相关的测试"
+    assert_includes instructions, "GitHub `Test` workflow 运行完整矩阵"
     refute_empty local_entrypoints
     local_entrypoints.each do |path|
-      assert_includes instructions, File.basename(path), "local test entrypoint is missing from AGENTS.md: #{path}"
+      assert_includes workflow, File.basename(path), "local test entrypoint is missing from CI: #{path}"
     end
   end
 
