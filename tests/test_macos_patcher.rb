@@ -9009,7 +9009,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_every_profile_status_is_documented
-    policy_document = File.read(File.join(ROOT, "claude-easy/references/patch-policy.md"))
+    policy_document = Dir[File.join(ROOT, "claude-easy/references/*.md")].sort.map { |path| File.read(path) }.join("\n")
     skill_document = File.read(File.join(ROOT, "claude-easy/SKILL.md"))
     examples = [
       { path: "/profiles/friend.yaml", status: :updated, active: true, reloaded: true, ai_group: "AI" },

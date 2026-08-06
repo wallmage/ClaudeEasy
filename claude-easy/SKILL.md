@@ -5,15 +5,25 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 # ClaudeEasy 配置与诊断
 
-## 先读规则
+## 策略读取路由
 
-开始前完整阅读 [references/patch-policy.md](references/patch-policy.md)。本文件保留代理入口、模块选择、执行顺序和不可突破的安全边界；详细产品行为、平台差异、异常处理和状态文案只在该策略文件定义。配置常量以 `references/policy.json` 为准；全部状态以策略文件的“输出格式”和 `references/result-contract.json` 为准。
+所有任务先完整阅读 [references/policy-core.md](references/policy-core.md)，再按下表读取任务模块；每个选中的文件都要完整阅读。按当前平台读取 [references/macos.md](references/macos.md) 或 [references/windows.md](references/windows.md)，不得读取另一平台后混用规则。
+
+| 任务 | 必须读取 | 条件追加 |
+| --- | --- | --- |
+| Diagnostics：慢、间歇失败、打不开、全红、分流异常或泄漏 | [references/diagnostics.md](references/diagnostics.md)；当前平台文件 | 涉及共同国内直连、DNS、TUN、代理组、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md)；需要改档或执行 Patch 时再读档位文件 |
+| Patch：首次安装、改变用途档位或完整安全增强 | [references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 涉及备份恢复或未完成事务时读 [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md) |
+| 安全更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 无 |
+| 列出、比较或恢复备份 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)；当前平台文件 | 恢复后验证 DNS、分流、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md) |
+| 维护、审查或测试 Skill | 与改动直接相关的策略文件 | 只有跨模块维护、权威归属审查或整体一致性检查才读取全部七个策略文件 |
+
+配置常量只读取 [references/policy.json](references/policy.json)；生成或判断机器输出时读取 [references/result-contract.json](references/result-contract.json)。全部状态以 `policy-core.md` 的“输出格式”和 `result-contract.json` 为准。本文件保留代理入口、模块选择、执行顺序和不可突破的安全边界；各策略文件按上表分别成为其模块的唯一权威来源。
 
 ## 不可突破的边界
 
 1. **绝对不要退出、停止或重启 Clash 客户端。** 不得执行、建议或要求用户这样做。
 2. **不得运行 ClashX Meta 主程序做检查。** 不用 `open`、LaunchServices、Computer Use 或 `--version` 启动它；客户端版本读取 `Info.plist`，运行状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo。客户端未运行时保持未运行。
-3. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。只有策略文件明确允许时，才通过客户端界面切换 TUN、Clash 自己的系统代理或 AdGuard for Mac 的兼容设置。
+3. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。只有对应任务策略明确允许时，才通过客户端界面切换 TUN、Clash 自己的系统代理或 AdGuard for Mac 的兼容设置。
 4. 只处理 Clash 当前存储位置中的订阅；无法确认本地或 iCloud 状态时停止，不猜。
 5. 写入候选必须通过 YAML 重读、二次转换一致性检查和 Mihomo 1.19.27 以上版本的 30 秒校验；失败时保持原文件。
 6. 跟随用户使用的语言。任何输出都不得包含订阅地址、密码、UUID、私钥、控制器密钥、完整节点地址或节点名称。
@@ -40,7 +50,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 2. 建立原始证据清单：用户时间线、先前自动化或终端的原始会话或审计记录、版本化备份和变更收据、应用与控制器日志、系统日志、配置差异、当前状态。已有历史证据未读完前，不用当前健康状态改写过去。
 3. 有 Computer Use 且原始症状可见时，在修改前用同一应用、目标和动作复现。再用范围矩阵区分单个目标、应用、本机、网络和共同路径；至少保留异常目标与两个健康对照。
 4. 维护结论台账，分开记录症状、故障机制、故障来源、触发条件、恢复原因和修复动作。每项新检查必须区分至少两个仍成立的解释，或补齐一个明确缺口；工具调用失败只说明取证方法失败。连续两次调用失败时先回读环境和工具能力，再换证据来源。
-5. 单次事故用现场时间线、直接机制证据、反证和恢复归因判断；声称“反复故障的主要原因”时，额外执行策略文件中的因果判定门槛：原始事件、时间方向、候选事件命中率、故障覆盖率、正反例、独立证据和单变量干预。不得把只适用于重复样本的统计门槛套到单次事故，也不得用机制解释冒充事故证据。
+5. 单次事故用现场时间线、直接机制证据、反证和恢复归因判断；声称“反复故障的主要原因”时，额外执行 `diagnostics.md` 中的因果判定门槛：原始事件、时间方向、候选事件命中率、故障覆盖率、正反例、独立证据和单变量干预。不得把只适用于重复样本的统计门槛套到单次事故，也不得用机制解释冒充事故证据。
 6. 一次只改变一个变量。修复失败后恢复并继续取证；但事务安全规则优先于一般失败恢复规则，文件身份变化、提交状态未知或持久事务待恢复时不得强行覆盖。连续两次判断或修改无改善时执行诊断重置；没有新证据不做第三次修改。
 7. 使用原场景复测。故障原因与恢复原因分别判断；组合操作、延迟复测或同一份配置未修改而恢复时，不得把恢复归给其中一项操作。
 
@@ -60,7 +70,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 
 1. **档位 1｜普通浏览**：普通浏览、国内直连和 Clash 系统代理；不改 TUN、IPv6、WebRTC、AI 分组或节点。
 2. **档位 2｜海外 AI**：继承档位 1，增加 TUN 和普通海外 AI；关闭 Clash 自己的系统代理，避免重复接管；不增加 WebRTC 或 AI 分组补丁。
-3. **档位 3｜Claude/Claude Code**：继承档位 2，再应用完整 DNS 分流、AI 分组与规则、UDP/WebRTC 防护和区域指纹检查。区域指纹只使用 `assets/claude-region-check.html`，是参考信号，不能作为 Claude 是否可用的通过条件；具体十项信号、Computer Use、STUN、CSP、浏览器与恢复规则只按策略文件执行。
+3. **档位 3｜Claude/Claude Code**：继承档位 2，再应用完整 DNS 分流、AI 分组与规则、UDP/WebRTC 防护和区域指纹检查。区域指纹只使用 `assets/claude-region-check.html`，是参考信号，不能作为 Claude 是否可用的通过条件；具体十项信号、Computer Use、STUN、CSP、浏览器与恢复规则只按 `profiles-and-patch.md` 执行。
 
 用户可以随时改档；升档只补新增能力。档位 3 降到 1 或 2 时先安全卸载：macOS `bash scripts/uninstall_macos.sh`，Windows `.\scripts\uninstall_windows.cmd`。Windows 卸载返回 `partial` 时保留旧档位且不得继续降档。
 

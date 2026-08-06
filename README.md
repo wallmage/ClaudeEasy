@@ -4,7 +4,7 @@ ClaudeEasy 是给 AI 助手使用的 Clash 网络配置与诊断 Skill，支持 
 
 ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关系。
 
-本文档面向用户，只解释用户可见行为，不重新定义执行规则。代理入口在 `claude-easy/SKILL.md`；详细行为、平台差异和状态以 `claude-easy/references/patch-policy.md` 为准；配置常量和机器输出分别以 `policy.json`、`result-contract.json` 为准。
+本文档面向用户，只解释用户可见行为，不重新定义执行规则。代理入口和策略读取路由在 `claude-easy/SKILL.md`：每次先读共同策略，再按 Diagnostics、Patch、安全更新或恢复任务读取对应模块和当前平台文件。详细策略位于 `claude-easy/references/`；配置常量和机器输出分别以 `policy.json`、`result-contract.json` 为准。
 
 ## 支持范围
 

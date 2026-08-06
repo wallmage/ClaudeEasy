@@ -1,8 +1,10 @@
 # 当前测试基线
 
-本文件记录现行测试范围，不定义产品功能。产品要求见 `docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md` 和 `claude-easy/references/patch-policy.md`。
+本文件记录现行测试范围，不定义产品功能。产品要求见 `docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md`、`claude-easy/references/policy-core.md` 及 `SKILL.md` 按任务路由到的模块策略。
 
 ## 必须通过
+
+- 策略路由合同：七个策略文件必须齐全，旧单体策略不得继续存在；`SKILL.md` 必须要求所有任务先读共同策略，并分别写明 Diagnostics、Patch、安全更新、备份恢复、平台和跨模块维护的读取组合。合同测试把七个文件作为一份完整策略检查现行规则，防止拆分漏掉内容。
 
 - Windows `profiles.yaml` 解析门禁：`items` 有内容却无法完整归属受支持块状项目时整批拒绝；`type` 只接受简单标量，订阅项目和 `option` 直属层级的复杂或转义键也必须在写入前拒绝，不能新增语义重复的 `option` 或 `allow_auto_update`。
 

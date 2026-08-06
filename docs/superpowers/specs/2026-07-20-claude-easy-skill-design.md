@@ -8,14 +8,19 @@
 本文只定义产品目标、组件边界和规则归属，不复制操作步骤、配置常量或状态文案：
 
 - `README.md`：用户可见能力、命令和限制。
-- `claude-easy/SKILL.md`：触发后必须立即可见的安全边界、代理入口、模块选择和执行顺序。
-- `claude-easy/references/patch-policy.md`：产品行为、授权边界、平台差异、异常和人类可读状态的唯一权威来源。
+- `claude-easy/SKILL.md`：触发后必须立即可见的安全边界、代理入口、模块选择、执行顺序和策略读取路由。
+- `claude-easy/references/policy-core.md`：所有任务共同遵守的支持范围、冲突顺序、脚本接口、异常和输出边界。
+- `claude-easy/references/diagnostics.md`：诊断任务合同、证据方法、已知故障、修复和完成标准。
+- `claude-easy/references/profiles-and-patch.md`：用途档位、Patch 顺序和 Patch 验收。
+- `claude-easy/references/routing-and-security.md`：共同国内直连、DNS、TUN、代理组、AI 规则和 WebRTC。
+- `claude-easy/references/safe-update-and-recovery.md`：安全更新、配置历史、备份和恢复。
+- `claude-easy/references/macos.md` 与 `windows.md`：各平台文件事务、运行恢复和客户端边界。
 - `claude-easy/references/policy.json`：解析器、规则集、分组候选和 AI 规则等配置常量。
 - `claude-easy/references/result-contract.json`：JSON v1 字段、类型和状态枚举。
 - `AGENTS.md`：开发、测试、安装和发布流程。
 - `tests/baseline.md`：现行自动化测试范围，不定义产品功能。
 
-需求变化直接修改所属的权威来源；其他文档只更新引用或用户摘要，不重新复制一套规则。不得新增平行的需求汇总文档。
+每个任务先读取 `policy-core.md`，再由 `SKILL.md` 按任务与平台选择模块；只有跨模块维护、权威归属审查或整体一致性检查才读取全部策略。需求变化直接修改所属的权威来源；其他文档只更新引用或用户摘要，不重新复制一套规则。不得新增平行的需求汇总文档。
 
 ## 产品目标
 
@@ -48,7 +53,7 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 
 ### 区域指纹组件
 
-档位 3 使用本地 `assets/claude-region-check.html`，在实际打开 Claude 的同一浏览器中比较修改前后区域信号。页面使用 STUN 与 IPWhois，CSP 只允许所需查询；正式支持 macOS Safari/Chrome 和 Windows Edge/Chrome。它提供十项参考信号、风险分档和未知权重，不是 Claude 官方判断，也不能作为 DNS、WebRTC、实时分流或 Claude 联网的通过条件。具体信号、权重、授权和恢复规则只在策略文件定义。
+档位 3 使用本地 `assets/claude-region-check.html`，在实际打开 Claude 的同一浏览器中比较修改前后区域信号。页面使用 STUN 与 IPWhois，CSP 只允许所需查询；正式支持 macOS Safari/Chrome 和 Windows Edge/Chrome。它提供十项参考信号、风险分档和未知权重，不是 Claude 官方判断，也不能作为 DNS、WebRTC、实时分流或 Claude 联网的通过条件。具体信号、权重、授权和恢复规则只在 `profiles-and-patch.md` 定义。
 
 ## Diagnostics 架构
 

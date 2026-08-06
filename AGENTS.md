@@ -5,7 +5,9 @@
 - 需求明确且在已有授权范围内时，从实现、验证、安装到提交推送连续做完。不得停在方案、计划、等待用户操作或“尚未提交”的中间状态，也不得要求用户重复确认；只有缺少必要权限或操作会明显超出用户授权时才能停下。
 - 实际修改项目后，除非用户明确要求不要提交，否则自动完成本地测试、commit 和 push，让 GitHub CI 自动运行。不得把“尚未 commit 或 push”作为常规收尾。
 - 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。如果 `~/.agents/skills/claude-easy/` 存在，也要同步安装 Agents 副本。新副本必须逐文件校验一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动处理。
-- `README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 规定触发后必须立即可见的安全边界、代理入口与执行顺序，`claude-easy/references/patch-policy.md` 是详细产品行为的唯一权威来源，`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同，设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
+- `README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 规定触发后必须立即可见的安全边界、代理入口、执行顺序和策略读取路由；设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
+- 策略按职责拆分：`policy-core.md` 保存所有任务共同边界；`diagnostics.md` 保存诊断与证据规则；`profiles-and-patch.md` 保存用途档位与 Patch；`routing-and-security.md` 保存 DNS、TUN、代理组、AI 与 WebRTC；`safe-update-and-recovery.md` 保存安全更新、备份与恢复；`macos.md` 和 `windows.md` 分别保存平台事务。`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同。
+- 运行 Skill 时始终先读 `policy-core.md`，再按 `SKILL.md` 的任务表读取对应模块和当前平台文件；只有跨模块维护、权威归属审查或整体一致性检查才读取全部策略。维护规则时先修改所属策略、代码和测试，再同步入口与架构说明。
 - 功能需求变化时，先修改所属权威来源、代码和测试；其他文档只同步用户摘要、执行入口或架构影响，不重复整套规则。
 
 ## 项目边界
