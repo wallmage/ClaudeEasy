@@ -7,6 +7,13 @@ function Test-JavaScriptStringLineBreak([string]$Character) {
     return $Character.Length -eq 1 -and ([int][char]$Character -in @(0x000A, 0x000D))
 }
 
+function Test-JavaScriptRegexLiteralStart([string]$Code) {
+    $prefix = $Code.TrimEnd()
+    if ($prefix.Length -eq 0) { return $true }
+    if ([string]$prefix[$prefix.Length - 1] -match '[\(\{\[=,:;!&|?+\-*%^~<>]') { return $true }
+    return $prefix -match '(?:^|[^A-Za-z0-9_$])(?:return|throw|case|delete|void|typeof|instanceof|in|of|yield|await|else|do)\s*$'
+}
+
 function Get-JavaScriptAnalysis([string]$Text) {
     $mask = New-Object System.Text.StringBuilder
     $markers = @()
@@ -15,6 +22,7 @@ function Get-JavaScriptAnalysis([string]$Text) {
     $templateStarts = @()
     $state = "code"
     $templateExpressionDepths = @()
+    $regexCharacterClass = $false
     $literalStart = -1
     $hasLiteral = $false
     $index = 0
@@ -50,6 +58,15 @@ function Get-JavaScriptAnalysis([string]$Text) {
                     [void]$mask.Append($(if (Test-JavaScriptLineTerminator $masked) { $masked } else { " " }))
                     $index++
                 }
+                continue
+            }
+            if ($character -eq "/" -and
+                (Test-JavaScriptRegexLiteralStart ($mask.ToString()))) {
+                $state = "regex"
+                $regexCharacterClass = $false
+                $hasLiteral = $true
+                [void]$mask.Append("/")
+                $index++
                 continue
             }
             if ($templateExpressionDepths.Count -gt 0 -and $character -eq "{") {
@@ -101,7 +118,44 @@ function Get-JavaScriptAnalysis([string]$Text) {
                 $index++
                 continue
             }
+            if ($character -eq "\") {
+                throw "JavaScript 代码区包含 Unicode 转义，无法安全检查标识符。原脚本没有被修改。"
+            }
             [void]$mask.Append($character)
+            $index++
+            continue
+        }
+
+        if ($state -eq "regex") {
+            if (Test-JavaScriptLineTerminator $character) {
+                throw "JavaScript 正则字面量没有结束，原脚本没有被修改。"
+            }
+            if ($character -eq "\") {
+                [void]$mask.Append(" ")
+                $index++
+                if ($index -ge $Text.Length -or
+                    (Test-JavaScriptLineTerminator ([string]$Text[$index]))) {
+                    throw "JavaScript 正则字面量没有结束，原脚本没有被修改。"
+                }
+                [void]$mask.Append(" ")
+                $index++
+                continue
+            }
+            if ($character -eq "[") {
+                $regexCharacterClass = $true
+            } elseif ($character -eq "]") {
+                $regexCharacterClass = $false
+            } elseif ($character -eq "/" -and -not $regexCharacterClass) {
+                [void]$mask.Append("/")
+                $index++
+                while ($index -lt $Text.Length -and [string]$Text[$index] -match '[A-Za-z]') {
+                    [void]$mask.Append(" ")
+                    $index++
+                }
+                $state = "code"
+                continue
+            }
+            [void]$mask.Append(" ")
             $index++
             continue
         }
@@ -166,6 +220,9 @@ function Get-JavaScriptAnalysis([string]$Text) {
         }
         [void]$mask.Append(" ")
         $index++
+    }
+    if ($state -eq "regex") {
+        throw "JavaScript 正则字面量没有结束，原脚本没有被修改。"
     }
     if ($state -ne "code" -or $templateExpressionDepths.Count -gt 0) {
         throw "JavaScript 字符串或模板表达式没有结束，原脚本没有被修改。"

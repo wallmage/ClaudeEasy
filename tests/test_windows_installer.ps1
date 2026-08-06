@@ -3732,6 +3732,19 @@ rules:
 
     Assert-True (Test-MihomoVersionText "Mihomo Meta v1.19.27") "minimum Mihomo version was rejected"
     Assert-True (-not (Test-MihomoVersionText "Mihomo Meta v1.19.26")) "old Mihomo version was accepted"
+    if ($onWindows) {
+        $commandSyntaxCore = Join-Path $sandbox "mihomo&friend.cmd"
+        [System.IO.File]::WriteAllText(
+            $commandSyntaxCore,
+            "@echo off`r`necho Mihomo Meta v1.19.27 windows amd64`r`n",
+            [System.Text.Encoding]::ASCII
+        )
+        $commandSyntaxRejected = $false
+        try { Invoke-Mihomo $commandSyntaxCore @("-v") | Out-Null } catch {
+            $commandSyntaxRejected = $_.Exception.Message.Contains("命令解释器字符")
+        }
+        Assert-True $commandSyntaxRejected "Mihomo command-script path accepted command syntax"
+    }
     $timeoutCore = $hangingCore
     $timeoutArguments = @("-v")
     if ($onWindows) {
@@ -7087,6 +7100,24 @@ friend payload
     Assert-True ((Read-TestUtf8Text $templateScriptPath).Contains("friend payload")) "uninstaller discarded marker text inside a template literal"
 
     Assert-InstallerRejectsScript "reserved-symbol-case" "const claudeEasyTransform = 1;`nfunction main(config) { return config; }`n" "保留标识符"
+    Assert-InstallerRejectsScript "unicode-reserved-symbol-case" "const cl\u0061udeEasyTransform = 1;`nfunction main(config) { return config; }`n" "Unicode 转义"
+    Assert-InstallerRejectsScript "regex-hidden-reserved-symbol-case" 'function main(config) { return config; }
+const first = /"/;
+const claudeEasyFinalizer = 1;
+const second = /"/;
+' "保留标识符"
+    $regexAndDivisionScript = @'
+function main(config) {
+  const quote = /["']/;
+  config.ratio = 6 / 3;
+  config.hasQuote = quote.test('"');
+  return config;
+}
+'@
+    Assert-JavaScriptCanCompose $regexAndDivisionScript
+    $renamedRegexAndDivision = Rename-JavaScriptMain $regexAndDivisionScript "main" "friendMain"
+    Assert-True ($renamedRegexAndDivision.Contains('const quote = /["'']/;')) "regex literal changed during main rename"
+    Assert-True ($renamedRegexAndDivision.Contains("config.ratio = 6 / 3;")) "division expression changed during main rename"
     Assert-InstallerRejectsScript "recursive-main-case" "function main(config) { return config.retry ? main(config) : config; }`n" "递归"
     Assert-InstallerRejectsScript "main-property-reference-case" "function main(config) { return config; }`nmain.version = 1;`n" "引用 main"
     Assert-InstallerRejectsScript "main-alias-reference-case" "function main(config) { const handler = main; return handler(config); }`n" "引用 main"

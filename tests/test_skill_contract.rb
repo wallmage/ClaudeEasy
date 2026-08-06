@@ -2912,6 +2912,23 @@ class SkillContractTest < Minitest::Test
     assert_operator staging, :<, publish
   end
 
+  def test_windows_mihomo_batch_invocation_rejects_command_syntax
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/mihomo.ps1")
+    ).force_encoding("UTF-8")
+    validator = source[
+      /function Assert-WindowsCommandScriptArgument\b.*?(?=^function |\z)/m
+    ]
+    invocation = source[/function Invoke-Mihomo\b.*?(?=^function |\z)/m]
+
+    refute_nil validator
+    refute_nil invocation
+    assert_includes validator, '["%!^&|<>()]'
+    assert_includes invocation, "Assert-WindowsCommandScriptArgument $CorePath"
+    assert_includes invocation, "Assert-WindowsCommandScriptArgument $_"
+    assert_includes invocation, "/v:off"
+  end
+
   def test_windows_test_failure_diagnostics_do_not_echo_captured_output
     source = File.read(File.join(ROOT, "tests/test_windows_installer.ps1"))
     diagnostic = source[/function Get-TestOutputDiagnostic\b.*?^}/m]

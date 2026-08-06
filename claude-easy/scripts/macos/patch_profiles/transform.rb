@@ -6,6 +6,8 @@ module ClaudeEasy
   REFERENCE_GROUP_BASE = "🔗 路由引用 · ClaudeEasy".freeze
   MIN_MIHOMO_VERSION = [1, 19, 27].freeze
   MAX_PATCH_ATTEMPTS = 3
+  MAX_YAML_AST_DEPTH = 256
+  MAX_YAML_AST_NODES = 500_000
   POLICY_VERSION = 1
   AUTO_CORE = Object.new.freeze
   DIRECT_TYPES = %w[direct dns reject reject-drop pass pass-rule compatible rematch].freeze
@@ -944,6 +946,21 @@ module ClaudeEasy
     false
   end
 
+  def validate_yaml_complexity(node)
+    stack = [[node, 0]]
+    node_count = 0
+    until stack.empty?
+      current, depth = stack.pop
+      node_count += 1
+      raise InvalidConfigError, "YAML 结构过于复杂" if
+        depth > MAX_YAML_AST_DEPTH || node_count > MAX_YAML_AST_NODES
+
+      next unless current.respond_to?(:children)
+
+      Array(current.children).reverse_each { |child| stack << [child, depth + 1] }
+    end
+  end
+
   def load_yaml(text, filename = nil)
     # REALITY short-id is schema-defined text, but a valid hexadecimal value
     # can also resemble a YAML number (for example 0906152e4 or 12345678).
@@ -956,6 +973,7 @@ module ClaudeEasy
 
     document = documents.first
     raise InvalidConfigError, "YAML 别名不受支持" if yaml_alias?(document)
+    validate_yaml_complexity(document)
 
     tag_reality_short_ids(document)
 

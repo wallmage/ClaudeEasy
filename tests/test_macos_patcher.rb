@@ -6459,6 +6459,38 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_load_yaml_rejects_excessive_depth_before_materialization
+    depth = 2_000
+    lines = (0...depth).map { |index| "#{'  ' * index}level#{index}:" }
+    lines << "#{'  ' * depth}leaf: value"
+
+    error = assert_raises(ClaudeEasy::InvalidConfigError) do
+      ClaudeEasy.load_yaml(lines.join("\n") + "\n", "deep.yaml")
+    end
+
+    assert_equal "YAML 结构过于复杂", error.message
+  end
+
+  def test_load_yaml_accepts_wide_shallow_documents
+    entries = (0...20_000).map { |index| "  key#{index}: value#{index}" }
+    config = ClaudeEasy.load_yaml("root:\n#{entries.join("\n")}\n", "wide.yaml")
+
+    assert_equal 20_000, config.fetch("root").length
+    assert_equal "value19999", config.fetch("root").fetch("key19999")
+  end
+
+  def test_yaml_complexity_rejects_excessive_node_count
+    root = Psych::Nodes::Sequence.new
+    scalar = Psych::Nodes::Scalar.new("value")
+    root.children.concat(Array.new(ClaudeEasy::MAX_YAML_AST_NODES + 1, scalar))
+
+    error = assert_raises(ClaudeEasy::InvalidConfigError) do
+      ClaudeEasy.validate_yaml_complexity(root)
+    end
+
+    assert_equal "YAML 结构过于复杂", error.message
+  end
+
   def test_shared_main_group_fixtures
     shared = JSON.parse(File.read(MAIN_GROUP_FIXTURES))
     assert_equal 1, shared.fetch("schema_version")

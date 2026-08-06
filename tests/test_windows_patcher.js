@@ -846,6 +846,15 @@ test('PowerShell installer uses the documented global script and app settings', 
   assert.ok(preflight !== -1 && firstBackup !== -1 && preflight < firstBackup, 'all transformations must be prepared before files change');
 });
 
+test('PowerShell JavaScript analysis uses canonical executable tokens', () => {
+  const source = fs.readFileSync(path.join(installerModuleDir, 'script_js.ps1'), 'utf8');
+
+  assert.match(source, /function Test-JavaScriptRegexLiteralStart\b/);
+  assert.match(source, /\$state = "regex"/);
+  assert.match(source, /Unicode 转义/);
+  assert.match(source, /Test-JavaScriptRegexLiteralStart \(\$mask\.ToString\(\)\)/);
+});
+
 test('PowerShell installer reuses the usage-profile snapshot for decisions and commit checks', () => {
   const source = fs.readFileSync(installerPath, 'utf8');
   assert.equal(
@@ -1380,13 +1389,14 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Set-RemoteSubscriptionAutoUpdateDisabled', 'Assert-RemoteSubscriptionAutoUpdateDisabled'
     ],
     'mihomo.ps1': [
-      'ConvertTo-NativeArgument', 'Invoke-Mihomo', 'Test-ClashVergeRunning', 'Test-MihomoVersionText',
+      'ConvertTo-NativeArgument', 'Assert-WindowsCommandScriptArgument', 'Invoke-Mihomo',
+      'Test-ClashVergeRunning', 'Test-MihomoVersionText',
       'Test-MihomoVersion', 'Find-MihomoCore', 'Start-MihomoCandidateCleanupWatcher',
       'Test-MihomoCandidate'
     ],
     'script_js.ps1': [
       'Test-JavaScriptLineTerminator', 'Test-JavaScriptStringLineBreak',
-      'Get-JavaScriptAnalysis', 'Get-JavaScriptDirectivePrologue',
+      'Test-JavaScriptRegexLiteralStart', 'Get-JavaScriptAnalysis', 'Get-JavaScriptDirectivePrologue',
       'Rename-JavaScriptMain', 'Assert-JavaScriptReservedIdentifiers',
       'Assert-JavaScriptDoesNotUseDynamicCode',
       'Assert-JavaScriptDoesNotBindMain', 'Assert-JavaScriptDoesNotReferenceMain',

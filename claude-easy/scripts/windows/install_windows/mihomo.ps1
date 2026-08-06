@@ -22,6 +22,13 @@
     [void]$builder.Append('"')
     return $builder.ToString()
 }
+
+function Assert-WindowsCommandScriptArgument([string]$Value) {
+    if ($Value -match '[\r\n]' -or $Value -match '["%!^&|<>()]') {
+        throw "Mihomo 命令脚本路径或参数包含不支持的命令解释器字符。"
+    }
+}
+
 function Invoke-Mihomo(
     [string]$CorePath,
     [string[]]$Arguments,
@@ -30,8 +37,10 @@ function Invoke-Mihomo(
     $nativeArguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
     $start = New-Object System.Diagnostics.ProcessStartInfo
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $CorePath -match '(?i)\.(?:cmd|bat)$') {
+        Assert-WindowsCommandScriptArgument $CorePath
+        $Arguments | ForEach-Object { Assert-WindowsCommandScriptArgument $_ }
         $start.FileName = $env:ComSpec
-        $start.Arguments = '/d /s /c ""' + $CorePath + '" ' + $nativeArguments + '"'
+        $start.Arguments = '/d /v:off /s /c ""' + $CorePath + '" ' + $nativeArguments + '"'
     } else {
         $start.FileName = $CorePath
         $start.Arguments = $nativeArguments
