@@ -41,9 +41,17 @@ module ClaudeEasy
     raise InvalidConfigError, "用途档位状态无效" unless text.valid_encoding?
 
     document = REXML::Document.new(text)
+    doctype = document.doctype
+    standard_doctype = doctype.nil? || (
+      doctype.name == "plist" &&
+      doctype.public == "-//Apple//DTD PLIST 1.0//EN" &&
+      doctype.system == "http://www.apple.com/DTDs/PropertyList-1.0.dtd" &&
+      doctype.children.empty?
+    )
     root = document.root
     root_elements = root&.elements&.to_a || []
     raise InvalidConfigError, "用途档位状态无效" unless
+      standard_doctype &&
       root&.name == "plist" && root.attributes.length == 1 &&
       root.attributes["version"] == "1.0" &&
       root_elements.length == 1 && root_elements.first.name == "dict" &&

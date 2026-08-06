@@ -10943,6 +10943,29 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_saved_usage_profile_rejects_document_type_entity_indirection
+    Dir.mktmpdir do |temporary_directory|
+      path = File.join(File.realpath(temporary_directory), "usage-profile.plist")
+      File.binwrite(
+        path,
+        <<~PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd" [<!ENTITY profile "3">]>
+          <plist version="1.0"><dict>
+          <key>Version</key><integer>1</integer>
+          <key>Profile</key><integer>&profile;</integer>
+          </dict></plist>
+        PLIST
+      )
+      File.chmod(0o600, path)
+
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.saved_usage_profile(path: path)
+      end
+    end
+  end
+
   def test_usage_profile_reader_standalone_exit_contract
     _stdout, _stderr, status = capture_ruby_entrypoint(USAGE_PROFILE_STATE_PATH)
     assert_equal 2, status.exitstatus
