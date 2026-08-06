@@ -31,6 +31,16 @@
     }
 }
 
+function Get-PublicSubscriptionResult([string]$Uid, [string]$Name, [string]$Status) {
+    $digest = Get-BytesSha256 ([System.Text.Encoding]::UTF8.GetBytes($Uid))
+    $label = if ([string]::IsNullOrWhiteSpace($Name)) { "订阅 " + $digest.Substring(0, 8) } else { $Name }
+    return [pscustomobject][ordered]@{
+        id = "ce-subscription-v1-$digest"
+        label = (Protect-ClaudeEasyResultText $label)
+        status = $Status
+    }
+}
+
 function Get-PublicBackupId([string]$BackupName) {
     return [string]((Get-PublicBackupDescriptor $BackupName).id)
 }
@@ -243,6 +253,9 @@ function Assert-ClaudeEasyProxyGroupCollection([string]$Text, [string]$Label) {
 
 function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes) {
     $leaf = Split-Path -Leaf $TargetPath
+    if ($TargetPath -in @($targetScript, $profilesIndexPath, $vergePath)) {
+        throw "受保护的客户端控制文件不能通过单文件备份恢复。"
+    }
     $extension = [System.IO.Path]::GetExtension($TargetPath).ToLowerInvariant()
     $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($Bytes)
     if ($extension -eq ".json") {

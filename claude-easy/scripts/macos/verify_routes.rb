@@ -42,10 +42,10 @@ module ClashRouteVerifier
     ["Claude", "https://claude.ai/", :ai, /(?:\A|\.)claude\.ai\z/i]
   ].freeze
   NON_PROXY_TERMINALS = %w[
-    DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
+    DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH RELAY
   ].freeze
   PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
-  NON_PROXY_TYPES = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch].freeze
+  NON_PROXY_TYPES = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay].freeze
 
   def get_json(socket, endpoint)
     code, body = ClaudeEasy.controller_request(socket, "GET", endpoint)
@@ -264,10 +264,21 @@ module ClashRouteVerifier
       connection = observe_connection(
         socket, url, host_pattern, observation_seconds: observation_seconds
       )
+      current_proxies = get_json(socket, "/proxies")&.fetch("proxies", {})
+      current_provider_payload = get_json(socket, "/providers/proxies")
+      current_main = current_proxies.is_a?(Hash) ? live_main_group(socket, current_proxies) : nil
+      current_ai = current_proxies.is_a?(Hash) ? find_group(
+        current_proxies, policy["ai_group_names"], nil, ai: true
+      ) : nil
+      snapshot_stable = current_provider_payload.is_a?(Hash) &&
+                        current_main == main_group && current_ai == ai_group &&
+                        current_proxies.dig(main_group, "now").to_s == selections[:main] &&
+                        current_proxies.dig(ai_group, "now").to_s == selections[:ai]
       chains = Array(connection && connection["chains"])
       provider_chains = Array(connection && connection["providerChains"])
-      ok = route_passes?(
-        chains, provider_chains: provider_chains, proxies: proxies, providers: providers,
+      ok = snapshot_stable && route_passes?(
+        chains, provider_chains: provider_chains, proxies: current_proxies,
+        providers: current_provider_payload.fetch("providers", {}),
         kind: kind, expected_group: expected.fetch(kind),
         expected_selection: selections.fetch(kind), ai_group: ai_group
       )

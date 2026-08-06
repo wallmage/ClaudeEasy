@@ -11471,9 +11471,9 @@ class MacosPatcherTest < Minitest::Test
               json = JSON.parse(output)
               assert_equal ["failed", "pending"], json.fetch("items").map { |item| item.fetch("status") }
               assert_equal ["download_failed", nil], json.fetch("items").map { |item| item["reason"] }
+              assert_equal ["first", "second"], json.fetch("items").map { |item| item.fetch("label") }
+              assert json.fetch("items").all? { |item| item.fetch("id").match?(/\Ace-subscription-v1-[0-9a-f]{64}\z/) }
               assert json.fetch("warnings").any? { |warning| warning.include?("开关关闭时无法更新") }
-              refute_includes output, "first"
-              refute_includes output, "second"
             end
           end
         end
@@ -12856,6 +12856,35 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_route_verifier_rejects_a_proxy_snapshot_changed_during_observation
+    proxies = { "proxies" => {
+      "Main" => { "type" => "Selector", "now" => "Same Leaf" },
+      "AI" => { "type" => "Selector", "now" => "Same Leaf" },
+      "Same Leaf" => { "type" => "Vmess" }
+    } }
+    changed = Marshal.load(Marshal.dump(proxies))
+    changed["proxies"]["Same Leaf"]["type"] = "Direct"
+    proxy_reads = 0
+    getter = lambda do |_socket, endpoint|
+      proxy_reads += 1 if endpoint == "/proxies"
+      next(proxy_reads == 1 ? proxies : changed) if endpoint == "/proxies"
+      next({ "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] }) if endpoint == "/rules"
+      { "providers" => {} }
+    end
+    observations = [
+      { "chains" => ["Same Leaf", "Main"] },
+      *Array.new(3) { { "chains" => ["Same Leaf", "AI"] } }
+    ]
+
+    ClaudeEasy.stub(:controller_socket, "socket") do
+      ClashRouteVerifier.stub(:get_json, getter) do
+        ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
+          refute ClashRouteVerifier.run(output: StringIO.new)
+        end
+      end
+    end
+  end
+
   def test_route_verifier_rejects_every_non_proxy_terminal_as_a_group_selection
     terminals = %w[
       DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
@@ -13096,7 +13125,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_route_verifier_rejects_every_custom_non_proxy_outbound_type
-    expected_types = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch]
+    expected_types = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay]
     assert_equal expected_types, ClashRouteVerifier::NON_PROXY_TYPES
     expected_types.each do |type|
       proxies = {
@@ -13193,7 +13222,9 @@ class MacosPatcherTest < Minitest::Test
           end
         end
       end
-      assert_equal ["/proxies", "/rules", "/providers/proxies"], endpoints
+      %w[/proxies /rules /providers/proxies].each do |endpoint|
+        assert_equal 5, endpoints.count(endpoint)
+      end
 
       [
         [nil, healthy_observations, "missing provider endpoint"],

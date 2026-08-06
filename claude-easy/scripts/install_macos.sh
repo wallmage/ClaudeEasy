@@ -40,6 +40,7 @@ PROFILE_OPERATION_RECEIPT_INVALID=0
 PROFILE_OPERATION_RESULT_FAILED=0
 PROFILE_OPERATION_RESULT_UNKNOWN=0
 OPERATION_LOCK_REQUIRED=1
+child_json=""
 
 restore_auto_update_if_required() {
   [ "$AUTO_UPDATE_RECOVERY_REQUIRED" -eq 1 ] || return 0
@@ -171,7 +172,17 @@ finish() {
   fi
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     if [ -x /usr/bin/ruby ] && [ -f "$RESULT_CONTRACT_SOURCE" ]; then
-      if [ -n "$finish_profile" ]; then
+      if [ "$finish_operation" = "safe_update" ] && [ -n "$child_json" ] && [ -n "$finish_profile" ]; then
+        /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
+          --command install --operation "$finish_operation" --ok "$([ "$finish_exit" -eq 0 ] && /usr/bin/printf true || /usr/bin/printf false)" \
+          --status "$finish_status" --code "$finish_code" --exit-code "$finish_exit" --summary "$finish_summary" \
+          --profile "$finish_profile" --merge-child-stdin
+      elif [ "$finish_operation" = "safe_update" ] && [ -n "$child_json" ]; then
+        /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
+          --command install --operation "$finish_operation" --ok "$([ "$finish_exit" -eq 0 ] && /usr/bin/printf true || /usr/bin/printf false)" \
+          --status "$finish_status" --code "$finish_code" --exit-code "$finish_exit" --summary "$finish_summary" \
+          --merge-child-stdin
+      elif [ -n "$finish_profile" ]; then
         /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
           --command install --operation "$finish_operation" --ok "$([ "$finish_exit" -eq 0 ] && /usr/bin/printf true || /usr/bin/printf false)" \
           --status "$finish_status" --code "$finish_code" --exit-code "$finish_exit" --summary "$finish_summary" \

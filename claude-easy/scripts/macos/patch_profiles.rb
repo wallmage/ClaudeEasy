@@ -40,11 +40,23 @@ module ClaudeEasyBootstrap
     patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime
     patch_profiles/log_repair patch_profiles/cli
   ].freeze
+  REQUIRED_APIS = {
+    "ClaudeEasyResult" => [:build],
+    "ClaudeEasyOperationLock" => [:acquire],
+    "ClaudeEasy" => %i[
+      patch profile_paths validate_with_mihomo transactional_compare_and_write_bytes
+      safe_update_all controller_request repair_clashx_logs cli saved_usage_profile
+    ]
+  }.freeze
 
   def load_dependencies(loader:, argv:, output:)
     DEPENDENCIES.each { |path| loader.call(path) }
+    raise NameError, "incomplete package API" unless REQUIRED_APIS.all? do |owner_name, methods|
+      owner = Object.const_get(owner_name)
+      methods.all? { |method_name| owner.respond_to?(method_name) }
+    end
     true
-  rescue LoadError, SyntaxError
+  rescue LoadError, SyntaxError, NameError
     if argv.include?("--json")
       output.write(JSON.generate(
         "schema" => "claude-easy.result", "version" => 1, "command" => "patch",

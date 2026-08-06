@@ -750,7 +750,12 @@ module ClaudeEasy
           summary_zh: "全部远程订阅已安全更新。", profile: options[:usage_profile],
           changes: ["remote_subscriptions"],
           checks: [{ "name" => "updated_count", "value" => result.fetch(:count) }],
-          items: result.fetch(:profiles).map { |_name| { "status" => "updated" } }
+          items: result.fetch(:profiles).map do |name|
+            {
+              "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name.to_s)}",
+              "label" => safe_label(name), "status" => "updated"
+            }
+          end
         ) if options[:json]
         puts "全部远程订阅已安全更新：#{result.fetch(:count)} 份。"
         result.fetch(:profiles).each { |name| puts "已更新：#{safe_label(name)}" }
@@ -790,7 +795,12 @@ module ClaudeEasy
       item_results = result.fetch(:items, [])
       switch_warning = "服务商可能设置了订阅开关。请登录服务商网站，在控制面板找到订阅开关并打开；开关关闭时无法更新。打开后请立即重试安全更新。"
       json_items = item_results.map do |item|
-        output = { "status" => item.fetch(:status) == :ready ? "pending" : item.fetch(:status).to_s }
+        name = item.fetch(:name).to_s
+        output = {
+          "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name)}",
+          "label" => safe_label(name),
+          "status" => item.fetch(:status) == :ready ? "pending" : item.fetch(:status).to_s
+        }
         output["reason"] = item.fetch(:reason).to_s if item[:reason]
         output
       end

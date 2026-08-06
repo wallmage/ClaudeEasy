@@ -2021,7 +2021,7 @@ class MutationSafetyTest < Minitest::Test
   end
 
   def test_route_custom_non_proxy_type_mutations_are_killed
-    types = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch]
+    types = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay]
     types.each do |removed|
       with_repo_copy do |root|
         replace_once(

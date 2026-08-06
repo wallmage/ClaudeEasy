@@ -2810,9 +2810,10 @@ rules:
     )
     $missingTargetVerifyJson = Assert-JsonResult $missingTargetVerify "install" 1
     Assert-True (
-        $missingTargetVerifyJson.status -eq "rolled_back" -and
-        $missingTargetVerifyJson.code -eq "operation_failed"
-    ) "missing safe-update target did not report a completed rollback"
+        $missingTargetVerifyJson.status -eq "partial" -and
+        $missingTargetVerifyJson.code -eq "safe_update_runtime_unverified" -and
+        @($missingTargetVerifyJson.warnings) -contains "runtime_unverified"
+    ) "missing safe-update target did not report unverified runtime state"
     Assert-True (
         (Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq
             $firstSafeOriginal
@@ -3584,6 +3585,23 @@ rules:
         [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($internalUsagePath)) -eq
         [Convert]::ToBase64String($internalUsageBeforeRestore)
     ) "rejected internal state restore changed the current state"
+
+    $protectedProfilesPath = Join-Path $internalRestoreCase "profiles.yaml"
+    [System.IO.File]::WriteAllText($protectedProfilesPath, "items:`n- uid: R-protected`n  type: remote`n  option:`n    allow_auto_update: true`n")
+    $protectedProfilesBackup = Backup-Versioned $protectedProfilesPath $internalRestoreBackupRoot "prewrite"
+    [System.IO.File]::WriteAllText($protectedProfilesPath, "items:`n- uid: R-protected`n  type: remote`n  option:`n    allow_auto_update: false`n")
+    $protectedProfilesBeforeRestore = [System.IO.File]::ReadAllBytes($protectedProfilesPath)
+    $protectedProfilesRestore = Invoke-TestPowerShell $installer @(
+        "-AppHome", $internalRestoreCase,
+        "-RestoreBackup", (Split-Path -Leaf $protectedProfilesBackup),
+        "-ExpectedCurrentSha256", (Get-BytesSha256 $protectedProfilesBeforeRestore),
+        "-MihomoPath", $fakeCore
+    )
+    Assert-True ($protectedProfilesRestore.ExitCode -eq 1) "public backup restore accepted profiles.yaml"
+    Assert-True (
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($protectedProfilesPath)) -eq
+        [Convert]::ToBase64String($protectedProfilesBeforeRestore)
+    ) "rejected profiles.yaml restore changed automatic-update state"
 
     $beforeComparison = "dns:`n  nameserver:`n    - https://old-secret.invalid/dns-query`nrules:`n  - MATCH,OldSecret`nipv6: true`n"
     $afterComparison = "dns:`n  nameserver:`n    - https://new-secret.invalid/dns-query`nrules:`n  - MATCH,NewSecret`n  - GEOSITE,CN,DIRECT`ninvalid-key: kept`n"

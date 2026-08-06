@@ -819,13 +819,17 @@ SOFTWARE.
             var finished = false;
             var candidates = [];
             var connection = null;
-            function finish() {
+            function finish(error) {
               if (finished) return;
               finished = true;
               try {
                 if (connection) connection.close();
               } catch (_error) {
                 // Continue with candidates already collected.
+              }
+              if (error) {
+                reject(error);
+                return;
               }
               var publicCandidates = publicWebrtcCandidates(candidates);
               Promise.all(publicCandidates.map(function (candidate) {
@@ -871,8 +875,9 @@ SOFTWARE.
               return;
             }
 
-            if (typeof schedule === "function") schedule(finish, 6000);
-            else finish();
+            if (typeof schedule === "function") {
+              schedule(function () { finish(new Error("WebRTC 探测超时")); }, 6000);
+            } else finish(new Error("WebRTC 探测超时"));
           });
         }
 

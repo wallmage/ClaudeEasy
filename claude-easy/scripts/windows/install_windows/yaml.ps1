@@ -1,6 +1,8 @@
 ﻿function Split-YamlLines([string]$Text) {
     if ([string]::IsNullOrEmpty($Text)) { return @() }
-    return @($Text -split "`r?`n")
+    $lines = @($Text -split "`r?`n")
+    if ($lines.Count -gt 0) { $lines[0] = $lines[0].TrimStart([char]0xFEFF) }
+    return $lines
 }
 function Join-YamlLines([string[]]$Lines) {
     if ($Lines.Count -eq 0) { return "" }

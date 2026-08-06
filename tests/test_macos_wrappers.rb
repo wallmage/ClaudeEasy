@@ -1417,6 +1417,25 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_installer_rejects_a_loadable_module_missing_its_api_before_creating_state
+    with_real_installer_package do |installer|
+      scripts = File.dirname(installer)
+      File.binwrite(File.join(scripts, "macos", "patch_profiles", "runtime.rb"), "# truncated\n")
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, stderr, status = run_script(installer, "--profile", "1", "--json", home: home)
+
+          assert_equal 6, status.exitstatus
+          assert_empty stderr
+          assert_equal "incomplete_package", assert_json_result(
+            stdout, status, command: "install"
+          ).fetch("code")
+          refute Dir.exist?(File.join(home, "Library", "Application Support", "ClaudeEasy"))
+        end
+      end
+    end
+  end
+
   def test_uninstaller_rejects_each_missing_release_dependency_before_mutating_state
     UNINSTALL_PACKAGE_DEPENDENCIES.each do |relative_path|
       with_real_installer_package do |installer|
@@ -2664,7 +2683,9 @@ class MacosWrapperTest < Minitest::Test
         puts JSON.generate(
           "status" => "partial",
           "code" => "safe_update_runtime_pending",
-          "summary_zh" => "订阅文件已恢复，但运行内核恢复失败。"
+          "summary_zh" => "订阅文件已恢复，但运行内核恢复失败。",
+          "items" => [{ "id" => "ce-subscription-v1-#{"a" * 64}", "label" => "订阅 A", "status" => "failed" }],
+          "warnings" => ["运行内核未恢复"]
         )
         exit 1
       end
@@ -2682,6 +2703,8 @@ class MacosWrapperTest < Minitest::Test
           result = assert_json_result(stdout, status, command: "install")
           assert_equal "partial", result.fetch("status")
           assert_equal "safe_update_runtime_pending", result.fetch("code")
+          assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
+          assert_includes result.fetch("warnings"), "运行内核未恢复"
         end
       end
     end

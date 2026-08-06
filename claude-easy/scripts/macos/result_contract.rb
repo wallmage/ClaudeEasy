@@ -78,6 +78,7 @@ module ClaudeEasyResult
 
   def cli(argv = ARGV)
     options = { messages: [], warnings: [], profile: nil }
+    merge_child_stdin = false
     parser = OptionParser.new do |opts|
       opts.on("--command VALUE") { |value| options[:command] = value }
       opts.on("--operation VALUE") { |value| options[:operation] = value }
@@ -89,14 +90,22 @@ module ClaudeEasyResult
       opts.on("--profile VALUE") { |value| options[:profile] = value.match?(/\A[1-3]\z/) ? value.to_i : nil }
       opts.on("--message VALUE") { |value| options[:messages] << value }
       opts.on("--warning VALUE") { |value| options[:warnings] << value }
+      opts.on("--merge-child-stdin") { merge_child_stdin = true }
     end
     parser.parse!(argv)
     required = %i[command operation ok status code exit_code summary_zh]
     raise OptionParser::MissingArgument, required.find { |key| !options.key?(key) }.to_s unless required.all? { |key| options.key?(key) }
 
-    emit(**options.merge(changes: [], checks: [], items: []))
+    child = merge_child_stdin ? JSON.parse($stdin.read) : {}
+    raise ArgumentError, "invalid child result" unless child.is_a?(Hash)
+    emit(**options.merge(
+      changes: Array(child["changes"]), checks: Array(child["checks"]),
+      items: Array(child["items"]),
+      messages: options[:messages] + Array(child["messages"]),
+      warnings: options[:warnings] + Array(child["warnings"])
+    ))
     0
-  rescue OptionParser::ParseError, ArgumentError
+  rescue OptionParser::ParseError, ArgumentError, JSON::ParserError
     emit(
       command: "patch", operation: "emit", ok: false, status: "invalid_request",
       code: "invalid_request", exit_code: 64, summary_zh: "结果参数无效。"

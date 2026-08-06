@@ -1352,7 +1352,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Assert-JavaScriptCanCompose', 'Build-GlobalScript'
     ],
     'safe_update.ps1': [
-      'Get-PublicBackupDescriptor', 'Get-PublicBackupId', 'Get-BackupTarget',
+      'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult', 'Get-PublicBackupId', 'Get-BackupTarget',
       'Get-ClaudeEasyManagedScriptBlock',
       'Get-ClaudeEasyManagedScriptEnvelope',
       'Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive',

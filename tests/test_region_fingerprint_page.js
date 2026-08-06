@@ -401,6 +401,24 @@ test("the WebRTC probe uses three STUN servers and checks each public IP country
   assert.equal(result.raw, "WebRTC 公网 IP 均不在中国大陆");
 });
 
+test("a WebRTC probe timeout stays unavailable instead of looking safe", async () => {
+  const api = detectorApi();
+  class SilentPeerConnection {
+    createDataChannel() {}
+    createOffer() { return Promise.resolve({ type: "offer", sdp: "" }); }
+    setLocalDescription() { return Promise.resolve(); }
+    close() {}
+  }
+
+  await assert.rejects(
+    api.detectWebrtcLeak({
+      PeerConnection: SilentPeerConnection,
+      schedule: (callback) => callback(),
+    }),
+    /超时/,
+  );
+});
+
 test("the country lookup sends only the WebRTC IP and reads an ISO country code", async () => {
   const requests = [];
   const api = detectorApi({

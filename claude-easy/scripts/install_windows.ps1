@@ -69,6 +69,19 @@ try {
         }
         $null = . $installerModulePath
     }
+    foreach ($requiredInstallerFunction in @(
+        "Complete-InstallResult",
+        "Split-YamlLines",
+        "Get-RemoteSubscriptionProfileItems",
+        "Find-MihomoCore",
+        "Invoke-VerifiedFileTransaction",
+        "Build-GlobalScript",
+        "Get-SafeUpdateRecoveryItems"
+    )) {
+        if ($null -eq (Get-Command $requiredInstallerFunction -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw "安装包不完整：安装模块缺少必要接口。"
+        }
+    }
 } catch {
     if ($Json) {
         [Console]::Out.WriteLine('{"schema":"claude-easy.result","version":1,"command":"install","platform":"windows","client":"clash-verge-rev","operation":"load","ok":false,"status":"failed","code":"incomplete_package","exit_code":6,"summary_zh":"安装包不完整。","profile":null,"changes":[],"checks":[],"items":[],"messages":[],"warnings":[]}')
@@ -196,7 +209,10 @@ if ($SnapshotProfiles) {
     }
     Write-Info "已核对远程清单，并为 $($profiles.Count) 份订阅创建安全更新前备份。"
     foreach ($profile in $profiles) { Write-Info ("待更新：" + $(if ([string]::IsNullOrWhiteSpace($profile.Name)) { $profile.Uid } else { $profile.Name })) }
-    Complete-InstallResult 0 "ok" "snapshot_created" "已创建全部远程订阅的安全更新前备份。" @("profile_backups")
+    $snapshotItems = @($profiles | ForEach-Object {
+        Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "pending"
+    })
+    Complete-InstallResult 0 "ok" "snapshot_created" "已创建全部远程订阅的安全更新前备份。" @("profile_backups") @() $snapshotItems
 }
 
 if ($VerifySafeUpdate) {
@@ -388,7 +404,10 @@ if ($VerifySafeUpdate) {
             throw "更新验收失败；检测到订阅同时发生变化，未覆盖新内容：$($restoreResult.Conflicts -join '、')。安全更新记录已保留。"
         }
         if ($restoreResult.Failures.Count -gt 0) { throw "更新验收失败，且部分订阅未能恢复：$($restoreResult.Failures -join '、')。安全更新记录已保留。" }
-        throw "更新验收失败，全部订阅文件已恢复到更新前版本。"
+        $rollbackItems = @($recoveryItems | ForEach-Object {
+            Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "rolled_back"
+        })
+        Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")
     }
     foreach ($entry in $validated) {
         $changed = (Get-FileSha256 $entry.Target.Path) -ne [string]$entry.Manifest.BeforeSha256
@@ -398,7 +417,10 @@ if ($VerifySafeUpdate) {
     if ($legacySnapshotRetirement) {
         Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v2 快照后再更新。" @() @("legacy_manifest_retired")
     }
-    Complete-InstallResult 0 "ok" "safe_update_verified" "全部远程订阅已逐份通过检查。" @() @("global_script", "yaml", "mihomo", "auto_update")
+    $verifiedItems = @($validated | ForEach-Object {
+        Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) "verified"
+    })
+    Complete-InstallResult 0 "ok" "safe_update_verified" "全部远程订阅已逐份通过检查。" @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems
 }
 
 if ($ListBackups) {
