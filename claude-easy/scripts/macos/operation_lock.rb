@@ -154,24 +154,7 @@ module ClaudeEasyOperationLock
     rescue Errno::ENOENT
       nil
     end
-    begin
-      ClaudeEasyExclusiveRename.call(expanded_source, expanded_destination)
-    rescue Errno::EACCES, Errno::EINVAL, Errno::ENOTSUP
-      # Some macOS volumes reject RENAME_EXCL for directories even though an
-      # ordinary atomic directory rename to an absent path is supported. Check
-      # the destination again after the failed syscall; the operation lock and
-      # post-rename inode check guard this directory-only compatibility path.
-      # Files still fail closed.
-      raise unless source_stat.directory?
-
-      begin
-        File.lstat(expanded_destination)
-        raise IOError, "rename destination already exists"
-      rescue Errno::ENOENT
-        nil
-      end
-      File.rename(expanded_source, expanded_destination)
-    end
+    ClaudeEasyExclusiveRename.call(expanded_source, expanded_destination)
     destination_stat = File.lstat(expanded_destination)
     raise IOError, "renamed path identity changed" unless
       [source_stat.dev, source_stat.ino] == [destination_stat.dev, destination_stat.ino]
@@ -193,7 +176,7 @@ module ClaudeEasyOperationLock
                                                       (File.exist?(path) && !File.file?(path))
 
     FileUtils.chmod(0o700, directory)
-    handle = File.open(path, File::RDWR | File::CREAT, 0o600)
+    handle = open_private_lock(path)
     deadline = monotonic_now + timeout_seconds
     until handle.flock(File::LOCK_EX | File::LOCK_NB)
       if monotonic_now >= deadline
@@ -202,7 +185,23 @@ module ClaudeEasyOperationLock
       end
       sleep 0.05
     end
-    FileUtils.chmod(0o600, path)
+    handle
+  rescue StandardError
+    handle&.close
+    raise
+  end
+
+  def open_private_lock(path)
+    flags = File::RDWR | File::CREAT
+    flags |= File::NOFOLLOW if File.const_defined?(:NOFOLLOW)
+    handle = File.open(path, flags, 0o600)
+    opened = handle.stat
+    current = File.lstat(path)
+    raise IOError, "operation lock path is unsafe" unless
+      opened.file? && opened.nlink == 1 && !current.symlink? &&
+      [opened.dev, opened.ino] == [current.dev, current.ino]
+
+    handle.chmod(0o600)
     handle
   rescue StandardError
     handle&.close

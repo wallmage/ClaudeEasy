@@ -2521,7 +2521,7 @@ class SkillContractTest < Minitest::Test
     refute_includes mac_uninstall, "launchctl bootout"
     refute_includes mac_uninstall, 'defaults write "$DEFAULTS_DOMAIN" restoreTunProxy'
     assert_includes mac_uninstall, "旧版安装前的 TUN 偏好无法证明仍是当前选择"
-    assert_includes patcher, "File::EXCL"
+    assert_includes patcher, "ClaudeEasyDarwinFilesystem.rename_exclusive"
 
     assert_equal "\xEF\xBB\xBF".b, windows_install_entry.byteslice(0, 3)
     assert_equal "\xEF\xBB\xBF".b, windows_uninstall.byteslice(0, 3)

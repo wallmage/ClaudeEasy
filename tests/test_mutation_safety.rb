@@ -874,9 +874,9 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "      File.rename(temporary.path, path)\n" \
+        "      ClaudeEasyDarwinFilesystem.rename_exclusive(temporary.path, path)\n" \
           "      fsync_parent_directory(path)\n",
-        "      File.rename(temporary.path, path)\n"
+        "      ClaudeEasyDarwinFilesystem.rename_exclusive(temporary.path, path)\n"
       )
 
       assert_mutation_is_killed(
@@ -1039,10 +1039,10 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/backups.rb",
-        "    FileUtils.chmod(0o600, destination)\n" \
+        "    end\n\n" \
           "    fsync_directory(root)\n" \
           "    destination\n",
-        "    FileUtils.chmod(0o600, destination)\n" \
+        "    end\n\n" \
           "    destination\n"
       )
 
@@ -1672,8 +1672,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/transaction.ps1",
-        "                Test-InterruptedRecoveryCommitCondition \$preCommitCondition\n",
-        "                \$true\n"
+        "                \$finalizeRejected = -not (\n                    Test-InterruptedRecoveryCommitCondition \$preCommitCondition\n",
+        "                \$finalizeRejected = -not (\n                    \$true\n"
       )
 
       assert_mutation_is_killed(

@@ -115,29 +115,28 @@ module ClaudeEasy
     bytes = content.nil? ? File.binread(File.realpath(path)) : content.b
     key = backup_key(path)
     destination = nil
-    100.times do
-      timestamp = Time.now.strftime("%Y-%m-%d_%H-%M-%S.%9N%z")
-      candidate = File.join(root, "#{timestamp}--#{reason}--#{key}--#{File.basename(path)}.backup")
-      begin
-        File.open(candidate, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |backup|
-          backup.write(bytes)
-          backup.flush
-          backup.fsync
+    Tempfile.create([".claude-easy-backup-", ".tmp"], root) do |backup|
+      backup.binmode
+      backup.chmod(0o600)
+      backup.write(bytes)
+      backup.flush
+      backup.fsync
+      100.times do
+        timestamp = Time.now.strftime("%Y-%m-%d_%H-%M-%S.%9N%z")
+        candidate = File.join(root, "#{timestamp}--#{reason}--#{key}--#{File.basename(path)}.backup")
+        begin
+          ClaudeEasyDarwinFilesystem.rename_exclusive(backup.path, candidate)
+          destination = candidate
+          break
+        rescue Errno::EEXIST
+          Thread.pass
         end
-        destination = candidate
-        break
-      rescue Errno::EEXIST
-        Thread.pass
       end
+      raise IOError, "无法创建唯一的版本化备份" unless destination
     end
-    raise IOError, "无法创建唯一的版本化备份" unless destination
 
-    FileUtils.chmod(0o600, destination)
     fsync_directory(root)
     destination
-  rescue StandardError
-    FileUtils.rm_f(destination) if destination && File.exist?(destination)
-    raise
   end
 
   def snapshot_initial_profiles(directories, backup_root)

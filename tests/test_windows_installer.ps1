@@ -6652,10 +6652,10 @@ Object.defineProperty(globalThis, "main", {
         @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`nfunction main(config) { return config; }")).Count -eq 1
     ) "a semicolon-free strict directive before a function was lost"
     Assert-True (
-        @(Get-JavaScriptDirectivePrologue ('"use strict";`n"use asm";`nfunction main(config) { return config; }')).Count -eq 2
+        @(Get-JavaScriptDirectivePrologue ('"use strict";' + "`n" + '"use asm";' + "`nfunction main(config) { return config; }")).Count -eq 2
     ) "multiple terminated directives were not preserved"
     Assert-True (
-        @(Get-JavaScriptDirectivePrologue ('"use strict"`n"use asm"`nfunction main(config) { return config; }')).Count -eq 2
+        @(Get-JavaScriptDirectivePrologue ('"use strict"' + "`n" + '"use asm"' + "`nfunction main(config) { return config; }")).Count -eq 2
     ) "multiple ASI-terminated directives were not preserved"
     Assert-True (
         @(Get-JavaScriptDirectivePrologue ('`banner`' + "`n" + '"use strict"; function main(config) { return config; }')).Count -eq 0

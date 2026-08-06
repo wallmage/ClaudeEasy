@@ -698,6 +698,31 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_wrapper_operation_lock_rejects_a_lock_replaced_before_open
+    Dir.mktmpdir do |directory|
+      lock_path = File.join(directory, "backups", "lock")
+      target = File.join(directory, "unrelated")
+      File.binwrite(target, "preserve")
+      File.chmod(0o644, target)
+      original_open = File.method(:open)
+      raced = false
+      racing_open = lambda do |path, *arguments, &block|
+        if !raced && File.expand_path(path) == lock_path
+          raced = true
+          File.symlink(target, lock_path)
+        end
+        original_open.call(path, *arguments, &block)
+      end
+
+      File.stub(:open, racing_open) do
+        assert_raises(SystemCallError, IOError) do
+          ClaudeEasyOperationLock.acquire(lock_path)
+        end
+      end
+      assert_equal 0o644, File.stat(target).mode & 0o777
+    end
+  end
+
   def test_wrapper_operation_lock_rejects_links_and_reports_run_outcomes
     Dir.mktmpdir do |directory|
       real_directory = File.join(directory, "real")
@@ -805,50 +830,19 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_wrapper_operation_lock_falls_back_when_a_volume_rejects_exclusive_directory_rename
+  def test_wrapper_operation_lock_fails_closed_when_exclusive_directory_rename_is_unsupported
     Dir.mktmpdir do |directory|
       source = File.join(directory, "source")
       destination = File.join(directory, "destination")
       Dir.mkdir(source)
 
-      original_rename = File.method(:rename)
-      destination_was_absent = false
-      guarded_rename = lambda do |from, to|
-        destination_was_absent = !File.exist?(to)
-        original_rename.call(from, to)
-      end
-      File.stub(:rename, guarded_rename) do
-        ClaudeEasyExclusiveRename.stub(:call, ->(*_arguments) { raise Errno::EACCES }) do
-          assert ClaudeEasyOperationLock.rename_exclusive(source, destination)
-        end
-      end
-      assert destination_was_absent, "directory fallback did not use the supported absent-path rename"
-      assert Dir.exist?(destination)
-      refute File.exist?(source)
-
-      file_source = File.join(directory, "file-source")
-      File.binwrite(file_source, "preserve")
       ClaudeEasyExclusiveRename.stub(:call, ->(*_arguments) { raise Errno::EACCES }) do
         assert_raises(Errno::EACCES) do
-          ClaudeEasyOperationLock.rename_exclusive(file_source, File.join(directory, "file-destination"))
+          ClaudeEasyOperationLock.rename_exclusive(source, destination)
         end
       end
-      assert_equal "preserve", File.binread(file_source)
-
-      raced_source = File.join(directory, "raced-source")
-      raced_destination = File.join(directory, "raced-destination")
-      Dir.mkdir(raced_source)
-      reject_race = lambda do |*_arguments|
-        Dir.mkdir(raced_destination)
-        raise Errno::EACCES
-      end
-      ClaudeEasyExclusiveRename.stub(:call, reject_race) do
-        assert_raises(IOError) do
-          ClaudeEasyOperationLock.rename_exclusive(raced_source, raced_destination)
-        end
-      end
-      assert Dir.exist?(raced_source)
-      assert Dir.exist?(raced_destination)
+      assert Dir.exist?(source)
+      refute File.exist?(destination)
     end
   end
 
@@ -2844,6 +2838,21 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_versioned_backup_is_hidden_until_atomic_publication
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      backup_root = File.join(directory, "backups")
+      File.write(profile, YAML.dump(base_config))
+
+      assert_raises(IOError) do
+        ClaudeEasyDarwinFilesystem.stub(:rename_exclusive, ->(*) { raise IOError, "injected" }) do
+          ClaudeEasy.create_versioned_backup(profile, backup_root)
+        end
+      end
+      assert_empty ClaudeEasy.backup_entries_for(profile, backup_root)
+    end
+  end
+
   def test_list_backups_returns_only_opaque_backup_ids_newest_first
     Dir.mktmpdir do |directory|
       backup_root = File.join(directory, "backups")
@@ -3732,7 +3741,7 @@ class MacosPatcherTest < Minitest::Test
     assert_equal :unknown, ClaudeEasy.subscription_auto_update_state(nil)
   end
 
-  def test_backup_helpers_tolerate_owned_file_permission_errors_and_cleanup_failed_creates
+  def test_backup_helpers_tolerate_owned_file_permission_errors
     Dir.mktmpdir do |directory|
       backup_root = File.join(directory, "backups")
       FileUtils.mkdir_p(backup_root)
@@ -3747,20 +3756,6 @@ class MacosPatcherTest < Minitest::Test
       FileUtils.stub(:chmod, chmod_with_owned_failure) do
         assert_equal backup_root, ClaudeEasy.secure_backup_root!(backup_root)
       end
-
-      source = File.join(directory, "friend.yaml")
-      File.write(source, "original")
-      chmod_with_new_failure = lambda do |mode, path|
-        raise Errno::EPERM if path.end_with?(".backup")
-
-        original_chmod.call(mode, path)
-      end
-      FileUtils.stub(:chmod, chmod_with_new_failure) do
-        assert_raises(Errno::EPERM) do
-          ClaudeEasy.create_versioned_backup(source, backup_root)
-        end
-      end
-      assert_empty Dir.glob(File.join(backup_root, "*--prewrite--*.backup"))
       assert_equal "old", File.read(existing)
     end
   end
@@ -3861,17 +3856,16 @@ class MacosPatcherTest < Minitest::Test
       source = File.join(directory, "friend.yaml")
       backup_root = File.join(directory, "backups")
       File.write(source, "original")
-      original_open = File.method(:open)
+      original_rename = ClaudeEasyDarwinFilesystem.method(:rename_exclusive)
       attempts = 0
-      colliding_open = lambda do |path, *arguments, &block|
-        if path.to_s.end_with?(".backup")
-          attempts += 1
-          raise Errno::EEXIST if attempts == 1
-        end
-        original_open.call(path, *arguments, &block)
+      colliding_rename = lambda do |from, to|
+        attempts += 1
+        raise Errno::EEXIST if attempts == 1
+
+        original_rename.call(from, to)
       end
 
-      backup = File.stub(:open, colliding_open) do
+      backup = ClaudeEasyDarwinFilesystem.stub(:rename_exclusive, colliding_rename) do
         ClaudeEasy.create_versioned_backup(source, backup_root)
       end
 
@@ -3940,15 +3934,11 @@ class MacosPatcherTest < Minitest::Test
       end
 
       attempts = 0
-      original_open = File.method(:open)
-      collision = lambda do |path, *arguments, &block|
-        if path.to_s.end_with?(".backup")
-          attempts += 1
-          raise Errno::EEXIST
-        end
-        original_open.call(path, *arguments, &block)
+      collision = lambda do |*_arguments|
+        attempts += 1
+        raise Errno::EEXIST
       end
-      File.stub(:open, collision) do
+      ClaudeEasyDarwinFilesystem.stub(:rename_exclusive, collision) do
         assert_raises(IOError) do
           ClaudeEasy.create_versioned_backup(source, real_root)
         end
@@ -7363,7 +7353,7 @@ class MacosPatcherTest < Minitest::Test
         end
       end
       checked = ClaudeEasy.verify_unchanged_profile_runtime(
-        { status: :unchanged }, require_safe_ai: true
+        { status: :unchanged }, requester: requester, require_safe_ai: true
       )
       assert_equal :runtime_check_failed, checked.fetch(:status)
     end
@@ -9719,6 +9709,24 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert_equal "original", File.binread(target)
+      refute ClaudeEasy.profile_transaction_pending?(backup_root)
+    end
+  end
+
+  def test_profile_transaction_requires_exclusive_publication
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+
+      assert_raises(IOError) do
+        ClaudeEasyDarwinFilesystem.stub(:rename_exclusive, ->(*) { raise IOError, "injected" }) do
+          ClaudeEasy.prepare_profile_transaction(
+            [{ path: profile, original: "original", candidate: "candidate" }],
+            backup_root, roots: [directory]
+          )
+        end
+      end
       refute ClaudeEasy.profile_transaction_pending?(backup_root)
     end
   end

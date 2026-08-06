@@ -92,9 +92,8 @@ module ClaudeEasy
   def profile_operation_lock(backup_root)
     root = secure_backup_root!(backup_root)
     path = File.join(root, PROFILE_OPERATION_LOCK_BASENAME)
-    handle = File.open(path, File::RDWR | File::CREAT, 0o600)
+    handle = ClaudeEasyOperationLock.open_private_lock(path)
     lock_exclusive_with_timeout(handle)
-    FileUtils.chmod(0o600, path)
     handle
   rescue StandardError
     handle&.close
@@ -162,7 +161,7 @@ module ClaudeEasy
           temporary.write(PROFILE_TRANSACTION_COMMITTED_BYTES)
           temporary.flush
           temporary.fsync
-          File.chmod(0o600, temporary.path)
+          temporary.chmod(0o600)
           current = File.lstat(path)
           handle.rewind
           raise IOError, "配置事务记录同时发生变化" unless
@@ -330,8 +329,8 @@ module ClaudeEasy
       temporary.write(bytes)
       temporary.flush
       temporary.fsync
-      File.chmod(0o600, temporary.path)
-      File.rename(temporary.path, path)
+      temporary.chmod(0o600)
+      ClaudeEasyDarwinFilesystem.rename_exclusive(temporary.path, path)
       fsync_parent_directory(path)
     end
     snapshot = regular_file_snapshot_once(path, "配置事务记录")
