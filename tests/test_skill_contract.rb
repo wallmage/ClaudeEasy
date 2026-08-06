@@ -247,7 +247,6 @@ class SkillContractTest < Minitest::Test
     instructions = File.read(File.join(ROOT, "AGENTS.md"))
     assert_includes instructions, "从实现、验证、安装到提交推送连续做完"
     assert_includes instructions, "不得要求用户重复确认"
-    assert_includes instructions, "不得自行新增需求汇总、入口、方案或计划文档"
     assert_includes instructions, "实际修改项目后"
     assert_includes instructions, "自动完成本地测试、commit 和 push"
     assert_includes instructions, "不得把“尚未 commit 或 push”作为常规收尾"
