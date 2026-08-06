@@ -6792,10 +6792,9 @@ function fixture() {
 context.__claudeEasyFixture = fixture;
 const script = fs.readFileSync(generatedPath, "utf8");
 vm.runInContext(
-  "try {\n" + script + "\n" +
+  script + "\n" +
     "this.__claudeEasyResults = [];\n" +
-    "for (let attempt = 0; attempt < 2; attempt += 1) this.__claudeEasyResults.push(JSON.stringify(main(this.__claudeEasyFixture()) || ''));\n" +
-  "} catch (error) { throw error; }",
+    "for (let attempt = 0; attempt < 2; attempt += 1) this.__claudeEasyResults.push(JSON.stringify(main(this.__claudeEasyFixture()) || ''));\n",
   context,
   { filename: generatedPath }
 );
@@ -6860,8 +6859,7 @@ context.__claudeEasyFixture = {
 };
 const script = fs.readFileSync(process.argv[2], "utf8");
 vm.runInContext(
-  "try {\n" + script + "\n;this.__claudeEasyResult = JSON.stringify(main(this.__claudeEasyFixture) || '');\n" +
-  "} catch (error) { throw error; }",
+  script + "\n;this.__claudeEasyResult = JSON.stringify(main(this.__claudeEasyFixture) || '');\n",
   context
 );
 const result = JSON.parse(context.__claudeEasyResult);
@@ -6914,10 +6912,9 @@ context.__claudeEasyFixture = {
 };
 const script = fs.readFileSync(process.argv[2], "utf8");
 vm.runInContext(
-  "try {\n" + script + "\n" +
+  script + "\n" +
     ";this.__claudeEasyResult = JSON.stringify(main(this.__claudeEasyFixture) || '');\n" +
-    "this.__claudeEasyIntrinsicsIntact = Array.isArray([]) && Object.keys({ friend: true }).length === 1 && JSON.stringify({ friend: true }).indexOf('friend') !== -1;\n" +
-  "} catch (error) { throw error; }",
+    "this.__claudeEasyIntrinsicsIntact = Array.isArray([]) && Object.keys({ friend: true }).length === 1 && JSON.stringify({ friend: true }).indexOf('friend') !== -1;\n",
   context
 );
 const result = JSON.parse(context.__claudeEasyResult);

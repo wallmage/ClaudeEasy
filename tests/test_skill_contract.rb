@@ -457,6 +457,8 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_each_usage_profile_has_distinct_actions_and_acceptance_tests
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/patch-policy.md"))
 
     [policy].each do |document|
@@ -478,6 +480,10 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不是为了隐藏代理"
     assert_includes policy, "台湾家宽优先，其次日本家宽"
     assert_includes policy, "不得自动切换节点"
+    [readme, skill].each do |document|
+      assert_includes document, "脚本成功不等于档位完成"
+      assert_includes document, "客户端开关与验收"
+    end
   end
 
   def test_profile_three_closes_the_claude_region_fingerprint_loop_in_the_system_browser

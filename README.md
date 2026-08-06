@@ -107,6 +107,8 @@ Windows PowerShell 5.1：
 .\claude-easy\scripts\install_windows.cmd -UsageProfile 3
 ```
 
+这些命令只完成安全的文件事务。脚本成功不等于档位完成；仍需由 Skill 按策略通过客户端界面完成当前档位的客户端开关与验收。
+
 Windows 安装只在客户端本来就未运行时执行写入；客户端运行时修改整批延期且不得报告“已更新”。
 
 ## 公开命令
