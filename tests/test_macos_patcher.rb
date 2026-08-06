@@ -2691,6 +2691,29 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_preserves_user_udp_rules_to_selected_groups
+    { "Main" => 1, "AI" => 2 }.each do |target, expected_count|
+      config = base_config
+      user_rule = "NETWORK,UDP,#{target}"
+      config["rules"].insert(2, user_rule, "NETWORK,UDP,REJECT")
+
+      rules = ClaudeEasy.patch(config, @policy).fetch(:config).fetch("rules")
+
+      assert_equal expected_count, rules.count(user_rule), target
+      assert_equal 2, rules.count("NETWORK,UDP,REJECT"), target
+    end
+  end
+
+  def test_preserves_leading_user_udp_rule_to_main_group
+    config = base_config
+    config["rules"].unshift("NETWORK,UDP,Main", "NETWORK,UDP,REJECT")
+
+    rules = ClaudeEasy.patch(config, @policy).fetch(:config).fetch("rules")
+
+    assert_equal 1, rules.count("NETWORK,UDP,Main")
+    assert_equal 2, rules.count("NETWORK,UDP,REJECT")
+  end
+
   def test_managed_ai_rules_precede_every_rule_set
     config = base_config
     config["rules"] = ["RULE-SET,gfw,DIRECT", "RULE-SET,geolocation-!cn,Main", "MATCH,Main"]

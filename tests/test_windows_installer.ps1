@@ -6068,9 +6068,10 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
         $managedEdit = $scriptOwnershipCases["managed-edit"]
         $managedEditScript = Join-Path (Join-Path $managedEdit "profiles") "Script.js"
         $managedEditText = [System.IO.File]::ReadAllText($managedEditScript).Replace(
-            "function claudeEasyTransform(config, configName, usageProfile) {",
-            "function claudeEasyTransform(config, configName, usageProfile) {`n// user edit"
+            "function claudeEasyTransform(config, profileName, usageProfile) {",
+            "function claudeEasyTransform(config, profileName, usageProfile) {`n// user edit"
         )
+        Assert-True ($managedEditText -cne [System.IO.File]::ReadAllText($managedEditScript)) "managed-script mutation fixture did not change Script.js"
         [System.IO.File]::WriteAllText($managedEditScript, $managedEditText)
         $managedEditBefore = Get-TreeContentSnapshot $managedEdit
         Assert-JsonResult (Invoke-TestPowerShell $uninstaller @("-AppHome", $managedEdit, "-Json")) "uninstall" 1 | Out-Null
@@ -7101,6 +7102,7 @@ friend payload
 
     Assert-InstallerRejectsScript "reserved-symbol-case" "const claudeEasyTransform = 1;`nfunction main(config) { return config; }`n" "保留标识符"
     Assert-InstallerRejectsScript "unicode-reserved-symbol-case" "const cl\u0061udeEasyTransform = 1;`nfunction main(config) { return config; }`n" "Unicode 转义"
+    Assert-InstallerRejectsScript "postfix-division-reserved-symbol-case" "function main(config) { let x = 1; x++ / (claudeEasyInstallManagedMain = null) / 2; return config; }`n" "保留标识符"
     Assert-InstallerRejectsScript "regex-hidden-reserved-symbol-case" 'function main(config) { return config; }
 const first = /"/;
 const claudeEasyFinalizer = 1;

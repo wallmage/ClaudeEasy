@@ -838,15 +838,13 @@ function claudeEasyRules(config, aiGroup, routeGroup, ownedAiNames, ownedSafeNam
     }
 
     const info = claudeEasyRuleInfo(rule);
-    if (info.type !== "NETWORK" || info.payload.toUpperCase() !== "UDP" ||
-        (ownedSafeNames.indexOf(info.target) === -1 && info.target !== routeGroup && info.target !== aiGroup)) return;
+    const next = index === 0 && original.length > 1 ? claudeEasyRuleInfo(original[1]) : null;
+    if (index !== 0 || info.type !== "NETWORK" || info.payload.toUpperCase() !== "UDP" ||
+        (ownedSafeNames.indexOf(info.target) === -1 && info.target !== aiGroup)) return;
+    if (!next || next.type !== "NETWORK" || next.payload.toUpperCase() !== "UDP" ||
+        String(next.target).toUpperCase() !== "REJECT") return;
     ownedUdpIndexes.push(index);
-    if (index + 1 < original.length) {
-      const next = claudeEasyRuleInfo(original[index + 1]);
-      if (next.type === "NETWORK" && next.payload.toUpperCase() === "UDP" && String(next.target).toUpperCase() === "REJECT") {
-        ownedUdpIndexes.push(index + 1);
-      }
-    }
+    ownedUdpIndexes.push(1);
   });
 
   const userOverrides = [];

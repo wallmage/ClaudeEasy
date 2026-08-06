@@ -615,6 +615,29 @@ test('UDP guard precedes leaking rules without deleting them', { skip: !availabl
   }
 });
 
+test('preserves user UDP rules to selected groups', { skip: !available }, () => {
+  for (const [target, expectedCount] of [['Main', 1], ['AI', 2]]) {
+    const config = baseConfig();
+    const userRule = `NETWORK,UDP,${target}`;
+    config.rules.splice(2, 0, userRule, 'NETWORK,UDP,REJECT');
+
+    const rules = engine.claudeEasyTransform(config, 'fixture').rules;
+
+    assert.equal(rules.filter((rule) => rule === userRule).length, expectedCount, target);
+    assert.equal(rules.filter((rule) => rule === 'NETWORK,UDP,REJECT').length, 2, target);
+  }
+});
+
+test('preserves a leading user UDP rule to the main group', { skip: !available }, () => {
+  const config = baseConfig();
+  config.rules.unshift('NETWORK,UDP,Main', 'NETWORK,UDP,REJECT');
+
+  const rules = engine.claudeEasyTransform(config, 'fixture').rules;
+
+  assert.equal(rules.filter((rule) => rule === 'NETWORK,UDP,Main').length, 1);
+  assert.equal(rules.filter((rule) => rule === 'NETWORK,UDP,REJECT').length, 2);
+});
+
 test('managed AI rules precede every rule set', { skip: !available }, () => {
   const config = baseConfig();
   config.rules = ['RULE-SET,gfw,DIRECT', 'RULE-SET,geolocation-!cn,Main', 'MATCH,Main'];
@@ -853,6 +876,7 @@ test('PowerShell JavaScript analysis uses canonical executable tokens', () => {
   assert.match(source, /\$state = "regex"/);
   assert.match(source, /Unicode 转义/);
   assert.match(source, /Test-JavaScriptRegexLiteralStart \(\$mask\.ToString\(\)\)/);
+  assert.match(source, /EndsWith\("\+\+"\).*EndsWith\("--"\)/s);
 });
 
 test('PowerShell installer reuses the usage-profile snapshot for decisions and commit checks', () => {

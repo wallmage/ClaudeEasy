@@ -10,6 +10,7 @@ function Test-JavaScriptStringLineBreak([string]$Character) {
 function Test-JavaScriptRegexLiteralStart([string]$Code) {
     $prefix = $Code.TrimEnd()
     if ($prefix.Length -eq 0) { return $true }
+    if ($prefix.EndsWith("++") -or $prefix.EndsWith("--")) { return $false }
     if ([string]$prefix[$prefix.Length - 1] -match '[\(\{\[=,:;!&|?+\-*%^~<>]') { return $true }
     return $prefix -match '(?:^|[^A-Za-z0-9_$])(?:return|throw|case|delete|void|typeof|instanceof|in|of|yield|await|else|do)\s*$'
 }

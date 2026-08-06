@@ -780,15 +780,14 @@ module ClaudeEasy
       end
 
       info = rule_info(rule)
-      next unless info[:type] == "NETWORK" && info[:payload].casecmp("UDP").zero? &&
-                  (owned_safe_names.include?(info[:target]) || [route_group, ai_group].include?(info[:target]))
+      next_info = rule_info(original_rules[index + 1]) if index.zero? && original_rules.length > 1
+      next unless index.zero? && info[:type] == "NETWORK" && info[:payload].casecmp("UDP").zero? &&
+                  (owned_safe_names.include?(info[:target]) || info[:target] == ai_group)
+      next unless next_info && next_info[:type] == "NETWORK" && next_info[:payload].casecmp("UDP").zero? &&
+                  next_info[:target].to_s.casecmp("REJECT").zero?
 
       owned_udp_indexes << index
-      next_info = rule_info(original_rules[index + 1]) if index + 1 < original_rules.length
-      if next_info && next_info[:type] == "NETWORK" && next_info[:payload].casecmp("UDP").zero? &&
-         next_info[:target].to_s.casecmp("REJECT").zero?
-        owned_udp_indexes << index + 1
-      end
+      owned_udp_indexes << index + 1
     end
 
     user_overrides = []
