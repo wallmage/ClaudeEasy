@@ -365,12 +365,20 @@ function Build-GlobalScript(
                 if (-not [string]::IsNullOrWhiteSpace($embedded)) {
                     $embedded = Rename-JavaScriptMain $embedded "claudeEasyPreviousMain" "main"
                 }
+                $embeddedDirectives = @(Get-JavaScriptDirectivePrologue $embedded)
                 $restoredParts = @($outsidePrefix, $embedded, $outsideSuffix) |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                 $restored = ($restoredParts -join "`r`n`r`n")
                 if (-not [string]::IsNullOrWhiteSpace($restored)) {
                     Assert-JavaScriptCanCompose $restored
                     $previous = Rename-JavaScriptMain $restored "main" "claudeEasyPreviousMain"
+                    $currentDirectives = @(Get-JavaScriptDirectivePrologue $previous)
+                    $missingDirectives = @($embeddedDirectives | Where-Object {
+                        $currentDirectives -notcontains $_
+                    })
+                    if ($missingDirectives.Count -gt 0) {
+                        $previous = ($missingDirectives -join "`r`n") + "`r`n" + $previous
+                    }
                 }
             } else {
                 $restoredParts = @($outsidePrefix, $outsideSuffix) |

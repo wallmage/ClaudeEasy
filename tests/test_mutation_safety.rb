@@ -3061,12 +3061,10 @@ class MutationSafetyTest < Minitest::Test
         "claude-easy/scripts/windows/install_windows/script_js.ps1",
         "                    Assert-JavaScriptCanCompose $restored\n" \
           "                    $previous = Rename-JavaScriptMain $restored \"main\" \"claudeEasyPreviousMain\"\n" \
-          "                }\n" \
-          "            } else {\n",
+          "                    $currentDirectives = @(Get-JavaScriptDirectivePrologue $previous)\n",
         "                    Assert-JavaScriptReservedIdentifiers $restored\n" \
           "                    $previous = Rename-JavaScriptMain $restored \"main\" \"claudeEasyPreviousMain\"\n" \
-          "                }\n" \
-          "            } else {\n"
+          "                    $currentDirectives = @(Get-JavaScriptDirectivePrologue $previous)\n"
       )
 
       assert_mutation_is_killed(
