@@ -260,15 +260,6 @@ class SkillContractTest < Minitest::Test
     assert_includes ignore.lines.map(&:strip), "dist/"
   end
 
-  def test_agent_instructions_execute_clear_requests_without_reconfirmation
-    instructions = File.read(File.join(ROOT, "AGENTS.md"))
-    assert_includes instructions, "从实现、验证、安装到提交推送连续做完"
-    assert_includes instructions, "不得要求用户重复确认"
-    assert_includes instructions, "实际修改项目后"
-    assert_includes instructions, "自动完成本地测试、commit 和 push"
-    assert_includes instructions, "不得把“尚未 commit 或 push”作为常规收尾"
-  end
-
   def test_public_guides_define_their_roles_and_point_to_detailed_policy
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
@@ -3306,13 +3297,10 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_local_verification_is_targeted_and_ci_keeps_the_full_matrix
-    instructions = File.read(File.join(ROOT, "AGENTS.md"))
+  def test_ci_keeps_the_full_matrix
     workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
     local_entrypoints = Dir[File.join(ROOT, "tests/test_*.{rb,js}")].sort
 
-    assert_includes instructions, "只运行与改动直接相关的测试"
-    assert_includes instructions, "GitHub `Test` workflow 运行完整矩阵"
     refute_empty local_entrypoints
     local_entrypoints.each do |path|
       assert_includes workflow, File.basename(path), "local test entrypoint is missing from CI: #{path}"

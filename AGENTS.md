@@ -2,8 +2,6 @@
 
 ## 执行
 
-- 需求明确且在已有授权范围内时，从实现、验证、安装到提交推送连续做完。不得停在方案、计划、等待用户操作或“尚未提交”的中间状态，也不得要求用户重复确认；只有缺少必要权限或操作会明显超出用户授权时才能停下。
-- 实际修改项目后，除非用户明确要求不要提交，否则自动完成本地测试、commit 和 push，让 GitHub CI 自动运行。不得把“尚未 commit 或 push”作为常规收尾。
 - 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。如果 `~/.agents/skills/claude-easy/` 存在，也要同步安装 Agents 副本。新副本必须逐文件校验一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动处理。
 - `README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 规定触发后必须立即可见的安全边界、代理入口、执行顺序和策略读取路由；设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
 - 策略按职责拆分：`policy-core.md` 保存所有任务共同边界；`diagnostics.md` 保存诊断与证据规则；`profiles-and-patch.md` 保存用途档位与 Patch；`routing-and-security.md` 保存 DNS、TUN、代理组、AI 与 WebRTC；`safe-update-and-recovery.md` 保存安全更新、备份与恢复；`macos.md` 和 `windows.md` 分别保存平台事务。`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同。
@@ -21,19 +19,5 @@
 - 文档、代码和测试必须描述同一套现行行为，不保留已经取消的方案。
 
 ## 测试与发布
-
-修改过程中和提交前只运行与改动直接相关的测试、对应语法或静态检查，以及 `git diff --check`；不得为了声称“全套通过”重复运行无关测试。已有测试涉及变更后的合同或行为时必须同步更新；是否新增回归测试继续遵守 TDD 和本文件的精准修改要求。
-
-常见映射：
-
-- macOS Ruby 逻辑运行对应测试名或相关测试文件；包装器只运行相关包装器测试。只有安全不变量变化时才运行相关变异测试。
-- 区域检测页运行对应 Node 测试；只有浏览器真实行为受影响时才运行浏览器测试。
-- Windows JavaScript 运行对应 Node 测试。Windows PowerShell 5.1 的行为由 GitHub CI 验证。
-- Skill、策略、结果合同或文档变化运行对应合同测试；只有 `policy.json` 变化时才检查生成的 Windows 策略。
-- 改过的 Ruby、JavaScript 或 Shell 文件分别运行对应语法检查。
-
-以下情况提交前仍须在本地运行完整测试矩阵：跨模块公共事务或文件写入、跨平台策略或结果合同、依赖、测试基础设施、构建发布流程、大范围重构，以及上一次 CI 失败或 CI 无法使用。其他改动由 push 后的 GitHub `Test` workflow 运行完整矩阵，不在本地重复。
-
-每次 commit 或 push 前读取 `main` 上一次 `Test` workflow：失败则查看日志并修复；仍在运行或暂时无法访问时如实记录，不等待。随后自动在 `main` 上 commit、push，由 GitHub 启动 CI。push 后不轮询 CI，下次提交前再检查。
 
 完成说明只报告实际运行过的测试和 Git 状态。未读取的 CI 不能称为已经通过。
