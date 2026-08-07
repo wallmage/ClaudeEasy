@@ -97,3 +97,5 @@ AI 分组当前选择必须是代理节点，不能是 `DIRECT`。节点不支�
 不能按浏览器应用或 AI 域名单独防 WebRTC。同一个浏览器会同时访问国内和 AI 网站，而 STUN 连接的目标与原网页域名分离，Mihomo 无法判断连接来自哪个标签页。TCP 和 DNS 按域名分流；WebRTC 防护必须覆盖所有 UDP。HTTP/3/QUIC 也经过 AI 分组；国内网页的 TCP 与 DNS 仍然直连。在线游戏、语音和视频通话也可能受影响，安装前后的说明都必须写明这个影响。
 
 AI 网页流量、AI 域名 DNS 和所有 UDP 使用同一 AI 分组。多个结果如果全是代理出口，不属于真实 IP 泄漏；单一结果更容易确认。
+
+本地区域指纹页不得把 WebRTC 发现的公网 IP 发送给归属地查询或其他第三方服务。页面必须在创建 `RTCPeerConnection` 前明确列出 `stun.l.google.com`、`stun1.l.google.com` 和 `stun.cloudflare.com`，说明 Google 和 Cloudflare 会看到连接源公网 IP，并只在用户点击“开始检测并运行 WebRTC 测试”或同等明确的重新扫描按钮后连接这些 STUN 服务。CSP 必须禁止其他网络请求。没有公网 IP 时 WebRTC 项计 `+0`；发现公网 IP 但无法在本地确认归属地时写成“无法读取”和未知权重，不能为了补齐分数外发该 IP。

@@ -538,6 +538,11 @@ class SkillContractTest < Minitest::Test
     [policy].each do |document|
       assert_includes document, "STUN"
       assert_includes document, "CSP"
+      assert_includes document, "stun.l.google.com"
+      assert_includes document, "stun1.l.google.com"
+      assert_includes document, "stun.cloudflare.com"
+      assert_includes document, "不会把检测到的公网 IP 发送给其他服务"
+      assert_includes document, "开始检测并运行 WebRTC 测试"
       assert_includes document, "Safari"
       assert_includes document, "Chrome"
       assert_includes document, "Windows"
@@ -553,6 +558,10 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "31–60"
       assert_includes document, "61–100"
       refute_includes document, "补测其余八项"
+    end
+
+    [readme, policy, design].each do |document|
+      refute_includes document, "IPWhois"
     end
 
     [policy].each do |document|
@@ -636,9 +645,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "中国大陆简体中文"
       assert_includes document, "新加坡中文"
       assert_includes document, "`zh-Hans`"
-      assert_includes document, "只有中国大陆"
-      assert_includes document, "其他国家和地区"
-      assert_includes document, "无法确认归属地"
+      assert_includes document, "不做外部国家代码查询"
+      assert_includes document, "发现公网 IP 但无法在本地确认归属地"
+      assert_includes document, "未知权重"
     end
   end
 

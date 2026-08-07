@@ -11,8 +11,6 @@ const PAGE_URL = pathToFileURL(path.join(
   "assets",
   "claude-region-check.html",
 )).href;
-const COUNTRY_API_PREFIX = "https://ipwho.is/";
-
 const TARGETS = {
   chrome: { browserType: chromium, launch: { channel: "chrome" } },
   edge: { browserType: chromium, launch: { channel: "msedge" } },
@@ -88,6 +86,18 @@ for (const targetName of requestedTargets()) {
       viewport: { width: 1280, height: 900 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      const NativePeerConnection = window.RTCPeerConnection;
+      window.__claudeEasyPeerConnectionCount = 0;
+      if (typeof NativePeerConnection !== "function") return;
+      function TrackedPeerConnection(...args) {
+        window.__claudeEasyPeerConnectionCount += 1;
+        return new NativePeerConnection(...args);
+      }
+      TrackedPeerConnection.prototype = NativePeerConnection.prototype;
+      Object.setPrototypeOf(TrackedPeerConnection, NativePeerConnection);
+      window.RTCPeerConnection = TrackedPeerConnection;
+    });
     const consoleProblems = [];
     const pageErrors = [];
     const externalRequests = [];
@@ -107,16 +117,6 @@ for (const targetName of requestedTargets()) {
     await page.route("**/*", async (route) => {
       if (route.request().url().startsWith("file:")) {
         await route.continue();
-      } else if (route.request().url().startsWith(COUNTRY_API_PREFIX)) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            ip: route.request().url().slice(COUNTRY_API_PREFIX.length),
-            success: true,
-            country_code: "JP",
-          }),
-        });
       } else {
         await route.abort();
       }
@@ -140,11 +140,20 @@ for (const targetName of requestedTargets()) {
       "list",
     );
     assert.match(await page.locator("body").innerText(), /越高/);
+    assert.match(
+      await page.locator("body").innerText(),
+      /Google 和 Cloudflare.*看到.*公网 IP/,
+    );
+    assert.deepEqual(externalRequests, []);
+    assert.equal(
+      await page.evaluate(() => window.__claudeEasyPeerConnectionCount),
+      0,
+    );
 
     await page.locator('[data-action="start"]').focus();
     assert.equal(
       await page.evaluate(() => document.activeElement.textContent.trim()),
-      "开始检测",
+      "开始检测并运行 WebRTC 测试",
     );
     const focusIndicator = await page.evaluate(() => {
       const button = document.activeElement;
@@ -182,9 +191,13 @@ for (const targetName of requestedTargets()) {
     assert.notEqual(focusIndicator.outlineColor, "rgba(0, 0, 0, 0)");
     await page.keyboard.press("Enter");
     await waitForCompletedScan(page);
+    const firstPeerConnectionCount = await page.evaluate(
+      () => window.__claudeEasyPeerConnectionCount,
+    );
+    assert.equal(firstPeerConnectionCount, 1);
     assert.equal(
       await page.evaluate(() => document.activeElement.textContent.trim()),
-      "重新扫描",
+      "重新扫描并运行 WebRTC 测试",
     );
 
     const result = await page.evaluate(() => ({
@@ -218,8 +231,12 @@ for (const targetName of requestedTargets()) {
     await page.keyboard.press("Enter");
     await waitForCompletedScan(page);
     assert.equal(
+      await page.evaluate(() => window.__claudeEasyPeerConnectionCount),
+      firstPeerConnectionCount + 1,
+    );
+    assert.equal(
       await page.evaluate(() => document.activeElement.textContent.trim()),
-      "重新扫描",
+      "重新扫描并运行 WebRTC 测试",
     );
 
     await page.setViewportSize({ width: 280, height: 720 });
@@ -245,10 +262,7 @@ for (const targetName of requestedTargets()) {
     );
     assert.deepEqual(consoleProblems, []);
     assert.deepEqual(pageErrors, []);
-    assert.ok(
-      externalRequests.every((url) => url.startsWith(COUNTRY_API_PREFIX)),
-      `unexpected external requests: ${JSON.stringify(externalRequests)}`,
-    );
+    assert.deepEqual(externalRequests, []);
     assert.deepEqual(websockets, []);
   });
 
