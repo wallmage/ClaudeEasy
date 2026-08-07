@@ -306,11 +306,11 @@ test("the public contract exposes the upstream ten signals and weights", () => {
   assert.equal(api.riskBand(100), "high");
 });
 
-test("only a confirmed mainland China WebRTC public IP contributes ten", async () => {
+test("a detected WebRTC public IP leak contributes ten", async () => {
   const api = detectorApi();
   const candidate = await api.detect(baseEnvironment({
     detectWebrtcLeak: async () => ({
-      raw: "检测到 WebRTC 中国大陆公网 IP",
+      raw: "是：检测到 WebRTC 公网 IP 泄漏",
       score: 1,
     }),
   }));
@@ -319,27 +319,27 @@ test("only a confirmed mainland China WebRTC public IP contributes ten", async (
   assert.equal(signal.score, 1);
   assert.equal(signal.contribution, 10);
   assert.equal(signal.match, "strong");
-  assert.equal(signal.raw, "检测到 WebRTC 中国大陆公网 IP");
+  assert.equal(signal.raw, "是：检测到 WebRTC 公网 IP 泄漏");
 });
 
-test("WebRTC classification stays unknown when a public IP cannot be classified locally", () => {
+test("WebRTC classification reports a binary leak result without geolocation", () => {
   const api = detectorApi();
   assert.deepEqual(
     { ...api.classifyWebrtc([
       { ip: "203.0.113.9", type: "relay" },
       { ip: "192.168.1.7", type: "host" },
     ]) },
-    { raw: "未发现 WebRTC 公网 IP", score: 0 },
+    { raw: "否：未检测到 WebRTC 公网 IP 泄漏", score: 0 },
   );
   assert.deepEqual(
     { ...api.classifyWebrtc([]) },
-    { raw: "未发现 WebRTC 公网 IP", score: 0 },
+    { raw: "否：未检测到 WebRTC 公网 IP 泄漏", score: 0 },
   );
-  assert.throws(
-    () => api.classifyWebrtc([
+  assert.deepEqual(
+    { ...api.classifyWebrtc([
       { ip: "203.0.113.9", type: "srflx" },
-    ]),
-    /归属地/,
+    ]) },
+    { raw: "是：检测到 WebRTC 公网 IP 泄漏", score: 1 },
   );
 });
 
@@ -377,13 +377,10 @@ test("the WebRTC probe uses three disclosed STUN servers without sending candida
     close() {}
   }
 
-  await assert.rejects(
-    api.detectWebrtcLeak({
-      PeerConnection: FakePeerConnection,
-      schedule: () => {},
-    }),
-    /归属地/,
-  );
+  const result = await api.detectWebrtcLeak({
+    PeerConnection: FakePeerConnection,
+    schedule: () => {},
+  });
   assert.equal(
     JSON.stringify(configuration),
     JSON.stringify({
@@ -395,6 +392,10 @@ test("the WebRTC probe uses three disclosed STUN servers without sending candida
     }),
   );
   assert.equal(fetchCalls, 0);
+  assert.deepEqual(
+    { ...result },
+    { raw: "是：检测到 WebRTC 公网 IP 泄漏", score: 1 },
+  );
 });
 
 test("a WebRTC probe timeout stays unavailable instead of looking safe", async () => {

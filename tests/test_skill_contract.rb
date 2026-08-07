@@ -646,8 +646,8 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "新加坡中文"
       assert_includes document, "`zh-Hans`"
       assert_includes document, "不做外部国家代码查询"
-      assert_includes document, "发现公网 IP 但无法在本地确认归属地"
-      assert_includes document, "未知权重"
+      assert_includes document, "发现公网 IP 时明确写成“是”"
+      assert_includes document, "没有发现公网 IP 时明确写成“否”"
     end
   end
 

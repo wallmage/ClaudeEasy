@@ -455,7 +455,7 @@ SOFTWARE.
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
-          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项只通过页面列明的 STUN 服务检查是否出现公网 IP，不会把 IP 发送给归属地查询服务。发现公网 IP 时无法在本地确认归属地，因此显示“无法读取”，不会误计为安全或泄露；未发现公网 IP 时计 0 分。</p>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项只通过页面列明的 STUN 服务检查是否出现公网 IP，不会把 IP 发送给归属地查询服务。发现公网 IP 时明确显示“是：检测到泄漏”并计 10 分；未发现时明确显示“否：未检测到泄漏”并计 0 分。</p>
         </article>
       </section>
 
@@ -744,9 +744,9 @@ SOFTWARE.
         function classifyWebrtc(candidates) {
           var publicCandidates = publicWebrtcCandidates(candidates);
           if (publicCandidates.length === 0) {
-            return { raw: "未发现 WebRTC 公网 IP", score: 0 };
+            return { raw: "否：未检测到 WebRTC 公网 IP 泄漏", score: 0 };
           }
-          throw new Error("无法确认 WebRTC 公网 IP 归属地");
+          return { raw: "是：检测到 WebRTC 公网 IP 泄漏", score: 1 };
         }
 
         function detectWebrtcLeak(options) {

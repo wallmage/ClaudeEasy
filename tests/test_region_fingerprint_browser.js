@@ -210,6 +210,10 @@ for (const targetName of requestedTargets()) {
           row.querySelector("[data-signal-contribution]").textContent,
       })),
     }));
+    const webrtcResult = await page.locator(
+      '[data-signal-key="webrtcLeak"] [data-signal-value]',
+    ).textContent();
+    assert.match(webrtcResult, /^(?:是|否)：/);
     assert.equal(result.rows.length, 10);
     for (const row of result.rows) {
       assert.notEqual(row.value, "等待检测");
