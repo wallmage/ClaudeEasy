@@ -230,6 +230,8 @@ jobs:
         env:
           MIHOMO_VERSION: ${{ matrix.version }}
           MIHOMO_SHA256: ${{ matrix.sha256 }}
+          GEOSITE_COMMIT: "8616d0c188f1eed5b7e01bd088f1c3b3002d5496"
+          GEOSITE_SHA256: "0dd6474f59287d925ff2b10957e21657872c72170919a0b947bcc1ed6957cceb"
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "mihomo-windows-amd64.zip"
           curl.exe --fail --location --retry 3 --connect-timeout 15 --max-time 300 `
@@ -242,6 +244,13 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
           $core = @(Get-ChildItem -LiteralPath $destination -Filter "mihomo*.exe" -File -Recurse)
           if ($core.Count -ne 1) { throw "Mihomo archive did not contain exactly one executable" }
+          $geosite = Join-Path $env:RUNNER_TEMP "GeoSite.dat"
+          curl.exe --fail --location --retry 3 --connect-timeout 15 --max-time 300 `
+            --output $geosite `
+            "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/$env:GEOSITE_COMMIT/geosite.dat"
+          if ($LASTEXITCODE -ne 0) { throw "GeoSite.dat download failed" }
+          $actual = (Get-FileHash -LiteralPath $geosite -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $env:GEOSITE_SHA256) { throw "GeoSite.dat checksum mismatch" }
       - name: Validate all Windows profiles through the public installer
         shell: powershell
         run: |
@@ -250,6 +259,7 @@ jobs:
           if ($core.Count -ne 1) { throw "Mihomo executable is missing before validation" }
           $targetPowerShell = (Get-Command '${{ matrix.executable }}').Source
           $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-mihomo.json"
+          $geosite = Join-Path $env:RUNNER_TEMP "GeoSite.dat"
           Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
           $nonce = [Guid]::NewGuid().ToString("N")
           & $targetPowerShell -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 `
@@ -257,6 +267,7 @@ jobs:
             -ExpectedPSEdition '${{ matrix.edition }}' `
             -ExpectedPSMajor ${{ matrix.major }} `
             -RealMihomoPaths @($core[0].FullName) `
+            -RealMihomoGeoSitePath $geosite `
             -RealMihomoOnly `
             -CompletionReceiptPath $receipt `
             -CompletionReceiptNonce $nonce

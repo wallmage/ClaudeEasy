@@ -8,6 +8,7 @@
     [ValidateSet(5, 7)]
     [int]$ExpectedPSMajor,
     [string[]]$RealMihomoPaths = @(),
+    [string]$RealMihomoGeoSitePath,
     [switch]$RealMihomoOnly,
     [string]$CompletionReceiptPath,
     [string]$CompletionReceiptNonce
@@ -633,6 +634,9 @@ try {
 
         if ($RealMihomoOnly) {
             Assert-True ($RealMihomoPaths.Count -gt 0) "real Mihomo mode requires at least one core"
+            Assert-True (
+                Test-Path -LiteralPath $RealMihomoGeoSitePath -PathType Leaf
+            ) "real Mihomo mode requires a pinned GeoSite.dat"
             $realNode = Get-Command node.exe -ErrorAction SilentlyContinue
             Assert-True ($null -ne $realNode) "real Mihomo mode requires Node.js"
             $realTransformHarness = Join-Path $sandbox "run-global-script.js"
@@ -690,6 +694,10 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                     )
                     $realProfiles = Join-Path $realCase "profiles"
                     New-Item -ItemType Directory -Path $realProfiles -Force | Out-Null
+                    [System.IO.File]::Copy(
+                        $RealMihomoGeoSitePath,
+                        (Join-Path $realCase "GeoSite.dat")
+                    )
                     [System.IO.File]::WriteAllText(
                         (Join-Path $realCase "config.yaml"),
                         "mixed-port: 7890`nmode: rule`nipv6: true`ntun:`n  enable: false`nproxies: []`nproxy-groups:`n  - name: Main`n    type: select`n    proxies:`n      - DIRECT`nrules:`n  - MATCH,Main`n"
