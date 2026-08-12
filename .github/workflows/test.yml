@@ -122,7 +122,7 @@ jobs:
           EOF
             archive="$RUNNER_TEMP/mihomo-$label.gz"
             binary="$RUNNER_TEMP/mihomo-$label"
-            curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 \
+            curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 300 \
               --output "$archive" \
               "https://github.com/MetaCubeX/mihomo/releases/download/$version/mihomo-darwin-$MIHOMO_ARCHITECTURE-$version.gz"
             echo "$expected  $archive" | shasum -a 256 --check
@@ -234,7 +234,7 @@ jobs:
           GEOSITE_SHA256: "0dd6474f59287d925ff2b10957e21657872c72170919a0b947bcc1ed6957cceb"
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "mihomo-windows-amd64.zip"
-          curl.exe --fail --location --retry 3 --connect-timeout 15 --max-time 300 `
+          curl.exe --fail --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 300 `
             --output $archive `
             "https://github.com/MetaCubeX/mihomo/releases/download/$env:MIHOMO_VERSION/mihomo-windows-amd64-$env:MIHOMO_VERSION.zip"
           if ($LASTEXITCODE -ne 0) { throw "Mihomo download failed" }
@@ -245,7 +245,7 @@ jobs:
           $core = @(Get-ChildItem -LiteralPath $destination -Filter "mihomo*.exe" -File -Recurse)
           if ($core.Count -ne 1) { throw "Mihomo archive did not contain exactly one executable" }
           $geosite = Join-Path $env:RUNNER_TEMP "GeoSite.dat"
-          curl.exe --fail --location --retry 3 --connect-timeout 15 --max-time 300 `
+          curl.exe --fail --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 300 `
             --output $geosite `
             "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/$env:GEOSITE_COMMIT/geosite.dat"
           if ($LASTEXITCODE -ne 0) { throw "GeoSite.dat download failed" }
