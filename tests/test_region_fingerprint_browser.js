@@ -204,16 +204,26 @@ for (const targetName of requestedTargets()) {
       score: document.querySelector("[data-result-score]").textContent,
       summary: document.querySelector("[data-result-summary]").textContent,
       rows: Array.from(document.querySelectorAll(".signal")).map((row) => ({
+        key: row.getAttribute("data-signal-key"),
         coverage: row.getAttribute("data-coverage"),
         value: row.querySelector("[data-signal-value]").textContent,
         contribution:
           row.querySelector("[data-signal-contribution]").textContent,
       })),
     }));
-    const webrtcResult = await page.locator(
-      '[data-signal-key="webrtcLeak"] [data-signal-value]',
-    ).textContent();
-    assert.match(webrtcResult, /^(?:是|否)：/);
+    const webrtc = result.rows.find((row) => row.key === "webrtcLeak");
+    assert.ok(webrtc);
+    if (webrtc.coverage === "unavailable") {
+      assert.equal(webrtc.value, "无法读取");
+      assert.equal(webrtc.contribution, "未知");
+    } else {
+      assert.equal(webrtc.coverage, "full");
+      assert.match(webrtc.value, /^(?:是|否)：/);
+      assert.equal(
+        webrtc.contribution,
+        webrtc.value.startsWith("是：") ? "+10" : "+0",
+      );
+    }
     assert.equal(result.rows.length, 10);
     for (const row of result.rows) {
       assert.notEqual(row.value, "等待检测");
