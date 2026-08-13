@@ -27,7 +27,7 @@ SOFTWARE.
     <meta charset="utf-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://cloudflare.com; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
@@ -409,7 +409,7 @@ SOFTWARE.
         分数越高表示大陆关联信号越多；它不代表 Claude 的官方判定，
         也不能作为 Claude 是否可用的通过条件。
       </p>
-      <div class="privacy">点击下方按钮后，WebRTC 测试会连接 stun.l.google.com、stun1.l.google.com 和 stun.cloudflare.com；Google 和 Cloudflare 会看到你的连接源公网 IP。页面不会把检测到的 IP 发送给其他服务。</div>
+      <div class="privacy">点击下方按钮后，WebRTC 测试会连接 stun.l.google.com、stun1.l.google.com 和 stun.cloudflare.com；Google 和 Cloudflare 会看到连接源公网 IP。页面还会向 Cloudflare 查询网页正常访问所用的公网出口。Cloudflare 不会收到 STUN 候选，页面也不会显示、记录或发送候选地址。</div>
       <noscript>
         <p class="noscript-warning" role="alert">
           无法运行检测：当前浏览器禁用了 JavaScript。请启用后重新打开本地页面。
@@ -455,7 +455,7 @@ SOFTWARE.
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
-          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项只通过页面列明的 STUN 服务检查是否出现公网 IP，不会把 IP 发送给归属地查询服务。发现公网 IP 时明确显示“是：检测到泄漏”并计 10 分；未发现时明确显示“否：未检测到泄漏”并计 0 分。</p>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项在本地比较 STUN 候选与网页代理出口：一致或没有公网候选时计 0 分，出口不一致或暴露本地网络地址时计 10 分；无法取得同协议族网页出口时显示“无法读取”。</p>
         </article>
       </section>
 
@@ -741,12 +741,67 @@ SOFTWARE.
           });
         }
 
-        function classifyWebrtc(candidates) {
+        function classifyWebrtc(publicIp, candidates) {
+          var privateHostExposed = (candidates || []).some(function (candidate) {
+            return String(candidate.type || "").toLowerCase() === "host" &&
+              isPrivateIp(candidate.ip);
+          });
+          if (privateHostExposed) {
+            return { raw: "WebRTC 暴露本地网络地址", score: 1 };
+          }
           var publicCandidates = publicWebrtcCandidates(candidates);
           if (publicCandidates.length === 0) {
-            return { raw: "否：未检测到 WebRTC 公网 IP 泄漏", score: 0 };
+            return { raw: "未检测到 WebRTC 公网出口", score: 0 };
           }
-          return { raw: "是：检测到 WebRTC 公网 IP 泄漏", score: 1 };
+          var reference = normalizeIp(publicIp);
+          if (!reference) throw new Error("无法取得网页公网出口");
+          var referenceIsV4 = reference.indexOf(".") !== -1;
+          var sameFamily = publicCandidates.filter(function (candidate) {
+            return (candidate.ip.indexOf(".") !== -1) === referenceIsV4;
+          });
+          var mismatch = sameFamily.some(function (candidate) {
+            return candidate.ip !== reference;
+          });
+          if (mismatch) {
+            return { raw: "WebRTC 出口与网页代理出口不一致", score: 1 };
+          }
+          if (sameFamily.length !== publicCandidates.length) {
+            throw new Error("无法取得同协议族的网页公网出口");
+          }
+          return { raw: "WebRTC 与网页代理出口一致", score: 0 };
+        }
+
+        async function fetchBrowserPublicIp() {
+          if (typeof root.fetch !== "function") {
+            throw new Error("无法取得网页公网出口");
+          }
+          var controller = typeof root.AbortController === "function"
+            ? new root.AbortController()
+            : null;
+          var timer = typeof root.setTimeout === "function"
+            ? root.setTimeout(function () {
+              if (controller) controller.abort();
+            }, 5000)
+            : null;
+          try {
+            var response = await root.fetch(
+              "https://cloudflare.com/cdn-cgi/trace",
+              {
+                cache: "no-store",
+                signal: controller ? controller.signal : undefined
+              }
+            );
+            if (!response.ok) throw new Error("无法取得网页公网出口");
+            var body = await response.text();
+            var match = body.match(/(?:^|\n)ip=([^\n]+)/);
+            var ip = normalizeIp(match && match[1]);
+            if (!ip) throw new Error("无法取得网页公网出口");
+            return ip;
+          } finally {
+            if (timer !== null && typeof root.clearTimeout === "function") {
+              root.clearTimeout(timer);
+            }
+          }
         }
 
         function detectWebrtcLeak(options) {
@@ -755,6 +810,7 @@ SOFTWARE.
             settings,
             "PeerConnection"
           ) ? settings.PeerConnection : root.RTCPeerConnection;
+          var fetchPublicIp = settings.fetchPublicIp || fetchBrowserPublicIp;
           var schedule = settings.schedule || root.setTimeout;
           return new Promise(function (resolve, reject) {
             if (typeof Constructor !== "function") {
@@ -777,11 +833,18 @@ SOFTWARE.
                 reject(error);
                 return;
               }
-              try {
-                resolve(classifyWebrtc(candidates));
-              } catch (classificationError) {
-                reject(classificationError);
+              var publicCandidates = publicWebrtcCandidates(candidates);
+              if (publicCandidates.length === 0) {
+                try {
+                  resolve(classifyWebrtc("", candidates));
+                } catch (classificationError) {
+                  reject(classificationError);
+                }
+                return;
               }
+              Promise.resolve(fetchPublicIp()).then(function (publicIp) {
+                resolve(classifyWebrtc(publicIp, candidates));
+              }).catch(reject);
             }
 
             try {
