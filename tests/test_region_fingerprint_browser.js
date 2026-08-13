@@ -11,6 +11,7 @@ const PAGE_URL = pathToFileURL(path.join(
   "assets",
   "claude-region-check.html",
 )).href;
+const BROWSER_EXIT_URL = "https://cloudflare.com/cdn-cgi/trace";
 const TARGETS = {
   chrome: { browserType: chromium, launch: { channel: "chrome" } },
   edge: { browserType: chromium, launch: { channel: "msedge" } },
@@ -115,8 +116,15 @@ for (const targetName of requestedTargets()) {
     });
     page.on("websocket", (socket) => websockets.push(socket.url()));
     await page.route("**/*", async (route) => {
-      if (route.request().url().startsWith("file:")) {
+      const requestUrl = route.request().url();
+      if (requestUrl.startsWith("file:")) {
         await route.continue();
+      } else if (requestUrl === BROWSER_EXIT_URL) {
+        await route.fulfill({
+          body: "ip=198.51.100.7\n",
+          contentType: "text/plain",
+          status: 200,
+        });
       } else {
         await route.abort();
       }
@@ -218,10 +226,13 @@ for (const targetName of requestedTargets()) {
       assert.equal(webrtc.contribution, "未知");
     } else {
       assert.equal(webrtc.coverage, "full");
-      assert.match(webrtc.value, /^(?:是|否)：/);
+      assert.match(
+        webrtc.value,
+        /^(?:未检测到 WebRTC 公网出口|WebRTC 与网页代理出口一致|WebRTC 出口与网页代理出口不一致|WebRTC 暴露本地网络地址)$/,
+      );
       assert.equal(
         webrtc.contribution,
-        webrtc.value.startsWith("是：") ? "+10" : "+0",
+        /不一致|本地网络地址/.test(webrtc.value) ? "+10" : "+0",
       );
     }
     assert.equal(result.rows.length, 10);
@@ -276,7 +287,11 @@ for (const targetName of requestedTargets()) {
     );
     assert.deepEqual(consoleProblems, []);
     assert.deepEqual(pageErrors, []);
-    assert.deepEqual(externalRequests, []);
+    assert.ok(
+      externalRequests.every((requestUrl) => requestUrl === BROWSER_EXIT_URL),
+      `unexpected external request: ${JSON.stringify(externalRequests)}`,
+    );
+    assert.doesNotMatch(await page.locator("body").innerText(), /198\.51\.100\.7/);
     assert.deepEqual(websockets, []);
   });
 

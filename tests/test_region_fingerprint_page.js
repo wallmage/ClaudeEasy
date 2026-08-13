@@ -155,7 +155,7 @@ function baseEnvironment(overrides = {}) {
   };
 }
 
-test("the detector is one self-contained HTML file with only disclosed STUN probes", () => {
+test("the detector is one self-contained HTML file with only disclosed network probes", () => {
   const source = pageSource();
   const executableSource = source.replace(/<!--[\s\S]*?-->/g, "");
 
@@ -165,7 +165,7 @@ test("the detector is one self-contained HTML file with only disclosed STUN prob
   const csp = source.match(
     /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*>/i,
   );
-  assert.ok(csp, "the offline page must enforce a Content Security Policy");
+  assert.ok(csp, "the local page must enforce a Content Security Policy");
   const cspEntries = csp[1].split(";").map((entry) => entry.trim()).filter(Boolean);
   const cspDirectives = Object.fromEntries(cspEntries.map((entry) => {
     const [name, ...values] = entry.split(/\s+/);
@@ -176,7 +176,7 @@ test("the detector is one self-contained HTML file with only disclosed STUN prob
     "default-src": "'none'",
     "script-src": "'unsafe-inline'",
     "style-src": "'unsafe-inline'",
-    "connect-src": "'none'",
+    "connect-src": "https://cloudflare.com",
     "img-src": "'none'",
     "font-src": "'none'",
     "object-src": "'none'",
@@ -192,9 +192,12 @@ test("the detector is one self-contained HTML file with only disclosed STUN prob
   assert.doesNotMatch(source, /\b(?:src|href)\s*=/i);
   assert.deepEqual(
     Array.from(executableSource.matchAll(/https?:\/\/[^'"\s<]+/g), (match) => match[0]),
-    [],
+    [
+      "https://cloudflare.com;",
+      "https://cloudflare.com/cdn-cgi/trace",
+    ],
   );
-  assert.doesNotMatch(source, /\bfetch\b/);
+  assert.match(source, /\bfetch\b/);
   assert.doesNotMatch(
     source,
     /\b(?:XMLHttpRequest|WebSocket|EventSource|sendBeacon|serviceWorker)\b/,
@@ -223,6 +226,8 @@ test("the detector is one self-contained HTML file with only disclosed STUN prob
   assert.match(source, /stun1\.l\.google\.com/);
   assert.match(source, /stun\.cloudflare\.com/);
   assert.match(source, /Google 和 Cloudflare.*看到.*公网 IP/);
+  assert.match(source, /网页.*出口.*Cloudflare/);
+  assert.match(source, /不会.*收到.*STUN.*候选/);
   assert.match(source, />开始检测并运行 WebRTC 测试</);
   assert.match(source, /低风险/);
   assert.match(source, /中等风险/);
@@ -306,11 +311,11 @@ test("the public contract exposes the upstream ten signals and weights", () => {
   assert.equal(api.riskBand(100), "high");
 });
 
-test("a detected WebRTC public IP leak contributes ten", async () => {
+test("a confirmed WebRTC exit mismatch contributes ten", async () => {
   const api = detectorApi();
   const candidate = await api.detect(baseEnvironment({
     detectWebrtcLeak: async () => ({
-      raw: "是：检测到 WebRTC 公网 IP 泄漏",
+      raw: "WebRTC 出口与网页代理出口不一致",
       score: 1,
     }),
   }));
@@ -319,40 +324,61 @@ test("a detected WebRTC public IP leak contributes ten", async () => {
   assert.equal(signal.score, 1);
   assert.equal(signal.contribution, 10);
   assert.equal(signal.match, "strong");
-  assert.equal(signal.raw, "是：检测到 WebRTC 公网 IP 泄漏");
+  assert.equal(signal.raw, "WebRTC 出口与网页代理出口不一致");
 });
 
-test("WebRTC classification reports a binary leak result without geolocation", () => {
+test("WebRTC classification compares candidates with the browser proxy exit", () => {
   const api = detectorApi();
   assert.deepEqual(
-    { ...api.classifyWebrtc([
+    { ...api.classifyWebrtc("198.51.100.7", [
       { ip: "203.0.113.9", type: "relay" },
-      { ip: "192.168.1.7", type: "host" },
     ]) },
-    { raw: "否：未检测到 WebRTC 公网 IP 泄漏", score: 0 },
+    { raw: "未检测到 WebRTC 公网出口", score: 0 },
   );
   assert.deepEqual(
-    { ...api.classifyWebrtc([]) },
-    { raw: "否：未检测到 WebRTC 公网 IP 泄漏", score: 0 },
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "198.51.100.7", type: "srflx" },
+      { ip: "198.51.100.7", type: "srflx" },
+    ]) },
+    { raw: "WebRTC 与网页代理出口一致", score: 0 },
   );
   assert.deepEqual(
-    { ...api.classifyWebrtc([
+    { ...api.classifyWebrtc("198.51.100.7", [
       { ip: "203.0.113.9", type: "srflx" },
     ]) },
-    { raw: "是：检测到 WebRTC 公网 IP 泄漏", score: 1 },
+    { raw: "WebRTC 出口与网页代理出口不一致", score: 1 },
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "192.168.1.7", type: "host" },
+    ]) },
+    { raw: "WebRTC 暴露本地网络地址", score: 1 },
+  );
+  assert.throws(
+    () => api.classifyWebrtc("2001:db8::7", [
+      { ip: "198.51.100.7", type: "srflx" },
+    ]),
+    /同协议族/,
+  );
+  assert.deepEqual(
+    { ...api.classifyWebrtc("198.51.100.7", [
+      { ip: "203.0.113.9", type: "srflx" },
+      { ip: "2001:db8::7", type: "srflx" },
+    ]) },
+    { raw: "WebRTC 出口与网页代理出口不一致", score: 1 },
   );
 });
 
-test("the WebRTC probe uses three disclosed STUN servers without sending candidates elsewhere", async () => {
+test("the WebRTC probe compares against an egress lookup without sending candidates", async () => {
   let configuration;
-  let fetchCalls = 0;
+  const fetchCalls = [];
   const api = detectorApi({
     window: {
-      fetch: async () => {
-        fetchCalls += 1;
+      fetch: async (...args) => {
+        fetchCalls.push(args);
         return {
           ok: true,
-          json: async () => ({ success: true, country_code: "JP" }),
+          text: async () => "ip=198.51.100.7\n",
         };
       },
     },
@@ -391,10 +417,14 @@ test("the WebRTC probe uses three disclosed STUN servers without sending candida
       ],
     }),
   );
-  assert.equal(fetchCalls, 0);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0][0], "https://cloudflare.com/cdn-cgi/trace");
+  assert.equal(fetchCalls[0][1].cache, "no-store");
+  assert.equal(Object.hasOwn(fetchCalls[0][1], "body"), false);
+  assert.doesNotMatch(JSON.stringify(fetchCalls), /198\.51\.100\.7/);
   assert.deepEqual(
     { ...result },
-    { raw: "是：检测到 WebRTC 公网 IP 泄漏", score: 1 },
+    { raw: "WebRTC 与网页代理出口一致", score: 0 },
   );
 });
 

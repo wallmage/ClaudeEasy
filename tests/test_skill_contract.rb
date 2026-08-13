@@ -541,7 +541,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "stun.l.google.com"
       assert_includes document, "stun1.l.google.com"
       assert_includes document, "stun.cloudflare.com"
-      assert_includes document, "不会把检测到的公网 IP 发送给其他服务"
+      assert_includes document, "不会把 WebRTC 候选地址发送给其他服务"
+      assert_includes document, "正常网页出口"
+      assert_includes document, "Cloudflare"
       assert_includes document, "开始检测并运行 WebRTC 测试"
       assert_includes document, "Safari"
       assert_includes document, "Chrome"
@@ -646,8 +648,10 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "新加坡中文"
       assert_includes document, "`zh-Hans`"
       assert_includes document, "不做外部国家代码查询"
-      assert_includes document, "发现公网 IP 时明确写成“是”"
-      assert_includes document, "没有发现公网 IP 时明确写成“否”"
+      assert_includes document, "与正常网页出口一致"
+      assert_includes document, "与正常网页出口不一致"
+      assert_includes document, "同协议族"
+      assert_includes document, "没有发现公网候选地址"
     end
   end
 

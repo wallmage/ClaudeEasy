@@ -98,4 +98,4 @@ AI 分组当前选择必须是代理节点，不能是 `DIRECT`。节点不支�
 
 AI 网页流量、AI 域名 DNS 和所有 UDP 使用同一 AI 分组。多个结果如果全是代理出口，不属于真实 IP 泄漏；单一结果更容易确认。
 
-本地区域指纹页不得把 WebRTC 发现的公网 IP 发送给归属地查询或其他第三方服务。页面必须在创建 `RTCPeerConnection` 前明确列出 `stun.l.google.com`、`stun1.l.google.com` 和 `stun.cloudflare.com`，说明 Google 和 Cloudflare 会看到连接源公网 IP，并只在用户点击“开始检测并运行 WebRTC 测试”或同等明确的重新扫描按钮后连接这些 STUN 服务。CSP 必须禁止其他网络请求。探测成功时只做泄漏二元判断：发现公网 IP 时明确写成“是”并计 `+10`，没有发现公网 IP 时明确写成“否”并计 `+0`；浏览器没有 WebRTC API 或探测失败时才写成“无法读取”，不能把失败当成“否”。
+本地区域指纹页不得把 WebRTC 候选地址发送给归属地查询或其他第三方服务。页面必须在创建 `RTCPeerConnection` 前明确列出 `stun.l.google.com`、`stun1.l.google.com` 和 `stun.cloudflare.com`，并披露会向 `https://cloudflare.com/cdn-cgi/trace` 请求一次正常网页出口作为本地对照；Google 和 Cloudflare 会看到各自连接的源公网 IP，但 Cloudflare 不会收到 WebRTC 候选地址。只有用户点击“开始检测并运行 WebRTC 测试”或同等明确的重新扫描按钮后才能连接这些服务，CSP 只允许这个固定 HTTPS 对照端点。页面不做外部国家代码查询，只在本地比较同协议族地址：WebRTC 候选与正常网页出口一致或没有发现公网候选地址时计 `+0`，与正常网页出口不一致或发现本地网络地址时计 `+10`；取不到同协议族的正常网页出口、浏览器没有 WebRTC API 或探测失败时写成“无法读取”，不能把未知当成安全。

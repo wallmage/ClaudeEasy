@@ -78,7 +78,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 
 档位 3 在修改前后用实际打开 Claude 的浏览器运行本地页面 `claude-easy/assets/claude-region-check.html`。页面会在检测按钮前列明 Google、Cloudflare 的三个 STUN 端点及公网 IP 披露，点击后才运行 WebRTC 测试；不会把检测到的 IP 发送给归属地查询或其他服务，CSP 也禁止其他网络请求。支持 macOS 的 Safari、Chrome 和 Windows 的 Edge、Chrome。
 
-页面显示十项参考信号、已知项合计和未知权重。WebRTC 项只回答是否发现公网 IP 泄漏：发现为“是”，未发现为“否”，不查询国家。它不是 Claude 官方判定，不能作为 Claude 是否可用的通过条件，也不替代 DNS、WebRTC 和实时分流验证。不会为了降分删除字体、伪装设备、修改 User-Agent 或擅自更改系统默认浏览器。任何可选设置都会先展示影响并单独取得授权。
+页面显示十项参考信号、已知项合计和未知权重。WebRTC 项会在用户点击后，把 STUN 候选出口与正常网页出口留在本地比较；出口一致或没有公网候选为 `0` 分，出口不一致或暴露本地网络地址才计 `10` 分，无法取得同协议族对照则保持未知。它不查询国家，也不会把候选地址发给对照服务。它不是 Claude 官方判定，不能作为 Claude 是否可用的通过条件，也不替代 DNS、WebRTC 和实时分流验证。不会为了降分删除字体、伪装设备、修改 User-Agent 或擅自更改系统默认浏览器。任何可选设置都会先展示影响并单独取得授权。
 
 ## AdGuard for Mac
 

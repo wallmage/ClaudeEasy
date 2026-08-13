@@ -53,7 +53,7 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 
 ### 区域指纹组件
 
-档位 3 使用本地 `assets/claude-region-check.html`，在实际打开 Claude 的同一浏览器中比较修改前后区域信号。页面先披露固定 STUN 服务及其可见的公网 IP，再由明确按钮触发 WebRTC；检测到的 IP 不发送给其他服务，CSP 禁止其他网络请求。WebRTC 只做泄漏二元判断，不做国家归属查询。正式支持 macOS Safari/Chrome 和 Windows Edge/Chrome。它提供十项参考信号、风险分档和未知权重，不是 Claude 官方判断，也不能作为 DNS、WebRTC、实时分流或 Claude 联网的通过条件。具体信号、权重、授权和恢复规则只在 `profiles-and-patch.md` 定义。
+档位 3 使用本地 `assets/claude-region-check.html`，在实际打开 Claude 的同一浏览器中比较修改前后区域信号。页面先披露固定 STUN 服务、正常网页出口对照及其可见的公网 IP，再由明确按钮触发；WebRTC 候选只留在本地，与同协议族的正常网页出口比较，CSP 只允许固定对照端点。出口一致或没有公网候选不计分，出口不一致或暴露本地网络地址才计分，无法比较时保持未知；不做国家归属查询。正式支持 macOS Safari/Chrome 和 Windows Edge/Chrome。它提供十项参考信号、风险分档和未知权重，不是 Claude 官方判断，也不能作为 DNS、WebRTC、实时分流或 Claude 联网的通过条件。具体信号、权重、授权和恢复规则只在 `profiles-and-patch.md` 定义。
 
 ## Diagnostics 架构
 
