@@ -790,7 +790,6 @@ module ClaudeEasy
       owned_udp_indexes << index + 1
     end
 
-    user_overrides = []
     remaining = []
     original_rules.each_with_index do |rule, index|
       next if owned_udp_indexes.include?(index)
@@ -806,14 +805,12 @@ module ClaudeEasy
       main_group_ai = managed_keys.include?(key) && info[:target] == route_group
       next if patch_owned_ai || exact_current_ai || legacy_owned_ai || forbidden_ai || main_group_ai
 
-      if managed_keys.include?(key)
-        user_overrides << rule
-      else
-        remaining << rule
-      end
+      next if managed_keys.include?(key)
+
+      remaining << rule
     end
 
-    config["rules"] = ["NETWORK,UDP,#{ai_group}", "NETWORK,UDP,REJECT"] + user_overrides + managed + remaining
+    config["rules"] = ["NETWORK,UDP,#{ai_group}", "NETWORK,UDP,REJECT"] + managed + remaining
   end
 
   def normalize_reality_short_ids(value)

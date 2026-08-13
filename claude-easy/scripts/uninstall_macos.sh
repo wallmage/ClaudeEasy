@@ -23,6 +23,10 @@ UNINSTALL_READY=0
 UNINSTALL_COMMITTED=0
 RESTORE_FAILURE_CODE=""
 RESTORE_FAILURE_SUMMARY=""
+INTERNAL_UNINSTALL_EXIT_RECEIPT=""
+if [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" = "1" ]; then
+  INTERNAL_UNINSTALL_EXIT_RECEIPT="${CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT:-}"
+fi
 
 unexpected_uninstall_exit() {
   unexpected_status=$1
@@ -85,6 +89,8 @@ unexpected_uninstall_exit() {
   fi
   exit "$public_exit"
 }
+
+unset CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT
 
 trap 'unexpected_uninstall_exit $?' EXIT
 trap 'exit 129' HUP
@@ -236,6 +242,7 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
         --verify-held-lock "$OPERATION_LOCK_PATH"; then
       finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。"
     fi
+    CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT=$INTERNAL_UNINSTALL_EXIT_RECEIPT
   else
     operation_result_receipt=$(/usr/bin/mktemp -t claude-easy-uninstall-result) ||
       finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。"

@@ -847,7 +847,6 @@ function claudeEasyRules(config, aiGroup, routeGroup, ownedAiNames, ownedSafeNam
     ownedUdpIndexes.push(1);
   });
 
-  const userOverrides = [];
   const remaining = [];
   original.forEach(function (rule, index) {
     if (ownedUdpIndexes.indexOf(index) !== -1) return;
@@ -861,11 +860,11 @@ function claudeEasyRules(config, aiGroup, routeGroup, ownedAiNames, ownedSafeNam
       ownedAiNames.indexOf(info.target) !== -1;
     const mainGroupAi = managedKeys.indexOf(key) !== -1 && info.target === routeGroup;
     if (patchOwnedAi || exactCurrentAi || legacyOwnedAi || forbiddenAi || mainGroupAi) return;
-    if (managedKeys.indexOf(key) !== -1) userOverrides.push(rule);
-    else remaining.push(rule);
+    if (managedKeys.indexOf(key) !== -1) return;
+    remaining.push(rule);
   });
 
-  config.rules = ["NETWORK,UDP," + aiGroup, "NETWORK,UDP,REJECT"].concat(userOverrides, managed, remaining);
+  config.rules = ["NETWORK,UDP," + aiGroup, "NETWORK,UDP,REJECT"].concat(managed, remaining);
 }
 
 function claudeEasyApply(config, profileName, usageProfile) {
@@ -884,9 +883,7 @@ function claudeEasyApply(config, profileName, usageProfile) {
   const existingAi = claudeEasyExistingAiGroup(patched);
   let aiGroup;
   if (existingAi) {
-    if (ownedNames.ai.indexOf(existingAi.name) !== -1) {
-      if (!claudeEasyConfigureManagedAiGroup(existingAi, patched)) return config;
-    }
+    if (!claudeEasyConfigureManagedAiGroup(existingAi, patched)) return config;
     aiGroup = existingAi.name;
   } else {
     aiGroup = claudeEasyEnsureAiGroup(patched);

@@ -1142,7 +1142,7 @@ class MacosPatcherTest < Minitest::Test
       File.write(target, original)
       aliases = %w[a-alias.yaml z-active.yaml].map do |name|
         path = File.join(profiles, name)
-        File.symlink(target, path)
+        File.link(target, path)
         path
       end
       activations = []
@@ -1169,7 +1169,7 @@ class MacosPatcherTest < Minitest::Test
       violations << "changed the shared target" unless File.binread(target) == original.b
       violations << "activated a duplicate target" unless activations.empty?
       assert_empty violations, violations.join("; ")
-      aliases.each { |path| assert File.symlink?(path), path }
+      aliases.each { |path| assert_equal original.b, File.binread(path), path }
     end
   end
 
@@ -2635,18 +2635,24 @@ class MacosPatcherTest < Minitest::Test
     assert_operator udp_index, :<, rules.index("RULE-SET,private-special,DIRECT")
   end
 
-  def test_preserves_user_ai_target_ahead_of_managed_rule
+  def test_strips_foreign_target_rules_that_collide_with_managed_ai_keys
     config = base_config
     config["proxy-groups"] << { "name" => "MyGroup", "type" => "select", "proxies" => ["台湾家宽 01"] }
-    user_rule = "DOMAIN-SUFFIX,openai.com,MyGroup"
-    config["rules"].insert(0, user_rule)
+    conflicts = [
+      "DOMAIN-SUFFIX,openai.com,MyGroup",
+      "DOMAIN-SUFFIX,claude.ai,DIRECT",
+      "DOMAIN-SUFFIX,anthropic.com,REJECT"
+    ]
+    config["rules"] = conflicts + config.fetch("rules")
 
     result = ClaudeEasy.patch(config, @policy)
     rules = result.fetch(:config).fetch("rules")
-    managed_rule = "DOMAIN-SUFFIX,openai.com,#{result.fetch(:ai_group)}"
 
-    assert_equal 1, rules.count(user_rule)
-    assert_operator rules.index(user_rule), :<, rules.index(managed_rule)
+    conflicts.each { |conflict| refute_includes rules, conflict }
+    assert_includes rules, "DOMAIN-SUFFIX,openai.com,#{result.fetch(:ai_group)}"
+    assert_includes rules, "DOMAIN-SUFFIX,claude.ai,#{result.fetch(:ai_group)}"
+    assert_includes rules, "DOMAIN-SUFFIX,anthropic.com,#{result.fetch(:ai_group)}"
+    refute ClaudeEasy.patch(result.fetch(:config), @policy).fetch(:changed)
   end
 
   def test_main_group_ai_rules_do_not_bypass_the_ai_selector
@@ -3755,7 +3761,7 @@ class MacosPatcherTest < Minitest::Test
         }
       )
 
-      assert_equal :restore_conflict, result.fetch(:status)
+      assert_equal :invalid_backup, result.fetch(:status)
       assert_equal changed.b, File.binread(first)
       assert_equal changed.b, File.binread(second)
     end
@@ -4779,6 +4785,23 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_profile_enumeration_and_remote_mapping_reject_symlink_entries
+    Dir.mktmpdir do |directory|
+      target = File.join(directory, "actual.yaml")
+      link = File.join(directory, "friend.yaml")
+      File.binwrite(target, YAML.dump(base_config))
+      File.symlink("actual.yaml", link)
+
+      refute_includes ClaudeEasy.profile_paths(directory), link
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.remote_subscription_targets(
+          [directory], [{ name: "friend", url: "https://subscriptions.invalid/friend" }]
+        )
+      end
+      assert_equal YAML.dump(base_config).b, File.binread(target)
+    end
+  end
+
   def test_remote_subscription_manifest_rejects_unsafe_and_ambiguous_records
     encode = ->(records) { Base64.strict_encode64(JSON.generate(records)) }
     invalid_records = [
@@ -5357,19 +5380,20 @@ class MacosPatcherTest < Minitest::Test
 
   def test_safe_update_binds_each_commit_to_the_transaction_realpath
     Dir.mktmpdir do |directory|
-      first = File.join(directory, "first.yaml")
-      second = File.join(directory, "second.yaml")
-      path = File.join(directory, "friend.yaml")
+      profile_root = File.join(directory, "profiles")
+      first_root = File.join(directory, "first-profiles")
+      second_root = File.join(directory, "second-profiles")
+      FileUtils.mkdir_p([profile_root, second_root])
+      path = File.join(profile_root, "friend.yaml")
       backup_root = File.join(directory, "backups")
       original = YAML.dump(base_config.merge("subscription-marker" => "old"))
-      File.binwrite(first, original)
-      File.symlink(first, path)
+      File.binwrite(path, original)
+      File.binwrite(File.join(second_root, "friend.yaml"), original)
       real_prepare = ClaudeEasy.method(:prepare_profile_transaction)
       prepare_then_repoint = lambda do |items, root, **options|
         transaction = real_prepare.call(items, root, **options)
-        File.link(first, second)
-        File.unlink(path)
-        File.symlink(second, path)
+        File.rename(profile_root, first_root)
+        File.symlink(second_root, profile_root)
         transaction
       end
       activated = false
@@ -5389,12 +5413,12 @@ class MacosPatcherTest < Minitest::Test
       end
 
       refute activated, "a repointed transaction path must not activate"
-      assert_equal :aborted, result.fetch(:status)
+      assert_equal :rollback_failed, result.fetch(:status)
       assert_equal :concurrent_change, result.fetch(:reason)
-      assert_equal File.realpath(second), File.realpath(path)
-      assert_equal original.b, File.binread(first)
-      assert_equal original.b, File.binread(second)
-      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+      assert_equal File.realpath(File.join(second_root, "friend.yaml")), File.realpath(path)
+      assert_equal original.b, File.binread(File.join(first_root, "friend.yaml"))
+      assert_equal original.b, File.binread(File.join(second_root, "friend.yaml"))
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -6646,8 +6670,13 @@ class MacosPatcherTest < Minitest::Test
 
     fixtures.each_with_index do |fixture, index|
       ruby = ClaudeEasy.patch(fixture.fetch("input"), @policy).fetch(:config)
-      assert_equal ruby, windows.fetch(index), fixture.fetch("name")
-      assert_equal fixture.fetch("expected_config_sha256"), Digest::SHA256.hexdigest(JSON.generate(windows.fetch(index))), "#{fixture.fetch('name')}: Windows output drift"
+      if fixture.key?("expected_windows_config_sha256")
+        refute_equal ruby, windows.fetch(index), "#{fixture.fetch('name')}: platform-specific security policy"
+      else
+        assert_equal ruby, windows.fetch(index), fixture.fetch("name")
+      end
+      expected_digest = fixture.fetch("expected_windows_config_sha256", fixture.fetch("expected_config_sha256"))
+      assert_equal expected_digest, Digest::SHA256.hexdigest(JSON.generate(windows.fetch(index))), "#{fixture.fetch('name')}: Windows output drift"
     end
   end
 
@@ -9765,9 +9794,32 @@ class MacosPatcherTest < Minitest::Test
       backup_root = File.join(directory, "backups")
       FileUtils.mkdir_p([profile_root, outside_root])
       target = File.join(outside_root, "actual.yaml")
+      linked_directory = File.join(profile_root, "linked")
+      profile = File.join(linked_directory, "actual.yaml")
+      File.binwrite(target, "original")
+      File.symlink(outside_root, linked_directory)
+
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.prepare_profile_transaction(
+          [{ path: profile, original: "original", candidate: "candidate" }],
+          backup_root, roots: [profile_root]
+        )
+      end
+
+      assert_equal "original", File.binread(target)
+      refute ClaudeEasy.profile_transaction_pending?(backup_root)
+    end
+  end
+
+  def test_profile_transaction_rejects_a_symlink_target_inside_the_profile_root_before_publication
+    Dir.mktmpdir do |directory|
+      profile_root = File.join(directory, "profiles")
+      backup_root = File.join(directory, "backups")
+      FileUtils.mkdir_p(profile_root)
+      target = File.join(profile_root, "actual.yaml")
       profile = File.join(profile_root, "friend.yaml")
       File.binwrite(target, "original")
-      File.symlink(target, profile)
+      File.symlink("actual.yaml", profile)
 
       assert_raises(ClaudeEasy::InvalidConfigError) do
         ClaudeEasy.prepare_profile_transaction(

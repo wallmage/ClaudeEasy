@@ -1530,8 +1530,9 @@ class SkillContractTest < Minitest::Test
     ruby_patcher = mac_patcher_source
     windows_patcher = File.read(File.join(SKILL, "scripts/windows/clash_verge_global.js"))
 
-    assert_includes policy, "已有时直接复用"
-    assert_includes policy, "当前选择全部保持原样"
+    assert_includes policy, "macOS 直接复用已有分组"
+    assert_includes policy, "Windows 保留已有分组名称"
+    assert_includes policy, "不能信任订阅声明的原成员"
     assert_includes policy, "全部可用节点和代理提供者"
     assert_includes policy, "普通流量与 AI 流量选择不同节点"
     assert_includes policy, "不创建安全代理分组"
@@ -1742,6 +1743,18 @@ class SkillContractTest < Minitest::Test
     assert_includes uninstaller, "uninstall_committed_interrupted"
     assert_includes uninstaller, "uninstall_recovery_failed"
     assert_includes uninstaller, "CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT"
+    sanitize_receipt = uninstaller.index("unset CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT")
+    install_traps = uninstaller.index("trap 'unexpected_uninstall_exit $?'")
+    verify_lock = uninstaller.index('--verify-held-lock "$OPERATION_LOCK_PATH"')
+    trust_receipt = uninstaller.index(
+      "CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT=$INTERNAL_UNINSTALL_EXIT_RECEIPT"
+    )
+    refute_nil sanitize_receipt
+    refute_nil install_traps
+    refute_nil verify_lock
+    refute_nil trust_receipt
+    assert_operator sanitize_receipt, :<, install_traps
+    assert_operator verify_lock, :<, trust_receipt
   end
 
   def test_macos_profile_operation_signal_handoff_preserves_committed_state

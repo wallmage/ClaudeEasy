@@ -145,7 +145,7 @@ test('global transform applies common policy', { skip: !available }, () => {
   assert.equal(patched.dns['direct-nameserver-follow-policy'], false);
   assert.deepEqual(patched.dns['nameserver-policy']['geosite:cn'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith(`#${ai.name}`)));
-  assert.deepEqual(ai.proxies, ['Main']);
+  assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
   const udpIndex = patched.rules.indexOf(`NETWORK,UDP,${ai.name}`);
   assert.ok(udpIndex >= 0);
   assert.equal(patched.rules[udpIndex + 1], 'NETWORK,UDP,REJECT');
@@ -278,13 +278,17 @@ for (const distinctPath of [
   });
 }
 
-test('reuses the existing AI group without creating visible groups', { skip: !available }, () => {
+test('rebuilds an existing AI group before using it for managed policy', { skip: !available }, () => {
   const config = baseConfig();
-  const originalAi = structuredClone(config['proxy-groups'].find((group) => group.name === 'AI'));
 
   const patched = engine.claudeEasyTransform(config, 'fixture');
+  const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
 
-  assert.deepEqual(patched['proxy-groups'].find((group) => group.name === 'AI'), originalAi);
+  assert.deepEqual(ai, {
+    name: 'AI',
+    type: 'select',
+    proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
+  });
   assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
@@ -292,6 +296,26 @@ test('reuses the existing AI group without creating visible groups', { skip: !av
   assert.ok(patched.dns.nameserver.every((value) => value.endsWith('#Main')));
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#AI')));
 });
+
+for (const [name, declaredMembership] of [
+  ['AI', ['DIRECT']],
+  ['OpenAI', ['美国家宽 01']],
+  ['AI Tools', ['REJECT']]
+]) {
+  test(`rebuilds untrusted AI group membership: ${name}`, { skip: !available }, () => {
+    const config = baseConfig();
+    config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
+    config['proxy-groups'].push({ name, type: 'select', proxies: declaredMembership });
+
+    const patched = engine.main(config, 'subscription');
+    const ai = patched['proxy-groups'].find((group) => group.name === name);
+
+    assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
+    assert.equal(patched.rules[0], `NETWORK,UDP,${name}`);
+    assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${name}`));
+    assert.deepEqual(engine.main(structuredClone(patched), 'subscription'), patched);
+  });
+}
 
 test('creates an AI group with all inline nodes when the subscription has none', { skip: !available }, () => {
   const config = baseConfig();
@@ -552,7 +576,8 @@ test('does not select Japan home broadband automatically', { skip: !available },
   config['proxy-groups'][0].proxies = config['proxy-groups'][0].proxies.filter((name) => !name.includes('台湾'));
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
-  assert.deepEqual(ai.proxies, ['Main']);
+  assert.deepEqual(ai.proxies, ['日本家宽 01', '美国家宽 01']);
+  assert.equal(Object.hasOwn(ai, 'now'), false);
 });
 
 test('puts the UDP guard ahead of a narrow rule set', { skip: !available }, () => {
@@ -566,15 +591,23 @@ test('puts the UDP guard ahead of a narrow rule set', { skip: !available }, () =
   assert.ok(udpIndex < rules.indexOf('RULE-SET,private-special,DIRECT'));
 });
 
-test('preserves a user AI target ahead of the managed rule', { skip: !available }, () => {
+test('strips foreign-target rules that collide with managed AI keys', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'].push({ name: 'MyGroup', type: 'select', proxies: ['台湾家宽 01'] });
-  const userRule = 'DOMAIN-SUFFIX,openai.com,MyGroup';
-  config.rules.unshift(userRule);
-  const patched = engine.claudeEasyTransform(config, 'fixture');
-  const managed = 'DOMAIN-SUFFIX,openai.com,AI';
-  assert.equal(patched.rules.filter((rule) => rule === userRule).length, 1);
-  assert.ok(patched.rules.indexOf(userRule) < patched.rules.indexOf(managed));
+  const conflicts = [
+    'DOMAIN-SUFFIX,openai.com,MyGroup',
+    'DOMAIN-SUFFIX,claude.ai,DIRECT',
+    'DOMAIN-SUFFIX,anthropic.com,REJECT'
+  ];
+  config.rules = conflicts.concat(config.rules);
+
+  const patched = engine.main(config, 'subscription');
+
+  for (const conflict of conflicts) assert.equal(patched.rules.includes(conflict), false, conflict);
+  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
+  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,claude.ai,AI'));
+  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,anthropic.com,AI'));
+  assert.deepEqual(engine.main(structuredClone(patched), 'subscription'), patched);
 });
 
 test('main-group AI rules do not bypass the independent AI selector', { skip: !available }, () => {
@@ -771,7 +804,8 @@ test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAv
     assert.equal(aiGroup, fixture.expected_ai_group, fixture.name);
     assert.deepEqual(input, snapshot, `${fixture.name}: input mutated`);
     const serialized = JSON.stringify(patched);
-    assert.equal(crypto.createHash('sha256').update(serialized).digest('hex'), fixture.expected_config_sha256, `${fixture.name}: output drift`);
+    const expectedDigest = fixture.expected_windows_config_sha256 || fixture.expected_config_sha256;
+    assert.equal(crypto.createHash('sha256').update(serialized).digest('hex'), expectedDigest, `${fixture.name}: output drift`);
     for (const value of fixture.expected_absent_strings || []) {
       assert.equal(serialized.includes(value), false, `${fixture.name}: retained ${value}`);
     }
@@ -1130,7 +1164,9 @@ test('direct and rematch home names are not selected automatically', { skip: !av
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   const mainGroup = patched['proxy-groups'].find((group) => group.name === 'Main');
-  assert.deepEqual(ai.proxies, ['Main']);
+  assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
+  assert.equal(ai.proxies.includes('台湾家宽 DIRECT'), false);
+  assert.equal(ai.proxies.includes('台湾家宽 REMATCH'), false);
   assert.ok(mainGroup.proxies.includes('台湾家宽 DIRECT'));
   assert.ok(mainGroup.proxies.includes('台湾家宽 REMATCH'));
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy/.test(group.name)), false);
@@ -1156,7 +1192,7 @@ test('owned AI group is independent and collision safe', { skip: !available }, (
   assert.deepEqual(managed.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
 });
 
-test('user-owned branded select group is preserved', { skip: !available }, () => {
+test('user-owned branded select group is rebuilt before carrying managed policy', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const userGroup = {
@@ -1168,13 +1204,17 @@ test('user-owned branded select group is preserved', { skip: !available }, () =>
   config['proxy-groups'].push(userGroup);
   const first = engine.claudeEasyTransform(config, 'fixture');
   const second = engine.claudeEasyTransform(first, 'fixture');
-  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
+  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), {
+    name: userGroup.name,
+    type: 'select',
+    proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
+  });
   assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'), false);
   assert.ok(first.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
   assert.deepEqual(second, first);
 });
 
-test('branded user group with AI rules is not mistaken for patch ownership', { skip: !available }, () => {
+test('branded user group with AI rules is rebuilt regardless of claimed ownership', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const userGroup = {
@@ -1190,8 +1230,13 @@ test('branded user group with AI rules is not mistaken for patch ownership', { s
   );
   const first = engine.claudeEasyTransform(config, 'fixture');
   const second = engine.claudeEasyTransform(first, 'fixture');
-  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
-  assert.deepEqual(second['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
+  const expectedGroup = {
+    name: userGroup.name,
+    type: 'select',
+    proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
+  };
+  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), expectedGroup);
+  assert.deepEqual(second['proxy-groups'].find((group) => group.name === userGroup.name), expectedGroup);
   assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'), false);
   assert.deepEqual(second, first);
 });

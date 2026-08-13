@@ -278,6 +278,41 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_uninstaller_ignores_an_inherited_exit_receipt_in_the_outer_process
+    with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
+      Dir.mktmpdir do |home|
+        FileUtils.mkdir_p(File.join(home, "tmp"))
+        victim = File.join(home, "victim.txt")
+        sentinel = "sentinel-must-survive\n"
+        handler_ran = false
+
+        [0.03, 0.05, 0.10, 0.15].each do |delay|
+          File.binwrite(victim, sentinel)
+          env = {
+            "HOME" => home,
+            "TMPDIR" => File.join(home, "tmp"),
+            "CLAUDE_EASY_UNINSTALL_EXIT_RECEIPT" => victim
+          }
+          Open3.popen3(env, "/bin/sh", uninstaller, pgroup: true) do |stdin, stdout, stderr, thread|
+            stdin.close
+            readers = [Thread.new { stdout.read }, Thread.new { stderr.read }]
+            sleep(delay)
+            Process.kill("TERM", -thread.pid) rescue nil
+            thread.join(10) || flunk("uninstaller did not exit after TERM")
+            output = readers.map(&:value).join
+            handler_ran = output.include?("卸载流程意外中止")
+          ensure
+            Process.kill("KILL", -thread.pid) rescue nil
+          end
+          break if handler_ran
+        end
+
+        assert handler_ran, "TERM never reached the trap-armed outer-process window"
+        assert_equal sentinel, File.binread(victim)
+      end
+    end
+  end
+
   def test_installer_restores_the_previous_profile_when_profile_publication_cannot_sync
     with_supported_mihomo_installer do |installer|
       Dir.mktmpdir do |home|

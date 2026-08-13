@@ -15,6 +15,7 @@ module ClaudeEasy
     Dir.children(directory).sort.map do |basename|
       path = File.join(directory, basename)
       next if excluded_path?(path)
+      next if File.symlink?(path)
       next unless basename.match?(/\.ya?ml\z/i) && File.file?(path)
 
       path

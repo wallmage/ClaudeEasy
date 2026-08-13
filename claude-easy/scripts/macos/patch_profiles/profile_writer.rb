@@ -300,6 +300,8 @@ module ClaudeEasy
 
     records = items.map do |item|
       logical_path = File.expand_path(item.fetch(:path))
+      raise InvalidConfigError, "配置事务目标不能是符号链接" if File.symlink?(logical_path)
+
       write_path = File.realpath(logical_path)
       raise InvalidConfigError, "配置事务目标路径无效" unless
         profile_path_allowed?(logical_path, roots) &&
