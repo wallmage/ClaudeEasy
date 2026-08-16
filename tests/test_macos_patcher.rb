@@ -1419,13 +1419,10 @@ class MacosPatcherTest < Minitest::Test
           })]
         when ["GET", "/configs"]
           [200, JSON.generate("tun" => { "enable" => true })]
-        when ["PUT", "/configs?force=true"],
-             ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+        when ["PUT", "/configs?force=true"], ["POST", "/cache/dns/flush"]
           [204, ""]
         else
           if method == "GET" && endpoint.include?("www.baidu.com")
-            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
-          elsif method == "GET" && endpoint.include?("www.google.com")
             [500, JSON.generate("message" => "dns resolve failed")]
           else
             raise "unexpected controller request: #{method} #{endpoint}"
@@ -7289,8 +7286,9 @@ class MacosPatcherTest < Minitest::Test
       assert_includes ClaudeEasy.chinese_status(active), "已更新并自动生效"
       assert_includes ClaudeEasy.chinese_status(inactive), "已更新，选择该订阅时生效"
       assert requests.any? { |method, endpoint, _body| method == "PUT" && endpoint == "/configs?force=true" }
-      assert requests.any? { |method, endpoint, _body| method == "POST" && endpoint == "/cache/fakeip/flush" }
+      refute requests.any? { |method, endpoint, _body| method == "POST" && endpoint == "/cache/fakeip/flush" }
       assert requests.any? { |method, endpoint, _body| method == "POST" && endpoint == "/cache/dns/flush" }
+      refute requests.any? { |_method, endpoint, _body| endpoint.include?("www.google.com") }
     end
   end
 
@@ -10072,7 +10070,7 @@ class MacosPatcherTest < Minitest::Test
       lambda do |method, endpoint, _body|
         case [method, endpoint]
         when ["POST", "/cache/fakeip/flush"]
-          [failure == :fakeip_flush ? 503 : 204, ""]
+          flunk "runtime health must preserve Fake-IP mappings"
         when ["POST", "/cache/dns/flush"]
           [failure == :dns_flush ? 503 : 204, ""]
         when ["GET", "/configs"]
@@ -10088,8 +10086,7 @@ class MacosPatcherTest < Minitest::Test
           [200, JSON.generate("proxies" => proxies)]
         else
           if method == "GET" && endpoint.start_with?("/dns/query?")
-            failed_dns = (failure == :baidu_dns && endpoint.include?("www.baidu.com")) ||
-                         (failure == :google_dns && endpoint.include?("www.google.com"))
+            failed_dns = failure == :baidu_dns && endpoint.include?("www.baidu.com")
             [failed_dns ? 503 : 200, JSON.generate("Status" => 0, "Answer" => ["203.0.113.1"])]
           else
             [404, ""]
@@ -10104,7 +10101,7 @@ class MacosPatcherTest < Minitest::Test
       requester_for.call(nil), selections: selections, expected_tun: :enabled,
       connectivity_checker: checker
     )
-    %i[fakeip_flush dns_flush tun proxy_shape selection baidu_dns google_dns].each do |failure|
+    %i[dns_flush tun proxy_shape selection baidu_dns].each do |failure|
       refute ClaudeEasy.runtime_health_healthy?(
         requester_for.call(failure), selections: selections, expected_tun: :enabled,
         connectivity_checker: checker
@@ -11201,13 +11198,10 @@ class MacosPatcherTest < Minitest::Test
           })]
         when ["GET", "/configs"]
           [200, JSON.generate("tun" => { "enable" => true })]
-        when ["PUT", "/configs?force=true"],
-             ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+        when ["PUT", "/configs?force=true"], ["POST", "/cache/dns/flush"]
           [204, ""]
         else
           if method == "GET" && endpoint.include?("www.baidu.com")
-            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
-          elsif method == "GET" && endpoint.include?("www.google.com")
             [500, JSON.generate("message" => "dns resolve failed")]
           else
             raise "unexpected controller request: #{method} #{endpoint}"

@@ -2569,19 +2569,42 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_runtime_google_dns_health_mutation_is_killed
+  def test_runtime_fakeip_flush_reintroduction_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        '      return false unless dns_runtime_healthy?(requester, "www.google.com")',
-        '      true'
+        "      code, _body = requester.call(\"POST\", \"/cache/dns/flush\", nil)\n" \
+          "      return false unless [200, 204].include?(code)\n",
+        "      caches_flushed = [\"/cache/fakeip/flush\", \"/cache/dns/flush\"].all? do |endpoint|\n" \
+          "        code, _body = requester.call(\"POST\", endpoint, nil)\n" \
+          "        [200, 204].include?(code)\n" \
+          "      end\n" \
+          "      return false unless caches_flushed\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_runtime_health_rejects_every_partial_health_failure"
+        "--name", "test_run_automatically_reloads_and_checks_the_active_profile"
+      )
+    end
+  end
+
+  def test_runtime_fixed_foreign_dns_query_reintroduction_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        '      return false unless dns_runtime_healthy?(requester, "www.baidu.com")',
+        "      return false unless dns_runtime_healthy?(requester, \"www.baidu.com\")\n" \
+          "      return false unless dns_runtime_healthy?(requester, \"www.google.com\")"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_run_automatically_reloads_and_checks_the_active_profile"
       )
     end
   end

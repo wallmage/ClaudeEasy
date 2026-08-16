@@ -206,7 +206,7 @@ Mihomo 使用 Fake-IP 时，再从 AdGuard 日志读取故障连接的应用、�
 
 这是 macOS 上 Clash TUN 与 AdGuard for Mac 共存的产品规则，同时用于 Patch 和 Diagnostics。[AdGuard 官方兼容说明](https://adguard.com/kb/adguard-for-mac/solving-problems/big-sur-issues/)也把从 `Network Extension` 改为 `Automatic Proxy` 作为与部分 VPN 或透明代理冲突时的处理方式。该规则只适用于档位 2、3，因为这两档由 Clash TUN 负责最终分流；它不是升档，不增加当前档位之外的 DNS、WebRTC、AI 分组或订阅改动。Clash TUN 存在时不得把 AdGuard 改为 `Network Extension`，禁止按应用调整 AdGuard 过滤范围。档位 1 依赖 Clash 的系统代理，不能让 AdGuard 自动代理再占用同一个位置；Windows 的过滤机制也不同，两者都不能照搬。
 
-Patch 在切换档位 2、3 的客户端开关时同时检查 AdGuard for Mac。检测到 AdGuard 正在使用 `Network Extension`，就记录当前模式和保护状态，通过 Computer Use 只通过 AdGuard 界面切换到“自动代理”，保持 Clash TUN 开启、Clash 自己的系统代理关闭。运行配置使用 Fake-IP、AdGuard 出站代理原本关闭且当前 Mihomo 的 HTTP 代理端口可以按上述三项证据确认时，再通过 AdGuard 界面配置本机出站代理，避免 Patch 刷新后清理 Fake-IP 缓存时让 AdGuard 保留已经重新分配的旧地址。已有的非 Clash 出站代理保持不动并报告未修改。不得用 `networksetup`、defaults、Plist 编辑或脚本改写 AdGuard 与系统 PAC，不得退出、停用、卸载或重启 AdGuard，也不得添加逐站例外。
+Patch 在切换档位 2、3 的客户端开关时同时检查 AdGuard for Mac。检测到 AdGuard 正在使用 `Network Extension`，就记录当前模式和保护状态，通过 Computer Use 只通过 AdGuard 界面切换到“自动代理”，保持 Clash TUN 开启、Clash 自己的系统代理关闭。运行配置使用 Fake-IP、AdGuard 出站代理原本关闭且当前 Mihomo 的 HTTP 代理端口可以按上述三项证据确认时，再通过 AdGuard 界面配置本机出站代理，避免 AdGuard 把缓存的 Fake-IP 当作普通目标地址交给 Mihomo。已有的非 Clash 出站代理保持不动并报告未修改。不得用 `networksetup`、defaults、Plist 编辑或脚本改写 AdGuard 与系统 PAC，不得退出、停用、卸载或重启 AdGuard，也不得添加逐站例外。
 
 Diagnostics 遇到多个无关网站都先空白或转圈约 10–30 秒、随后很快显示，并且现场存在 Clash TUN 与 AdGuard `Network Extension` 时，直接把这条已知兼容路径作为第一项单变量对照，不再从零试一串站点规则。仍要在切换前用原应用复现并记录等待时间；不能仅凭检测到 AdGuard 就宣布故障原因。切换后用同一应用和动作连续复测原目标及至少三个无关目标，并确认 Safari 和 Chrome 的广告过滤仍符合用户需要。档位 2 再复测普通 AI 与 Agent 联网；档位 3 只复测本次共同网络路径可能影响的分流、DNS 与 WebRTC 能力。
 
@@ -224,7 +224,7 @@ Windows 历史总量优先读取 `ConnectionProfile.GetNetworkUsageAsync` 返回
 
 证据指向 Clash 配置时，先区分单项故障、三个档位共有的安全基线和档位 3 完整增强。先只读比较拟议改动；如果包含与已确认问题无关的改动，或包含当前档位不需要的改动，就不得把完整 Patch 伪装成单项修复。共同基线本来就属于三个档位，确认该层异常后可以调用已保存档位的平台安装入口统一处理全部订阅；这不授权档位 1、2 获得档位 3 增强。只有用户明确要求档位 3 或完整安全增强时，才执行档位 3 的全部策略和专项验收。
 
-**macOS 单项配置事务：** 留在 Diagnostics，只修改证据确认的非共同基线字段。保存原始字节和代理组选择；用 YAML 1.2 生成候选；重新读取候选；再次执行相同单项转换并要求无变化；用受支持的 Mihomo 在 30 秒内校验。写入当前订阅后只通过本地控制器刷新，并依次清除 Fake-IP 和 DNS 缓存，再复测原始症状。任何一步失败都按事务状态决定安全恢复或保留现场。不得用档位 3 完整增强代替这个事务。
+**macOS 单项配置事务：** 留在 Diagnostics，只修改证据确认的非共同基线字段。保存原始字节和代理组选择；用 YAML 1.2 生成候选；重新读取候选；再次执行相同单项转换并要求无变化；用受支持的 Mihomo 在 30 秒内校验。写入当前订阅后只通过本地控制器刷新，保留 Fake-IP 映射，只清除 DNS 缓存，再复测原始症状。任何一步失败都按事务状态决定安全恢复或保留现场。不得用档位 3 完整增强代替这个事务。
 
 **Windows 单项配置事务：** Windows 当前没有安全的即时单项配置写入路径。客户端运行时不得改当前配置。全局脚本中的共同国内域名直连基线属于三个档位，其他增强仍只属于档位 3；不能借共同基线伪装成无关单项修复。完成诊断后报告已确认问题与生效边界，并等待客户端以后正常加载或刷新。
 

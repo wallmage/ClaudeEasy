@@ -495,11 +495,8 @@ module ClaudeEasy
     return false unless runtime_precommit_allowed?(precommit_condition)
 
     if flush_caches
-      caches_flushed = ["/cache/fakeip/flush", "/cache/dns/flush"].all? do |endpoint|
-        code, _body = requester.call("POST", endpoint, nil)
-        [200, 204].include?(code)
-      end
-      return false unless caches_flushed
+      code, _body = requester.call("POST", "/cache/dns/flush", nil)
+      return false unless [200, 204].include?(code)
     end
     return false if expected_tun != :ignore && tun_state(requester: requester) != expected_tun
 
@@ -518,7 +515,6 @@ module ClaudeEasy
                     !runtime_proxy_group_safe?(requester, required_proxy_group, proxies: proxies)
     if check_dns
       return false unless dns_runtime_healthy?(requester, "www.baidu.com")
-      return false unless dns_runtime_healthy?(requester, "www.google.com")
     end
 
     connectivity_checker ||= lambda do

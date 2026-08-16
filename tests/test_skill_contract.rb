@@ -1456,7 +1456,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "单项 Clash 配置修复仍留在 Diagnostics"
     assert_includes policy, "只有用户明确要求完整安全增强时才进入 Patch"
     assert_includes policy, "macOS 单项配置事务"
-    assert_includes policy, "依次清除 Fake-IP 和 DNS 缓存"
+    assert_includes policy, "保留 Fake-IP 映射，只清除 DNS 缓存"
     assert_includes policy, "Windows 当前没有安全的即时单项配置写入路径"
     assert_includes policy, "## Patch 验证标准"
   end
@@ -1734,8 +1734,11 @@ class SkillContractTest < Minitest::Test
     %w[exclude-filter empty-fallback skip-cert-verify ecs legacy_ai_rules forbidden_ai_domains proxy-server-nameserver system 二次转换].each do |term|
       assert_includes policy, term
     end
-    assert_includes policy, "/cache/fakeip/flush"
+    assert_includes policy, "保留 Fake-IP 映射"
+    refute_includes policy, "/cache/fakeip/flush"
     assert_includes policy, "/cache/dns/flush"
+    refute_includes mac_patcher_source, "/cache/fakeip/flush"
+    refute_includes windows_installer_source, "/cache/fakeip/flush"
   end
 
   def test_product_documents_never_execute_subscription_dns_filters
