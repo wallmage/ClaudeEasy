@@ -1199,6 +1199,7 @@ class SkillContractTest < Minitest::Test
   def test_new_workflows_require_cross_platform_user_visible_parity
     core = File.read(File.join(SKILL, "references/policy-core.md"))
     safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+    profiles_and_patch = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     readme = File.read(File.join(ROOT, "README.md"))
     baseline = File.read(File.join(ROOT, "tests/baseline.md"))
@@ -1211,6 +1212,8 @@ class SkillContractTest < Minitest::Test
     assert_includes safe_update, "档位 1"
     assert_includes safe_update, "档位 2"
     assert_includes safe_update, "档位 3"
+    assert_includes profiles_and_patch, "`profile.store-selected`"
+    assert_includes profiles_and_patch, "macOS 与 Windows"
     assert_includes skill, "同一用户请求和同一已保存档位"
     assert_includes readme, "macOS 与 Windows 使用相同的完成条件"
     assert_includes baseline, "跨平台安全更新对等合同"
