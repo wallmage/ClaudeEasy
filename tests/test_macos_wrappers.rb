@@ -705,7 +705,27 @@ class MacosWrapperTest < Minitest::Test
   end
 
   def test_installer_does_not_write_usage_state_outside_its_managed_state_directory
-    with_supported_mihomo_installer do |installer|
+    patcher = <<~'RUBY'
+      require "json"
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      if ARGV.include?("--disable-subscription-auto-update")
+        puts "already_disabled"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      puts JSON.generate(
+        "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+        "platform" => "macos", "client" => "clashx-meta", "operation" => "patch_profiles",
+        "ok" => true, "status" => "ok", "code" => "patched", "exit_code" => 0,
+        "summary_zh" => "配置处理完成。", "profile" => 1,
+        "changes" => [], "checks" => [], "items" => [], "messages" => [], "warnings" => []
+      ) if ARGV.include?("--json")
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
           external_file = File.join(home, "important-user-file")
@@ -870,6 +890,7 @@ class MacosWrapperTest < Minitest::Test
     require_production_probe!
     patcher = <<~'RUBY'
       require "fileutils"
+      require "json"
 
       backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
       ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
@@ -896,6 +917,13 @@ class MacosWrapperTest < Minitest::Test
         puts "restored"
         exit 0
       end
+      puts JSON.generate(
+        "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+        "platform" => "macos", "client" => "clashx-meta", "operation" => "patch_profiles",
+        "ok" => true, "status" => "ok", "code" => "patched", "exit_code" => 0,
+        "summary_zh" => "配置处理完成。", "profile" => 2,
+        "changes" => [], "checks" => [], "items" => [], "messages" => [], "warnings" => []
+      ) if ARGV.include?("--json")
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
@@ -1000,6 +1028,8 @@ class MacosWrapperTest < Minitest::Test
   def test_production_probe_install_recovers_a_killed_ready_uninstall_before_changing_profile
     require_production_probe!
     patcher = <<~'RUBY'
+      require "json"
+
       backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
       ownership = File.join(backup_dir, "clashx-meta-kAutoUpdateEnable.state.json") if backup_dir
       preference = File.join(ENV.fetch("HOME"), "auto-update-state")
@@ -1024,6 +1054,13 @@ class MacosWrapperTest < Minitest::Test
         puts "restored"
         exit 0
       end
+      puts JSON.generate(
+        "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+        "platform" => "macos", "client" => "clashx-meta", "operation" => "patch_profiles",
+        "ok" => true, "status" => "ok", "code" => "patched", "exit_code" => 0,
+        "summary_zh" => "配置处理完成。", "profile" => 2,
+        "changes" => [], "checks" => [], "items" => [], "messages" => [], "warnings" => []
+      ) if ARGV.include?("--json")
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
@@ -2833,6 +2870,50 @@ class MacosWrapperTest < Minitest::Test
           assert_equal false, result.fetch("workflow_complete")
           assert_equal "subscription_update", result.fetch("completed_scope")
           assert_equal %w[route_verification final_state_audit], result.fetch("required_followups")
+        end
+      end
+    end
+  end
+
+  def test_json_wrapper_rejects_safe_update_success_without_workflow_metadata
+    patcher = <<~'RUBY'
+      require "json"
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        puts "already_disabled"
+        exit 0
+      end
+      if ARGV.include?("--safe-update-all")
+        puts JSON.generate(
+          "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+          "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
+          "ok" => true, "status" => "ok", "code" => "safe_update_completed", "exit_code" => 0,
+          "summary_zh" => "订阅事务完成。", "profile" => 3,
+          "changes" => ["remote_subscriptions"], "checks" => [], "items" => [],
+          "messages" => [], "warnings" => []
+        )
+        exit 0
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          write_usage_profile(home, 3)
+          stdout, stderr, status = run_script(
+            installer, "--safe-update", "--profile", "3", "--json", home: home
+          )
+
+          assert_equal 1, status.exitstatus
+          assert_empty stderr
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal false, result.fetch("ok")
+          assert_equal "partial", result.fetch("status")
+          assert_equal "operation_committed_result_failed", result.fetch("code")
         end
       end
     end

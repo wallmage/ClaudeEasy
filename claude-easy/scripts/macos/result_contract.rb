@@ -13,6 +13,7 @@ module ClaudeEasyResult
   STATUSES = %w[ok no_change skipped failed rolled_back partial invalid_request unsupported].freeze
   ITEM_STATUSES = %w[updated unchanged skipped failed rolled_back pending].freeze
   COMMANDS = %w[install uninstall patch verify_routes].freeze
+  INTERMEDIATE_WORKFLOW_CODES = %w[safe_update_completed safe_update_verified].freeze
   REQUIRED_FIELDS = %w[
     schema version command platform client operation ok status code exit_code summary_zh
     profile changes checks items messages warnings
@@ -45,6 +46,13 @@ module ClaudeEasyResult
     end
   end
 
+  def required_workflow_scope(operation, code)
+    return "subscription_update" if INTERMEDIATE_WORKFLOW_CODES.include?(code)
+    return "subscription_snapshot" if operation == "snapshot_profiles" && code == "snapshot_created"
+
+    nil
+  end
+
   def build(command:, operation:, ok:, status:, code:, exit_code:, summary_zh:, profile: nil,
             changes: [], checks: [], items: [], messages: [], warnings: [],
             workflow_complete: nil, completed_scope: nil, required_followups: nil)
@@ -52,16 +60,18 @@ module ClaudeEasyResult
     raise ArgumentError, "invalid command" unless COMMANDS.include?(normalized_command)
     normalized_status = status.to_s
     normalized_status = "failed" unless STATUSES.include?(normalized_status)
+    normalized_operation = sanitize_text(operation)
+    normalized_code = sanitize_text(code)
     result = {
       "schema" => SCHEMA,
       "version" => VERSION,
       "command" => normalized_command,
       "platform" => PLATFORM,
       "client" => CLIENT,
-      "operation" => sanitize_text(operation),
+      "operation" => normalized_operation,
       "ok" => !!ok,
       "status" => normalized_status,
-      "code" => sanitize_text(code),
+      "code" => normalized_code,
       "exit_code" => Integer(exit_code),
       "summary_zh" => sanitize_text(summary_zh),
       "profile" => profile,
@@ -72,7 +82,12 @@ module ClaudeEasyResult
       "warnings" => sanitize(Array(warnings))
     }
     workflow_fields = [workflow_complete, completed_scope, required_followups]
-    return result if workflow_fields.all?(&:nil?)
+    required_scope = required_workflow_scope(normalized_operation, normalized_code)
+    workflow_required = !required_scope.nil?
+    if workflow_fields.all?(&:nil?)
+      raise ArgumentError, "missing workflow metadata" if workflow_required
+      return result
+    end
     raise ArgumentError, "incomplete workflow metadata" if workflow_fields.any?(&:nil?)
     raise ArgumentError, "invalid workflow_complete" unless [true, false].include?(workflow_complete)
     sanitized_scope = sanitize_text(completed_scope)
@@ -83,6 +98,10 @@ module ClaudeEasyResult
       required_followups.each_with_index.all? do |entry, index|
         entry.is_a?(String) && !sanitized_followups[index].empty?
       end
+    if workflow_required &&
+       (workflow_complete != false || sanitized_scope != required_scope || sanitized_followups.empty?)
+      raise ArgumentError, "invalid intermediate workflow metadata"
+    end
 
     result.merge(
       "workflow_complete" => workflow_complete,
@@ -110,15 +129,22 @@ module ClaudeEasyResult
 
     workflow_keys = %w[workflow_complete completed_scope required_followups]
     present_workflow_keys = workflow_keys.select { |key| result.key?(key) }
-    return true if present_workflow_keys.empty?
+    required_scope = required_workflow_scope(result["operation"], result["code"])
+    workflow_required = !required_scope.nil?
+    return !workflow_required if present_workflow_keys.empty?
     return false unless present_workflow_keys == workflow_keys
 
-    [true, false].include?(result["workflow_complete"]) &&
+    workflow_valid = [true, false].include?(result["workflow_complete"]) &&
       result["completed_scope"].is_a?(String) && !sanitize_text(result["completed_scope"]).empty? &&
       result["required_followups"].is_a?(Array) &&
       result["required_followups"].all? do |entry|
         entry.is_a?(String) && !sanitize_text(entry).empty?
       end
+    workflow_valid && (!workflow_required || (
+      result["workflow_complete"] == false &&
+      result["completed_scope"] == required_scope &&
+      !result["required_followups"].empty?
+    ))
   rescue JSON::ParserError, TypeError
     false
   end

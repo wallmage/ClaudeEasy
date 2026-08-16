@@ -1256,6 +1256,37 @@ try {
         $partialWorkflowMetadataRejected = $true
     }
     Assert-True $partialWorkflowMetadataRejected "result contract accepted partial workflow metadata"
+    foreach ($safeUpdateCode in @("safe_update_completed", "safe_update_verified")) {
+        $missingWorkflowMetadataRejected = $false
+        try {
+            New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code $safeUpdateCode -ExitCode 0 -SummaryZh "订阅事务完成" | Out-Null
+        } catch {
+            $missingWorkflowMetadataRejected = $true
+        }
+        Assert-True $missingWorkflowMetadataRejected "result contract accepted $safeUpdateCode without workflow metadata"
+    }
+    foreach ($invalidSafeUpdateWorkflow in @(
+        @{ WorkflowComplete = $true; CompletedScope = "subscription_update"; RequiredFollowups = @("final_state_audit") },
+        @{ WorkflowComplete = $false; CompletedScope = "wrong_scope"; RequiredFollowups = @("final_state_audit") },
+        @{ WorkflowComplete = $false; CompletedScope = "subscription_update"; RequiredFollowups = @() }
+    )) {
+        $invalidSafeUpdateWorkflowRejected = $false
+        try {
+            New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $invalidSafeUpdateWorkflow.WorkflowComplete -CompletedScope $invalidSafeUpdateWorkflow.CompletedScope -RequiredFollowups $invalidSafeUpdateWorkflow.RequiredFollowups | Out-Null
+        } catch {
+            $invalidSafeUpdateWorkflowRejected = $true
+        }
+        Assert-True $invalidSafeUpdateWorkflowRejected "result contract accepted invalid safe-update workflow metadata"
+    }
+    $snapshotWorkflowMetadataRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "snapshot_profiles" -Ok $true -Status "ok" -Code "snapshot_created" -ExitCode 0 -SummaryZh "已创建快照" | Out-Null
+    } catch {
+        $snapshotWorkflowMetadataRejected = $true
+    }
+    Assert-True $snapshotWorkflowMetadataRejected "result contract accepted snapshot success without workflow metadata"
+    $snapshotWorkflowContractResult = New-ClaudeEasyResult -Command "install" -Operation "snapshot_profiles" -Ok $true -Status "ok" -Code "snapshot_created" -ExitCode 0 -SummaryZh "已创建快照" -WorkflowComplete $false -CompletedScope "subscription_snapshot" -RequiredFollowups @("region_fingerprint_baseline", "subscription_refresh")
+    Assert-True ($snapshotWorkflowContractResult.completed_scope -eq "subscription_snapshot") "result contract changed snapshot workflow metadata"
     $invalidWorkflowFollowupRejected = $false
     try {
         New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false -CompletedScope "subscription_update" -RequiredFollowups @("route_verification", 7) | Out-Null

@@ -474,6 +474,7 @@ finish_profile_operation_signal() {
   trap '' HUP INT TERM
   preserve_profile_operation_state
   if [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 0 ] ||
+     [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 75 ] ||
      [ "$PROFILE_OPERATION_RECEIPT_COMMITTED" -eq 1 ]; then
     PROFILE_OPERATION_COMMITTED=1
   else
@@ -552,6 +553,9 @@ run_committing_profile_operation() {
     child_json=$(/bin/cat "$child_output_path" 2>/dev/null || true)
     /bin/rm -f "$child_output_path"
     PENDING_TEMPORARY=""
+    if [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 0 ] && ! valid_child_json; then
+      PROFILE_OPERATION_CHILD_STATUS=75
+    fi
   else
     if /usr/bin/ruby "$PATCHER_SOURCE" "$@" \
         --wrapper-commit-receipt "$PROFILE_OPERATION_RECEIPT_PATH" \

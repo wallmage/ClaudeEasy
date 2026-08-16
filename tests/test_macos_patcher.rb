@@ -1995,6 +1995,49 @@ class MacosPatcherTest < Minitest::Test
     refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("workflow_complete" => "false")))
   end
 
+  def test_result_contract_rejects_safe_update_success_without_workflow_metadata
+    common = {
+      command: "install", operation: "safe_update", ok: true, status: "ok",
+      exit_code: 0, summary_zh: "订阅事务完成。", profile: 3
+    }
+
+    %w[safe_update_completed safe_update_verified].each do |code|
+      assert_raises(ArgumentError) do
+        ClaudeEasyResult.build(**common, code: code)
+      end
+
+      legacy = ClaudeEasyResult.build(**common, code: "completed").merge("code" => code)
+      refute ClaudeEasyResult.valid_child_json?(JSON.generate(legacy))
+    end
+
+    [
+      { workflow_complete: true, completed_scope: "subscription_update", required_followups: ["final_state_audit"] },
+      { workflow_complete: false, completed_scope: "wrong_scope", required_followups: ["final_state_audit"] },
+      { workflow_complete: false, completed_scope: "subscription_update", required_followups: [] }
+    ].each do |invalid_workflow|
+      assert_raises(ArgumentError) do
+        ClaudeEasyResult.build(**common, code: "safe_update_completed", **invalid_workflow)
+      end
+    end
+  end
+
+  def test_result_contract_requires_snapshot_followups_for_windows_style_snapshot_operation
+    common = {
+      command: "install", operation: "snapshot_profiles", ok: true, status: "ok",
+      code: "snapshot_created", exit_code: 0, summary_zh: "已创建快照。", profile: 3
+    }
+
+    assert_raises(ArgumentError) { ClaudeEasyResult.build(**common) }
+    legacy = ClaudeEasyResult.build(**common.merge(operation: "snapshot_initial"))
+      .merge("operation" => "snapshot_profiles")
+    refute ClaudeEasyResult.valid_child_json?(JSON.generate(legacy))
+    result = ClaudeEasyResult.build(
+      **common, workflow_complete: false, completed_scope: "subscription_snapshot",
+      required_followups: ["region_fingerprint_baseline", "subscription_refresh"]
+    )
+    assert ClaudeEasyResult.valid_child_json?(JSON.generate(result))
+  end
+
   def test_result_contract_rejects_workflow_text_that_sanitizes_to_empty
     common = {
       command: "install", operation: "safe_update", ok: true, status: "ok",

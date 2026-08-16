@@ -10,7 +10,7 @@ macOS 安全更新命令在订阅下载、档位补丁、配置校验和内部�
 
 ## 设计
 
-保留 `safe_update_completed` 与 `safe_update_verified`，避免破坏已有调用方；给结果合同增加三个向后兼容的可选字段：
+保留 `safe_update_completed` 与 `safe_update_verified`，避免破坏已有调用方；给结果合同增加三个字段。它们对普通结果可选，对这两个安全更新中间回执必须同时存在；Windows 的 `snapshot_profiles:snapshot_created` 也必须带齐：
 
 - `workflow_complete: boolean`：结果是否已经覆盖整个用户任务。
 - `completed_scope: string`：本次命令实际完成的范围。

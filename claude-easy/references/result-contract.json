@@ -68,6 +68,25 @@
     "completed_scope": "string",
     "required_followups": "array"
   },
+  "required_workflow_metadata_by_code": {
+    "safe_update_completed": {
+      "workflow_complete": false,
+      "completed_scope": "subscription_update",
+      "required_followups": "non_empty_array"
+    },
+    "safe_update_verified": {
+      "workflow_complete": false,
+      "completed_scope": "subscription_update",
+      "required_followups": "non_empty_array"
+    }
+  },
+  "required_workflow_metadata_by_operation_and_code": {
+    "snapshot_profiles:snapshot_created": {
+      "workflow_complete": false,
+      "completed_scope": "subscription_snapshot",
+      "required_followups": "non_empty_array"
+    }
+  },
   "platforms": {
     "macos": {
       "client": "clashx-meta",

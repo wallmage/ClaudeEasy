@@ -117,6 +117,17 @@ function New-ClaudeEasyResult(
     }
     $hasWorkflowMetadata = $null -ne $WorkflowComplete -or $null -ne $CompletedScope -or
         $null -ne $RequiredFollowups
+    $requiredWorkflowScope = if ($Code -in @("safe_update_completed", "safe_update_verified")) {
+        "subscription_update"
+    } elseif ($Operation -ceq "snapshot_profiles" -and $Code -ceq "snapshot_created") {
+        "subscription_snapshot"
+    } else {
+        $null
+    }
+    $workflowRequired = $null -ne $requiredWorkflowScope
+    if ($workflowRequired -and -not $hasWorkflowMetadata) {
+        throw "安全更新结果缺少工作流字段。"
+    }
     if ($hasWorkflowMetadata) {
         if ($null -eq $WorkflowComplete -or
             $WorkflowComplete -isnot [bool] -or
@@ -138,6 +149,12 @@ function New-ClaudeEasyResult(
                 throw "工作流后续项目无效。"
             }
             $protectedRequiredFollowups += ,$protectedRequiredFollowup
+        }
+        if ($workflowRequired -and
+            ($WorkflowComplete -ne $false -or
+             $protectedCompletedScope -cne $requiredWorkflowScope -or
+             $protectedRequiredFollowups.Count -eq 0)) {
+            throw "安全更新结果的工作流字段无效。"
         }
         $result.workflow_complete = [bool]$WorkflowComplete
         $result.completed_scope = $protectedCompletedScope

@@ -1173,6 +1173,18 @@ class SkillContractTest < Minitest::Test
     assert_equal "boolean", optional_fields.fetch("workflow_complete")
     assert_equal "string", optional_fields.fetch("completed_scope")
     assert_equal "array", optional_fields.fetch("required_followups")
+    required_workflow = result_contract.fetch("required_workflow_metadata_by_code")
+    %w[safe_update_completed safe_update_verified].each do |code|
+      rule = required_workflow.fetch(code)
+      assert_equal false, rule.fetch("workflow_complete")
+      assert_equal "subscription_update", rule.fetch("completed_scope")
+      assert_equal "non_empty_array", rule.fetch("required_followups")
+    end
+    snapshot_rule = result_contract.fetch("required_workflow_metadata_by_operation_and_code")
+      .fetch("snapshot_profiles:snapshot_created")
+    assert_equal false, snapshot_rule.fetch("workflow_complete")
+    assert_equal "subscription_snapshot", snapshot_rule.fetch("completed_scope")
+    assert_equal "non_empty_array", snapshot_rule.fetch("required_followups")
 
     result_sources = [
       File.read(File.join(SKILL, "scripts/macos/result_contract.rb")),
