@@ -648,10 +648,10 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "新加坡中文"
       assert_includes document, "`zh-Hans`"
       assert_includes document, "不做外部国家代码查询"
-      assert_includes document, "与正常网页出口一致"
-      assert_includes document, "与正常网页出口不一致"
-      assert_includes document, "同协议族"
-      assert_includes document, "没有发现公网候选地址"
+      assert_includes document, "只有发现 `host` 候选明确暴露本地网络地址时"
+      assert_includes document, "公网出口不同不能单独证明 WebRTC 绕过代理"
+      assert_includes document, "取不到同协议族网页出口"
+      assert_includes document, "没有公网候选"
     end
   end
 

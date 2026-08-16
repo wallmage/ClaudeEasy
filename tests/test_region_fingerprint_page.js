@@ -311,20 +311,19 @@ test("the public contract exposes the upstream ten signals and weights", () => {
   assert.equal(api.riskBand(100), "high");
 });
 
-test("a confirmed WebRTC exit mismatch contributes ten", async () => {
+test("a public WebRTC exit mismatch contributes zero without proof of a leak", async () => {
   const api = detectorApi();
   const candidate = await api.detect(baseEnvironment({
-    detectWebrtcLeak: async () => ({
-      raw: "WebRTC 出口与网页代理出口不一致",
-      score: 1,
-    }),
+    detectWebrtcLeak: async () => api.classifyWebrtc("198.51.100.7", [
+      { ip: "203.0.113.9", type: "srflx" },
+    ]),
   }));
   const signal = candidate.signals.find((entry) => entry.id === "webrtcLeak");
 
-  assert.equal(signal.score, 1);
-  assert.equal(signal.contribution, 10);
-  assert.equal(signal.match, "strong");
-  assert.equal(signal.raw, "WebRTC 出口与网页代理出口不一致");
+  assert.equal(signal.score, 0);
+  assert.equal(signal.contribution, 0);
+  assert.equal(signal.match, "none");
+  assert.equal(signal.raw, "WebRTC 公网出口不同，未确认泄露");
 });
 
 test("WebRTC classification compares candidates with the browser proxy exit", () => {
@@ -346,7 +345,7 @@ test("WebRTC classification compares candidates with the browser proxy exit", ()
     { ...api.classifyWebrtc("198.51.100.7", [
       { ip: "203.0.113.9", type: "srflx" },
     ]) },
-    { raw: "WebRTC 出口与网页代理出口不一致", score: 1 },
+    { raw: "WebRTC 公网出口不同，未确认泄露", score: 0 },
   );
   assert.deepEqual(
     { ...api.classifyWebrtc("198.51.100.7", [
@@ -354,18 +353,18 @@ test("WebRTC classification compares candidates with the browser proxy exit", ()
     ]) },
     { raw: "WebRTC 暴露本地网络地址", score: 1 },
   );
-  assert.throws(
-    () => api.classifyWebrtc("2001:db8::7", [
+  assert.deepEqual(
+    { ...api.classifyWebrtc("2001:db8::7", [
       { ip: "198.51.100.7", type: "srflx" },
-    ]),
-    /同协议族/,
+    ]) },
+    { raw: "WebRTC 公网出口不同，未确认泄露", score: 0 },
   );
   assert.deepEqual(
     { ...api.classifyWebrtc("198.51.100.7", [
       { ip: "203.0.113.9", type: "srflx" },
       { ip: "2001:db8::7", type: "srflx" },
     ]) },
-    { raw: "WebRTC 出口与网页代理出口不一致", score: 1 },
+    { raw: "WebRTC 公网出口不同，未确认泄露", score: 0 },
   );
 });
 
@@ -456,7 +455,7 @@ test("the public API exposes no country lookup that could disclose a WebRTC IP",
   assert.equal(Object.hasOwn(api, "lookupCountry"), false);
 });
 
-test("a failed WebRTC probe stays unknown without aborting the other signals", async () => {
+test("a failed WebRTC probe contributes zero and keeps the total", async () => {
   const api = detectorApi();
   const result = await api.detect(baseEnvironment({
     detectWebrtcLeak: async () => {
@@ -466,12 +465,13 @@ test("a failed WebRTC probe stays unknown without aborting the other signals", a
   const signal = result.signals.find((entry) => entry.id === "webrtcLeak");
 
   assert.equal(result.status, "complete");
-  assert.equal(result.total, null);
-  assert.equal(signal.coverage, "unavailable");
-  assert.equal(signal.contribution, null);
+  assert.equal(result.total, 6);
+  assert.equal(signal.raw, "未确认 WebRTC 泄露");
+  assert.equal(signal.coverage, "full");
+  assert.equal(signal.contribution, 0);
 });
 
-test("an unavailable WebRTC API stays unknown and hides the total", async () => {
+test("an unavailable WebRTC API contributes zero and keeps the total", async () => {
   const context = {
     measureText: () => ({ width: 100 }),
   };
@@ -492,11 +492,13 @@ test("an unavailable WebRTC API stays unknown and hides the total", async () => 
   const result = await api.detect(api.browserEnvironment());
   const signal = result.signals.find((entry) => entry.id === "webrtcLeak");
 
-  assert.equal(signal.coverage, "unavailable");
-  assert.equal(signal.score, null);
-  assert.equal(signal.contribution, null);
-  assert.equal(result.total, null);
-  assert.equal(result.unknownWeight, 10);
+  assert.equal(signal.raw, "未确认 WebRTC 泄露");
+  assert.equal(signal.coverage, "full");
+  assert.equal(signal.score, 0);
+  assert.equal(signal.contribution, 0);
+  assert.equal(typeof result.total, "number");
+  assert.equal(result.total, result.knownTotal);
+  assert.equal(result.unknownWeight, 0);
 });
 
 test("rejected high-entropy client hints fall back without aborting the scan", async () => {
@@ -736,9 +738,9 @@ test("browser environment survives unavailable canvas font detection", async () 
   assert.equal(result.signals.length, 10);
   assert.equal(fonts.coverage, "unavailable");
   assert.equal(vendorFonts.coverage, "unavailable");
-  assert.equal(result.unavailableCount, 3);
+  assert.equal(result.unavailableCount, 2);
   assert.equal(result.total, null);
-  assert.equal(result.unknownWeight, 34);
+  assert.equal(result.unknownWeight, 24);
 });
 
 test("browser environment detects fonts from measured canvas width changes", () => {
@@ -875,9 +877,9 @@ test("unreadable browser values remain unknown instead of looking safe", async (
   assert.equal(result.status, "complete");
   assert.equal(result.total, null);
   assert.equal(result.knownTotal, 0);
-  assert.equal(result.unknownWeight, 100);
+  assert.equal(result.unknownWeight, 90);
   assert.equal(result.matchedCount, 0);
-  assert.equal(result.unavailableCount, 10);
+  assert.equal(result.unavailableCount, 9);
   assert.ok(
     result.signals
       .filter((signal) => signal.raw === "无法读取")
@@ -899,13 +901,14 @@ test("unreadable browser values remain unknown instead of looking safe", async (
   assert.match(ui.status.textContent, /已知项合计 0 \/ 100/);
   assert.match(ui.status.textContent, /已知命中 0 项/);
   assert.doesNotMatch(ui.status.textContent, /已知非零/);
-  assert.match(ui.status.textContent, /10 项无法读取/);
-  for (const row of ui.list.children) {
-    assert.equal(
-      row.querySelector("[data-signal-contribution]").textContent,
-      "未知",
-    );
-  }
+  assert.match(ui.status.textContent, /9 项无法读取/);
+  const webrtcRow = ui.list.children.find(
+    (row) => row.attributes.get("data-signal-key") === "webrtcLeak",
+  );
+  assert.equal(
+    webrtcRow.querySelector("[data-signal-contribution]").textContent,
+    "+0",
+  );
 });
 
 test("Taiwan preferences score zero while mainland preferences score fully", () => {

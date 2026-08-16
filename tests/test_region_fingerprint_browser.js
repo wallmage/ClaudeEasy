@@ -221,20 +221,15 @@ for (const targetName of requestedTargets()) {
     }));
     const webrtc = result.rows.find((row) => row.key === "webrtcLeak");
     assert.ok(webrtc);
-    if (webrtc.coverage === "unavailable") {
-      assert.equal(webrtc.value, "无法读取");
-      assert.equal(webrtc.contribution, "未知");
-    } else {
-      assert.equal(webrtc.coverage, "full");
-      assert.match(
-        webrtc.value,
-        /^(?:未检测到 WebRTC 公网出口|WebRTC 与网页代理出口一致|WebRTC 出口与网页代理出口不一致|WebRTC 暴露本地网络地址)$/,
-      );
-      assert.equal(
-        webrtc.contribution,
-        /不一致|本地网络地址/.test(webrtc.value) ? "+10" : "+0",
-      );
-    }
+    assert.equal(webrtc.coverage, "full");
+    assert.match(
+      webrtc.value,
+      /^(?:未检测到 WebRTC 公网出口|WebRTC 与网页代理出口一致|WebRTC 公网出口不同，未确认泄露|WebRTC 暴露本地网络地址|未确认 WebRTC 泄露)$/,
+    );
+    assert.equal(
+      webrtc.contribution,
+      /暴露本地网络地址/.test(webrtc.value) ? "+10" : "+0",
+    );
     assert.equal(result.rows.length, 10);
     for (const row of result.rows) {
       assert.notEqual(row.value, "等待检测");

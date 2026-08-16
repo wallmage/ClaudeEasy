@@ -455,7 +455,7 @@ SOFTWARE.
         </article>
         <article class="note">
           <h2>浏览器兼容</h2>
-          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项在本地比较 STUN 候选与网页代理出口：一致或没有公网候选时计 0 分，出口不一致或暴露本地网络地址时计 10 分；无法取得同协议族网页出口时显示“无法读取”。</p>
+          <p>支持 Safari、Microsoft Edge 和 Google Chrome。浏览器未提供设备提示时，会明确显示“有限信息”。WebRTC 项只有在明确暴露本地网络地址时计 10 分；公网出口不同、没有公网候选或无法完成对照都计 0 分。</p>
         </article>
       </section>
 
@@ -754,7 +754,9 @@ SOFTWARE.
             return { raw: "未检测到 WebRTC 公网出口", score: 0 };
           }
           var reference = normalizeIp(publicIp);
-          if (!reference) throw new Error("无法取得网页公网出口");
+          if (!reference) {
+            return { raw: "未确认 WebRTC 泄露", score: 0 };
+          }
           var referenceIsV4 = reference.indexOf(".") !== -1;
           var sameFamily = publicCandidates.filter(function (candidate) {
             return (candidate.ip.indexOf(".") !== -1) === referenceIsV4;
@@ -762,11 +764,8 @@ SOFTWARE.
           var mismatch = sameFamily.some(function (candidate) {
             return candidate.ip !== reference;
           });
-          if (mismatch) {
-            return { raw: "WebRTC 出口与网页代理出口不一致", score: 1 };
-          }
-          if (sameFamily.length !== publicCandidates.length) {
-            throw new Error("无法取得同协议族的网页公网出口");
+          if (mismatch || sameFamily.length !== publicCandidates.length) {
+            return { raw: "WebRTC 公网出口不同，未确认泄露", score: 0 };
           }
           return { raw: "WebRTC 与网页代理出口一致", score: 0 };
         }
@@ -1000,17 +999,17 @@ SOFTWARE.
             } catch (_error) {
               results.push(outcome(
                 definitions.webrtcLeak,
-                "无法读取",
+                "未确认 WebRTC 泄露",
                 0,
-                "unavailable"
+                "full"
               ));
             }
           } else {
             results.push(outcome(
               definitions.webrtcLeak,
-              "无法读取",
+              "未确认 WebRTC 泄露",
               0,
-              "unavailable"
+              "full"
             ));
           }
 
