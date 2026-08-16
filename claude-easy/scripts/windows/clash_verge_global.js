@@ -872,6 +872,8 @@ function claudeEasyApply(config, profileName, usageProfile) {
   if (!claudeEasyUsable(config)) return config;
   const patched = claudeEasyClone(config);
   if (!Array.isArray(patched.rules)) patched.rules = [];
+  patched.profile = patched.profile && typeof patched.profile === "object" && !Array.isArray(patched.profile) ? patched.profile : {};
+  patched.profile["store-selected"] = true;
   const detectedMainGroup = claudeEasyDetectMain(patched);
   if (!detectedMainGroup) return config;
   const mainGroup = claudeEasySafeGroupReference(patched, detectedMainGroup);

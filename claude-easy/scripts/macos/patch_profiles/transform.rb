@@ -841,6 +841,8 @@ module ClaudeEasy
     original = deep_copy(config)
     patched = deep_copy(config)
     patched["rules"] ||= []
+    patched["profile"] = {} unless patched["profile"].is_a?(Hash)
+    patched["profile"]["store-selected"] = true
     detected_main_group = detect_main_group(patched, policy)
     return base_result(config, :no_main_group) unless detected_main_group
     main_group = safe_group_reference(patched, detected_main_group)

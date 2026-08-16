@@ -42,6 +42,8 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 
 三个档位都包含共同国内域名直连基线。档位 3 的其余完整补丁包括：TUN、DNS 劫持、自动与严格路由、IPv6 关闭、普通国外与 AI DNS 分流、AI 分组与规则、全局 UDP/WebRTC 防护和完整验证。节点只给建议：台湾家宽优先，其次日本家宽；不得自动切换节点。全局 UDP 也会影响 QUIC、游戏、语音和视频，必须在选择界面说明。
 
+macOS 与 Windows 的三个档位都把 `profile.store-selected` 设为 `true`，并保留 `profile` 下的其他设置，使 Mihomo 重新加载订阅后继续使用原代理组选择。
+
 macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 完成后结束，不增加 TUN、IPv6、WebRTC 或 AI 分组设置。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置由安装程序直接修改，不依赖 Computer Use：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读。任一平台无法安全识别、备份、写入或确认时，停止且不继续打补丁。
 
 ### 档位 3 的 Claude 区域指纹检测

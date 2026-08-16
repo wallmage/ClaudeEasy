@@ -177,6 +177,25 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
   }
 });
 
+test('every Windows usage profile persists proxy selections across reloads', { skip: !available }, () => {
+  for (const usageProfile of [1, 2, 3]) {
+    const missing = baseConfig();
+    const disabled = baseConfig();
+    const invalid = baseConfig();
+    disabled.profile = { 'store-selected': false, sibling: 'preserved' };
+    invalid.profile = [];
+
+    const patchedMissing = engine.claudeEasyTransform(missing, 'fixture', usageProfile);
+    const patchedDisabled = engine.claudeEasyTransform(disabled, 'fixture', usageProfile);
+    const patchedInvalid = engine.claudeEasyTransform(invalid, 'fixture', usageProfile);
+
+    assert.equal(patchedMissing.profile['store-selected'], true);
+    assert.equal(patchedDisabled.profile['store-selected'], true);
+    assert.equal(patchedDisabled.profile.sibling, 'preserved');
+    assert.deepEqual(patchedInvalid.profile, { 'store-selected': true });
+  }
+});
+
 test('Windows preserves REALITY short-id text exactly like macOS', { skip: !available }, () => {
   const config = baseConfig();
   config.proxies[0]['reality-opts'] = { 'short-id': '0906152e4' };

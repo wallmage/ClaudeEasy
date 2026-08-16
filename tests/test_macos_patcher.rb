@@ -53,6 +53,31 @@ class MacosPatcherTest < Minitest::Test
       ENV["CLAUDE_EASY_RUN_PRODUCTION_PROBES"] == "1"
   end
 
+  def test_every_macos_usage_profile_persists_proxy_selections_across_reloads
+    [1, 2, 3].each do |usage_profile|
+      missing = base_config
+      disabled = base_config.merge(
+        "profile" => { "store-selected" => false, "sibling" => "preserved" }
+      )
+      invalid = base_config.merge("profile" => [])
+
+      patched_missing = ClaudeEasy.patch(
+        missing, @policy, usage_profile: usage_profile
+      ).fetch(:config)
+      patched_disabled = ClaudeEasy.patch(
+        disabled, @policy, usage_profile: usage_profile
+      ).fetch(:config)
+      patched_invalid = ClaudeEasy.patch(
+        invalid, @policy, usage_profile: usage_profile
+      ).fetch(:config)
+
+      assert_equal true, patched_missing.dig("profile", "store-selected")
+      assert_equal true, patched_disabled.dig("profile", "store-selected")
+      assert_equal "preserved", patched_disabled.dig("profile", "sibling")
+      assert_equal({ "store-selected" => true }, patched_invalid.fetch("profile"))
+    end
+  end
+
   def route_controller_getter(proxies, main_group: "Main", providers: { "providers" => {} })
     lambda do |_socket, endpoint|
       case endpoint
