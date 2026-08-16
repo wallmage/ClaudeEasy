@@ -397,6 +397,7 @@ module ClaudeEasy
   end
 
   def restore_runtime_tun_state(requester, expected_tun)
+    return false if expected_tun == :unknown
     return true if expected_tun == :ignore || tun_state(requester: requester) == expected_tun
 
     enabled = expected_tun == :enabled
@@ -419,7 +420,7 @@ module ClaudeEasy
 
   def runtime_health_healthy?(requester, selections:, expected_tun:, connectivity_checker: nil,
                               precommit_condition: nil, required_proxy_group: nil,
-                              flush_caches: true)
+                              flush_caches: true, check_dns: true)
     return false unless runtime_precommit_allowed?(precommit_condition)
 
     if flush_caches
@@ -444,8 +445,10 @@ module ClaudeEasy
     return false unless selections.all? { |name, selected| after.key?(name) && after[name] == selected }
     return false if required_proxy_group &&
                     !runtime_proxy_group_safe?(requester, required_proxy_group, proxies: proxies)
-    return false unless dns_runtime_healthy?(requester, "www.baidu.com")
-    return false unless dns_runtime_healthy?(requester, "www.google.com")
+    if check_dns
+      return false unless dns_runtime_healthy?(requester, "www.baidu.com")
+      return false unless dns_runtime_healthy?(requester, "www.google.com")
+    end
 
     connectivity_checker ||= lambda do
       default_connectivity_healthy?(requester: requester, tun_mode: expected_tun)
@@ -490,7 +493,7 @@ module ClaudeEasy
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker,
-      precommit_condition: precommit_condition
+      precommit_condition: precommit_condition, check_dns: false
     )
     healthy && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
@@ -619,10 +622,12 @@ module ClaudeEasy
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker,
-      precommit_condition: precommit_condition
+      precommit_condition: precommit_condition, check_dns: false
     )
-    healthy && runtime_precommit_allowed?(precommit_condition) ?
-      :reload_failed_rolled_back : :reload_failed_restore_pending
+    return :reload_failed_rolled_back if
+      healthy && runtime_precommit_allowed?(precommit_condition)
+
+    :reload_failed_restore_pending
   rescue StandardError
     :reload_failed_restore_pending
   end

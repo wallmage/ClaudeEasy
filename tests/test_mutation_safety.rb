@@ -611,6 +611,75 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_recovered_patch_runtime_dns_baseline_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "      precommit_condition: precommit_condition, check_dns: false\n" \
+          "    )\n" \
+          "    healthy && runtime_precommit_allowed?(precommit_condition)\n" \
+          "  rescue StandardError\n" \
+          "    false\n" \
+          "  end\n\n" \
+          "  def verify_unchanged_profile_runtime",
+        "      precommit_condition: precommit_condition\n" \
+          "    )\n" \
+          "    healthy && runtime_precommit_allowed?(precommit_condition)\n" \
+          "  rescue StandardError\n" \
+          "    false\n" \
+          "  end\n\n" \
+          "  def verify_unchanged_profile_runtime"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_recovered_runtime_accepts_the_original_dns_limit_when_connectivity_is_restored"
+      )
+    end
+  end
+
+  def test_runtime_rollback_dns_baseline_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "      precommit_condition: precommit_condition, check_dns: false\n" \
+          "    )\n" \
+          "    return :reload_failed_rolled_back if\n" \
+          "      healthy && runtime_precommit_allowed?(precommit_condition)",
+        "      precommit_condition: precommit_condition\n" \
+          "    )\n" \
+          "    return :reload_failed_rolled_back if\n" \
+          "      healthy && runtime_precommit_allowed?(precommit_condition)"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_runtime_rollback_accepts_the_original_dns_limit_when_connectivity_is_restored"
+      )
+    end
+  end
+
+  def test_safe_update_recovery_dns_baseline_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "      precommit_condition: precommit_condition, check_dns: false\n",
+        "      precommit_condition: precommit_condition\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_recovered_safe_update_runtime_restores_tun_after_reloading_raw_subscription"
+      )
+    end
+  end
+
   def test_active_reload_candidate_selection_mutation_is_killed
     with_repo_copy do |root|
       replace_once(

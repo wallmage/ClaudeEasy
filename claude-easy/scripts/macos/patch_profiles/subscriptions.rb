@@ -714,7 +714,7 @@ module ClaudeEasy
 
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
-      precommit_condition: precommit_condition
+      precommit_condition: precommit_condition, check_dns: false
     )
     healthy && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError

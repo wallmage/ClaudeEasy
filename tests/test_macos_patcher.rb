@@ -1373,6 +1373,39 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_recovered_runtime_accepts_the_original_dns_limit_when_connectivity_is_restored
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      File.binwrite(profile, YAML.dump(base_config))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "Taiwan" }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        when ["PUT", "/configs?force=true"],
+             ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          if method == "GET" && endpoint.include?("www.baidu.com")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          elsif method == "GET" && endpoint.include?("www.google.com")
+            [500, JSON.generate("message" => "dns resolve failed")]
+          else
+            raise "unexpected controller request: #{method} #{endpoint}"
+          end
+        end
+      end
+
+      assert ClaudeEasy.reload_recovered_profile_runtime(
+        [{ path: profile, active: true }], require_tun: :preserve,
+        requester: requester, connectivity_checker: -> { true }
+      )
+    end
+  end
+
   def test_failed_pending_runtime_recovery_keeps_transaction_and_skips_new_patch
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
@@ -5359,6 +5392,7 @@ class MacosPatcherTest < Minitest::Test
   def test_recovered_safe_update_runtime_restores_tun_after_reloading_raw_subscription
     target = { name: "active", path: "/tmp/active.yaml" }
     tun_enabled = true
+    check_dns = nil
     patches = []
     requester = lambda do |_socket, method, endpoint, body|
       case [method, endpoint]
@@ -5382,7 +5416,10 @@ class MacosPatcherTest < Minitest::Test
     restored = ClaudeEasy.stub(:controller_socket, "socket") do
       ClaudeEasy.stub(:controller_request, requester) do
         ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
-          ClaudeEasy.stub(:runtime_health_healthy?, ->(_requester, **_options) { tun_enabled }) do
+          ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
+            check_dns = options.fetch(:check_dns)
+            tun_enabled
+          }) do
             ClaudeEasy.reload_recovered_safe_update_runtime(
               [target], 3, "active", precommit_condition: -> { true }
             )
@@ -5393,6 +5430,7 @@ class MacosPatcherTest < Minitest::Test
 
     assert restored
     assert tun_enabled
+    refute check_dns
     assert_equal [{ "tun" => { "enable" => true } }], patches
   end
 
@@ -10551,6 +10589,15 @@ class MacosPatcherTest < Minitest::Test
     )
     ClaudeEasy.stub(:restore_profile_bytes, true) do
       ClaudeEasy.stub(:reload_profile_runtime, true) do
+        ClaudeEasy.stub(:runtime_health_healthy?, false) do
+          assert_equal(
+            :reload_failed_restore_pending,
+            ClaudeEasy.rollback_after_reload_failure(
+              missing_result, ->(*_args) { [204, ""] }, missing_result.fetch(:path),
+              selections: {}, expected_tun: :enabled
+            )
+          )
+        end
         ClaudeEasy.stub(:runtime_health_healthy?, ->(*_args, **_options) { raise IOError }) do
           assert_equal(
             :reload_failed_restore_pending,
@@ -10614,6 +10661,50 @@ class MacosPatcherTest < Minitest::Test
       assert tun_enabled
       assert_equal 2, reloads
       assert_equal [{ "tun" => { "enable" => true } }], patches
+    end
+  end
+
+  def test_runtime_rollback_accepts_the_original_dns_limit_when_connectivity_is_restored
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "new"))
+      File.binwrite(path, candidate)
+      stat = File.stat(path)
+      result = {
+        path: path, rollback_bytes: original.b,
+        patched_digest: Digest::SHA256.hexdigest(candidate.b),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(path)
+      }
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "Taiwan" }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        when ["PUT", "/configs?force=true"],
+             ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          if method == "GET" && endpoint.include?("www.baidu.com")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          elsif method == "GET" && endpoint.include?("www.google.com")
+            [500, JSON.generate("message" => "dns resolve failed")]
+          else
+            raise "unexpected controller request: #{method} #{endpoint}"
+          end
+        end
+      end
+
+      status = ClaudeEasy.rollback_after_reload_failure(
+        result, requester, path, selections: { "Main" => "Taiwan" },
+        expected_tun: :enabled, connectivity_checker: -> { true }
+      )
+
+      assert_equal :reload_failed_rolled_back, status
+      assert_equal original.b, File.binread(path)
     end
   end
 
