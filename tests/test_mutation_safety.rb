@@ -468,7 +468,8 @@ class MutationSafetyTest < Minitest::Test
           "      reload_recovered_profile_runtime(\n" \
           "        work_items, require_tun: require_tun, socket: socket, requester: requester,\n" \
           "        connectivity_checker: connectivity_checker,\n" \
-          "        precommit_condition: precommit_condition\n" \
+          "        precommit_condition: precommit_condition,\n" \
+          "        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n" \
           "      )\n",
         "    return :runtime_restore_pending unless true\n"
       )
@@ -582,8 +583,9 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        "    code == 204 && restore_runtime_tun_state(requester, expected_tun)\n",
-        "    code == 204\n"
+        "      restore_runtime_tun_state(requester, expected_tun) &&\n" \
+          "      restore_runtime_selections(requester, selections)\n",
+        "      restore_runtime_selections(requester, selections)\n"
       )
 
       assert_mutation_is_killed(
@@ -599,14 +601,17 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "    return false unless restore_runtime_tun_state(requester, expected_tun)\n",
-        "    # mutant: skip TUN restoration after recovery reload\n"
+        "      precommit_condition: precommit_condition,\n" \
+          "      runtime_checkpoint: runtime_checkpoint\n" \
+          "    )\n",
+        "      precommit_condition: precommit_condition\n" \
+          "    )\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_recovered_safe_update_runtime_restores_tun_after_reloading_raw_subscription"
+        "--name", "test_recovered_safe_update_runtime_uses_the_saved_checkpoint"
       )
     end
   end
@@ -667,9 +672,21 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "      precommit_condition: precommit_condition, check_dns: false\n",
-        "      precommit_condition: precommit_condition\n"
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "      precommit_condition: precommit_condition, check_dns: false\n" \
+          "    )\n" \
+          "    healthy && runtime_precommit_allowed?(precommit_condition)\n" \
+          "  rescue StandardError\n" \
+          "    false\n" \
+          "  end\n\n" \
+          "  def verify_unchanged_profile_runtime",
+        "      precommit_condition: precommit_condition\n" \
+          "    )\n" \
+          "    healthy && runtime_precommit_allowed?(precommit_condition)\n" \
+          "  rescue StandardError\n" \
+          "    false\n" \
+          "  end\n\n" \
+          "  def verify_unchanged_profile_runtime"
       )
 
       assert_mutation_is_killed(
@@ -723,7 +740,7 @@ class MutationSafetyTest < Minitest::Test
           "    begin\n" \
           "      transaction = prepare_profile_transaction(\n" \
           "        [{ path: target, original: current_bytes, candidate: backup_bytes }],\n" \
-          "        backup_root, roots: directories\n" \
+          "        backup_root, roots: directories, runtime_checkpoint: runtime_checkpoint\n" \
           "      )\n" \
           "    rescue ConcurrentProfileChangeError\n" \
           "      return { status: :restore_conflict, path: target }\n" \
@@ -815,7 +832,7 @@ class MutationSafetyTest < Minitest::Test
           "      begin\n" \
           "        transaction = prepare_profile_transaction(\n" \
           "          [{ path: target, original: current_bytes, candidate: backup_bytes }],\n" \
-          "          backup_root, roots: directories\n" \
+          "          backup_root, roots: directories, runtime_checkpoint: runtime_checkpoint\n" \
           "        )\n" \
           "      rescue ConcurrentProfileChangeError\n" \
           "        return { status: :restore_conflict, path: target }\n" \
@@ -863,7 +880,7 @@ class MutationSafetyTest < Minitest::Test
           "        work_items = profile_work_items(roots, selected, active_root)\n" \
           "        recovery = resume_profile_transaction(\n" \
           "          backup_root, roots: roots, work_items: work_items, reload_runtime: true,\n" \
-          "          require_tun: usage_profile >= 2,\n" \
+          "          require_tun: runtime_tun_requirement(usage_profile),\n" \
           "          precommit_condition: precommit_condition\n" \
           "        )\n" \
           "        if recovery == :runtime_restore_pending\n" \
@@ -2557,8 +2574,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        '    return false unless dns_runtime_healthy?(requester, "www.google.com")',
-        '    true'
+        '      return false unless dns_runtime_healthy?(requester, "www.google.com")',
+        '      true'
       )
 
       assert_mutation_is_killed(
@@ -2908,11 +2925,11 @@ class MutationSafetyTest < Minitest::Test
     with_repo_copy do |root|
       replace_once(
         root,
-        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        "    return false if expected_tun == :unknown\n" \
-          "    return false unless runtime_precommit_allowed?(precommit_condition)\n",
-        "    return false if expected_tun == :unknown\n" \
-          "    # mutant: skip the live profile check\n"
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "        precommit_condition: precommit_condition,\n" \
+          "        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n",
+        "        precommit_condition: nil,\n" \
+          "        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n"
       )
 
       assert_mutation_is_killed(

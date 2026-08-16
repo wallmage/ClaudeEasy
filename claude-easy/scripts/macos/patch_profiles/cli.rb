@@ -665,6 +665,15 @@ module ClaudeEasy
           runtime_context, directories, guard_storage: guard_storage
         )
       end
+      runtime_checkpoint = nil
+      runtime_checkpoint_provider = lambda do |target|
+        active = runtime_context[:active_path] &&
+                 File.realpath(target) == runtime_context.fetch(:active_path)
+        next nil unless active
+
+        runtime_checkpoint = capture_runtime_checkpoint(target, require_tun: :preserve)
+        runtime_checkpoint || false
+      end
       activation = lambda do |restore_result|
         if restore_result[:status] != :no_change &&
            !runtime_precommit_allowed?(precommit_condition)
@@ -682,7 +691,8 @@ module ClaudeEasy
           activate_updated_profile(
             restore_result, require_tun: :preserve,
             precommit_condition: precommit_condition,
-            require_safe_ai: restore_usage_profile == 3
+            require_safe_ai: restore_usage_profile == 3,
+            runtime_checkpoint: runtime_checkpoint
           )
         else
           restore_result
@@ -696,7 +706,8 @@ module ClaudeEasy
           restore_candidate_valid?(path, restore_usage_profile, policy: restore_policy)
         },
         selected_name: selected, activation: activation,
-        precommit_condition: precommit_condition
+        precommit_condition: precommit_condition,
+        runtime_checkpoint_provider: runtime_checkpoint_provider
       )
 
       status, code, summary = case result[:status]
@@ -711,6 +722,8 @@ module ClaudeEasy
                                 ["partial", "restore_runtime_pending", "备份未能通过运行检查；文件已恢复回滚前版本，但运行内核恢复失败。"]
                               when :reload_failed_rollback_conflict
                                 ["partial", "restore_rollback_conflict", "备份未能通过运行检查，且订阅同时发生变化；未覆盖新内容。"]
+                              when :runtime_state_unavailable
+                                ["failed", "client_state_changed", "无法确认更新前的运行状态，未恢复备份。"]
                               else
                                 ["failed", result[:status].to_s, "备份恢复失败。"]
                               end

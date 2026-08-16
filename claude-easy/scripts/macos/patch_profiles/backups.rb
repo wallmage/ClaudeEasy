@@ -293,7 +293,8 @@ module ClaudeEasy
 
       restored_runtime = reload_recovered_profile_runtime(
         [{ path: result.fetch(:path), active: true }], require_tun: :preserve,
-        precommit_condition: precommit_condition
+        precommit_condition: precommit_condition,
+        runtime_checkpoint: transaction.is_a?(Hash) ? transaction[:runtime_checkpoint] : nil
       ) && runtime_precommit_allowed?(precommit_condition)
       if restored_runtime
         remove_profile_transaction(transaction)
@@ -339,7 +340,8 @@ module ClaudeEasy
   end
 
   def restore_backup(backup_id, directories:, backup_root:, expected_current_sha256:, validator:,
-                     selected_name: nil, activation: nil, precommit_condition: nil)
+                     selected_name: nil, activation: nil, precommit_condition: nil,
+                     runtime_checkpoint: nil, runtime_checkpoint_provider: nil)
     operation_lock = nil
     return { status: :restore_conflict } unless expected_current_sha256.to_s.match?(/\A[0-9a-f]{64}\z/i)
 
@@ -367,6 +369,12 @@ module ClaudeEasy
     public_id = public_backup_id(physical_id)
     target = find_backup_target(physical_id, directories)
     write_path = File.realpath(target)
+    if runtime_checkpoint_provider
+      provided_checkpoint = runtime_checkpoint_provider.call(target)
+      return { status: :runtime_state_unavailable, path: target } if provided_checkpoint == false
+
+      runtime_checkpoint = provided_checkpoint
+    end
     backup_bytes = read_regular_file_once(backup_path, "备份")
     backup_text = backup_bytes.dup.force_encoding(Encoding::UTF_8)
     raise InvalidConfigError, "备份不是有效的 UTF-8" unless backup_text.valid_encoding?
@@ -389,7 +397,7 @@ module ClaudeEasy
       begin
         transaction = prepare_profile_transaction(
           [{ path: target, original: current_bytes, candidate: backup_bytes }],
-          backup_root, roots: directories
+          backup_root, roots: directories, runtime_checkpoint: runtime_checkpoint
         )
       rescue ConcurrentProfileChangeError
         return { status: :restore_conflict, path: target }
@@ -412,7 +420,7 @@ module ClaudeEasy
     begin
       transaction = prepare_profile_transaction(
         [{ path: target, original: current_bytes, candidate: backup_bytes }],
-        backup_root, roots: directories
+        backup_root, roots: directories, runtime_checkpoint: runtime_checkpoint
       )
     rescue ConcurrentProfileChangeError
       return { status: :restore_conflict, path: target }
