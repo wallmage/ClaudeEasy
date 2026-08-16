@@ -105,6 +105,8 @@ ruby scripts/macos/patch_profiles.rb --json
 
 `safe_update_completed`、`safe_update_verified` 和 `workflow_complete: false` 都是中间状态；看到后必须继续完成 `required_followups`，不得输出最终说明。发现缺少不需要用户决定的检查就立即补做；更新前区域基线缺失时自动建立新基线并重新执行整套安全更新，直至全部订阅和当前档位的每项检查都有本轮证据。
 
+同一用户请求和同一已保存档位在 macOS 与 Windows 上使用相同的执行顺序、完成条件和档位后续项目；平台入口可以分成不同数量的安全步骤，但不能省略共同流程或提前结束。
+
 ## 配置历史与恢复
 
 先列出备份，再比较症状出现前的候选；配置差异只输出字段名和哈希。恢复必须携带比较时哈希：macOS `--expected-current-sha256`，Windows `-ExpectedCurrentSha256`。恢复前先备份当前版本；恢复当前订阅后还要恢复运行配置并按保存档位验收。外部修改、文件身份变化、事务状态未知或运行恢复失败时保留现场和记录，不强行回滚。

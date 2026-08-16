@@ -39,6 +39,20 @@ function Complete-InstallResult(
     exit $ExitCode
 }
 
+function Get-SafeUpdateRequiredFollowups([int]$Profile) {
+    switch ($Profile) {
+        1 { return @("client_switch_verification", "site_verification", "final_state_audit") }
+        2 { return @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit") }
+        3 {
+            return @(
+                "region_fingerprint_baseline", "route_verification", "dns_deep_test",
+                "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
+            )
+        }
+        default { throw "用途档位无效，只能是 1、2 或 3。" }
+    }
+}
+
 function Get-SavedUsageProfile([string]$Path, [object]$Snapshot = $null) {
     $snapshot = $Snapshot
     if ($null -eq $snapshot) {

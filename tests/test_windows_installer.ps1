@@ -328,6 +328,30 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+$safeUpdateFollowupCases = @(
+    [pscustomobject]@{
+        Profile = 1
+        Expected = @("client_switch_verification", "site_verification", "final_state_audit")
+    },
+    [pscustomobject]@{
+        Profile = 2
+        Expected = @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit")
+    },
+    [pscustomobject]@{
+        Profile = 3
+        Expected = @(
+            "region_fingerprint_baseline", "route_verification", "dns_deep_test",
+            "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
+        )
+    }
+)
+foreach ($followupCase in $safeUpdateFollowupCases) {
+    $actualFollowups = @(Get-SafeUpdateRequiredFollowups ([int]$followupCase.Profile))
+    Assert-True (
+        ($actualFollowups -join ",") -ceq (@($followupCase.Expected) -join ",")
+    ) "Windows safe-update follow-ups differ from the shared profile workflow for profile $($followupCase.Profile)"
+}
+
 function Get-TreeContentSnapshot([string]$Path) {
     $rootPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
@@ -1232,6 +1256,13 @@ try {
         $partialWorkflowMetadataRejected = $true
     }
     Assert-True $partialWorkflowMetadataRejected "result contract accepted partial workflow metadata"
+    $invalidWorkflowFollowupRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false -CompletedScope "subscription_update" -RequiredFollowups @("route_verification", 7) | Out-Null
+    } catch {
+        $invalidWorkflowFollowupRejected = $true
+    }
+    Assert-True $invalidWorkflowFollowupRejected "result contract accepted a non-string workflow follow-up"
     $invalidContractCommandRejected = $false
     try { New-ClaudeEasyResult -Command "contract-test" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" | Out-Null } catch { $invalidContractCommandRejected = $true }
     Assert-True $invalidContractCommandRejected "result contract accepted an unstable command name"
@@ -2815,9 +2846,21 @@ rules:
     $snapshotResult = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-SnapshotProfiles",
-        "-MihomoPath", $fakeCore
+        "-MihomoPath", $fakeCore,
+        "-Json"
     )
-    Assert-True ($snapshotResult.ExitCode -eq 0) "safe update snapshot failed; $(Get-TestOutputDiagnostic $snapshotResult.Output)"
+    $snapshotJson = Assert-JsonResult $snapshotResult "install" 0
+    Assert-True ($snapshotJson.profile -eq 1) "safe update snapshot did not report the saved profile"
+    Assert-True (
+        $snapshotJson.workflow_complete -eq $false -and
+        $snapshotJson.completed_scope -eq "subscription_snapshot" -and
+        (@($snapshotJson.required_followups) -join ",") -ceq (
+            @(
+                "subscription_refresh", "safe_update_verification",
+                "client_switch_verification", "site_verification", "final_state_audit"
+            ) -join ","
+        )
+    ) "safe update snapshot did not preserve the remaining profile 1 workflow"
     $safeBackups = @(Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--pre-update--*" })
     Assert-True ($safeBackups.Count -eq 2) "snapshot did not back up exactly the two remote subscriptions"
     $pendingSafeUpdateBeforeUninstall = Get-TreeContentSnapshot $safeUpdateCase
@@ -3066,16 +3109,11 @@ rules: ["MATCH,AI"]
     Assert-True (
         $legacyRecoveryRetryJson.workflow_complete -eq $false -and
         $legacyRecoveryRetryJson.completed_scope -eq "subscription_update" -and
-        @($legacyRecoveryRetryJson.required_followups).Count -gt 0
+        $legacyRecoveryRetryJson.profile -eq 1 -and
+        (@($legacyRecoveryRetryJson.required_followups) -join ",") -ceq (
+            @("client_switch_verification", "site_verification", "final_state_audit") -join ","
+        )
     ) "safe update verification incorrectly reported the whole user workflow complete"
-    foreach ($requiredFollowup in @(
-        "region_fingerprint_baseline", "route_verification", "dns_deep_test",
-        "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
-    )) {
-        Assert-True (
-            @($legacyRecoveryRetryJson.required_followups) -contains $requiredFollowup
-        ) "safe update verification omitted required follow-up $requiredFollowup"
-    }
     Assert-True (
         @($legacyRecoveryRetryJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "updated" }).Count -eq 0
     ) "changed safe-update subscriptions were not reported as updated"

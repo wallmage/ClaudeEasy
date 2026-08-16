@@ -1419,7 +1419,7 @@ test('Windows installation fails closed and preserves exact restore state', () =
 test('Windows installer is split into side-effect-free modules with stable function ownership', () => {
   const entry = fs.readFileSync(installerPath, 'utf8');
   const expected = {
-    'common.ps1': ['Write-ClaudeEasyHumanText', 'Write-Info', 'Complete-InstallResult', 'Get-SavedUsageProfile', 'Save-UsageProfile'],
+    'common.ps1': ['Write-ClaudeEasyHumanText', 'Write-Info', 'Complete-InstallResult', 'Get-SafeUpdateRequiredFollowups', 'Get-SavedUsageProfile', 'Save-UsageProfile'],
     'transaction.ps1': [
       'Protect-BackupAcl', 'ConvertTo-NormalizedWindowsPath', 'Resolve-ClashVergeAppHome',
       'Get-AppHomeRelativePath',

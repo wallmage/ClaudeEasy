@@ -125,6 +125,11 @@ function New-ClaudeEasyResult(
             $null -eq $RequiredFollowups) {
             throw "工作流结果字段不完整。"
         }
+        foreach ($requiredFollowup in @($RequiredFollowups)) {
+            if ($requiredFollowup -isnot [string] -or $requiredFollowup.Length -eq 0) {
+                throw "工作流后续项目无效。"
+            }
+        }
         $result.workflow_complete = [bool]$WorkflowComplete
         $result.completed_scope = Protect-ClaudeEasyResultText $CompletedScope
         $result.required_followups = @(ConvertTo-ClaudeEasyResultArray $RequiredFollowups)

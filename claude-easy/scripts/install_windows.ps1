@@ -70,7 +70,7 @@ try {
         $null = . $installerModulePath
     }
     foreach ($requiredInstallerFunction in @(
-        "Complete-InstallResult", "Write-Info", "Write-ClaudeEasyHumanText", "Get-SavedUsageProfile", "Resolve-ClashVergeAppHome", "ConvertTo-NormalizedWindowsPath",
+        "Complete-InstallResult", "Write-Info", "Write-ClaudeEasyHumanText", "Get-SafeUpdateRequiredFollowups", "Get-SavedUsageProfile", "Resolve-ClashVergeAppHome", "ConvertTo-NormalizedWindowsPath",
         "Enter-AppHomeMutationLock", "Exit-AppHomeMutationLock", "Assert-NoReparsePointPath", "Get-OptionalFileSnapshot",
         "ConvertTo-Utf8Bytes", "Get-BytesSha256", "Get-FileSha256", "Get-StreamBytes", "Remove-VerifiedOwnedFile",
         "Backup-InitialOnce", "Backup-Versioned", "Invoke-VerifiedFileTransaction", "Get-BackupTarget", "Get-PublicBackupDescriptor", "Test-RestoreCandidate",
@@ -156,8 +156,34 @@ $clientStoppedPreCommit = {
     return (-not (Test-ClashVergeRunning))
 }
 
+$usageProfileSnapshot = $null
+$savedUsageProfile = 0
+$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (
+    -not $ListBackups -and
+    [string]::IsNullOrWhiteSpace($CompareBackup) -and
+    [string]::IsNullOrWhiteSpace($RestoreBackup)
+)
+if ($needsUsageProfile) {
+    try {
+        $usageProfileSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
+        $savedUsageProfile = Get-SavedUsageProfile $usageStatePath $usageProfileSnapshot
+    } catch {
+        Complete-InstallResult 1 "failed" "usage_profile_read_failed" ("读取用途档位失败：" + $_.Exception.Message)
+    }
+}
+
 try {
 try {
+if ($SnapshotProfiles -or $VerifySafeUpdate) {
+    if ($savedUsageProfile -eq 0) {
+        Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
+    }
+    if ($UsageProfile -ne 0 -and $UsageProfile -ne $savedUsageProfile) {
+        Complete-InstallResult 64 "invalid_request" "usage_profile_mismatch" "请求档位与已保存档位不一致；未执行安全更新。"
+    }
+    $script:ClaudeEasyProfile = $savedUsageProfile
+}
+
 if ($SnapshotProfiles) {
     $newManifestSnapshot = Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录"
     if ($newManifestSnapshot.Exists) {
@@ -218,7 +244,12 @@ if ($SnapshotProfiles) {
     $snapshotItems = @($profiles | ForEach-Object {
         Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "pending"
     })
-    Complete-InstallResult 0 "ok" "snapshot_created" "已创建全部远程订阅的安全更新前备份。" @("profile_backups") @() $snapshotItems
+    $snapshotFollowups = @("subscription_refresh", "safe_update_verification") +
+        @(Get-SafeUpdateRequiredFollowups $script:ClaudeEasyProfile)
+    Complete-InstallResult 0 "ok" "snapshot_created" `
+        "已创建全部远程订阅的安全更新前备份；订阅刷新、验收和最终复核尚未完成。" `
+        @("profile_backups") @() $snapshotItems @() `
+        $false "subscription_snapshot" $snapshotFollowups
 }
 
 if ($VerifySafeUpdate) {
@@ -293,7 +324,7 @@ if ($VerifySafeUpdate) {
                 Complete-InstallResult 1 "partial" "safe_update_refresh_pending" "仍有远程订阅缺少本轮刷新凭据；安全更新清单和订阅文件保持不变，请在客户端完成全部更新后重试验收。" @() @("refresh_evidence")
             }
         }
-        $savedProfile = Get-SavedUsageProfile $usageStatePath
+        $savedProfile = $savedUsageProfile
         if ($savedProfile -notin @(1, 2, 3)) { throw "没有可用于安全更新验收的用途档位。" }
         if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
         $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
@@ -431,16 +462,7 @@ if ($VerifySafeUpdate) {
         }
         Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) $itemStatus
     })
-    $requiredFollowups = if ($script:ClaudeEasyProfile -eq 1) {
-        @("client_switch_verification", "site_verification", "final_state_audit")
-    } elseif ($script:ClaudeEasyProfile -eq 2) {
-        @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit")
-    } else {
-        @(
-            "region_fingerprint_baseline", "route_verification", "dns_deep_test",
-            "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
-        )
-    }
+    $requiredFollowups = @(Get-SafeUpdateRequiredFollowups $script:ClaudeEasyProfile)
     Complete-InstallResult 0 "ok" "safe_update_verified" `
         "订阅、补丁和平台检查已完成；当前档位的后续验收尚未完成。" `
         @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems @() `
@@ -558,13 +580,6 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     $operationStatus = if ($_.Exception.Message -match "已恢复") { "rolled_back" } else { "failed" }
     Complete-InstallResult 1 $operationStatus "operation_failed" ("操作失败：" + $_.Exception.Message)
 }
-try {
-    $usageProfileSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
-    $savedUsageProfile = Get-SavedUsageProfile $usageStatePath $usageProfileSnapshot
-} catch {
-    Complete-InstallResult 1 "failed" "usage_profile_read_failed" ("读取用途档位失败：" + $_.Exception.Message)
-}
-
 if ($ShowUsageProfile) {
     if ($savedUsageProfile -ne 0) { $script:ClaudeEasyProfile = $savedUsageProfile }
     if (-not $Json) { Write-ClaudeEasyHumanText $(if ($savedUsageProfile -eq 0) { "unset" } else { [string]$savedUsageProfile }) }

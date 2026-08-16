@@ -1184,6 +1184,26 @@ class SkillContractTest < Minitest::Test
     end
   end
 
+  def test_new_workflows_require_cross_platform_user_visible_parity
+    core = File.read(File.join(SKILL, "references/policy-core.md"))
+    safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    readme = File.read(File.join(ROOT, "README.md"))
+    baseline = File.read(File.join(ROOT, "tests/baseline.md"))
+
+    assert_includes core, "跨平台对等"
+    assert_includes core, "执行顺序、完成条件、中间状态、后续项目和失败处理"
+    assert_includes core, "两个平台都实现并通过对应测试"
+    assert_includes safe_update, "subscription_refresh"
+    assert_includes safe_update, "safe_update_verification"
+    assert_includes safe_update, "档位 1"
+    assert_includes safe_update, "档位 2"
+    assert_includes safe_update, "档位 3"
+    assert_includes skill, "同一用户请求和同一已保存档位"
+    assert_includes readme, "macOS 与 Windows 使用相同的完成条件"
+    assert_includes baseline, "跨平台安全更新对等合同"
+  end
+
   def test_safe_update_never_checks_provider_switch_before_the_first_attempt
     documents = [
       File.read(File.join(ROOT, "README.md")),
