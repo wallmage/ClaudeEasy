@@ -911,9 +911,11 @@ if [ "$SAFE_UPDATE" -eq 1 ]; then
         safe_update
       ;;
   esac
-  say "安全更新已完成：当前存储位置中的全部远程订阅已一起更新。"
+  say "订阅、补丁和内部运行检查已完成：当前存储位置中的全部远程订阅已一起更新。"
   say "已再次确认订阅自动更新关闭。"
-  finish 0 ok safe_update_completed "安全更新已完成。" safe_update
+  say "当前档位的后续验收尚未完成，必须继续完成后才能结束任务。"
+  finish 0 ok safe_update_completed \
+    "订阅、补丁和内部运行检查已完成；当前档位的后续验收尚未完成。" safe_update
 fi
 
 if [ -n "$CUSTOM_PROFILE_DIR" ]; then

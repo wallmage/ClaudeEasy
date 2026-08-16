@@ -1221,6 +1221,17 @@ try {
     foreach ($field in @("schema", "version", "command", "platform", "client", "operation", "ok", "status", "code", "exit_code", "summary_zh", "profile", "changes", "checks", "items", "messages", "warnings")) {
         Assert-True ($null -ne $contractResult.PSObject.Properties[$field]) "result contract omitted $field"
     }
+    $workflowContractResult = New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false -CompletedScope "subscription_update" -RequiredFollowups @("route_verification", "final_state_audit")
+    Assert-True ($workflowContractResult.workflow_complete -eq $false) "result contract changed incomplete workflow state"
+    Assert-True ($workflowContractResult.completed_scope -eq "subscription_update") "result contract omitted completed workflow scope"
+    Assert-True ((@($workflowContractResult.required_followups) -join ",") -eq "route_verification,final_state_audit") "result contract changed required follow-ups"
+    $partialWorkflowMetadataRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false | Out-Null
+    } catch {
+        $partialWorkflowMetadataRejected = $true
+    }
+    Assert-True $partialWorkflowMetadataRejected "result contract accepted partial workflow metadata"
     $invalidContractCommandRejected = $false
     try { New-ClaudeEasyResult -Command "contract-test" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" | Out-Null } catch { $invalidContractCommandRejected = $true }
     Assert-True $invalidContractCommandRejected "result contract accepted an unstable command name"
@@ -3052,6 +3063,19 @@ rules: ["MATCH,AI"]
     Assert-True (
         $legacyRecoveryRetryJson.code -eq "safe_update_verified"
     ) "legacy recovery could not complete after every subscription was refreshed"
+    Assert-True (
+        $legacyRecoveryRetryJson.workflow_complete -eq $false -and
+        $legacyRecoveryRetryJson.completed_scope -eq "subscription_update" -and
+        @($legacyRecoveryRetryJson.required_followups).Count -gt 0
+    ) "safe update verification incorrectly reported the whole user workflow complete"
+    foreach ($requiredFollowup in @(
+        "region_fingerprint_baseline", "route_verification", "dns_deep_test",
+        "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
+    )) {
+        Assert-True (
+            @($legacyRecoveryRetryJson.required_followups) -contains $requiredFollowup
+        ) "safe update verification omitted required follow-up $requiredFollowup"
+    }
     Assert-True (
         @($legacyRecoveryRetryJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "updated" }).Count -eq 0
     ) "changed safe-update subscriptions were not reported as updated"

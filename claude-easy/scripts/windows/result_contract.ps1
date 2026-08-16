@@ -81,7 +81,10 @@ function New-ClaudeEasyResult(
     [object[]]$Checks = @(),
     [object[]]$Items = @(),
     [object[]]$Messages = @(),
-    [object[]]$Warnings = @()
+    [object[]]$Warnings = @(),
+    [object]$WorkflowComplete = $null,
+    [string]$CompletedScope = "",
+    [object]$RequiredFollowups = $null
 ) {
     if ($Command -notin $script:ClaudeEasyResultCommands) { throw "结果命令无效。" }
     if ($Status -notin @("ok", "no_change", "skipped", "failed", "rolled_back", "partial", "invalid_request", "unsupported")) { throw "结果状态无效。" }
@@ -93,7 +96,7 @@ function New-ClaudeEasyResult(
             throw "结果项目状态无效。"
         }
     }
-    return [pscustomobject][ordered]@{
+    $result = [ordered]@{
         schema = $script:ClaudeEasyResultSchema
         version = $script:ClaudeEasyResultVersion
         command = $Command
@@ -112,6 +115,21 @@ function New-ClaudeEasyResult(
         messages = @(ConvertTo-ClaudeEasyResultArray $Messages)
         warnings = @(ConvertTo-ClaudeEasyResultArray $Warnings)
     }
+    $hasWorkflowMetadata = $null -ne $WorkflowComplete -or
+        -not [string]::IsNullOrWhiteSpace($CompletedScope) -or
+        $null -ne $RequiredFollowups
+    if ($hasWorkflowMetadata) {
+        if ($null -eq $WorkflowComplete -or
+            $WorkflowComplete -isnot [bool] -or
+            [string]::IsNullOrWhiteSpace($CompletedScope) -or
+            $null -eq $RequiredFollowups) {
+            throw "工作流结果字段不完整。"
+        }
+        $result.workflow_complete = [bool]$WorkflowComplete
+        $result.completed_scope = Protect-ClaudeEasyResultText $CompletedScope
+        $result.required_followups = @(ConvertTo-ClaudeEasyResultArray $RequiredFollowups)
+    }
+    return [pscustomobject]$result
 }
 
 function Write-ClaudeEasyResult([object]$Result) {

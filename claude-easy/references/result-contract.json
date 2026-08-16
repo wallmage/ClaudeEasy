@@ -63,6 +63,11 @@
     "messages": "array",
     "warnings": "array"
   },
+  "optional_field_types": {
+    "workflow_complete": "boolean",
+    "completed_scope": "string",
+    "required_followups": "array"
+  },
   "platforms": {
     "macos": {
       "client": "clashx-meta",

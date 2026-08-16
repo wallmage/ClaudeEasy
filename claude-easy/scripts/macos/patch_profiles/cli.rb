@@ -160,11 +160,14 @@ module ClaudeEasy
   end
 
   def emit_cli_result(operation:, exit_code:, status:, code:, summary_zh:, profile: nil,
-                      changes: [], checks: [], items: [], messages: [], warnings: [])
+                      changes: [], checks: [], items: [], messages: [], warnings: [],
+                      workflow_complete: nil, completed_scope: nil, required_followups: nil)
     ClaudeEasyResult.emit(
       command: "patch", operation: operation, ok: exit_code.zero? && !%w[failed partial].include?(status),
       status: status, code: code, exit_code: exit_code, summary_zh: summary_zh, profile: profile,
-      changes: changes, checks: checks, items: items, messages: messages, warnings: warnings
+      changes: changes, checks: checks, items: items, messages: messages, warnings: warnings,
+      workflow_complete: workflow_complete, completed_scope: completed_scope,
+      required_followups: required_followups
     )
     exit_code
   end
@@ -745,9 +748,24 @@ module ClaudeEasy
       )
       if result[:status] == :updated
         mark_wrapper_commit_receipt(options)
+        required_followups = case options[:usage_profile]
+                             when 1
+                               %w[client_switch_verification site_verification final_state_audit]
+                             when 2
+                               %w[
+                                 client_switch_verification site_verification
+                                 agent_connectivity_verification final_state_audit
+                               ]
+                             else
+                               %w[
+                                 region_fingerprint_baseline route_verification dns_deep_test
+                                 webrtc_test_1 webrtc_test_2 region_fingerprint_rescan final_state_audit
+                               ]
+                             end
         return emit_cli_result(
           operation: "safe_update", exit_code: 0, status: "ok", code: "safe_update_completed",
-          summary_zh: "全部远程订阅已安全更新。", profile: options[:usage_profile],
+          summary_zh: "订阅、补丁和内部运行检查已完成；当前档位的后续验收尚未完成。",
+          profile: options[:usage_profile],
           changes: ["remote_subscriptions"],
           checks: [{ "name" => "updated_count", "value" => result.fetch(:count) }],
           items: result.fetch(:profiles).map do |name|
@@ -755,7 +773,9 @@ module ClaudeEasy
               "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name.to_s)}",
               "label" => safe_label(name), "status" => "updated"
             }
-          end
+          end,
+          workflow_complete: false, completed_scope: "subscription_update",
+          required_followups: required_followups
         ) if options[:json]
         puts "全部远程订阅已安全更新：#{result.fetch(:count)} 份。"
         result.fetch(:profiles).each { |name| puts "已更新：#{safe_label(name)}" }

@@ -1140,6 +1140,50 @@ class SkillContractTest < Minitest::Test
     refute_includes skill, "订阅以后刷新时，请再次运行"
   end
 
+  def test_safe_update_cannot_stop_after_the_subscription_transaction
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+    baseline = File.read(File.join(ROOT, "tests/baseline.md"))
+    result_contract = JSON.parse(
+      File.read(File.join(SKILL, "references/result-contract.json"))
+    )
+
+    assert_includes policy, "完整任务顺序与完成条件"
+    assert_includes policy, "更新前区域指纹基线"
+    assert_includes policy, "分流验证、DNS 深度测试、WebRTC 测试 1、WebRTC 测试 2"
+    assert_includes policy, "更新后区域指纹重扫"
+    assert_includes policy, "最终状态复核"
+    assert_includes policy, "safe_update_completed"
+    assert_includes policy, "safe_update_verified"
+    assert_includes policy, "不代表用户要求的安全更新任务已经完成"
+    assert_includes policy, "自动把当前状态作为新的更新前基线"
+    assert_includes policy, "重新执行整套安全更新"
+    assert_includes policy, "不得因为仍有工作未做而停止"
+    assert_includes policy, "每一项都有本轮新证据"
+
+    assert_includes skill, "`workflow_complete: false`"
+    assert_includes skill, "继续完成 `required_followups`"
+    assert_includes skill, "不得输出最终说明"
+    assert_includes readme, "脚本返回更新成功不代表整项任务完成"
+    assert_includes readme, "自动继续完成当前档位的全部验收"
+    assert_includes baseline, "安全更新完整任务合同"
+
+    optional_fields = result_contract.fetch("optional_field_types")
+    assert_equal "boolean", optional_fields.fetch("workflow_complete")
+    assert_equal "string", optional_fields.fetch("completed_scope")
+    assert_equal "array", optional_fields.fetch("required_followups")
+
+    result_sources = [
+      File.read(File.join(SKILL, "scripts/macos/result_contract.rb")),
+      File.read(File.join(SKILL, "scripts/windows/result_contract.ps1"))
+    ]
+    result_sources.each do |source|
+      assert_includes source, "workflow_complete"
+      assert_includes source, "required_followups"
+    end
+  end
+
   def test_safe_update_never_checks_provider_switch_before_the_first_attempt
     documents = [
       File.read(File.join(ROOT, "README.md")),

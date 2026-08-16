@@ -23,10 +23,13 @@ function Complete-InstallResult(
     [object[]]$Changes = @(),
     [object[]]$Checks = @(),
     [object[]]$Items = @(),
-    [object[]]$Warnings = @()
+    [object[]]$Warnings = @(),
+    [object]$WorkflowComplete = $null,
+    [string]$CompletedScope = "",
+    [object]$RequiredFollowups = $null
 ) {
     if ($Json) {
-        $result = New-ClaudeEasyResult -Command "install" -Operation $script:ClaudeEasyOperation -Ok ($ExitCode -eq 0) -Status $Status -Code $Code -ExitCode $ExitCode -SummaryZh $SummaryZh -Profile $script:ClaudeEasyProfile -Changes $Changes -Checks $Checks -Items $Items -Messages @($script:ClaudeEasyMessages) -Warnings $Warnings
+        $result = New-ClaudeEasyResult -Command "install" -Operation $script:ClaudeEasyOperation -Ok ($ExitCode -eq 0) -Status $Status -Code $Code -ExitCode $ExitCode -SummaryZh $SummaryZh -Profile $script:ClaudeEasyProfile -Changes $Changes -Checks $Checks -Items $Items -Messages @($script:ClaudeEasyMessages) -Warnings $Warnings -WorkflowComplete $WorkflowComplete -CompletedScope $CompletedScope -RequiredFollowups $RequiredFollowups
         Write-ClaudeEasyResult $result
     } elseif ($ExitCode -eq 0) {
         Write-ClaudeEasyHumanText "[ClaudeEasy] $SummaryZh"

@@ -431,7 +431,20 @@ if ($VerifySafeUpdate) {
         }
         Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) $itemStatus
     })
-    Complete-InstallResult 0 "ok" "safe_update_verified" "全部远程订阅已逐份通过检查。" @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems
+    $requiredFollowups = if ($script:ClaudeEasyProfile -eq 1) {
+        @("client_switch_verification", "site_verification", "final_state_audit")
+    } elseif ($script:ClaudeEasyProfile -eq 2) {
+        @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit")
+    } else {
+        @(
+            "region_fingerprint_baseline", "route_verification", "dns_deep_test",
+            "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
+        )
+    }
+    Complete-InstallResult 0 "ok" "safe_update_verified" `
+        "订阅、补丁和平台检查已完成；当前档位的后续验收尚未完成。" `
+        @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems @() `
+        $false "subscription_update" $requiredFollowups
 }
 
 if ($ListBackups) {

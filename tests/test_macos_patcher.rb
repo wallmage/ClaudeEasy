@@ -1900,6 +1900,20 @@ class MacosPatcherTest < Minitest::Test
 
     output, error = capture_io do
       assert_equal 0, ClaudeEasyResult.cli(%w[
+        --command patch --operation safe_update --ok true --status ok
+        --code safe_update_completed --exit-code 0 --summary 完成
+        --workflow-complete false --completed-scope subscription_update
+        --required-followup route_verification --required-followup final_state_audit
+      ])
+    end
+    assert_empty error
+    result = JSON.parse(output)
+    assert_equal false, result.fetch("workflow_complete")
+    assert_equal "subscription_update", result.fetch("completed_scope")
+    assert_equal %w[route_verification final_state_audit], result.fetch("required_followups")
+
+    output, error = capture_io do
+      assert_equal 0, ClaudeEasyResult.cli(%w[
         --command patch --operation test --ok true --status ok --code completed
         --exit-code 0 --summary 完成 --profile 4
       ])
@@ -1960,6 +1974,47 @@ class MacosPatcherTest < Minitest::Test
     refute ClaudeEasyResult.valid_child_json?('{"items":[')
     refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.reject { |key, _| key == "checks" }))
     refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("items" => [{ "status" => "verified" }])))
+  end
+
+  def test_result_contract_preserves_incomplete_workflow_metadata
+    result = ClaudeEasyResult.build(
+      command: "install", operation: "safe_update", ok: true, status: "ok",
+      code: "safe_update_completed", exit_code: 0,
+      summary_zh: "订阅事务完成，后续检查尚未完成。", profile: 3,
+      workflow_complete: false, completed_scope: "subscription_update",
+      required_followups: %w[
+        route_verification dns_deep_test webrtc_test_1 webrtc_test_2
+        region_fingerprint_rescan final_state_audit
+      ]
+    )
+
+    assert_equal false, result.fetch("workflow_complete")
+    assert_equal "subscription_update", result.fetch("completed_scope")
+    assert_equal 6, result.fetch("required_followups").length
+    assert ClaudeEasyResult.valid_child_json?(JSON.generate(result))
+    refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("workflow_complete" => "false")))
+  end
+
+  def test_result_contract_cli_merges_child_workflow_metadata
+    child = ClaudeEasyResult.build(
+      command: "patch", operation: "safe_update", ok: true, status: "ok",
+      code: "safe_update_completed", exit_code: 0, summary_zh: "订阅事务完成。",
+      workflow_complete: false, completed_scope: "subscription_update",
+      required_followups: %w[route_verification final_state_audit]
+    )
+    output, error, status = Open3.capture3(
+      "/usr/bin/ruby", RESULT_CONTRACT_PATH,
+      "--command", "install", "--operation", "safe_update", "--ok", "true",
+      "--status", "ok", "--code", "safe_update_completed", "--exit-code", "0",
+      "--summary", "订阅事务完成，后续检查尚未完成。", "--merge-child-stdin",
+      stdin_data: JSON.generate(child)
+    )
+
+    assert status.success?, error
+    result = JSON.parse(output)
+    assert_equal false, result.fetch("workflow_complete")
+    assert_equal "subscription_update", result.fetch("completed_scope")
+    assert_equal %w[route_verification final_state_audit], result.fetch("required_followups")
   end
 
   def test_result_contract_redacts_a_uuid_next_to_unicode_text
@@ -11621,8 +11676,40 @@ class MacosPatcherTest < Minitest::Test
                   ])
                 end
                 assert_empty error
-                assert_equal expected_code, JSON.parse(output).fetch("code")
+                parsed = JSON.parse(output)
+                assert_equal expected_code, parsed.fetch("code")
+                if expected_code == "safe_update_completed"
+                  assert_equal false, parsed.fetch("workflow_complete")
+                  assert_equal "subscription_update", parsed.fetch("completed_scope")
+                  assert_equal %w[
+                    region_fingerprint_baseline route_verification dns_deep_test
+                    webrtc_test_1 webrtc_test_2 region_fingerprint_rescan final_state_audit
+                  ], parsed.fetch("required_followups")
+                end
               end
+            end
+          end
+        end
+      end
+
+      {
+        1 => %w[client_switch_verification site_verification final_state_audit],
+        2 => %w[
+          client_switch_verification site_verification
+          agent_connectivity_verification final_state_audit
+        ]
+      }.each do |profile, followups|
+        ClaudeEasy.stub(:saved_usage_profile, profile) do
+          ClaudeEasy.stub(:remote_subscription_targets, []) do
+            ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 1, profiles: ["friend"] }) do
+              output, error = capture_io do
+                assert_equal 0, ClaudeEasy.cli([
+                  "--json", "--profile-dir", directory, "--safe-update-all",
+                  "--usage-profile", profile.to_s
+                ])
+              end
+              assert_empty error
+              assert_equal followups, JSON.parse(output).fetch("required_followups")
             end
           end
         end
