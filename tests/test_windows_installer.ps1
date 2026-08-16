@@ -3436,6 +3436,12 @@ rules:
             $schemaSafeUpdateTarget,
             "mode: rule`nproxies: []`nproxy-groups: [{ name: Main, type: select, proxies: [DIRECT] }]`nrules: [MATCH,Main]`n"
         )
+        $schemaInstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $schemaSafeUpdateCase,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore
+        )
+        Assert-True ($schemaInstall.ExitCode -eq 0) "safe-update schema fixture install failed"
         $schemaSnapshot = Invoke-TestPowerShell $installer @(
             "-AppHome", $schemaSafeUpdateCase,
             "-SnapshotProfiles",
