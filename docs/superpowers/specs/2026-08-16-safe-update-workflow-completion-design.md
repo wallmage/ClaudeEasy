@@ -18,6 +18,8 @@ macOS 安全更新命令在订阅下载、档位补丁、配置校验和内部�
 
 macOS `--safe-update` 和 Windows `-VerifySafeUpdate` 成功时都返回 `workflow_complete: false`。它们只证明订阅事务、档位补丁和平台内部检查成功，不能证明浏览器与完整档位验收已经完成。
 
+档位 3 的更新前区域指纹基线不属于成功事务后的 `required_followups`。macOS 在调用 `--safe-update` 前完成基线；Windows 的快照结果把基线排在订阅刷新和 `-VerifySafeUpdate` 前。两个平台的更新事务成功后都只返回相同的更新后检查。
+
 `safe-update-and-recovery.md` 统一规定安全更新的完整顺序。`SKILL.md` 只保留不可误解的入口规则：脚本成功是检查点，不是任务终点；缺项且无需用户决定时必须继续。档位的具体检查内容仍由 `profiles-and-patch.md` 负责，不在入口文件复制。
 
 ## 档位 3 顺序

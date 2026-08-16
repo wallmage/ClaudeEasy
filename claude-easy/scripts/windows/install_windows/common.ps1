@@ -45,7 +45,7 @@ function Get-SafeUpdateRequiredFollowups([int]$Profile) {
         2 { return @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit") }
         3 {
             return @(
-                "region_fingerprint_baseline", "route_verification", "dns_deep_test",
+                "route_verification", "dns_deep_test",
                 "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
             )
         }

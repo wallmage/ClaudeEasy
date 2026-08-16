@@ -11712,8 +11712,8 @@ class MacosPatcherTest < Minitest::Test
                   assert_equal false, parsed.fetch("workflow_complete")
                   assert_equal "subscription_update", parsed.fetch("completed_scope")
                   assert_equal %w[
-                    region_fingerprint_baseline route_verification dns_deep_test
-                    webrtc_test_1 webrtc_test_2 region_fingerprint_rescan final_state_audit
+                    route_verification dns_deep_test webrtc_test_1 webrtc_test_2
+                    region_fingerprint_rescan final_state_audit
                   ], parsed.fetch("required_followups")
                 end
               end

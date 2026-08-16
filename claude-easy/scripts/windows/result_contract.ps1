@@ -121,7 +121,7 @@ function New-ClaudeEasyResult(
         if ($null -eq $WorkflowComplete -or
             $WorkflowComplete -isnot [bool] -or
             $CompletedScope -isnot [string] -or
-            $null -eq $RequiredFollowups) {
+            $RequiredFollowups -isnot [System.Array]) {
             throw "工作流结果字段不完整。"
         }
         $protectedCompletedScope = Protect-ClaudeEasyResultText $CompletedScope

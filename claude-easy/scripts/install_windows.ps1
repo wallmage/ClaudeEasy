@@ -246,6 +246,9 @@ if ($SnapshotProfiles) {
     })
     $snapshotFollowups = @("subscription_refresh", "safe_update_verification") +
         @(Get-SafeUpdateRequiredFollowups $script:ClaudeEasyProfile)
+    if ($script:ClaudeEasyProfile -eq 3) {
+        $snapshotFollowups = @("region_fingerprint_baseline") + $snapshotFollowups
+    }
     Complete-InstallResult 0 "ok" "snapshot_created" `
         "已创建全部远程订阅的安全更新前备份；订阅刷新、验收和最终复核尚未完成。" `
         @("profile_backups") @() $snapshotItems @() `

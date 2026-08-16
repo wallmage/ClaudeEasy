@@ -340,7 +340,7 @@ $safeUpdateFollowupCases = @(
     [pscustomobject]@{
         Profile = 3
         Expected = @(
-            "region_fingerprint_baseline", "route_verification", "dns_deep_test",
+            "route_verification", "dns_deep_test",
             "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
         )
     }
@@ -1263,6 +1263,13 @@ try {
         $invalidWorkflowFollowupRejected = $true
     }
     Assert-True $invalidWorkflowFollowupRejected "result contract accepted a non-string workflow follow-up"
+    $scalarWorkflowFollowupsRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false -CompletedScope "subscription_update" -RequiredFollowups "final_state_audit" | Out-Null
+    } catch {
+        $scalarWorkflowFollowupsRejected = $true
+    }
+    Assert-True $scalarWorkflowFollowupsRejected "result contract accepted a scalar string instead of a workflow follow-up array"
     $incompleteWhitespaceScopeRejected = $false
     try {
         New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -CompletedScope "   " | Out-Null
@@ -2915,6 +2922,44 @@ rules:
             ) -join ","
         )
     ) "safe update snapshot did not preserve the remaining profile 1 workflow"
+
+    $profileThreeSnapshotCase = Join-Path $sandbox "profile-three-snapshot-case"
+    $profileThreeSnapshotProfiles = Join-Path $profileThreeSnapshotCase "profiles"
+    New-Item -ItemType Directory -Path $profileThreeSnapshotProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $profileThreeSnapshotCase "profiles.yaml"),
+        $profilesIndexInput
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $profileThreeSnapshotCase "claude-easy-usage-profile.json"),
+        '{"Version":1,"Profile":3}'
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $profileThreeSnapshotProfiles "R-first.yaml"),
+        $firstSafeOriginal
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $profileThreeSnapshotProfiles "R-second.yml"),
+        $secondSafeOriginal
+    )
+    $profileThreeSnapshotResult = Invoke-TestPowerShell $installer @(
+        "-AppHome", $profileThreeSnapshotCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $profileThreeSnapshotJson = Assert-JsonResult $profileThreeSnapshotResult "install" 0
+    Assert-True (
+        (@($profileThreeSnapshotJson.required_followups) -join ",") -ceq (
+            @(
+                "region_fingerprint_baseline", "subscription_refresh",
+                "safe_update_verification", "route_verification", "dns_deep_test",
+                "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan",
+                "final_state_audit"
+            ) -join ","
+        )
+    ) "profile 3 snapshot allowed subscription refresh before the required pre-update baseline"
+
     $safeBackups = @(Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--pre-update--*" })
     Assert-True ($safeBackups.Count -eq 2) "snapshot did not back up exactly the two remote subscriptions"
     $pendingSafeUpdateBeforeUninstall = Get-TreeContentSnapshot $safeUpdateCase

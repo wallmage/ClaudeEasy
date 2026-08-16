@@ -758,8 +758,8 @@ module ClaudeEasy
                                ]
                              else
                                %w[
-                                 region_fingerprint_baseline route_verification dns_deep_test
-                                 webrtc_test_1 webrtc_test_2 region_fingerprint_rescan final_state_audit
+                                 route_verification dns_deep_test webrtc_test_1 webrtc_test_2
+                                 region_fingerprint_rescan final_state_audit
                                ]
                              end
         return emit_cli_result(

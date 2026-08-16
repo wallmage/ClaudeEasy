@@ -6,15 +6,15 @@
 
 平台命令返回 `safe_update_completed` 或 `safe_update_verified`，只表示全部订阅的更新事务、补丁和平台内部运行检查已经完成，不代表用户要求的安全更新任务已经完成。机器结果出现 `workflow_complete: false` 时，必须继续完成 `required_followups`；不得把中间回执当成最终说明。
 
-安全更新完成订阅事务后，macOS 与 Windows 必须按已保存档位返回同一组后续项目，顺序固定：
+安全更新完成订阅事务后，macOS 与 Windows 必须按已保存档位返回同一组尚未完成的后续项目，顺序固定：
 
 | 已保存档位 | `required_followups` |
 | --- | --- |
 | 档位 1 | `client_switch_verification`、`site_verification`、`final_state_audit` |
 | 档位 2 | `client_switch_verification`、`site_verification`、`agent_connectivity_verification`、`final_state_audit` |
-| 档位 3 | `region_fingerprint_baseline`、`route_verification`、`dns_deep_test`、`webrtc_test_1`、`webrtc_test_2`、`region_fingerprint_rescan`、`final_state_audit` |
+| 档位 3 | `route_verification`、`dns_deep_test`、`webrtc_test_1`、`webrtc_test_2`、`region_fingerprint_rescan`、`final_state_audit` |
 
-Windows 的安全更新分成快照和验收两个平台步骤。`-SnapshotProfiles` 成功也必须返回 `workflow_complete: false`，以 `subscription_snapshot` 表示已完成范围，并在当前档位后续项前先列出 `subscription_refresh`、`safe_update_verification`；不得在读取已保存档位前生成清单。`-VerifySafeUpdate` 成功后移除这两个 Windows 平台步骤，返回上表对应项目。macOS 在单次安全更新命令内完成订阅刷新和验收，所以不返回这两个平台步骤。两端最终完成条件不因此改变。
+档位 3 的 `region_fingerprint_baseline` 是更新前条件，不是订阅事务完成后的检查。macOS 必须在运行单次安全更新命令前完成它；命令成功后只返回上表中尚未完成的项目。Windows 的安全更新分成快照和验收两个平台步骤。`-SnapshotProfiles` 成功也必须返回 `workflow_complete: false`，以 `subscription_snapshot` 表示已完成范围；档位 3 固定依次返回 `region_fingerprint_baseline`、`subscription_refresh`、`safe_update_verification`，再接上表中的更新后项目，档位 1、2 则先返回两个平台步骤再接对应项目。不得在读取已保存档位前生成清单。`-VerifySafeUpdate` 成功后移除更新前基线和两个 Windows 平台步骤，只返回上表对应项目。两端最终完成条件不因此改变。
 
 安全更新必须按以下顺序连续执行，不需要用户逐项提醒：
 
