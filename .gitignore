@@ -5,6 +5,10 @@ docs/superpowers/*
 !docs/superpowers/specs/
 docs/superpowers/specs/*
 !docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md
+!docs/superpowers/specs/2026-08-16-safe-update-workflow-completion-design.md
+!docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/2026-08-16-safe-update-workflow-completion.md
 dist/
 node_modules/
 *.zip
