@@ -2591,6 +2591,24 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_macos_wrapper_fakeip_flush_reintroduction_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_macos.sh",
+        "if [ \"$SAFE_UPDATE\" -eq 1 ]; then\n  if [ -n \"$CUSTOM_PROFILE_DIR\" ]; then\n",
+        "/usr/bin/curl -X POST http://localhost/cache/fakeip/flush\n" \
+          "if [ \"$SAFE_UPDATE\" -eq 1 ]; then\n  if [ -n \"$CUSTOM_PROFILE_DIR\" ]; then\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_skill_contract.rb",
+        "--name", "test_policy_documents_dns_filters_and_safety_migrations"
+      )
+    end
+  end
+
   def test_runtime_fixed_foreign_dns_query_reintroduction_is_killed
     with_repo_copy do |root|
       replace_once(

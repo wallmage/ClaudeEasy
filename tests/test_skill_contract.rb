@@ -1737,8 +1737,9 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "保留 Fake-IP 映射"
     refute_includes policy, "/cache/fakeip/flush"
     assert_includes policy, "/cache/dns/flush"
-    refute_includes mac_patcher_source, "/cache/fakeip/flush"
-    refute_includes windows_installer_source, "/cache/fakeip/flush"
+    Dir[File.join(SKILL, "scripts/**/*")].select { |path| File.file?(path) }.each do |path|
+      refute_includes File.binread(path), "/cache/fakeip/flush", path
+    end
   end
 
   def test_product_documents_never_execute_subscription_dns_filters
