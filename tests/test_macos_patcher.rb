@@ -14417,6 +14417,10 @@ class MacosPatcherTest < Minitest::Test
           File.expand_path(path) => { identity: identity, write_path: File.realpath(path) }
         }
       }
+      runtime_checkpoint = {
+        path: File.realpath(path), expected_tun: :disabled,
+        selections: { "Main" => "Taiwan" }
+      }
       patcher = lambda do |_path, _policy, dry_run:, **_options|
         dry_run ? preview.dup : committed.dup
       end
@@ -14438,20 +14442,22 @@ class MacosPatcherTest < Minitest::Test
         ClaudeEasy.stub(:resume_profile_transaction, :none) do
           ClaudeEasy.stub(:profile_work_items, [{ path: path, active: true }]) do
             ClaudeEasy.stub(:patch_path, patcher) do
-              ClaudeEasy.stub(:prepare_profile_transaction, transaction) do
-                ClaudeEasy.stub(:activate_updated_profile, activator) do
-                  ClaudeEasy.stub(:runtime_precommit_allowed?, runtime_precommit) do
-                    ClaudeEasy.stub(:profile_result_current?, false) do
-                      ClaudeEasy.stub(:restore_profile_bytes, true) do
-                        ClaudeEasy.stub(:recover_profile_transaction, recoverer) do
-                          ClaudeEasy.stub(:reload_recovered_profile_runtime, reload) do
-                            ClaudeEasy.stub(:remove_profile_transaction, remover) do
-                              return ClaudeEasy.run(
-                                directory: directory, policy_path: POLICY_PATH,
-                                backup_root: File.join(directory, "backups"),
-                                selected_name: "friend", validator: ->(_candidate) { true },
-                                auto_reload: auto_reload, usage_profile: 1
-                              )
+              ClaudeEasy.stub(:capture_runtime_checkpoint, runtime_checkpoint) do
+                ClaudeEasy.stub(:prepare_profile_transaction, transaction) do
+                  ClaudeEasy.stub(:activate_updated_profile, activator) do
+                    ClaudeEasy.stub(:runtime_precommit_allowed?, runtime_precommit) do
+                      ClaudeEasy.stub(:profile_result_current?, false) do
+                        ClaudeEasy.stub(:restore_profile_bytes, true) do
+                          ClaudeEasy.stub(:recover_profile_transaction, recoverer) do
+                            ClaudeEasy.stub(:reload_recovered_profile_runtime, reload) do
+                              ClaudeEasy.stub(:remove_profile_transaction, remover) do
+                                return ClaudeEasy.run(
+                                  directory: directory, policy_path: POLICY_PATH,
+                                  backup_root: File.join(directory, "backups"),
+                                  selected_name: "friend", validator: ->(_candidate) { true },
+                                  auto_reload: auto_reload, usage_profile: 1
+                                )
+                              end
                             end
                           end
                         end
