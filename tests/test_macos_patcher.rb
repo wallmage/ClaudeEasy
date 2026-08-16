@@ -5302,10 +5302,15 @@ class MacosPatcherTest < Minitest::Test
     put_paths = []
     expected_tun = nil
     requester = lambda do |_socket, method, endpoint, body|
-      raise "unexpected controller request" unless method == "PUT" && endpoint == "/configs?force=true"
-
-      put_paths << JSON.parse(body).fetch("path")
-      [204, ""]
+      case [method, endpoint]
+      when ["PUT", "/configs?force=true"]
+        put_paths << JSON.parse(body).fetch("path")
+        [204, ""]
+      when ["GET", "/configs"]
+        [200, JSON.generate("tun" => { "enable" => true })]
+      else
+        raise "unexpected controller request"
+      end
     end
 
     no_socket = ClaudeEasy.stub(:controller_socket, nil) do
@@ -5349,6 +5354,46 @@ class MacosPatcherTest < Minitest::Test
     assert restored
     assert_equal [File.expand_path(target.fetch(:path))], put_paths
     assert_equal :enabled, expected_tun
+  end
+
+  def test_recovered_safe_update_runtime_restores_tun_after_reloading_raw_subscription
+    target = { name: "active", path: "/tmp/active.yaml" }
+    tun_enabled = true
+    patches = []
+    requester = lambda do |_socket, method, endpoint, body|
+      case [method, endpoint]
+      when ["GET", "/proxies"]
+        [200, JSON.generate("proxies" => {})]
+      when ["GET", "/configs"]
+        [200, JSON.generate("tun" => { "enable" => tun_enabled })]
+      when ["PUT", "/configs?force=true"]
+        tun_enabled = false
+        [204, ""]
+      when ["PATCH", "/configs"]
+        payload = JSON.parse(body)
+        patches << payload
+        tun_enabled = payload.dig("tun", "enable") == true
+        [204, ""]
+      else
+        raise "unexpected controller request: #{method} #{endpoint}"
+      end
+    end
+
+    restored = ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_request, requester) do
+        ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+          ClaudeEasy.stub(:runtime_health_healthy?, ->(_requester, **_options) { tun_enabled }) do
+            ClaudeEasy.reload_recovered_safe_update_runtime(
+              [target], 3, "active", precommit_condition: -> { true }
+            )
+          end
+        end
+      end
+    end
+
+    assert restored
+    assert tun_enabled
+    assert_equal [{ "tun" => { "enable" => true } }], patches
   end
 
   def test_safe_update_legacy_recovery_check_stops_if_the_shared_precheck_misses_a_journal
@@ -9422,6 +9467,26 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_default_connectivity_waits_between_cold_reload_failures
+    failed = Object.new
+    failed.define_singleton_method(:success?) { false }
+    successful = Object.new
+    successful.define_singleton_method(:success?) { true }
+    attempts = 0
+    delays = []
+
+    Open3.stub(:capture2e, lambda { |*_args|
+      attempts += 1
+      ["", attempts == 3 ? successful : failed]
+    }) do
+      ClaudeEasy.stub(:sleep, ->(seconds) { delays << seconds }) do
+        assert ClaudeEasy.default_connectivity_healthy?
+      end
+    end
+
+    assert_equal [1, 1], delays
+  end
+
   def test_default_connectivity_uses_the_current_mihomo_listener_without_ambient_proxies
     success = Object.new
     success.define_singleton_method(:success?) { true }
@@ -10480,6 +10545,75 @@ class MacosPatcherTest < Minitest::Test
         :reload_failed_rollback_conflict,
         ClaudeEasy.rollback_after_reload_failure(missing_result, nil, nil)
       )
+    end
+    refute ClaudeEasy.restore_runtime_tun_state(
+      ->(*_args) { raise IOError }, :enabled
+    )
+    ClaudeEasy.stub(:restore_profile_bytes, true) do
+      ClaudeEasy.stub(:reload_profile_runtime, true) do
+        ClaudeEasy.stub(:runtime_health_healthy?, ->(*_args, **_options) { raise IOError }) do
+          assert_equal(
+            :reload_failed_restore_pending,
+            ClaudeEasy.rollback_after_reload_failure(
+              missing_result, ->(*_args) { [204, ""] }, missing_result.fetch(:path),
+              selections: {}, expected_tun: :enabled
+            )
+          )
+        end
+      end
+    end
+  end
+
+  def test_runtime_rollback_restores_tun_when_the_original_subscription_omits_it
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config.reject { |key, _value| key == "tun" })
+      candidate = YAML.dump(base_config.merge("tun" => { "enable" => true }))
+      File.binwrite(path, candidate)
+      stat = File.stat(path)
+      result = {
+        path: path, rollback_bytes: original.b,
+        patched_digest: Digest::SHA256.hexdigest(candidate.b),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(path)
+      }
+      tun_enabled = true
+      reloads = 0
+      patches = []
+      requester = lambda do |method, endpoint, body|
+        case [method, endpoint]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => tun_enabled })]
+        when ["PUT", "/configs?force=true"]
+          reloads += 1
+          loaded = ClaudeEasy.load_yaml(File.read(JSON.parse(body).fetch("path")))
+          tun_enabled = loaded.dig("tun", "enable") == true
+          [204, ""]
+        when ["PATCH", "/configs"]
+          payload = JSON.parse(body)
+          patches << payload
+          tun_enabled = payload.dig("tun", "enable") == true
+          [204, ""]
+        else
+          raise "unexpected controller request: #{method} #{endpoint}"
+        end
+      end
+      health_checks = 0
+      health = lambda do |_requester, **_options|
+        health_checks += 1
+        health_checks > 1 && tun_enabled
+      end
+
+      activated = ClaudeEasy.stub(:runtime_selections, {}) do
+        ClaudeEasy.stub(:runtime_health_healthy?, health) do
+          ClaudeEasy.activate_updated_profile(result, requester: requester, require_tun: true)
+        end
+      end
+
+      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
+      assert_equal original.b, File.binread(path)
+      assert tun_enabled
+      assert_equal 2, reloads
+      assert_equal [{ "tun" => { "enable" => true } }], patches
     end
   end
 

@@ -333,10 +333,12 @@ module ClaudeEasy
     ]
     arguments.concat(["--noproxy", "*"]) if tun_mode == :enabled
     arguments << "https://www.google.com/generate_204"
-    3.times do
+    3.times do |attempt|
       _output, status = Open3.capture2e(CURL_ISOLATED_ENVIRONMENT, *arguments)
       return true if status.success?
+      sleep 1 if attempt < 2
     rescue StandardError
+      sleep 1 if attempt < 2
       next
     end
     false
@@ -391,6 +393,27 @@ module ClaudeEasy
       expected_path: result.fetch(:patched_path)
     )
   rescue SystemCallError, IOError, KeyError
+    false
+  end
+
+  def restore_runtime_tun_state(requester, expected_tun)
+    return true if expected_tun == :ignore || tun_state(requester: requester) == expected_tun
+
+    enabled = expected_tun == :enabled
+    code, _body = requester.call(
+      "PATCH", "/configs", JSON.generate("tun" => { "enable" => enabled })
+    )
+    code == 204 && tun_state(requester: requester) == expected_tun
+  rescue StandardError
+    false
+  end
+
+  def reload_profile_runtime(requester, path, expected_tun: :ignore)
+    code, _body = requester.call(
+      "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(path))
+    )
+    code == 204 && restore_runtime_tun_state(requester, expected_tun)
+  rescue StandardError
     false
   end
 
@@ -460,10 +483,9 @@ module ClaudeEasy
     return false if expected_tun == :unknown
     return false unless runtime_precommit_allowed?(precommit_condition)
 
-    code, _body = requester.call(
-      "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(active.fetch(:path)))
+    return false unless reload_profile_runtime(
+      requester, active.fetch(:path), expected_tun: expected_tun
     )
-    return false unless code == 204
 
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
@@ -560,6 +582,9 @@ module ClaudeEasy
     )
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback.call) unless code == 204
+    tun_restored = restore_runtime_tun_state(requester, expected_tun)
+    return pending.call unless profile_result_current?(result)
+    return result.merge(status: rollback.call) unless tun_restored
 
     healthy = runtime_health_healthy?(
       requester, selections: candidate_selections, expected_tun: expected_tun,
@@ -587,10 +612,9 @@ module ClaudeEasy
     return :reload_failed_restore_pending unless requester && path && selections && expected_tun
     return :reload_failed_restore_pending unless runtime_precommit_allowed?(precommit_condition)
 
-    code, _body = requester.call(
-      "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(path))
+    return :reload_failed_restore_pending unless reload_profile_runtime(
+      requester, path, expected_tun: expected_tun
     )
-    return :reload_failed_restore_pending unless code == 204
 
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,

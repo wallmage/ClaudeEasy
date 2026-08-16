@@ -1925,7 +1925,10 @@ class SkillContractTest < Minitest::Test
       refute_nil finish
       body = runtime[start...finish]
       guard = body.index("runtime_precommit_allowed?(precommit_condition)")
-      load = body.index('"PUT", "/configs?force=true"')
+      load = [
+        body.index('"PUT", "/configs?force=true"'),
+        body.index("reload_profile_runtime(")
+      ].compact.min
       refute_nil guard
       refute_nil load
       assert_operator guard, :<, load

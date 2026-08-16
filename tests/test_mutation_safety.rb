@@ -558,6 +558,59 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_cold_reload_connectivity_delay_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "      sleep 1 if attempt < 2\n" \
+          "    rescue StandardError\n" \
+          "      sleep 1 if attempt < 2\n",
+        "    rescue StandardError\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_default_connectivity_waits_between_cold_reload_failures"
+      )
+    end
+  end
+
+  def test_runtime_reload_tun_restore_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "    code == 204 && restore_runtime_tun_state(requester, expected_tun)\n",
+        "    code == 204\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_runtime_rollback_restores_tun_when_the_original_subscription_omits_it"
+      )
+    end
+  end
+
+  def test_safe_update_recovery_tun_restore_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "    return false unless restore_runtime_tun_state(requester, expected_tun)\n",
+        "    # mutant: skip TUN restoration after recovery reload\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_recovered_safe_update_runtime_restores_tun_after_reloading_raw_subscription"
+      )
+    end
+  end
+
   def test_active_reload_candidate_selection_mutation_is_killed
     with_repo_copy do |root|
       replace_once(

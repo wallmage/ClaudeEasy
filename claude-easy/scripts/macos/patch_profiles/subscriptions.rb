@@ -709,6 +709,8 @@ module ClaudeEasy
     )
     return false unless code == 204
     return false unless runtime_precommit_allowed?(precommit_condition)
+    return false unless restore_runtime_tun_state(requester, expected_tun)
+    return false unless runtime_precommit_allowed?(precommit_condition)
 
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
