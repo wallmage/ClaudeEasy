@@ -1257,7 +1257,10 @@ class MacosPatcherTest < Minitest::Test
         when ["GET", "/proxies"]
           selections = JSON.parse(File.read(runtime_state))
           proxies = selections.to_h do |name, selected|
-            [name, { "type" => "Selector", "now" => selected }]
+            [name, {
+              "type" => "Selector", "now" => selected,
+              "all" => ["Taiwan", "Japan"]
+            }]
           end
           [200, JSON.generate("proxies" => proxies)]
         when ["PUT", "/configs?force=true"]
@@ -1265,7 +1268,7 @@ class MacosPatcherTest < Minitest::Test
           config = ClaudeEasy.load_yaml(File.read(path))
           marker = config.fetch("rule-providers", {}).key?(provider_name) ? "candidate" : "original"
           selections = ClaudeEasy.selectable_groups(config).to_h do |group|
-            [group.fetch("name"), "Taiwan"]
+            [group.fetch("name"), "Japan"]
           end
           File.write(runtime_state, JSON.generate(selections))
           if marker == "candidate" && !File.exist?(gate_seen)
@@ -1280,7 +1283,13 @@ class MacosPatcherTest < Minitest::Test
         when ["GET", "/configs"]
           [200, JSON.generate("tun" => { "enable" => true })]
         else
-          if method == "GET" && endpoint.start_with?("/dns/query?")
+          if method == "PUT" && endpoint.start_with?("/proxies/")
+            selections = JSON.parse(File.read(runtime_state))
+            group = endpoint.delete_prefix("/proxies/")
+            selections[group] = JSON.parse(body).fetch("name")
+            File.write(runtime_state, JSON.generate(selections))
+            [204, ""]
+          elsif method == "GET" && endpoint.start_with?("/dns/query?")
             [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
           else
             [404, ""]
@@ -1406,6 +1415,118 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_profile_transaction_records_the_pre_reload_runtime_checkpoint
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      backup_root = File.join(directory, "backups")
+      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "new"))
+      File.binwrite(profile, original)
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "Taiwan" }
+      }
+
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.prepare_profile_transaction(
+          [{ path: profile, original: original, candidate: candidate }],
+          backup_root, roots: [directory], runtime_checkpoint: checkpoint.merge(extra: true)
+        )
+      end
+
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: original, candidate: candidate }],
+        backup_root, roots: [directory], runtime_checkpoint: checkpoint
+      )
+      state = JSON.parse(transaction.fetch(:bytes))
+      recovered = ClaudeEasy.recover_profile_transaction(
+        backup_root, roots: [directory], keep_transaction: true
+      )
+
+      assert_equal 4, state.fetch("Version")
+      assert_equal checkpoint, recovered.fetch(:runtime_checkpoint)
+    end
+  end
+
+  def test_profile_transaction_rejects_a_missing_version_four_runtime_checkpoint
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      backup_root = File.join(directory, "backups")
+      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "new"))
+      File.binwrite(profile, original)
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "Taiwan" }
+      }
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: original, candidate: candidate }],
+        backup_root, roots: [directory], runtime_checkpoint: checkpoint
+      )
+      transaction_path = ClaudeEasy.profile_transaction_path(backup_root)
+      state = JSON.parse(File.binread(transaction_path))
+      state.delete("Runtime")
+      File.binwrite(transaction_path, JSON.generate(state))
+
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.recover_profile_transaction(
+          backup_root, roots: [directory], keep_transaction: true
+        )
+      end
+      assert_equal original.b, File.binread(profile)
+    end
+  end
+
+  def test_runtime_recovery_uses_the_durable_checkpoint_instead_of_damaged_live_state
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      File.binwrite(profile, YAML.dump(base_config))
+      selected = "Japan"
+      tun_enabled = false
+      requester = lambda do |method, endpoint, body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => {
+              "type" => "Selector", "now" => selected,
+              "all" => ["Taiwan", "Japan"]
+            }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => tun_enabled })]
+        when ["PUT", "/configs?force=true"]
+          selected = "Japan"
+          tun_enabled = false
+          [204, ""]
+        when ["PUT", "/proxies/Main"]
+          selected = JSON.parse(body).fetch("name")
+          [204, ""]
+        when ["PATCH", "/configs"]
+          tun_enabled = JSON.parse(body).dig("tun", "enable")
+          [204, ""]
+        when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          raise "unexpected controller request: #{method} #{endpoint}"
+        end
+      end
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "Taiwan" }
+      }
+
+      restored = ClaudeEasy.reload_recovered_profile_runtime(
+        [{ path: profile, active: true }], require_tun: :preserve,
+        requester: requester, connectivity_checker: -> { true },
+        runtime_checkpoint: checkpoint
+      )
+
+      assert restored
+      assert_equal "Taiwan", selected
+      assert tun_enabled
+    end
+  end
+
   def test_failed_pending_runtime_recovery_keeps_transaction_and_skips_new_patch
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
@@ -1479,6 +1600,8 @@ class MacosPatcherTest < Minitest::Test
           [200, JSON.generate("proxies" => {
             "Main" => { "type" => "Selector", "now" => "Taiwan" }
           })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
         when ["PUT", "/configs?force=true"]
           put_paths << JSON.parse(body).fetch("path")
           [204, ""]
@@ -1627,6 +1750,8 @@ class MacosPatcherTest < Minitest::Test
           [200, JSON.generate("proxies" => {
             "Main" => { "type" => "Selector", "now" => "Taiwan" }
           })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
         when ["PUT", "/configs?force=true"]
           path = JSON.parse(body).fetch("path")
           marker = ClaudeEasy.load_yaml(File.read(path)).fetch("subscription-marker")
@@ -3100,6 +3225,42 @@ class MacosPatcherTest < Minitest::Test
       refute_includes JSON.generate(comparison), "11111111-2222-3333-4444-555555555555"
       assert_equal :updated, result.fetch(:status)
       assert_equal original.b, File.binread(profile)
+    end
+  end
+
+  def test_restore_backup_records_the_active_runtime_checkpoint_before_writing
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      backup_root = File.join(directory, "backups")
+      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
+      current = YAML.dump(base_config.merge("subscription-marker" => "new"))
+      File.binwrite(profile, original)
+      ClaudeEasy.create_versioned_backup(profile, backup_root, reason: "prewrite")
+      File.binwrite(profile, current)
+      backup_id = ClaudeEasy.list_backups(backup_root).first.fetch("id")
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :disabled,
+        selections: { "Main" => "Taiwan" }
+      }
+      recorded_state = nil
+
+      result = ClaudeEasy.restore_backup(
+        backup_id, directories: [directory], backup_root: backup_root,
+        expected_current_sha256: Digest::SHA256.hexdigest(current),
+        validator: ->(_path) { true }, selected_name: "active",
+        runtime_checkpoint_provider: ->(_path) { checkpoint },
+        activation: lambda do |restore_result|
+          recorded_state = JSON.parse(
+            File.binread(ClaudeEasy.profile_transaction_path(backup_root))
+          )
+          restore_result
+        end
+      )
+
+      assert_equal :updated, result.fetch(:status)
+      assert_equal 4, recorded_state.fetch("Version")
+      assert_equal "disabled", recorded_state.fetch("Runtime").fetch("Tun")
+      assert_equal({ "Main" => "Taiwan" }, recorded_state.fetch("Runtime").fetch("Selections"))
     end
   end
 
@@ -5263,6 +5424,9 @@ class MacosPatcherTest < Minitest::Test
       File.binwrite(config_path, candidate)
       put_paths = []
       requester = lambda do |_socket, method, endpoint, body|
+        if method == "GET" && endpoint == "/configs"
+          next [200, JSON.generate("tun" => { "enable" => true })]
+        end
         raise "unexpected controller request" unless method == "PUT" && endpoint == "/configs?force=true"
 
         put_paths << JSON.parse(body).fetch("path")
@@ -5432,6 +5596,46 @@ class MacosPatcherTest < Minitest::Test
     assert tun_enabled
     refute check_dns
     assert_equal [{ "tun" => { "enable" => true } }], patches
+  end
+
+  def test_recovered_safe_update_runtime_uses_the_saved_checkpoint
+    selected_name = File.basename(__FILE__)
+    target = { name: selected_name, path: __FILE__ }
+    tun_enabled = true
+    requester = lambda do |_socket, method, endpoint, body|
+      case [method, endpoint]
+      when ["GET", "/proxies"]
+        [200, JSON.generate("proxies" => {})]
+      when ["GET", "/configs"]
+        [200, JSON.generate("tun" => { "enable" => tun_enabled })]
+      when ["PUT", "/configs?force=true"]
+        [204, ""]
+      when ["PATCH", "/configs"]
+        tun_enabled = JSON.parse(body).dig("tun", "enable")
+        [204, ""]
+      else
+        raise "unexpected controller request: #{method} #{endpoint}"
+      end
+    end
+    checkpoint = {
+      path: File.realpath(target.fetch(:path)), expected_tun: :disabled, selections: {}
+    }
+
+    restored = ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_request, requester) do
+        ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+          ClaudeEasy.stub(:runtime_health_healthy?, ->(*) { tun_enabled == false }) do
+            ClaudeEasy.reload_recovered_safe_update_runtime(
+              [target], 1, selected_name, precommit_condition: -> { true },
+              runtime_checkpoint: checkpoint
+            )
+          end
+        end
+      end
+    end
+
+    assert restored
+    refute tun_enabled
   end
 
   def test_safe_update_legacy_recovery_check_stops_if_the_shared_precheck_misses_a_journal
@@ -7777,6 +7981,217 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_activation_does_not_reload_runtime_when_tun_is_unknown_before_candidate_load
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      result = {
+        path: profile, rollback_bytes: original.b,
+        patched_digest: Digest::SHA256.hexdigest(candidate.b),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      reloads = 0
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "Taiwan" }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => {})]
+        when ["PUT", "/configs?force=true"]
+          reloads += 1
+          [204, ""]
+        else
+          raise "unexpected controller request: #{method} #{endpoint}"
+        end
+      end
+
+      activated = ClaudeEasy.activate_updated_profile(
+        result, requester: requester, require_tun: :preserve
+      )
+
+      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
+      assert_equal original.b, File.binread(profile)
+      assert_equal 0, reloads
+    end
+  end
+
+  def test_run_stops_before_writing_when_the_runtime_checkpoint_is_unavailable
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      backup_root = File.join(directory, "backups")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+
+      results = ClaudeEasy.stub(:selected_profile_name, "active") do
+        ClaudeEasy.stub(:storage_mode, :local) do
+          ClaudeEasy.stub(:capture_runtime_checkpoint, nil) do
+            ClaudeEasy.run(
+              directory: directory, policy_path: POLICY_PATH, backup_root: backup_root,
+              validator: ->(_path) { true }, auto_reload: true, usage_profile: 1
+            )
+          end
+        end
+      end
+
+      assert_equal :runtime_check_failed, results.fetch(0).fetch(:status)
+      assert_equal original.b, File.binread(profile)
+      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_candidate_reload_restores_existing_selector_before_health_check
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      File.binwrite(profile, YAML.dump(base_config))
+      result = ClaudeEasy.patch_path(
+        profile, @policy, usage_profile: 3, validator: ->(_candidate) { true }
+      )
+      selected = "Taiwan"
+      selector_updates = []
+      requester = lambda do |method, endpoint, body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => {
+              "type" => "Selector", "now" => selected,
+              "all" => ["Taiwan", "Japan"]
+            },
+            "Taiwan" => { "type" => "Shadowsocks" },
+            "Japan" => { "type" => "Shadowsocks" },
+            "AI" => {
+              "type" => "Selector", "now" => "Taiwan", "all" => ["Taiwan", "Japan"]
+            }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        when ["PUT", "/configs?force=true"]
+          selected = "Japan"
+          [204, ""]
+        when ["PUT", "/proxies/Main"]
+          selector_updates << JSON.parse(body).fetch("name")
+          selected = selector_updates.last
+          [204, ""]
+        when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          if method == "GET" && endpoint.start_with?("/dns/query?")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          else
+            raise "unexpected controller request: #{method} #{endpoint}"
+          end
+        end
+      end
+
+      activated = ClaudeEasy.activate_updated_profile(
+        result, requester: requester, connectivity_checker: -> { true },
+        require_tun: true, require_safe_ai: true
+      )
+
+      assert_equal true, activated.fetch(:reloaded)
+      assert_equal "Taiwan", selected
+      assert_equal ["Taiwan"], selector_updates
+    end
+  end
+
+  def test_runtime_selector_restore_percent_encodes_controller_path_components
+    requested_endpoint = nil
+    selected = "Japan"
+    requester = lambda do |method, endpoint, _body = nil|
+      if method == "GET" && endpoint == "/proxies"
+        [200, JSON.generate("proxies" => {
+          "AI / 中文" => {
+            "type" => "Selector", "now" => selected, "all" => ["Taiwan", "Japan"]
+          }
+        })]
+      elsif method == "PUT"
+        requested_endpoint = endpoint
+        selected = "Taiwan"
+        [204, ""]
+      else
+        raise "unexpected controller request: #{method} #{endpoint}"
+      end
+    end
+
+    assert ClaudeEasy.restore_runtime_selections(
+      requester, { "AI / 中文" => "Taiwan" }
+    )
+    assert_equal "/proxies/AI%20%2F%20%E4%B8%AD%E6%96%87", requested_endpoint
+  end
+
+  def test_runtime_rollback_restores_existing_selector_after_original_reload
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config.merge("subscription-marker" => "original"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      result = {
+        path: profile, rollback_bytes: original.b,
+        patched_digest: Digest::SHA256.hexdigest(candidate.b),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      selected = "Taiwan"
+      reloads = 0
+      selector_updates = []
+      connectivity_checks = 0
+      requester = lambda do |method, endpoint, body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => {
+              "type" => "Selector", "now" => selected,
+              "all" => ["Taiwan", "Japan"]
+            },
+            "Taiwan" => { "type" => "Shadowsocks" },
+            "Japan" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => true })]
+        when ["PUT", "/configs?force=true"]
+          reloads += 1
+          selected = "Japan"
+          [204, ""]
+        when ["PUT", "/proxies/Main"]
+          selector_updates << JSON.parse(body).fetch("name")
+          selected = selector_updates.last
+          [204, ""]
+        when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          if method == "GET" && endpoint.start_with?("/dns/query?")
+            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
+          else
+            raise "unexpected controller request: #{method} #{endpoint}"
+          end
+        end
+      end
+      connectivity = lambda do
+        connectivity_checks += 1
+        reloads > 1
+      end
+
+      activated = ClaudeEasy.stub(:sleep, nil) do
+        ClaudeEasy.activate_updated_profile(
+          result, requester: requester, connectivity_checker: connectivity,
+          require_tun: true
+        )
+      end
+
+      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
+      assert_equal original.b, File.binread(profile)
+      assert_equal "Taiwan", selected
+      assert_equal 2, reloads
+      assert_equal ["Taiwan", "Taiwan"], selector_updates
+    end
+  end
+
   def test_unchanged_batch_rechecks_every_file_after_runtime_acceptance
     Dir.mktmpdir do |directory|
       patched = ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config)
@@ -8258,9 +8673,9 @@ class MacosPatcherTest < Minitest::Test
         requester: requester, connectivity_checker: -> { true }, require_tun: :preserve
       )
 
-      assert_equal :reload_failed_restore_pending, result.fetch(:status)
+      assert_equal :reload_failed_rolled_back, result.fetch(:status)
       assert_equal original.b, File.binread(profile)
-      assert_equal 1, reloads
+      assert_equal 0, reloads
     end
   end
 
@@ -9722,6 +10137,33 @@ class MacosPatcherTest < Minitest::Test
         active, require_tun: false,
         requester: ->(*_args) { raise IOError, "injected runtime read failure" }
       )
+      refute ClaudeEasy.restore_runtime_selections(
+        ->(*_args) { raise IOError, "injected selector failure" }, { "Main" => "Taiwan" }
+      )
+
+      profile = File.join(directory, "profile.yaml")
+      File.binwrite(profile, YAML.dump(base_config))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "Taiwan" }
+          })]
+        else
+          raise "unexpected request: #{method} #{endpoint}"
+        end
+      end
+      checkpoint = ClaudeEasy.capture_runtime_checkpoint(
+        profile, require_tun: false, requester: requester
+      )
+      assert_equal :ignore, checkpoint.fetch(:expected_tun)
+      assert_nil ClaudeEasy.capture_runtime_checkpoint(
+        missing_profile, require_tun: false, requester: requester
+      )
+      assert_nil ClaudeEasy.capture_runtime_checkpoint(
+        profile, require_tun: false,
+        requester: ->(*_args) { raise IOError, "injected checkpoint failure" }
+      )
     end
   end
 
@@ -9741,7 +10183,7 @@ class MacosPatcherTest < Minitest::Test
 
     ClaudeEasy.stub(:profile_result_current?, true) do
       ClaudeEasy.stub(:runtime_selections, nil) do
-        ClaudeEasy.stub(:rollback_after_reload_failure, rollback) do
+        ClaudeEasy.stub(:rollback_before_runtime_reload, rollback) do
           failed = ClaudeEasy.activate_updated_profile(
             result, requester: ->(*_args) { [200, "{}"] }
           )
@@ -9750,15 +10192,63 @@ class MacosPatcherTest < Minitest::Test
       end
 
       ClaudeEasy.stub(:runtime_selections, ->(_requester) { raise IOError, "injected request failure" }) do
-        ClaudeEasy.stub(:rollback_after_reload_failure, rollback) do
+        ClaudeEasy.stub(:rollback_before_runtime_reload, rollback) do
           failed = ClaudeEasy.activate_updated_profile(
             result, requester: ->(*_args) { [200, "{}"] }
           )
           assert_equal :reload_failed_restore_pending, failed.fetch(:status)
         end
       end
+
+      Dir.mktmpdir do |directory|
+        profile = File.join(directory, "active.yaml")
+        other = File.join(directory, "other.yaml")
+        File.binwrite(profile, "candidate")
+        File.binwrite(other, "other")
+        stat = File.stat(profile)
+        mismatch_result = {
+          path: profile, rollback_bytes: "original",
+          patched_digest: Digest::SHA256.hexdigest("candidate"),
+          patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+        }
+        checkpoint = {
+          path: File.realpath(other), expected_tun: :ignore, selections: {}
+        }
+        ClaudeEasy.stub(:rollback_before_runtime_reload, rollback) do
+          failed = ClaudeEasy.activate_updated_profile(
+            mismatch_result, requester: ->(*_args) { [204, ""] },
+            runtime_checkpoint: checkpoint
+          )
+          assert_equal :reload_failed_restore_pending, failed.fetch(:status)
+        end
+      end
+
+      Dir.mktmpdir do |directory|
+        profile = File.join(directory, "active.yaml")
+        File.binwrite(profile, "candidate")
+        stat = File.stat(profile)
+        loaded_result = {
+          path: profile, rollback_bytes: "original",
+          patched_digest: Digest::SHA256.hexdigest("candidate"),
+          patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+        }
+        loaded_checkpoint = {
+          path: File.realpath(profile), expected_tun: :ignore, selections: {}
+        }
+        requester = ->(*_args) { raise IOError, "injected load failure" }
+        ClaudeEasy.stub(:rollback_after_reload_failure, rollback) do
+          failed = ClaudeEasy.activate_updated_profile(
+            loaded_result, requester: requester, runtime_checkpoint: loaded_checkpoint
+          )
+          assert_equal :reload_failed_restore_pending, failed.fetch(:status)
+        end
+      end
     end
-    assert_equal 2, rollback_calls
+    ClaudeEasy.stub(:restore_profile_bytes, ->(_result) { raise IOError, "injected restore failure" }) do
+      assert_equal :reload_failed_rollback_conflict,
+                   ClaudeEasy.rollback_before_runtime_reload(result)
+    end
+    assert_equal 4, rollback_calls
   end
 
   def test_process_timeout_helpers_cover_normal_exit_and_kill_fallbacks
@@ -10647,12 +11137,14 @@ class MacosPatcherTest < Minitest::Test
       health_checks = 0
       health = lambda do |_requester, **_options|
         health_checks += 1
-        health_checks > 1 && tun_enabled
+        reloads > 1 && tun_enabled
       end
 
       activated = ClaudeEasy.stub(:runtime_selections, {}) do
         ClaudeEasy.stub(:runtime_health_healthy?, health) do
-          ClaudeEasy.activate_updated_profile(result, requester: requester, require_tun: true)
+          ClaudeEasy.stub(:sleep, nil) do
+            ClaudeEasy.activate_updated_profile(result, requester: requester, require_tun: true)
+          end
         end
       end
 
@@ -12066,6 +12558,7 @@ class MacosPatcherTest < Minitest::Test
       [
         :reload_failed_rolled_back,
         :reload_failed_rollback_conflict,
+        :runtime_state_unavailable,
         :invalid_backup
       ].each do |status|
         private_id = "11111111-2222-3333-4444-555555555555"
@@ -12139,30 +12632,39 @@ class MacosPatcherTest < Minitest::Test
         patched_digest: Digest::SHA256.hexdigest("restored")
       }
       activated = false
-      activation = lambda do |result, require_tun:, require_safe_ai:, **_keywords|
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :disabled,
+        selections: { "Main" => "Taiwan" }
+      }
+      activation = lambda do |result, require_tun:, require_safe_ai:, runtime_checkpoint:, **_keywords|
         activated = true
         assert_equal :preserve, require_tun
         assert_equal true, require_safe_ai
+        assert_equal checkpoint, runtime_checkpoint
         result.merge(reloaded: true)
       end
 
       restore = lambda do |*_arguments, **keywords|
+        assert_equal checkpoint,
+                     keywords.fetch(:runtime_checkpoint_provider).call(profile)
         keywords.fetch(:activation).call(restore_result)
       end
       ClaudeEasy.stub(:restore_backup, restore) do
         ClaudeEasy.stub(:selected_profile_name, "friend") do
           ClaudeEasy.stub(:active_profile_root, directory) do
-            ClaudeEasy.stub(:activate_updated_profile, activation) do
-              output, error = ClaudeEasy.stub(:saved_usage_profile, 3) do
-                capture_io do
-                  assert_equal 0, ClaudeEasy.cli([
-                    "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
-                    "--expected-current-sha256", "0" * 64
-                  ])
+            ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+              ClaudeEasy.stub(:activate_updated_profile, activation) do
+                output, error = ClaudeEasy.stub(:saved_usage_profile, 3) do
+                  capture_io do
+                    assert_equal 0, ClaudeEasy.cli([
+                      "--json", "--profile-dir", directory, "--restore-backup", "backup-id",
+                      "--expected-current-sha256", "0" * 64
+                    ])
+                  end
                 end
+                assert_empty error
+                assert_equal "ok", JSON.parse(output).fetch("status")
               end
-              assert_empty error
-              assert_equal "ok", JSON.parse(output).fetch("status")
             end
           end
         end

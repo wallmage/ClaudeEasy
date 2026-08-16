@@ -1939,10 +1939,15 @@ class SkillContractTest < Minitest::Test
     refute_nil safe_recovery_start
     refute_nil safe_recovery_end
     safe_recovery = subscriptions[safe_recovery_start...safe_recovery_end]
+    safe_load = [
+      safe_recovery.index('"PUT", "/configs?force=true"'),
+      safe_recovery.index("reload_recovered_profile_runtime(")
+    ].compact.min
+    refute_nil safe_load
     assert_operator(
       safe_recovery.index("capture_runtime_profile_context(roots)"),
       :<,
-      safe_recovery.index('"PUT", "/configs?force=true"')
+      safe_load
     )
 
     assert_includes subscriptions, "def capture_runtime_profile_context"

@@ -409,11 +409,82 @@ module ClaudeEasy
     false
   end
 
-  def reload_profile_runtime(requester, path, expected_tun: :ignore)
+  def controller_path_component(value)
+    value.to_s.encode("UTF-8").bytes.map do |byte|
+      character = byte.chr
+      character.match?(/[A-Za-z0-9\-._~]/) ? character : format("%%%02X", byte)
+    end.join
+  end
+
+  def restore_runtime_selections(requester, selections)
+    return false unless selections.is_a?(Hash) &&
+                        selections.all? do |name, selected|
+                          name.is_a?(String) && !name.empty? &&
+                            selected.is_a?(String) && !selected.empty?
+                        end
+    return true if selections.empty?
+
+    proxies = runtime_proxies(requester)
+    return false unless proxies
+
+    selections.each do |name, selected|
+      proxy = proxies[name]
+      return false unless proxy.is_a?(Hash) && proxy["type"].to_s.casecmp("Selector").zero?
+      next if proxy["now"] == selected
+      return false unless proxy["all"].is_a?(Array) && proxy["all"].include?(selected)
+
+      code, _body = requester.call(
+        "PUT", "/proxies/#{controller_path_component(name)}", JSON.generate("name" => selected)
+      )
+      return false unless code == 204
+    end
+
+    restored = runtime_selections(requester)
+    restored.is_a?(Hash) && selections.all? { |name, selected| restored[name] == selected }
+  rescue StandardError
+    false
+  end
+
+  def runtime_tun_requirement(usage_profile)
+    usage_profile >= 2 ? true : :preserve
+  end
+
+  def capture_runtime_checkpoint(path, require_tun:, socket: nil, requester: nil)
+    if requester.nil?
+      socket ||= controller_socket
+      return nil unless socket
+
+      requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+    end
+    selections = runtime_selections(requester)
+    return nil unless selections
+
+    selections = runtime_selections_for_profile(selections, path)
+    return nil unless selections
+    expected_tun = if require_tun == :preserve
+                     tun_state(requester: requester)
+                   elsif require_tun
+                     :enabled
+                   else
+                     :ignore
+                   end
+    return nil if expected_tun == :unknown
+
+    {
+      path: File.realpath(path), selections: selections,
+      expected_tun: expected_tun
+    }
+  rescue StandardError
+    nil
+  end
+
+  def reload_profile_runtime(requester, path, expected_tun: :ignore, selections: {})
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(path))
     )
-    code == 204 && restore_runtime_tun_state(requester, expected_tun)
+    code == 204 &&
+      restore_runtime_tun_state(requester, expected_tun) &&
+      restore_runtime_selections(requester, selections)
   rescue StandardError
     false
   end
@@ -461,7 +532,8 @@ module ClaudeEasy
   end
 
   def reload_recovered_profile_runtime(work_items, require_tun:, socket: nil, requester: nil,
-                                       connectivity_checker: nil, precommit_condition: nil)
+                                       connectivity_checker: nil, precommit_condition: nil,
+                                       runtime_checkpoint: nil)
     active = work_items.find { |item| item.fetch(:active) }
     return true unless active
 
@@ -471,23 +543,31 @@ module ClaudeEasy
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
-    selections = runtime_selections(requester)
-    return false unless selections
+    if runtime_checkpoint
+      return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
 
-    selections = runtime_selections_for_profile(selections, active.fetch(:path))
+      selections = runtime_selections_for_profile(
+        runtime_checkpoint[:selections], active.fetch(:path)
+      )
+      expected_tun = runtime_checkpoint[:expected_tun]
+    else
+      selections = runtime_selections(requester)
+      return false unless selections
+      selections = runtime_selections_for_profile(selections, active.fetch(:path))
+      expected_tun = if require_tun == :preserve
+                       tun_state(requester: requester)
+                     elsif require_tun
+                       :enabled
+                     else
+                       :ignore
+                     end
+    end
     return false unless selections
-    expected_tun = if require_tun == :preserve
-                     tun_state(requester: requester)
-                   elsif require_tun
-                     :enabled
-                   else
-                     :ignore
-                   end
     return false if expected_tun == :unknown
     return false unless runtime_precommit_allowed?(precommit_condition)
 
     return false unless reload_profile_runtime(
-      requester, active.fetch(:path), expected_tun: expected_tun
+      requester, active.fetch(:path), expected_tun: expected_tun, selections: selections
     )
 
     healthy = runtime_health_healthy?(
@@ -534,52 +614,54 @@ module ClaudeEasy
 
   def activate_updated_profile(result, socket: nil, requester: nil, connectivity_checker: nil,
                                require_tun: true, precommit_condition: nil,
-                               require_safe_ai: false)
+                               require_safe_ai: false, runtime_checkpoint: nil)
     pending = -> { result.merge(status: :reload_failed_restore_pending) }
+    reload_attempted = false
     return pending.call unless profile_result_current?(result)
 
     if requester.nil?
       socket ||= controller_socket
-      return result.merge(
-        status: rollback_after_reload_failure(
-          result, nil, nil, precommit_condition: precommit_condition
-        )
-      ) unless socket
+      return result.merge(status: rollback_before_runtime_reload(result)) unless socket
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
-    before = runtime_selections(requester)
-    unless before
-      return result.merge(
-        status: rollback_after_reload_failure(
-          result, requester, result[:path], precommit_condition: precommit_condition
-        )
-      )
+    if runtime_checkpoint
+      unless runtime_checkpoint[:path] == File.realpath(result.fetch(:path))
+        return result.merge(status: rollback_before_runtime_reload(result))
+      end
+      before = runtime_checkpoint[:selections]
+      expected_tun = runtime_checkpoint[:expected_tun]
+    else
+      before = runtime_selections(requester)
+      return result.merge(status: rollback_before_runtime_reload(result)) unless before
+      expected_tun = if require_tun == :preserve
+                       tun_state(requester: requester)
+                     elsif require_tun
+                       :enabled
+                     else
+                       :ignore
+                     end
     end
-    expected_tun = if require_tun == :preserve
-                     tun_state(requester: requester)
-                   elsif require_tun
-                     :enabled
-                   else
-                     :ignore
-                   end
     rollback = lambda do
       rollback_after_reload_failure(
         result, requester, result[:path], selections: before, expected_tun: expected_tun,
         connectivity_checker: connectivity_checker, precommit_condition: precommit_condition
       )
     end
-    return result.merge(status: rollback.call) if expected_tun == :unknown
+    return result.merge(status: rollback_before_runtime_reload(result)) if expected_tun == :unknown
     candidate_selections = runtime_selections_for_profile(before, result.fetch(:path))
-    return result.merge(status: rollback.call) unless candidate_selections
+    return result.merge(status: rollback_before_runtime_reload(result)) unless candidate_selections
     required_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
-    return result.merge(status: rollback.call) if require_safe_ai && !required_proxy_group
+    if require_safe_ai && !required_proxy_group
+      return result.merge(status: rollback_before_runtime_reload(result))
+    end
     unless runtime_precommit_allowed?(precommit_condition)
       status = restore_profile_bytes(result) ? :reload_failed_rolled_back : :reload_failed_rollback_conflict
       return result.merge(status: status)
     end
     return pending.call unless profile_result_current?(result)
 
+    reload_attempted = true
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(result.fetch(:path)))
     )
@@ -588,6 +670,9 @@ module ClaudeEasy
     tun_restored = restore_runtime_tun_state(requester, expected_tun)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback.call) unless tun_restored
+    selections_restored = restore_runtime_selections(requester, candidate_selections)
+    return pending.call unless profile_result_current?(result)
+    return result.merge(status: rollback.call) unless selections_restored
 
     healthy = runtime_health_healthy?(
       requester, selections: candidate_selections, expected_tun: expected_tun,
@@ -602,11 +687,22 @@ module ClaudeEasy
 
     result.merge(status: rollback.call)
   rescue StandardError
-    result.merge(
-      status: rollback_after_reload_failure(
-        result, requester, result[:path], precommit_condition: precommit_condition
-      )
-    )
+    status = if reload_attempted
+               rollback_after_reload_failure(
+                 result, requester, result[:path], selections: before,
+                 expected_tun: expected_tun, connectivity_checker: connectivity_checker,
+                 precommit_condition: precommit_condition
+               )
+             else
+               rollback_before_runtime_reload(result)
+             end
+    result.merge(status: status)
+  end
+
+  def rollback_before_runtime_reload(result)
+    restore_profile_bytes(result) ? :reload_failed_rolled_back : :reload_failed_rollback_conflict
+  rescue StandardError
+    :reload_failed_rollback_conflict
   end
 
   def rollback_after_reload_failure(result, requester, path, selections: nil, expected_tun: nil,
@@ -616,7 +712,7 @@ module ClaudeEasy
     return :reload_failed_restore_pending unless runtime_precommit_allowed?(precommit_condition)
 
     return :reload_failed_restore_pending unless reload_profile_runtime(
-      requester, path, expected_tun: expected_tun
+      requester, path, expected_tun: expected_tun, selections: selections
     )
 
     healthy = runtime_health_healthy?(

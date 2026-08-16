@@ -662,7 +662,7 @@ module ClaudeEasy
   end
 
   def default_safe_update_activation(items, usage_profile, selected_name = selected_profile_name,
-                                     precommit_condition: nil)
+                                     precommit_condition: nil, runtime_checkpoint: nil)
     active = items.find { |item| active_profile?(item.fetch(:path), selected_name) }
     return runtime_precommit_allowed?(precommit_condition) unless active
 
@@ -672,14 +672,15 @@ module ClaudeEasy
       patched_identity: active[:patched_identity], patched_path: active[:patched_path]
     }
     activate_updated_profile(
-      result, require_tun: usage_profile >= 2,
+      result, require_tun: runtime_tun_requirement(usage_profile),
       precommit_condition: precommit_condition,
-      require_safe_ai: usage_profile == 3
+      require_safe_ai: usage_profile == 3,
+      runtime_checkpoint: runtime_checkpoint
     )
   end
 
   def reload_recovered_safe_update_runtime(targets, usage_profile, selected_name,
-                                           precommit_condition: nil)
+                                           precommit_condition: nil, runtime_checkpoint: nil)
     active = targets.find { |target| active_profile?(target.fetch(:path), selected_name) }
     return true unless active
 
@@ -687,12 +688,6 @@ module ClaudeEasy
     return false unless socket
 
     requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
-    selections = runtime_selections(requester)
-    return false unless selections
-    selections = runtime_selections_for_profile(selections, active.fetch(:path))
-    return false unless selections
-
-    expected_tun = usage_profile >= 2 ? :enabled : :ignore
     roots = targets.map { |target| File.dirname(File.expand_path(target.fetch(:path))) }.uniq
     unless precommit_condition
       runtime_context = capture_runtime_profile_context(roots)
@@ -702,21 +697,12 @@ module ClaudeEasy
         runtime_profile_context_current?(runtime_context, roots)
       end
     end
-    return false unless runtime_precommit_allowed?(precommit_condition)
-
-    code, _body = requester.call(
-      "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(active.fetch(:path)))
+    reload_recovered_profile_runtime(
+      [{ path: active.fetch(:path), active: true }],
+      require_tun: runtime_tun_requirement(usage_profile), requester: requester,
+      precommit_condition: precommit_condition,
+      runtime_checkpoint: runtime_checkpoint
     )
-    return false unless code == 204
-    return false unless runtime_precommit_allowed?(precommit_condition)
-    return false unless restore_runtime_tun_state(requester, expected_tun)
-    return false unless runtime_precommit_allowed?(precommit_condition)
-
-    healthy = runtime_health_healthy?(
-      requester, selections: selections, expected_tun: expected_tun,
-      precommit_condition: precommit_condition, check_dns: false
-    )
-    healthy && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
     false
   end
@@ -726,6 +712,7 @@ module ClaudeEasy
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil)
     operation_lock = nil
+    default_activation = activation.nil?
     raise InvalidConfigError, "用途档位无效" unless [1, 2, 3].include?(usage_profile)
     raise InvalidConfigError, "没有可更新的远程订阅" unless targets.is_a?(Array) && !targets.empty?
     roots = targets.map { |target| File.dirname(File.expand_path(target.fetch(:path))) }.uniq
@@ -754,7 +741,7 @@ module ClaudeEasy
         work_items = profile_work_items(roots, selected, active_root)
         recovery = resume_profile_transaction(
           backup_root, roots: roots, work_items: work_items, reload_runtime: true,
-          require_tun: usage_profile >= 2,
+          require_tun: runtime_tun_requirement(usage_profile),
           precommit_condition: precommit_condition
         )
         if recovery == :runtime_restore_pending
@@ -831,7 +818,21 @@ module ClaudeEasy
       return { status: :aborted, failed_profile: "", reason: :duplicate_target }
     end
     begin
-      transaction = prepare_profile_transaction(items, backup_root, roots: roots)
+      runtime_checkpoint = nil
+      if default_activation
+        active = items.find { |item| active_profile?(item.fetch(:path), selected_name) }
+        if active
+          runtime_checkpoint = capture_runtime_checkpoint(
+            active.fetch(:path), require_tun: runtime_tun_requirement(usage_profile)
+          )
+          unless runtime_checkpoint
+            return { status: :aborted, failed_profile: "", reason: :client_state_changed }
+          end
+        end
+      end
+      transaction = prepare_profile_transaction(
+        items, backup_root, roots: roots, runtime_checkpoint: runtime_checkpoint
+      )
     rescue ConcurrentProfileChangeError
       return { status: :aborted, failed_profile: "", reason: :concurrent_change }
     end
@@ -926,7 +927,8 @@ module ClaudeEasy
     activation ||= lambda do |updated_items|
       default_safe_update_activation(
         updated_items, usage_profile, selected_name,
-        precommit_condition: precommit_condition
+        precommit_condition: precommit_condition,
+        runtime_checkpoint: runtime_checkpoint
       )
     end
     activation_result = begin
@@ -982,7 +984,8 @@ module ClaudeEasy
       if runtime_committed
         restored_runtime = reload_recovered_safe_update_runtime(
           targets, usage_profile, selected_name,
-          precommit_condition: precommit_condition
+          precommit_condition: precommit_condition,
+          runtime_checkpoint: transaction.fetch(:runtime_checkpoint, runtime_checkpoint)
         ) && runtime_precommit_allowed?(precommit_condition)
         if restored_runtime
           begin

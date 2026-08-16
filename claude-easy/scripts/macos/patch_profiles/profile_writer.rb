@@ -141,6 +141,46 @@ module ClaudeEasy
     end
   end
 
+  def serialized_runtime_checkpoint(checkpoint, roots:, write_paths:)
+    unless checkpoint.is_a?(Hash) && checkpoint.keys.sort == %i[expected_tun path selections]
+      raise InvalidConfigError, "运行时恢复记录无效"
+    end
+
+    path = checkpoint.fetch(:path)
+    tun = checkpoint.fetch(:expected_tun)
+    selections = checkpoint.fetch(:selections)
+    valid = path.is_a?(String) && path == File.expand_path(path) &&
+            profile_path_allowed?(path, roots) && write_paths.include?(path) &&
+            %i[enabled disabled ignore].include?(tun) &&
+            selections.is_a?(Hash) && selections.all? do |name, selected|
+              name.is_a?(String) && !name.empty? &&
+                selected.is_a?(String) && !selected.empty?
+            end
+    raise InvalidConfigError, "运行时恢复记录无效" unless valid
+
+    { "Path" => path, "Tun" => tun.to_s, "Selections" => selections }
+  end
+
+  def parsed_runtime_checkpoint(value, roots:, write_paths:)
+    valid = value.is_a?(Hash) && value.keys.sort == %w[Path Selections Tun] &&
+            value["Path"].is_a?(String) &&
+            value["Path"] == File.expand_path(value["Path"]) &&
+            profile_path_allowed?(value["Path"], roots) &&
+            write_paths.include?(value["Path"]) &&
+            %w[enabled disabled ignore].include?(value["Tun"]) &&
+            value["Selections"].is_a?(Hash) &&
+            value["Selections"].all? do |name, selected|
+              name.is_a?(String) && !name.empty? &&
+                selected.is_a?(String) && !selected.empty?
+            end
+    raise InvalidConfigError, "配置事务运行时记录无效" unless valid
+
+    {
+      path: value.fetch("Path"), expected_tun: value.fetch("Tun").to_sym,
+      selections: value.fetch("Selections")
+    }
+  end
+
   def remove_profile_transaction(snapshot, state_uncertain_on_sync_failure: false)
     path = snapshot.fetch(:path)
     flags = File::RDONLY
@@ -209,14 +249,26 @@ module ClaudeEasy
       remove_profile_transaction(snapshot)
       return :committed
     end
-    valid_state = state.is_a?(Hash) && state.keys.sort == %w[Items Version] &&
-                  [1, 2].include?(state["Version"]) && state["Items"].is_a?(Array) &&
+    version = state["Version"] if state.is_a?(Hash)
+    expected_state_keys = version == 4 ? %w[Items Runtime Version] : %w[Items Version]
+    valid_state = state.is_a?(Hash) && state.keys.sort == expected_state_keys &&
+                  [1, 2, 4].include?(version) && state["Items"].is_a?(Array) &&
                   !state["Items"].empty?
     raise InvalidConfigError, "配置事务记录无效" unless valid_state
 
+    runtime_checkpoint = if version == 4
+                           parsed_runtime_checkpoint(
+                             state["Runtime"], roots: roots,
+                             write_paths: state.fetch("Items").each_with_object([]) do |item, paths|
+                               if item.is_a?(Hash) && item["WritePath"].is_a?(String)
+                                 paths << item["WritePath"]
+                               end
+                             end
+                           )
+                         end
+
     seen = {}
     state.fetch("Items").each do |item|
-      version = state.fetch("Version")
       expected_keys = if version == 1
                         %w[CandidateSha256 OriginalBase64 Path WritePath]
                       else
@@ -226,7 +278,7 @@ module ClaudeEasy
                    item["Path"].is_a?(String) && item["WritePath"].is_a?(String) &&
                    item["OriginalBase64"].is_a?(String) &&
                    item["CandidateSha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
-      if version == 2
+      if [2, 4].include?(version)
         identity = item["OriginalIdentity"]
         valid_item &&= item["CandidateBase64"].is_a?(String) &&
                        identity.is_a?(Array) && identity.length == 2 &&
@@ -254,7 +306,7 @@ module ClaudeEasy
         next
       end
       current = current_snapshot.fetch(:bytes)
-      if version == 2
+      if [2, 4].include?(version)
         candidate = Base64.strict_decode64(item.fetch("CandidateBase64"))
         raise InvalidConfigError, "配置事务记录无效" unless
           Digest::SHA256.hexdigest(candidate) == item.fetch("CandidateSha256")
@@ -288,12 +340,12 @@ module ClaudeEasy
       raise InvalidConfigError, "旧版配置事务缺少文件身份，不能自动恢复"
     end
     remove_profile_transaction(snapshot) unless keep_transaction
-    snapshot
+    snapshot.merge(runtime_checkpoint: runtime_checkpoint)
   rescue ArgumentError, JSON::ParserError
     raise InvalidConfigError, "配置事务记录无效"
   end
 
-  def prepare_profile_transaction(items, backup_root, roots:)
+  def prepare_profile_transaction(items, backup_root, roots:, runtime_checkpoint: nil)
     root = secure_backup_root!(backup_root)
     path = profile_transaction_path(root)
     raise IOError, "发现尚未恢复的配置事务记录" if File.exist?(path) || File.symlink?(path)
@@ -325,7 +377,15 @@ module ClaudeEasy
     raise InvalidConfigError, "配置事务包含重复目标" unless
       records.map { |record| record.fetch("WritePath") }.uniq.length == records.length
 
-    bytes = (JSON.generate("Version" => 2, "Items" => records) + "\n").b
+    state = { "Version" => 2, "Items" => records }
+    if runtime_checkpoint
+      state["Version"] = 4
+      state["Runtime"] = serialized_runtime_checkpoint(
+        runtime_checkpoint, roots: roots,
+        write_paths: records.map { |record| record.fetch("WritePath") }
+      )
+    end
+    bytes = (JSON.generate(state) + "\n").b
     Tempfile.create([".claude-easy-profile-transaction-", ".tmp"], root) do |temporary|
       temporary.binmode
       temporary.write(bytes)
@@ -345,7 +405,7 @@ module ClaudeEasy
         }
       ]
     end
-    snapshot.merge(targets: targets)
+    snapshot.merge(targets: targets, runtime_checkpoint: runtime_checkpoint)
   end
 
   def profile_work_items(roots, selected, active_root)
@@ -379,7 +439,8 @@ module ClaudeEasy
       reload_recovered_profile_runtime(
         work_items, require_tun: require_tun, socket: socket, requester: requester,
         connectivity_checker: connectivity_checker,
-        precommit_condition: precommit_condition
+        precommit_condition: precommit_condition,
+        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)
       )
     return :runtime_restore_pending unless
       runtime_precommit_allowed?(precommit_condition)
@@ -594,7 +655,7 @@ module ClaudeEasy
       if !dry_run && backup_root
         recovery = resume_profile_transaction(
           backup_root, roots: roots, work_items: work_items, reload_runtime: auto_reload,
-          require_tun: usage_profile >= 2, socket: socket, requester: requester,
+          require_tun: runtime_tun_requirement(usage_profile), socket: socket, requester: requester,
           connectivity_checker: connectivity_checker,
           precommit_condition: precommit_condition
         )
@@ -635,7 +696,23 @@ module ClaudeEasy
         end
 
         transaction = nil
+        runtime_checkpoint = nil
         if backup_root && preflight.any? { |preview| preview.fetch(:status) == :updated }
+          active_pair = work_items.zip(preflight).find { |item, _preview| item.fetch(:active) }
+          active_preview = active_pair&.last
+          if auto_reload && active_preview && active_preview.fetch(:status) == :updated
+            runtime_checkpoint = capture_runtime_checkpoint(
+              active_pair.first.fetch(:path),
+              require_tun: runtime_tun_requirement(usage_profile),
+              socket: socket, requester: requester
+            )
+            unless runtime_checkpoint
+              return preflight.map do |preview|
+                status = preview.fetch(:active) ? :runtime_check_failed : :batch_aborted
+                preview.merge(status: status, dry_run: false)
+              end
+            end
+          end
           transaction_items = work_items.zip(preflight).map do |item, preview|
             {
               path: item.fetch(:path),
@@ -645,7 +722,8 @@ module ClaudeEasy
           end
           begin
             transaction = prepare_profile_transaction(
-              transaction_items, backup_root, roots: roots
+              transaction_items, backup_root, roots: roots,
+              runtime_checkpoint: runtime_checkpoint
             )
           rescue ConcurrentProfileChangeError
             if batch_attempt + 1 < MAX_PATCH_ATTEMPTS
@@ -701,9 +779,10 @@ module ClaudeEasy
                 socket: socket,
                 requester: requester,
                 connectivity_checker: connectivity_checker,
-                require_tun: usage_profile >= 2,
+                require_tun: runtime_tun_requirement(usage_profile),
                 precommit_condition: precommit_condition,
-                require_safe_ai: usage_profile == 3
+                require_safe_ai: usage_profile == 3,
+                runtime_checkpoint: runtime_checkpoint
               )
             elsif result[:status] == :unchanged
               result = verify_unchanged_profile_runtime(
@@ -785,10 +864,11 @@ module ClaudeEasy
               end
               if runtime_committed
                 restored_runtime = recovery && reload_recovered_profile_runtime(
-                  work_items, require_tun: usage_profile >= 2,
+                  work_items, require_tun: runtime_tun_requirement(usage_profile),
                   socket: socket, requester: requester,
                   connectivity_checker: connectivity_checker,
-                  precommit_condition: precommit_condition
+                  precommit_condition: precommit_condition,
+                  runtime_checkpoint: transaction.fetch(:runtime_checkpoint, runtime_checkpoint)
                 ) && runtime_precommit_allowed?(precommit_condition)
                 if restored_runtime
                   begin
