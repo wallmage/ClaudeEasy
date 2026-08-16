@@ -75,14 +75,19 @@ module ClaudeEasyResult
     return result if workflow_fields.all?(&:nil?)
     raise ArgumentError, "incomplete workflow metadata" if workflow_fields.any?(&:nil?)
     raise ArgumentError, "invalid workflow_complete" unless [true, false].include?(workflow_complete)
-    raise ArgumentError, "invalid completed_scope" unless completed_scope.is_a?(String) && !completed_scope.empty?
+    sanitized_scope = sanitize_text(completed_scope)
+    raise ArgumentError, "invalid completed_scope" unless completed_scope.is_a?(String) && !sanitized_scope.empty?
+    sanitized_followups = required_followups.map { |entry| sanitize_text(entry) } if required_followups.is_a?(Array)
     raise ArgumentError, "invalid required_followups" unless
-      required_followups.is_a?(Array) && required_followups.all? { |entry| entry.is_a?(String) && !entry.empty? }
+      required_followups.is_a?(Array) &&
+      required_followups.each_with_index.all? do |entry, index|
+        entry.is_a?(String) && !sanitized_followups[index].empty?
+      end
 
     result.merge(
       "workflow_complete" => workflow_complete,
-      "completed_scope" => sanitize_text(completed_scope),
-      "required_followups" => sanitize(required_followups)
+      "completed_scope" => sanitized_scope,
+      "required_followups" => sanitized_followups
     )
   end
 
@@ -109,9 +114,11 @@ module ClaudeEasyResult
     return false unless present_workflow_keys == workflow_keys
 
     [true, false].include?(result["workflow_complete"]) &&
-      result["completed_scope"].is_a?(String) && !result["completed_scope"].empty? &&
+      result["completed_scope"].is_a?(String) && !sanitize_text(result["completed_scope"]).empty? &&
       result["required_followups"].is_a?(Array) &&
-      result["required_followups"].all? { |entry| entry.is_a?(String) && !entry.empty? }
+      result["required_followups"].all? do |entry|
+        entry.is_a?(String) && !sanitize_text(entry).empty?
+      end
   rescue JSON::ParserError, TypeError
     false
   end

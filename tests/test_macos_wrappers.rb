@@ -47,6 +47,16 @@ class MacosWrapperTest < Minitest::Test
     File.join(home, "Library", "Application Support", "ClaudeEasy", "usage-profile.plist")
   end
 
+  def write_usage_profile(home, profile)
+    state = usage_state_path(home)
+    FileUtils.mkdir_p(File.dirname(state))
+    system("/usr/bin/plutil", "-create", "xml1", state)
+    system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
+    system("/usr/bin/plutil", "-insert", "Profile", "-integer", profile.to_s, state)
+    File.chmod(0o600, state)
+    state
+  end
+
   def run_script(path, *arguments, home:, extra_env: {})
     state = usage_state_path(home)
     env = {
@@ -2039,12 +2049,7 @@ class MacosWrapperTest < Minitest::Test
           [false, true].each do |json|
             Dir.mktmpdir do |home|
               with_supported_app(home) do
-                state = usage_state_path(home)
-                FileUtils.mkdir_p(File.dirname(state))
-                system("/usr/bin/plutil", "-create", "xml1", state)
-                system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-                system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
-                File.chmod(0o600, state)
+                state = write_usage_profile(home, operation == "safe-update" ? 3 : 1)
                 arguments = ["--profile", "3"]
                 arguments.unshift("--safe-update") if operation == "safe-update"
                 arguments << "--json" if json
@@ -2128,12 +2133,7 @@ class MacosWrapperTest < Minitest::Test
         [false, true].each do |json|
           Dir.mktmpdir do |home|
             with_supported_app(home) do
-              state = usage_state_path(home)
-              FileUtils.mkdir_p(File.dirname(state))
-              system("/usr/bin/plutil", "-create", "xml1", state)
-              system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-              system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
-              File.chmod(0o600, state)
+              state = write_usage_profile(home, operation == "safe-update" ? 3 : 1)
               arguments = ["--profile", "3"]
               arguments.unshift("--safe-update") if operation == "safe-update"
               arguments << "--json" if json
@@ -2212,12 +2212,7 @@ class MacosWrapperTest < Minitest::Test
           [false, true].each do |json|
             Dir.mktmpdir do |home|
               with_supported_app(home) do
-                state = usage_state_path(home)
-                FileUtils.mkdir_p(File.dirname(state))
-                system("/usr/bin/plutil", "-create", "xml1", state)
-                system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-                system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
-                File.chmod(0o600, state)
+                state = write_usage_profile(home, operation == "safe-update" ? 3 : 1)
                 arguments = ["--profile", "3"]
                 arguments.unshift("--safe-update") if operation == "safe-update"
                 arguments << "--json" if json
@@ -2744,6 +2739,7 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
+          write_usage_profile(home, 1)
           stdout, stderr, status = run_script(
             installer, "--safe-update", "--profile", "1", "--json", home: home
           )
@@ -2755,6 +2751,43 @@ class MacosWrapperTest < Minitest::Test
           assert_equal "safe_update_runtime_pending", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
           assert_includes result.fetch("warnings"), "运行内核未恢复"
+        end
+      end
+    end
+  end
+
+  def test_safe_update_uses_only_the_saved_profile
+    with_supported_mihomo_installer do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, stderr, status = run_script(
+            installer, "--safe-update", "--profile", "1", "--json", home: home
+          )
+
+          assert_equal 10, status.exitstatus
+          assert_empty stderr
+          result = JSON.parse(stdout)
+          assert_equal "usage_profile_required", result.fetch("code")
+          assert_nil result.fetch("profile")
+          refute File.exist?(usage_state_path(home))
+        end
+      end
+
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = write_usage_profile(home, 1)
+          original = File.binread(state)
+
+          stdout, stderr, status = run_script(
+            installer, "--safe-update", "--profile", "2", "--json", home: home
+          )
+
+          assert_equal 64, status.exitstatus
+          assert_empty stderr
+          result = JSON.parse(stdout)
+          assert_equal "usage_profile_mismatch", result.fetch("code")
+          assert_nil result.fetch("profile")
+          assert_equal original, File.binread(state)
         end
       end
     end
@@ -2790,6 +2823,7 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
+          write_usage_profile(home, 3)
           stdout, stderr, status = run_script(
             installer, "--safe-update", "--profile", "3", "--json", home: home
           )
@@ -2863,6 +2897,7 @@ class MacosWrapperTest < Minitest::Test
     with_missing_mihomo_installer do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
+          write_usage_profile(home, 1)
           stdout, _stderr, status = run_script(installer, "--safe-update", "--profile", "1", home: home)
           assert_equal 8, status.exitstatus
           assert_includes stdout, "没有找到可用的 Mihomo"

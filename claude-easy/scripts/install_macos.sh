@@ -649,6 +649,21 @@ parse_arguments() {
 
 resolve_usage_profile() {
   load_saved_profile_or_finish select_profile
+  if [ "$SAFE_UPDATE" -eq 1 ]; then
+    if [ -z "$SAVED_PROFILE" ]; then
+      say "还没有选择用途档位。"
+      USAGE_PROFILE=""
+      finish 10 invalid_request usage_profile_required "还没有选择用途档位。" safe_update
+    fi
+    if [ -n "$USAGE_PROFILE" ] && [ "$USAGE_PROFILE" != "$SAVED_PROFILE" ]; then
+      say "请求档位与已保存档位不一致；未执行安全更新。"
+      USAGE_PROFILE=""
+      finish 64 invalid_request usage_profile_mismatch \
+        "请求档位与已保存档位不一致；未执行安全更新。" safe_update
+    fi
+    USAGE_PROFILE=$SAVED_PROFILE
+    PROFILE_SOURCE="saved"
+  fi
   if [ -z "$USAGE_PROFILE" ]; then
     USAGE_PROFILE=$SAVED_PROFILE
     PROFILE_SOURCE="saved"

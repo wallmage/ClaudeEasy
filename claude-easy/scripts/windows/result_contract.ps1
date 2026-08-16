@@ -83,7 +83,7 @@ function New-ClaudeEasyResult(
     [object[]]$Messages = @(),
     [object[]]$Warnings = @(),
     [object]$WorkflowComplete = $null,
-    [string]$CompletedScope = "",
+    [object]$CompletedScope = $null,
     [object]$RequiredFollowups = $null
 ) {
     if ($Command -notin $script:ClaudeEasyResultCommands) { throw "结果命令无效。" }
@@ -115,24 +115,33 @@ function New-ClaudeEasyResult(
         messages = @(ConvertTo-ClaudeEasyResultArray $Messages)
         warnings = @(ConvertTo-ClaudeEasyResultArray $Warnings)
     }
-    $hasWorkflowMetadata = $null -ne $WorkflowComplete -or
-        -not [string]::IsNullOrWhiteSpace($CompletedScope) -or
+    $hasWorkflowMetadata = $null -ne $WorkflowComplete -or $null -ne $CompletedScope -or
         $null -ne $RequiredFollowups
     if ($hasWorkflowMetadata) {
         if ($null -eq $WorkflowComplete -or
             $WorkflowComplete -isnot [bool] -or
-            [string]::IsNullOrWhiteSpace($CompletedScope) -or
+            $CompletedScope -isnot [string] -or
             $null -eq $RequiredFollowups) {
             throw "工作流结果字段不完整。"
         }
+        $protectedCompletedScope = Protect-ClaudeEasyResultText $CompletedScope
+        if ([string]::IsNullOrWhiteSpace($protectedCompletedScope)) {
+            throw "工作流完成范围无效。"
+        }
+        $protectedRequiredFollowups = @()
         foreach ($requiredFollowup in @($RequiredFollowups)) {
-            if ($requiredFollowup -isnot [string] -or $requiredFollowup.Length -eq 0) {
+            if ($requiredFollowup -isnot [string]) {
                 throw "工作流后续项目无效。"
             }
+            $protectedRequiredFollowup = Protect-ClaudeEasyResultText $requiredFollowup
+            if ([string]::IsNullOrWhiteSpace($protectedRequiredFollowup)) {
+                throw "工作流后续项目无效。"
+            }
+            $protectedRequiredFollowups += ,$protectedRequiredFollowup
         }
         $result.workflow_complete = [bool]$WorkflowComplete
-        $result.completed_scope = Protect-ClaudeEasyResultText $CompletedScope
-        $result.required_followups = @(ConvertTo-ClaudeEasyResultArray $RequiredFollowups)
+        $result.completed_scope = $protectedCompletedScope
+        $result.required_followups = @($protectedRequiredFollowups)
     }
     return [pscustomobject]$result
 }

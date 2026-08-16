@@ -25,7 +25,7 @@ function Complete-InstallResult(
     [object[]]$Items = @(),
     [object[]]$Warnings = @(),
     [object]$WorkflowComplete = $null,
-    [string]$CompletedScope = "",
+    [object]$CompletedScope = $null,
     [object]$RequiredFollowups = $null
 ) {
     if ($Json) {

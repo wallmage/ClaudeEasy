@@ -1263,6 +1263,27 @@ try {
         $invalidWorkflowFollowupRejected = $true
     }
     Assert-True $invalidWorkflowFollowupRejected "result contract accepted a non-string workflow follow-up"
+    $incompleteWhitespaceScopeRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -CompletedScope "   " | Out-Null
+    } catch {
+        $incompleteWhitespaceScopeRejected = $true
+    }
+    Assert-True $incompleteWhitespaceScopeRejected "result contract ignored an explicitly supplied blank workflow scope"
+    $emptySanitizedWorkflowScopeRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false -CompletedScope (" " + [char]27 + "[31m ") -RequiredFollowups @("final_state_audit") | Out-Null
+    } catch {
+        $emptySanitizedWorkflowScopeRejected = $true
+    }
+    Assert-True $emptySanitizedWorkflowScopeRejected "result contract accepted a workflow scope that sanitizes to empty"
+    $emptySanitizedWorkflowFollowupRejected = $false
+    try {
+        New-ClaudeEasyResult -Command "install" -Operation "safe_update" -Ok $true -Status "ok" -Code "safe_update_verified" -ExitCode 0 -SummaryZh "订阅事务完成" -WorkflowComplete $false -CompletedScope "subscription_update" -RequiredFollowups @((" " + [char]0x202E + " ")) | Out-Null
+    } catch {
+        $emptySanitizedWorkflowFollowupRejected = $true
+    }
+    Assert-True $emptySanitizedWorkflowFollowupRejected "result contract accepted a workflow follow-up that sanitizes to empty"
     $invalidContractCommandRejected = $false
     try { New-ClaudeEasyResult -Command "contract-test" -Operation "test" -Ok $true -Status "ok" -Code "ok" -ExitCode 0 -SummaryZh "完成" | Out-Null } catch { $invalidContractCommandRejected = $true }
     Assert-True $invalidContractCommandRejected "result contract accepted an unstable command name"
@@ -2738,6 +2759,24 @@ items:
     Assert-True $flowListRejected "multiline flow YAML list was silently omitted"
 
     $safeUpdateCase = Join-Path $sandbox "safe-update-case"
+    $unprofiledSafeUpdateCase = Join-Path $sandbox "safe-update-without-profile"
+    New-Item -ItemType Directory -Path $unprofiledSafeUpdateCase -Force | Out-Null
+    $unprofiledSafeUpdate = Invoke-TestPowerShell $installer @(
+        "-AppHome", $unprofiledSafeUpdateCase,
+        "-SnapshotProfiles",
+        "-UsageProfile", "1",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $unprofiledSafeUpdateJson = Assert-JsonResult $unprofiledSafeUpdate "install" 10
+    Assert-True (
+        $unprofiledSafeUpdateJson.code -eq "usage_profile_required" -and
+        $null -eq $unprofiledSafeUpdateJson.profile
+    ) "Windows safe update accepted a requested profile without a saved profile"
+    Assert-True (-not (
+        Test-Path -LiteralPath (Join-Path $unprofiledSafeUpdateCase "claude-easy-usage-profile.json")
+    )) "Windows safe update created a missing saved profile"
+
     $safeUpdateProfiles = Join-Path $safeUpdateCase "profiles"
     New-Item -ItemType Directory -Path $safeUpdateProfiles -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateCase "profiles.yaml"), $profilesIndexInput)
@@ -2780,6 +2819,21 @@ rules:
         "-AppHome", $safeUpdateCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore
     )
     Assert-True ($safeUpdateInstall.ExitCode -eq 0) "safe update fixture install failed; $(Get-TestOutputDiagnostic $safeUpdateInstall.Output)"
+    $mismatchedSafeUpdate = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-SnapshotProfiles",
+        "-UsageProfile", "2",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $mismatchedSafeUpdateJson = Assert-JsonResult $mismatchedSafeUpdate "install" 64
+    Assert-True (
+        $mismatchedSafeUpdateJson.code -eq "usage_profile_mismatch" -and
+        $null -eq $mismatchedSafeUpdateJson.profile
+    ) "Windows safe update accepted a profile different from the saved profile"
+    Assert-True (-not (
+        Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json")
+    )) "Windows profile mismatch created a safe-update manifest"
     $remoteTargets = @(Get-RemoteSubscriptionTargets $profilesIndexInput $safeUpdateProfiles)
     Assert-True ($remoteTargets.Count -eq 2) "two distinct remote subscriptions were not mapped independently"
     Assert-True ((@($remoteTargets | ForEach-Object { $_.Path } | Sort-Object -Unique)).Count -eq 2) "distinct remote subscriptions were mapped to one file"

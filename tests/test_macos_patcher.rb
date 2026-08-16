@@ -1995,6 +1995,36 @@ class MacosPatcherTest < Minitest::Test
     refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("workflow_complete" => "false")))
   end
 
+  def test_result_contract_rejects_workflow_text_that_sanitizes_to_empty
+    common = {
+      command: "install", operation: "safe_update", ok: true, status: "ok",
+      code: "safe_update_completed", exit_code: 0, summary_zh: "订阅事务完成。",
+      workflow_complete: false
+    }
+
+    assert_raises(ArgumentError) do
+      ClaudeEasyResult.build(
+        **common, completed_scope: " \e[31m ", required_followups: ["final_state_audit"]
+      )
+    end
+    assert_raises(ArgumentError) do
+      ClaudeEasyResult.build(
+        **common, completed_scope: "subscription_update", required_followups: [" \u200E "]
+      )
+    end
+
+    valid = ClaudeEasyResult.build(
+      **common, completed_scope: "subscription_update",
+      required_followups: ["final_state_audit"]
+    )
+    refute ClaudeEasyResult.valid_child_json?(
+      JSON.generate(valid.merge("completed_scope" => " \e[31m "))
+    )
+    refute ClaudeEasyResult.valid_child_json?(
+      JSON.generate(valid.merge("required_followups" => [" \u200E "]))
+    )
+  end
+
   def test_result_contract_cli_merges_child_workflow_metadata
     child = ClaudeEasyResult.build(
       command: "patch", operation: "safe_update", ok: true, status: "ok",
