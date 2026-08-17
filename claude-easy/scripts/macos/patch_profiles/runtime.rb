@@ -237,8 +237,33 @@ module ClaudeEasy
   def profile_ai_runtime_group(path, policy: nil)
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
     rules = Array(config["rules"])
-    first = rule_info(rules[0])
-    second = rule_info(rules[1])
+    udp_index = if policy
+                  provider_policy = policy["cn_ip_provider"]
+                  cn_ip_provider = if config["rule-providers"].is_a?(Hash)
+                                     config["rule-providers"].find do |name, provider|
+                                       owned_rule_provider?(name, provider, provider_policy)
+                                     end&.first
+                                   end
+                  return nil unless cn_ip_provider
+
+                  cn_udp = render_cn_udp_direct_rule(policy, cn_ip_provider)
+                  cn_udp_index = rules.index do |rule|
+                    rule.to_s.gsub(/\s+/, "").casecmp(cn_udp.gsub(/\s+/, "")).zero?
+                  end
+                  cn_udp_index && cn_udp_index + 1
+                else
+                  rules.each_index.find do |index|
+                    first = rule_info(rules[index])
+                    second = rule_info(rules[index + 1])
+                    first[:type] == "NETWORK" && first[:payload].to_s.casecmp("UDP").zero? &&
+                      second[:type] == "NETWORK" && second[:payload].to_s.casecmp("UDP").zero? &&
+                      second[:target].to_s.casecmp("REJECT").zero?
+                  end
+                end
+    return nil unless udp_index
+
+    first = rule_info(rules[udp_index])
+    second = rule_info(rules[udp_index + 1])
     return nil unless first[:type] == "NETWORK" && first[:payload].to_s.casecmp("UDP").zero? &&
                       second[:type] == "NETWORK" && second[:payload].to_s.casecmp("UDP").zero? &&
                       second[:target].to_s.casecmp("REJECT").zero?
@@ -248,14 +273,21 @@ module ClaudeEasy
 
     if policy
       required = render_ai_rules(policy, target).map { |rule| managed_rule_identity(rule) }
-      return nil if required.empty? || required.any?(&:nil?)
+      rejects = render_ai_rules(policy, target).map { |rule| managed_rule_identity(rule_with_target(rule, "REJECT")) }
+      return nil if required.empty? || required.any?(&:nil?) || rejects.any?(&:nil?)
 
       identities = rules.map { |rule| managed_rule_identity(rule) }
       positions = required.map { |identity| identities.index(identity) }
-      return nil if positions.any?(&:nil?)
+      reject_positions = rejects.map { |identity| identities.index(identity) }
+      return nil if positions.any?(&:nil?) || reject_positions.any?(&:nil?)
 
-      first_broad = rules.index { |rule| broad_rule?(rule) }
-      return nil if first_broad && positions.any? { |position| position >= first_broad }
+      cn_rule_index = rules.index do |rule|
+        info = rule_info(rule)
+        info[:type] == "RULE-SET" && info[:target].to_s.casecmp("DIRECT").zero? &&
+          managed_cn_provider_name?(info[:payload], policy)
+      end
+      return nil unless cn_rule_index && cn_rule_index + 2 == udp_index
+      return nil unless positions.max < reject_positions.min && reject_positions.max < cn_rule_index
     end
 
     target

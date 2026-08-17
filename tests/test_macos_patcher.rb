@@ -1947,6 +1947,8 @@ class MacosPatcherTest < Minitest::Test
       assert_equal true, patched.fetch("ipv6")
       assert_equal({ "enable" => false }, patched.fetch("tun"))
       refute patched.fetch("rules").any? { |rule| rule.start_with?("NETWORK,UDP,") }
+      refute_includes patched.fetch("rules"), @policy.fetch("cn_udp_direct_rule")
+      refute patched.fetch("rule-providers").key?(@policy.fetch("cn_ip_provider").fetch("name"))
       assert_equal patched, ClaudeEasy.patch(patched, @policy, usage_profile: usage_profile).fetch(:config)
     end
   end
@@ -1963,6 +1965,22 @@ class MacosPatcherTest < Minitest::Test
     assert_equal "./user-owned.yaml", patched.fetch("rule-providers").fetch(base_name).fetch("path")
     assert patched.fetch("rule-providers").key?("#{base_name}-2")
     assert_includes patched.fetch("rules"), "RULE-SET,#{base_name}-2,DIRECT"
+  end
+
+  def test_china_ip_udp_provider_does_not_overwrite_a_user_provider
+    config = base_config
+    provider_name = @policy.fetch("cn_ip_provider").fetch("name")
+    user_provider = { "type" => "file", "behavior" => "ipcidr", "path" => "./user/cn-ip.yaml" }
+    config["rule-providers"] = { provider_name => user_provider }
+
+    result = ClaudeEasy.patch(config, @policy)
+    patched = result.fetch(:config)
+    managed_name = "#{provider_name}-2"
+
+    assert_equal user_provider, patched.fetch("rule-providers").fetch(provider_name)
+    assert_equal "ipcidr", patched.fetch("rule-providers").fetch(managed_name).fetch("behavior")
+    assert_includes patched.fetch("rules"), ClaudeEasy.render_cn_udp_direct_rule(@policy, managed_name)
+    refute ClaudeEasy.patch(patched, @policy).fetch(:changed)
   end
 
   def test_common_china_domain_baseline_does_not_reuse_user_provider_path
@@ -2605,10 +2623,36 @@ class MacosPatcherTest < Minitest::Test
     udp = "NETWORK,UDP,#{result.fetch(:ai_group)}"
     assert_includes patched.fetch("rules"), udp
     assert_equal "NETWORK,UDP,REJECT", patched.fetch("rules")[patched.fetch("rules").index(udp) + 1]
-    assert_equal 0, patched.fetch("rules").index(udp)
+    assert_operator patched.fetch("rules").index("RULE-SET,#{result.fetch(:cn_provider)},DIRECT"), :<,
+                    patched.fetch("rules").index(udp)
     assert_operator patched.fetch("rules").index(udp), :<, patched.fetch("rules").index("GEOSITE,CN,DIRECT")
     assert_includes patched.fetch("rules"), "DOMAIN,raw.githubusercontent.com,AI"
     assert_includes patched.fetch("rules"), "DOMAIN,storage.googleapis.com,AI"
+  end
+
+  def test_routes_udp_by_deterministic_destination_and_fails_closed_for_ai
+    result = ClaudeEasy.patch(base_config, @policy)
+    patched = result.fetch(:config)
+    rules = patched.fetch("rules")
+    ai_group = result.fetch(:ai_group)
+    cn_provider = result.fetch(:cn_provider)
+    cn_ip_provider = @policy.fetch("cn_ip_provider").fetch("name")
+    expected_order = [
+      "DOMAIN-SUFFIX,openai.com,#{ai_group}",
+      "DOMAIN-SUFFIX,openai.com,REJECT",
+      "RULE-SET,#{cn_provider},DIRECT",
+      "AND,((NETWORK,UDP),(RULE-SET,#{cn_ip_provider})),DIRECT",
+      "NETWORK,UDP,#{ai_group}",
+      "NETWORK,UDP,REJECT"
+    ]
+
+    provider = patched.fetch("rule-providers").fetch(cn_ip_provider)
+    assert_equal "ipcidr", provider.fetch("behavior")
+    assert_equal result.fetch(:route_group), provider.fetch("proxy")
+    indexes = expected_order.map { |rule| rules.index(rule) }
+    refute_includes indexes, nil
+    indexes.each_cons(2) { |left, right| assert_operator left, :<, right }
+    refute ClaudeEasy.patch(patched, @policy).fetch(:changed)
   end
 
   def test_reuses_existing_ai_group_without_creating_visible_groups
@@ -2623,7 +2667,7 @@ class MacosPatcherTest < Minitest::Test
     assert_equal original_ai, patched.fetch("proxy-groups").find { |group| group["name"] == "AI" }
     refute patched.fetch("proxy-groups").any? { |group| ClaudeEasy.managed_group_name?(group["name"]) }
     assert_includes patched.fetch("rules"), "DOMAIN-SUFFIX,openai.com,AI"
-    assert_equal ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT"], patched.fetch("rules").first(2)
+    assert_equal ClaudeEasy.render_ai_rules(@policy, "AI").first(2), patched.fetch("rules").first(2)
     assert patched.dig("dns", "nameserver").all? { |value| value.end_with?("#Main") }
     assert patched.dig("dns", "nameserver-policy", "+.openai.com").all? { |value| value.end_with?("#AI") }
   end
@@ -2642,7 +2686,7 @@ class MacosPatcherTest < Minitest::Test
     refute ai_group.key?("use")
     refute patched.fetch("proxy-groups").any? { |group| ClaudeEasy.managed_name?(group["name"], ClaudeEasy::SAFE_GROUP_BASE) }
     assert_includes patched.fetch("rules"), "DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy"
-    assert_equal "NETWORK,UDP,🤖 AI · ClaudeEasy", patched.fetch("rules")[0]
+    assert_equal "DOMAIN-SUFFIX,anthropic.com,🤖 AI · ClaudeEasy", patched.fetch("rules")[0]
     assert patched.dig("dns", "nameserver-policy", "+.openai.com").all? do |value|
       value.end_with?("#🤖 AI · ClaudeEasy")
     end
@@ -2728,7 +2772,7 @@ class MacosPatcherTest < Minitest::Test
     refute patched.fetch("proxy-groups").any? { |group| [ai_name, safe_name].include?(group["name"]) }
     refute patched.fetch("rules").any? { |rule| rule.include?(ai_name) || rule.include?(safe_name) }
     refute JSON.generate(patched.fetch("dns")).include?(safe_name)
-    assert_equal ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT"], patched.fetch("rules").first(2)
+    assert_equal ClaudeEasy.render_ai_rules(@policy, "AI").first(2), patched.fetch("rules").first(2)
   end
 
   def test_preserves_encrypted_ip_bootstrap_and_replaces_direct_resolvers_with_managed_mainland_doh
@@ -2937,7 +2981,10 @@ class MacosPatcherTest < Minitest::Test
     rules = ClaudeEasy.patch(config, @policy).fetch(:config).fetch("rules")
 
     udp_index = rules.index { |rule| rule.start_with?("NETWORK,UDP,") && rule != "NETWORK,UDP,REJECT" }
-    assert_equal 0, udp_index
+    expected_cn_udp = ClaudeEasy.render_cn_udp_direct_rule(
+      @policy, @policy.fetch("cn_ip_provider").fetch("name")
+    )
+    assert_equal expected_cn_udp, rules[udp_index - 1]
     assert_equal "NETWORK,UDP,REJECT", rules[udp_index + 1]
     assert_operator udp_index, :<, rules.index("GEOSITE,CN,DIRECT")
     assert_operator udp_index, :<, rules.index("RULE-SET,private-special,DIRECT")
@@ -2956,7 +3003,8 @@ class MacosPatcherTest < Minitest::Test
     result = ClaudeEasy.patch(config, @policy)
     rules = result.fetch(:config).fetch("rules")
 
-    conflicts.each { |conflict| refute_includes rules, conflict }
+    conflicts.first(2).each { |conflict| refute_includes rules, conflict }
+    assert_includes rules, "DOMAIN-SUFFIX,anthropic.com,REJECT"
     assert_includes rules, "DOMAIN-SUFFIX,openai.com,#{result.fetch(:ai_group)}"
     assert_includes rules, "DOMAIN-SUFFIX,claude.ai,#{result.fetch(:ai_group)}"
     assert_includes rules, "DOMAIN-SUFFIX,anthropic.com,#{result.fetch(:ai_group)}"
@@ -2997,8 +3045,11 @@ class MacosPatcherTest < Minitest::Test
     rules = result.fetch(:config).fetch("rules")
     guard = "NETWORK,UDP,#{result.fetch(:ai_group)}"
 
-    assert_equal 0, rules.index(guard)
-    assert_equal "NETWORK,UDP,REJECT", rules[1]
+    expected_cn_udp = ClaudeEasy.render_cn_udp_direct_rule(
+      @policy, @policy.fetch("cn_ip_provider").fetch("name")
+    )
+    assert_equal expected_cn_udp, rules[rules.index(guard) - 1]
+    assert_equal "NETWORK,UDP,REJECT", rules[rules.index(guard) + 1]
     user_rules.each do |rule|
       assert_includes rules, rule
       assert_operator rules.index(guard), :<, rules.index(rule)
@@ -8333,12 +8384,21 @@ class MacosPatcherTest < Minitest::Test
       )
 
       complete = ClaudeEasy.render_ai_rules(@policy, "AI")
-      incomplete["rules"] = ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT"] + complete + ["MATCH,DIRECT"]
+      rejects = complete.map { |rule| ClaudeEasy.rule_with_target(rule, "REJECT") }
+      cn_provider = @policy.fetch("cn_domain_provider").fetch("name")
+      cn_ip_provider = ClaudeEasy.ensure_cn_ip_provider(incomplete, @policy, "Main")
+      managed_tail = [
+        "RULE-SET,#{cn_provider},DIRECT",
+        ClaudeEasy.render_cn_udp_direct_rule(@policy, cn_ip_provider),
+        "NETWORK,UDP,AI",
+        "NETWORK,UDP,REJECT"
+      ]
+      incomplete["rules"] = complete + rejects + managed_tail + ["MATCH,DIRECT"]
       File.write(path, YAML.dump(incomplete))
       assert ClaudeEasy.restore_candidate_valid?(
         path, 3, policy: @policy, validator: ->(_candidate) { true }
       )
-      incomplete["rules"] = ["NETWORK,UDP,AI", "NETWORK,UDP,REJECT", "MATCH,DIRECT"] + complete
+      incomplete["rules"] = complete + managed_tail + rejects + ["MATCH,DIRECT"]
       File.write(path, YAML.dump(incomplete))
       refute ClaudeEasy.restore_candidate_valid?(
         path, 3, policy: @policy, validator: ->(_candidate) { true }

@@ -1714,13 +1714,16 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "AI 分组"
   end
 
-  def test_shared_browser_policy_scopes_dns_but_not_webrtc_by_domain
+  def test_udp_policy_uses_only_deterministic_destination_matches
     policy = policy_document
 
     [policy].each do |source|
-      %w[AI\ 分组 STUN 标签页 TCP DNS].each { |term| assert_includes source, term }
+      %w[AI\ 分组 国内域名库 目标\ IP UDP WebRTC].each { |term| assert_includes source, term }
     end
+    machine_policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
+    assert_equal "AND,((NETWORK,UDP),(RULE-SET,{CN_IP})),DIRECT", machine_policy.fetch("cn_udp_direct_rule")
     assert_includes policy, "NETWORK,UDP,<AI 分组>"
+    assert_includes policy, "不能直接识别一条 UDP 是否属于 WebRTC"
     refute_includes policy, "NETWORK,UDP,<原主代理组>"
   end
 

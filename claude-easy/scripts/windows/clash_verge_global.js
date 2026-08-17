@@ -27,6 +27,17 @@ const CLAUDE_EASY_POLICY = {
     "interval": 86400,
     "size_limit": 2097152
   },
+  "cnIpProvider": {
+    "name": "claude-easy-cn-ip",
+    "type": "http",
+    "behavior": "ipcidr",
+    "format": "mrs",
+    "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs",
+    "path": "./ruleset/claude-easy-cn-ip.mrs",
+    "interval": 86400,
+    "size_limit": 2097152
+  },
+  "cnUdpDirectRule": "AND,((NETWORK,UDP),(RULE-SET,{CN_IP})),DIRECT",
   "mainGroupNames": [
     "Proxy",
     "PROXY",
@@ -676,19 +687,18 @@ function claudeEasyBroadRule(rule) {
   return ["MATCH", "GEOSITE", "GEOIP", "RULE-SET"].indexOf(claudeEasyRuleInfo(rule).type) !== -1;
 }
 
-function claudeEasyManagedCnProviderName(name) {
-  const base = CLAUDE_EASY_POLICY.cnDomainProvider.name;
+function claudeEasyManagedProviderName(name, expected) {
+  const base = expected.name;
   const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp("^" + escaped + "(?:-[2-9]|-[1-9][0-9]+)?$").test(String(name));
 }
 
-function claudeEasyCnProviderPath(name) {
-  const provider = CLAUDE_EASY_POLICY.cnDomainProvider;
-  const suffix = String(name).slice(provider.name.length);
-  if (!suffix) return provider.path;
-  const dot = provider.path.lastIndexOf(".");
-  if (dot === -1) return provider.path + suffix;
-  return provider.path.slice(0, dot) + suffix + provider.path.slice(dot);
+function claudeEasyProviderPath(expected, name) {
+  const suffix = String(name).slice(expected.name.length);
+  if (!suffix) return expected.path;
+  const dot = expected.path.lastIndexOf(".");
+  if (dot === -1) return expected.path + suffix;
+  return expected.path.slice(0, dot) + suffix + expected.path.slice(dot);
 }
 
 function claudeEasyWindowsPathKey(value) {
@@ -734,18 +744,20 @@ function claudeEasyWindowsProviderPathCollision(existingValue, managedValue) {
 }
 
 function claudeEasyOwnedCnProvider(name, provider) {
-  const expected = CLAUDE_EASY_POLICY.cnDomainProvider;
-  return provider && typeof provider === "object" && claudeEasyManagedCnProviderName(name) &&
-    provider.url === expected.url && provider.path === claudeEasyCnProviderPath(name);
+  return claudeEasyOwnedProvider(name, provider, CLAUDE_EASY_POLICY.cnDomainProvider);
 }
 
-function claudeEasyEnsureCnProvider(config, routeGroup) {
-  const expected = CLAUDE_EASY_POLICY.cnDomainProvider;
+function claudeEasyOwnedProvider(name, provider, expected) {
+  return provider && typeof provider === "object" && claudeEasyManagedProviderName(name, expected) &&
+    provider.url === expected.url && provider.path === claudeEasyProviderPath(expected, name);
+}
+
+function claudeEasyEnsureProvider(config, routeGroup, expected) {
   const providers = config["rule-providers"] && typeof config["rule-providers"] === "object" &&
     !Array.isArray(config["rule-providers"]) ? config["rule-providers"] : {};
   config["rule-providers"] = providers;
   let name = Object.keys(providers).find(function (candidate) {
-    return claudeEasyOwnedCnProvider(candidate, providers[candidate]);
+    return claudeEasyOwnedProvider(candidate, providers[candidate], expected);
   });
   if (!name) {
     name = expected.name;
@@ -753,7 +765,7 @@ function claudeEasyEnsureCnProvider(config, routeGroup) {
     while (Object.prototype.hasOwnProperty.call(providers, name) || Object.keys(providers).some(function (candidate) {
       const provider = providers[candidate];
       return provider && typeof provider === "object" &&
-        claudeEasyWindowsProviderPathCollision(provider.path, claudeEasyCnProviderPath(name));
+        claudeEasyWindowsProviderPathCollision(provider.path, claudeEasyProviderPath(expected, name));
     })) {
       name = expected.name + "-" + sequence;
       sequence += 1;
@@ -764,12 +776,20 @@ function claudeEasyEnsureCnProvider(config, routeGroup) {
     behavior: expected.behavior,
     format: expected.format,
     url: expected.url,
-    path: claudeEasyCnProviderPath(name),
+    path: claudeEasyProviderPath(expected, name),
     interval: expected.interval,
     proxy: routeGroup,
     "size-limit": expected.size_limit
   };
   return name;
+}
+
+function claudeEasyEnsureCnProvider(config, routeGroup) {
+  return claudeEasyEnsureProvider(config, routeGroup, CLAUDE_EASY_POLICY.cnDomainProvider);
+}
+
+function claudeEasyEnsureCnIpProvider(config, routeGroup) {
+  return claudeEasyEnsureProvider(config, routeGroup, CLAUDE_EASY_POLICY.cnIpProvider);
 }
 
 function claudeEasyCommonCn(config, routeGroup) {
@@ -821,8 +841,25 @@ function claudeEasyRenderAiRules(aiGroup) {
   });
 }
 
-function claudeEasyRules(config, aiGroup, routeGroup, ownedAiNames, ownedSafeNames) {
+function claudeEasyRenderCnUdpDirectRule(cnIpProviderName) {
+  return CLAUDE_EASY_POLICY.cnUdpDirectRule.replace(/\{CN_IP\}/g, function () { return cnIpProviderName; });
+}
+
+function claudeEasyRuleWithTarget(rule, target) {
+  const info = claudeEasyRuleInfo(rule);
+  const parts = info.parts.slice();
+  const noResolve = String(parts[parts.length - 1] || "").toLowerCase() === "no-resolve";
+  const targetIndex = noResolve ? parts.length - 2 : parts.length - 1;
+  if (targetIndex <= 0) return rule;
+  parts[targetIndex] = target;
+  return parts.join(",");
+}
+
+function claudeEasyRules(config, aiGroup, routeGroup, cnProviderName, cnIpProviderName, ownedAiNames, ownedSafeNames) {
   const managed = claudeEasyRenderAiRules(aiGroup);
+  const managedRejects = managed.map(function (rule) { return claudeEasyRuleWithTarget(rule, "REJECT"); });
+  const cnDirect = "RULE-SET," + cnProviderName + ",DIRECT";
+  const cnUdpDirect = claudeEasyRenderCnUdpDirectRule(cnIpProviderName);
   const managedKeys = managed.map(claudeEasyManagedRuleKey);
   const managedIdentities = managed.map(claudeEasyManagedRuleIdentity);
   const legacyKeys = (CLAUDE_EASY_POLICY.legacyAiRules || []).map(claudeEasyManagedRuleKey);
@@ -838,13 +875,15 @@ function claudeEasyRules(config, aiGroup, routeGroup, ownedAiNames, ownedSafeNam
     }
 
     const info = claudeEasyRuleInfo(rule);
-    const next = index === 0 && original.length > 1 ? claudeEasyRuleInfo(original[1]) : null;
-    if (index !== 0 || info.type !== "NETWORK" || info.payload.toUpperCase() !== "UDP" ||
+    const previousIsCnUdp = index > 0 && String(original[index - 1]).replace(/\s+/g, "").toUpperCase() ===
+      String(cnUdpDirect).replace(/\s+/g, "").toUpperCase();
+    const next = original.length > index + 1 ? claudeEasyRuleInfo(original[index + 1]) : null;
+    if ((index !== 0 && !previousIsCnUdp) || info.type !== "NETWORK" || info.payload.toUpperCase() !== "UDP" ||
         (ownedSafeNames.indexOf(info.target) === -1 && info.target !== aiGroup)) return;
     if (!next || next.type !== "NETWORK" || next.payload.toUpperCase() !== "UDP" ||
         String(next.target).toUpperCase() !== "REJECT") return;
     ownedUdpIndexes.push(index);
-    ownedUdpIndexes.push(1);
+    ownedUdpIndexes.push(index + 1);
   });
 
   const remaining = [];
@@ -861,10 +900,17 @@ function claudeEasyRules(config, aiGroup, routeGroup, ownedAiNames, ownedSafeNam
     const mainGroupAi = managedKeys.indexOf(key) !== -1 && info.target === routeGroup;
     if (patchOwnedAi || exactCurrentAi || legacyOwnedAi || forbiddenAi || mainGroupAi) return;
     if (managedKeys.indexOf(key) !== -1) return;
+    if (claudeEasyManagedRuleIdentity(rule) === claudeEasyManagedRuleIdentity(cnDirect)) return;
+    if (String(rule).replace(/\s+/g, "").toUpperCase() === String(cnUdpDirect).replace(/\s+/g, "").toUpperCase()) return;
     remaining.push(rule);
   });
 
-  config.rules = ["NETWORK,UDP," + aiGroup, "NETWORK,UDP,REJECT"].concat(managed, remaining);
+  config.rules = managed.concat(managedRejects, [
+    cnDirect,
+    cnUdpDirect,
+    "NETWORK,UDP," + aiGroup,
+    "NETWORK,UDP,REJECT"
+  ], remaining);
 }
 
 function claudeEasyApply(config, profileName, usageProfile) {
@@ -894,6 +940,7 @@ function claudeEasyApply(config, profileName, usageProfile) {
   aiGroup = claudeEasySafeGroupReference(patched, aiGroup);
   if (!aiGroup) return config;
   const routeGroup = mainGroup;
+  const cnIpProviderName = claudeEasyEnsureCnIpProvider(patched, routeGroup);
   patched.ipv6 = false;
   patched.tun = patched.tun && typeof patched.tun === "object" && !Array.isArray(patched.tun) ? patched.tun : {};
   patched.tun.enable = true;
@@ -903,7 +950,7 @@ function claudeEasyApply(config, profileName, usageProfile) {
   patched.tun["auto-detect-interface"] = true;
   patched.tun["strict-route"] = true;
   claudeEasyDns(patched, routeGroup, aiGroup, ownedNames.safe, cnProviderName);
-  claudeEasyRules(patched, aiGroup, routeGroup, ownedNames.ai, ownedNames.safe);
+  claudeEasyRules(patched, aiGroup, routeGroup, cnProviderName, cnIpProviderName, ownedNames.ai, ownedNames.safe);
   claudeEasyRemoveOwnedManagedGroups(
     patched,
     ownedNames.ai.filter(function (name) { return name !== aiGroup && name !== routeGroup; })

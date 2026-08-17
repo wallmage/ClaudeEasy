@@ -70,7 +70,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 
 1. **档位 1｜普通浏览**：普通浏览、国内直连和 Clash 系统代理；不改 TUN、IPv6、WebRTC、AI 分组或节点。
 2. **档位 2｜海外 AI**：继承档位 1，增加 TUN 和普通海外 AI；关闭 Clash 自己的系统代理，避免重复接管；不增加 WebRTC 或 AI 分组补丁。
-3. **档位 3｜Claude/Claude Code**：继承档位 2，再应用完整 DNS 分流、AI 分组与规则、UDP/WebRTC 防护和区域指纹检查。区域指纹只使用 `assets/claude-region-check.html`，是参考信号，不能作为 Claude 是否可用的通过条件；具体十项信号、Computer Use、STUN、CSP、浏览器与恢复规则只按 `profiles-and-patch.md` 执行。
+3. **档位 3｜Claude/Claude Code**：继承档位 2，再应用完整 DNS 分流、AI 分组与规则、国内 UDP 分流、其余 UDP/WebRTC 防护和区域指纹检查。区域指纹只使用 `assets/claude-region-check.html`，是参考信号，不能作为 Claude 是否可用的通过条件；具体十项信号、Computer Use、STUN、CSP、浏览器与恢复规则只按 `profiles-and-patch.md` 执行。
 
 用户可以随时改档；升档只补新增能力。档位 3 降到 1 或 2 时先安全卸载：macOS `bash scripts/uninstall_macos.sh`，Windows `.\scripts\uninstall_windows.cmd`。Windows 卸载返回 `partial` 时保留旧档位且不得继续降档。
 

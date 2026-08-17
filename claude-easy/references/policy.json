@@ -23,6 +23,17 @@
     "interval": 86400,
     "size_limit": 2097152
   },
+  "cn_ip_provider": {
+    "name": "claude-easy-cn-ip",
+    "type": "http",
+    "behavior": "ipcidr",
+    "format": "mrs",
+    "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs",
+    "path": "./ruleset/claude-easy-cn-ip.mrs",
+    "interval": 86400,
+    "size_limit": 2097152
+  },
+  "cn_udp_direct_rule": "AND,((NETWORK,UDP),(RULE-SET,{CN_IP})),DIRECT",
   "main_group_names": [
     "Proxy",
     "PROXY",

@@ -70,7 +70,11 @@ module ClaudeEasy
   end
 
   def managed_cn_provider_name?(name, policy)
-    base = policy.dig("cn_domain_provider", "name")
+    managed_rule_provider_name?(name, policy["cn_domain_provider"])
+  end
+
+  def managed_rule_provider_name?(name, provider_policy)
+    base = provider_policy["name"] if provider_policy.is_a?(Hash)
     base.is_a?(String) && name.is_a?(String) && name.match?(/\A#{Regexp.escape(base)}#{CN_PROVIDER_SUFFIX}\z/)
   end
 
@@ -122,8 +126,12 @@ module ClaudeEasy
 
   def owned_cn_provider?(name, provider, policy)
     provider_policy = policy["cn_domain_provider"]
+    owned_rule_provider?(name, provider, provider_policy)
+  end
+
+  def owned_rule_provider?(name, provider, provider_policy)
     return false unless provider_policy.is_a?(Hash) && provider.is_a?(Hash)
-    return false unless managed_cn_provider_name?(name, policy)
+    return false unless managed_rule_provider_name?(name, provider_policy)
 
     provider["url"] == provider_policy["url"] && provider["path"] == cn_provider_path(provider_policy, name)
   end
@@ -132,9 +140,20 @@ module ClaudeEasy
     provider_policy = policy["cn_domain_provider"]
     raise InvalidConfigError, "国内域名规则配置无效" unless provider_policy.is_a?(Hash)
 
+    ensure_rule_provider(config, provider_policy, route_group)
+  end
+
+  def ensure_cn_ip_provider(config, policy, route_group)
+    provider_policy = policy["cn_ip_provider"]
+    raise InvalidConfigError, "国内 IP 规则配置无效" unless provider_policy.is_a?(Hash)
+
+    ensure_rule_provider(config, provider_policy, route_group)
+  end
+
+  def ensure_rule_provider(config, provider_policy, route_group)
     providers = config["rule-providers"].is_a?(Hash) ? config["rule-providers"] : {}
     config["rule-providers"] = providers
-    name = providers.find { |candidate, provider| owned_cn_provider?(candidate, provider, policy) }&.first
+    name = providers.find { |candidate, provider| owned_rule_provider?(candidate, provider, provider_policy) }&.first
     unless name
       base = provider_policy.fetch("name")
       name = base
@@ -760,12 +779,31 @@ module ClaudeEasy
     Array(policy["ai_rules"]).map { |template| template.sub("{AI}") { ai_group } }
   end
 
+  def render_cn_udp_direct_rule(policy, cn_ip_provider_name)
+    policy.fetch("cn_udp_direct_rule").sub("{CN_IP}") { cn_ip_provider_name }
+  end
+
+  def rule_with_target(rule, target)
+    info = rule_info(rule)
+    parts = info[:parts].dup
+    no_resolve = parts.last.to_s.casecmp("no-resolve").zero?
+    target_index = no_resolve ? parts.length - 2 : parts.length - 1
+    return rule unless target_index.positive?
+
+    parts[target_index] = target
+    parts.join(",")
+  end
+
   def broad_rule?(rule)
     %w[MATCH GEOSITE GEOIP RULE-SET].include?(rule_info(rule)[:type])
   end
 
-  def patch_rules(config, policy, ai_group, route_group, owned_ai_names = [], owned_safe_names = [])
+  def patch_rules(config, policy, ai_group, route_group, cn_provider_name, cn_ip_provider_name,
+                  owned_ai_names = [], owned_safe_names = [])
     managed = render_ai_rules(policy, ai_group)
+    managed_rejects = managed.map { |rule| rule_with_target(rule, "REJECT") }
+    cn_direct = "RULE-SET,#{cn_provider_name},DIRECT"
+    cn_udp_direct = render_cn_udp_direct_rule(policy, cn_ip_provider_name)
     managed_keys = managed.map { |rule| managed_rule_key(rule) }.compact
     managed_identities = managed.map { |rule| managed_rule_identity(rule) }.compact
     legacy_keys = Array(policy["legacy_ai_rules"]).map { |rule| managed_rule_key(rule) }.compact
@@ -780,8 +818,11 @@ module ClaudeEasy
       end
 
       info = rule_info(rule)
-      next_info = rule_info(original_rules[index + 1]) if index.zero? && original_rules.length > 1
-      next unless index.zero? && info[:type] == "NETWORK" && info[:payload].casecmp("UDP").zero? &&
+      previous_is_cn_udp = index.positive? &&
+                           original_rules[index - 1].to_s.gsub(/\s+/, "").casecmp(cn_udp_direct.gsub(/\s+/, "")).zero?
+      next_info = rule_info(original_rules[index + 1]) if original_rules.length > index + 1
+      next unless (index.zero? || previous_is_cn_udp) && info[:type] == "NETWORK" &&
+                  info[:payload].casecmp("UDP").zero? &&
                   (owned_safe_names.include?(info[:target]) || info[:target] == ai_group)
       next unless next_info && next_info[:type] == "NETWORK" && next_info[:payload].casecmp("UDP").zero? &&
                   next_info[:target].to_s.casecmp("REJECT").zero?
@@ -806,11 +847,18 @@ module ClaudeEasy
       next if patch_owned_ai || exact_current_ai || legacy_owned_ai || forbidden_ai || main_group_ai
 
       next if managed_keys.include?(key)
+      next if managed_rule_identity(rule) == managed_rule_identity(cn_direct)
+      next if rule.to_s.gsub(/\s+/, "").casecmp(cn_udp_direct.gsub(/\s+/, "")).zero?
 
       remaining << rule
     end
 
-    config["rules"] = ["NETWORK,UDP,#{ai_group}", "NETWORK,UDP,REJECT"] + managed + remaining
+    config["rules"] = managed + managed_rejects + [
+      cn_direct,
+      cn_udp_direct,
+      "NETWORK,UDP,#{ai_group}",
+      "NETWORK,UDP,REJECT"
+    ] + remaining
   end
 
   def normalize_reality_short_ids(value)
@@ -880,11 +928,15 @@ module ClaudeEasy
     ai_group = safe_group_reference(patched, ai_group)
     return base_result(config, :no_ai_nodes) unless ai_group
     route_group = main_group
+    cn_ip_provider = ensure_cn_ip_provider(patched, policy, route_group)
     patched["ipv6"] = false
     patched["tun"] = {} unless patched["tun"].is_a?(Hash)
     TUN_POLICY.each { |key, value| patched["tun"][key] = deep_copy(value) }
     patch_dns(patched, policy, route_group, ai_group, owned_safe_names, cn_provider)
-    patch_rules(patched, policy, ai_group, route_group, owned_ai_names, owned_safe_names)
+    patch_rules(
+      patched, policy, ai_group, route_group, cn_provider, cn_ip_provider,
+      owned_ai_names, owned_safe_names
+    )
     remove_owned_managed_groups(
       patched,
       (owned_ai_names - [ai_group, route_group]) + (owned_safe_names - [route_group])

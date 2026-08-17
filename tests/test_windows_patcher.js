@@ -149,9 +149,33 @@ test('global transform applies common policy', { skip: !available }, () => {
   const udpIndex = patched.rules.indexOf(`NETWORK,UDP,${ai.name}`);
   assert.ok(udpIndex >= 0);
   assert.equal(patched.rules[udpIndex + 1], 'NETWORK,UDP,REJECT');
-  assert.equal(udpIndex, 0);
+  assert.ok(patched.rules.indexOf(`RULE-SET,${engine.CLAUDE_EASY_POLICY.cnDomainProvider.name},DIRECT`) < udpIndex);
   assert.ok(patched.rules.includes('DOMAIN,raw.githubusercontent.com,AI'));
   assert.ok(patched.rules.includes('DOMAIN,storage.googleapis.com,AI'));
+});
+
+test('routes UDP by deterministic destination and fails closed for AI', { skip: !available }, () => {
+  const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
+  const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
+  const cnProvider = engine.CLAUDE_EASY_POLICY.cnDomainProvider.name;
+  const cnIpProvider = engine.CLAUDE_EASY_POLICY.cnIpProvider.name;
+  const expectedOrder = [
+    `DOMAIN-SUFFIX,openai.com,${ai.name}`,
+    'DOMAIN-SUFFIX,openai.com,REJECT',
+    `RULE-SET,${cnProvider},DIRECT`,
+    `AND,((NETWORK,UDP),(RULE-SET,${cnIpProvider})),DIRECT`,
+    `NETWORK,UDP,${ai.name}`,
+    'NETWORK,UDP,REJECT'
+  ];
+  const indexes = expectedOrder.map((rule) => patched.rules.indexOf(rule));
+
+  assert.equal(patched['rule-providers'][cnIpProvider].behavior, 'ipcidr');
+  assert.equal(patched['rule-providers'][cnIpProvider].proxy, 'Main');
+  assert.equal(indexes.includes(-1), false);
+  for (let index = 1; index < indexes.length; index += 1) {
+    assert.ok(indexes[index - 1] < indexes[index]);
+  }
+  assert.deepEqual(engine.claudeEasyTransform(structuredClone(patched), 'fixture'), patched);
 });
 
 test('lightweight profiles receive the common China-domain baseline only', { skip: !available }, () => {
@@ -173,8 +197,26 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
     assert.equal(patched.ipv6, true);
     assert.deepEqual(patched.tun, { enable: false });
     assert.equal(patched.rules.some((rule) => rule.startsWith('NETWORK,UDP,')), false);
+    assert.equal(patched.rules.includes(engine.CLAUDE_EASY_POLICY.cnUdpDirectRule), false);
+    assert.equal(Object.hasOwn(patched['rule-providers'], engine.CLAUDE_EASY_POLICY.cnIpProvider.name), false);
     assert.deepEqual(engine.claudeEasyTransform(patched, 'fixture', usageProfile), patched);
   }
+});
+
+test('China IP UDP provider preserves a colliding user provider', { skip: !available }, () => {
+  const config = baseConfig();
+  const providerName = engine.CLAUDE_EASY_POLICY.cnIpProvider.name;
+  const userProvider = { type: 'file', behavior: 'ipcidr', path: './user/cn-ip.yaml' };
+  config['rule-providers'] = { [providerName]: userProvider };
+
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+  const managedName = `${providerName}-2`;
+  const cnUdpDirect = engine.CLAUDE_EASY_POLICY.cnUdpDirectRule.replace('{CN_IP}', managedName);
+
+  assert.deepEqual(patched['rule-providers'][providerName], userProvider);
+  assert.equal(patched['rule-providers'][managedName].behavior, 'ipcidr');
+  assert.ok(patched.rules.includes(cnUdpDirect));
+  assert.deepEqual(engine.claudeEasyTransform(structuredClone(patched), 'fixture'), patched);
 });
 
 test('every Windows usage profile persists proxy selections across reloads', { skip: !available }, () => {
@@ -311,7 +353,7 @@ test('rebuilds an existing AI group before using it for managed policy', { skip:
   assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
-  assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,AI', 'NETWORK,UDP,REJECT']);
+  assert.deepEqual(patched.rules.slice(0, 2), engine.claudeEasyRenderAiRules('AI').slice(0, 2));
   assert.ok(patched.dns.nameserver.every((value) => value.endsWith('#Main')));
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#AI')));
 });
@@ -330,7 +372,7 @@ for (const [name, declaredMembership] of [
     const ai = patched['proxy-groups'].find((group) => group.name === name);
 
     assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
-    assert.equal(patched.rules[0], `NETWORK,UDP,${name}`);
+    assert.equal(patched.rules[0], `DOMAIN-SUFFIX,anthropic.com,${name}`);
     assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${name}`));
     assert.deepEqual(engine.main(structuredClone(patched), 'subscription'), patched);
   });
@@ -347,7 +389,7 @@ test('creates an AI group with all inline nodes when the subscription has none',
   assert.equal(Object.hasOwn(ai, 'use'), false);
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
-  assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,🤖 AI · ClaudeEasy', 'NETWORK,UDP,REJECT']);
+  assert.deepEqual(patched.rules.slice(0, 2), engine.claudeEasyRenderAiRules('🤖 AI · ClaudeEasy').slice(0, 2));
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#🤖 AI · ClaudeEasy')));
 });
 
@@ -426,7 +468,7 @@ test('removes groups created by an older patch', { skip: !available }, () => {
   assert.equal(patched['proxy-groups'].some((group) => group.name === aiName || group.name === safeName), false);
   assert.equal(patched.rules.some((rule) => rule.includes(aiName) || rule.includes(safeName)), false);
   assert.equal(JSON.stringify(patched.dns).includes(safeName), false);
-  assert.deepEqual(patched.rules.slice(0, 2), ['NETWORK,UDP,AI', 'NETWORK,UDP,REJECT']);
+  assert.deepEqual(patched.rules.slice(0, 2), engine.claudeEasyRenderAiRules('AI').slice(0, 2));
 });
 
 test('preserves encrypted IP bootstrap and replaces direct resolvers with managed mainland DoH', { skip: !available }, () => {
@@ -604,7 +646,10 @@ test('puts the UDP guard ahead of a narrow rule set', { skip: !available }, () =
   config.rules.splice(2, 0, 'RULE-SET,private-special,DIRECT');
   const rules = engine.claudeEasyTransform(config, 'fixture').rules;
   const udpIndex = rules.findIndex((rule) => rule.startsWith('NETWORK,UDP,') && rule !== 'NETWORK,UDP,REJECT');
-  assert.equal(udpIndex, 0);
+  const cnUdpDirect = engine.CLAUDE_EASY_POLICY.cnUdpDirectRule.replace(
+    '{CN_IP}', engine.CLAUDE_EASY_POLICY.cnIpProvider.name
+  );
+  assert.equal(rules[udpIndex - 1], cnUdpDirect);
   assert.equal(rules[udpIndex + 1], 'NETWORK,UDP,REJECT');
   assert.ok(udpIndex < rules.indexOf('GEOSITE,CN,DIRECT'));
   assert.ok(udpIndex < rules.indexOf('RULE-SET,private-special,DIRECT'));
@@ -622,7 +667,8 @@ test('strips foreign-target rules that collide with managed AI keys', { skip: !a
 
   const patched = engine.main(config, 'subscription');
 
-  for (const conflict of conflicts) assert.equal(patched.rules.includes(conflict), false, conflict);
+  for (const conflict of conflicts.slice(0, 2)) assert.equal(patched.rules.includes(conflict), false, conflict);
+  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,anthropic.com,REJECT'));
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,claude.ai,AI'));
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,anthropic.com,AI'));
@@ -659,8 +705,11 @@ test('UDP guard precedes leaking rules without deleting them', { skip: !availabl
   config.rules = userRules.concat(config.rules);
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const guard = 'NETWORK,UDP,AI';
-  assert.equal(patched.rules.indexOf(guard), 0);
-  assert.equal(patched.rules[1], 'NETWORK,UDP,REJECT');
+  const cnUdpDirect = engine.CLAUDE_EASY_POLICY.cnUdpDirectRule.replace(
+    '{CN_IP}', engine.CLAUDE_EASY_POLICY.cnIpProvider.name
+  );
+  assert.equal(patched.rules[patched.rules.indexOf(guard) - 1], cnUdpDirect);
+  assert.equal(patched.rules[patched.rules.indexOf(guard) + 1], 'NETWORK,UDP,REJECT');
   for (const rule of userRules) {
     assert.ok(patched.rules.includes(rule), rule);
     assert.ok(patched.rules.indexOf(guard) < patched.rules.indexOf(rule), rule);

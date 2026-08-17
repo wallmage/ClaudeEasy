@@ -45,7 +45,7 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 | --- | --- | --- | --- |
 | 1｜普通浏览 | 国内直连与普通境外浏览 | 全部订阅的共同国内域名直连基线、安全节点启动解析、关闭订阅自动更新 | Clash 系统代理 |
 | 2｜海外 AI | 普通浏览、海外 AI 和 Agent | 继承档位 1 | TUN 开，Clash 自己的系统代理关 |
-| 3｜Claude/Claude Code | Claude、Claude Code 和完整泄漏防护 | 继承档位 2 | DNS 分流、AI 分组与规则、UDP/WebRTC 防护、区域指纹检查 |
+| 3｜Claude/Claude Code | Claude、Claude Code 和更强的泄漏防护 | 继承档位 2 | DNS 分流、AI 分组与规则、国内 UDP 分流、其余 UDP/WebRTC 防护、区域指纹检查 |
 
 共同基线属于三个档位，不能放进档位 3 专属实现。`default-nameserver`、`proxy-server-nameserver` 和 `direct-nameserver` 的安全判断由两个平台共享同一 `policy.json`，从而避免订阅加载时重进系统 DNS、AdGuard、TUN `dns-hijack` 与 Fake-IP 链。
 
