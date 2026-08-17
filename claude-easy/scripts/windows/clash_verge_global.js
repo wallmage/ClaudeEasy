@@ -941,16 +941,38 @@ function claudeEasyValidProviderPolicy(provider) {
     typeof provider.size_limit === "number" && provider.size_limit > 0 && provider.size_limit % 1 === 0;
 }
 
+function claudeEasyValidStringArray(value, allowEmpty) {
+  return Array.isArray(value) && (allowEmpty || value.length > 0) && value.every(function (item) {
+    return typeof item === "string" && item.length > 0;
+  });
+}
+
+function claudeEasyValidAiRuleTemplates(value, allowEmpty) {
+  return claudeEasyValidStringArray(value, allowEmpty) && value.every(function (template) {
+    return (template.match(/\{AI\}/g) || []).length === 1;
+  });
+}
+
 function claudeEasyValidPolicy() {
+  const requiredArrays = [
+    "resolvers", "directResolvers", "bootstrapFallbackResolvers", "mainGroupNames",
+    "aiGroupNames", "taiwanTokens", "japanTokens", "lanUdpDirectRules"
+  ];
+  const domainProvider = CLAUDE_EASY_POLICY.cnDomainProvider;
+  const ipProvider = CLAUDE_EASY_POLICY.cnIpProvider;
   const cnUdpRule = CLAUDE_EASY_POLICY.cnUdpDirectRule;
   return CLAUDE_EASY_POLICY.version === 2 &&
-    claudeEasyValidProviderPolicy(CLAUDE_EASY_POLICY.cnDomainProvider) &&
-    claudeEasyValidProviderPolicy(CLAUDE_EASY_POLICY.cnIpProvider) &&
-    Array.isArray(CLAUDE_EASY_POLICY.lanUdpDirectRules) &&
-    CLAUDE_EASY_POLICY.lanUdpDirectRules.length > 0 &&
-    CLAUDE_EASY_POLICY.lanUdpDirectRules.every(function (rule) {
-      return typeof rule === "string" && rule.length > 0;
-    }) && typeof cnUdpRule === "string" &&
+    requiredArrays.every(function (key) {
+      return claudeEasyValidStringArray(CLAUDE_EASY_POLICY[key], false);
+    }) && claudeEasyValidStringArray(CLAUDE_EASY_POLICY.forbiddenAiDomains, true) &&
+    claudeEasyValidAiRuleTemplates(CLAUDE_EASY_POLICY.legacyAiRules, true) &&
+    claudeEasyValidAiRuleTemplates(CLAUDE_EASY_POLICY.aiRules, false) &&
+    claudeEasyValidProviderPolicy(domainProvider) &&
+    claudeEasyValidProviderPolicy(ipProvider) &&
+    domainProvider.type === "http" && domainProvider.behavior === "domain" && domainProvider.format === "mrs" &&
+    ipProvider.type === "http" && ipProvider.behavior === "ipcidr" && ipProvider.format === "mrs" &&
+    !(domainProvider.name === ipProvider.name && domainProvider.url === ipProvider.url &&
+      domainProvider.path === ipProvider.path) && typeof cnUdpRule === "string" &&
     (cnUdpRule.match(/\{CN_IP\}/g) || []).length === 1;
 }
 

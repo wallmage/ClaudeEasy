@@ -2595,6 +2595,70 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_policy_without_any_required_array_is_rejected_without_mutating_config
+    required_arrays = %w[
+      resolvers direct_resolvers bootstrap_fallback_resolvers main_group_names
+      ai_group_names taiwan_tokens japan_tokens forbidden_ai_domains
+      legacy_ai_rules ai_rules
+    ]
+
+    required_arrays.each do |key|
+      config = base_config
+      snapshot = Marshal.load(Marshal.dump(config))
+      policy = Marshal.load(Marshal.dump(@policy))
+      policy.delete(key)
+
+      result = ClaudeEasy.patch(config, policy)
+
+      assert_equal :invalid_policy, result.fetch(:status), key
+      assert_equal snapshot, config, key
+      assert_equal snapshot, result.fetch(:config), key
+    end
+  end
+
+  def test_policy_with_invalid_ai_rule_template_is_rejected_without_mutating_config
+    invalid_templates = [
+      "DOMAIN-SUFFIX,openai.com,DIRECT",
+      "DOMAIN-SUFFIX,openai.com,{AI},{AI}"
+    ]
+
+    invalid_templates.each do |template|
+      config = base_config
+      snapshot = Marshal.load(Marshal.dump(config))
+      policy = Marshal.load(Marshal.dump(@policy))
+      policy["ai_rules"] = [template]
+
+      result = ClaudeEasy.patch(config, policy)
+
+      assert_equal :invalid_policy, result.fetch(:status), template
+      assert_equal snapshot, config, template
+      assert_equal snapshot, result.fetch(:config), template
+    end
+  end
+
+  def test_policy_with_wrong_or_ambiguous_provider_semantics_is_rejected_without_mutation
+    invalid_policies = []
+    wrong_behavior = Marshal.load(Marshal.dump(@policy))
+    wrong_behavior.fetch("cn_ip_provider")["behavior"] = "domain"
+    invalid_policies << wrong_behavior
+    ambiguous = Marshal.load(Marshal.dump(@policy))
+    %w[name url path].each do |key|
+      ambiguous.fetch("cn_ip_provider")[key] = ambiguous.fetch("cn_domain_provider").fetch(key)
+    end
+    invalid_policies << ambiguous
+
+    invalid_policies.each do |policy|
+      config = base_config
+      snapshot = Marshal.load(Marshal.dump(config))
+
+      result = ClaudeEasy.patch(config, policy)
+
+      assert_equal :invalid_policy, result.fetch(:status)
+      assert_equal snapshot, config
+      assert_equal snapshot, result.fetch(:config)
+    end
+  end
+
   def test_locked_write_restores_original_bytes_after_a_partial_write_error
     fake = Class.new do
       attr_reader :bytes
@@ -8466,13 +8530,36 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.restore_candidate_valid?(
         path, 3, policy: @policy, validator: ->(_candidate) { true }
       )
+      managed_cn_provider = Marshal.load(
+        Marshal.dump(incomplete.fetch("rule-providers").fetch(cn_provider))
+      )
+      managed_cn_ip_provider = Marshal.load(
+        Marshal.dump(incomplete.fetch("rule-providers").fetch(cn_ip_provider))
+      )
+      corruptions = [
+        [cn_ip_provider, "type", "file"],
+        [cn_ip_provider, "behavior", "domain"],
+        [cn_ip_provider, "format", "yaml"],
+        [cn_ip_provider, "interval", 60],
+        [cn_ip_provider, "size-limit", 1],
+        [cn_provider, "proxy", "DIRECT"],
+        [cn_provider, "unexpected", true]
+      ]
+      corruptions.each do |provider_name, field, value|
+        incomplete.fetch("rule-providers").fetch(provider_name)[field] = value
+        File.write(path, YAML.dump(incomplete))
+        refute ClaudeEasy.restore_candidate_valid?(
+          path, 3, policy: @policy, validator: ->(_candidate) { true }
+        ), "#{provider_name}.#{field}"
+        incomplete.fetch("rule-providers")[cn_provider] = Marshal.load(Marshal.dump(managed_cn_provider))
+        incomplete.fetch("rule-providers")[cn_ip_provider] = Marshal.load(Marshal.dump(managed_cn_ip_provider))
+      end
       incomplete["rules"].insert(1, "MATCH,DIRECT")
       File.write(path, YAML.dump(incomplete))
       refute ClaudeEasy.restore_candidate_valid?(
         path, 3, policy: @policy, validator: ->(_candidate) { true }
       )
       incomplete["rules"].delete_at(1)
-      managed_cn_provider = Marshal.load(Marshal.dump(incomplete.fetch("rule-providers").fetch(cn_provider)))
       incomplete.fetch("rule-providers")[cn_provider] = {
         "type" => "file", "behavior" => "domain", "path" => "./user/cn-domain.mrs"
       }

@@ -36,7 +36,7 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 | --- | --- | --- | --- | --- |
 | **档位 1｜普通浏览** | 国内网站、Twitter、Facebook、YouTube 等 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；用 Computer Use 确认 Clash 客户端的“设置为系统代理”已开启 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 国内站、Google、Twitter 和一个用户常用站点能稳定打开，速度无明显异常 |
 | **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；用 Computer Use 开启 TUN，并关闭 Clash 客户端自己的系统代理开关 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 国内站、Google、Twitter、ChatGPT、Gemini 能稳定打开；命令行或 Agent 应用能联网 |
-| **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要完整泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、Claude、分流、DNS 深度测试和两项 WebRTC 测试 |
+| **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、Claude、分流、DNS 深度测试和两项 WebRTC 测试 |
 
 档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；除下述 AdGuard for Mac 已知兼容路径外，不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
 

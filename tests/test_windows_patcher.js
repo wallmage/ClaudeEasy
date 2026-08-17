@@ -839,6 +839,68 @@ test('missing managed provider or domestic UDP template is rejected without muta
   }
 });
 
+test('missing any required policy array is rejected without mutation', { skip: !available }, () => {
+  const requiredArrays = [
+    'resolvers', 'directResolvers', 'bootstrapFallbackResolvers', 'mainGroupNames',
+    'aiGroupNames', 'taiwanTokens', 'japanTokens', 'forbiddenAiDomains',
+    'legacyAiRules', 'aiRules'
+  ];
+  for (const key of requiredArrays) {
+    const config = baseConfig();
+    const snapshot = structuredClone(config);
+    const original = engine.CLAUDE_EASY_POLICY[key];
+    try {
+      engine.CLAUDE_EASY_POLICY[key] = null;
+      let patched;
+      assert.doesNotThrow(() => {
+        patched = engine.claudeEasyTransform(config, 'fixture');
+      }, key);
+      assert.deepEqual(patched, config, key);
+      assert.deepEqual(config, snapshot, key);
+    } finally {
+      engine.CLAUDE_EASY_POLICY[key] = original;
+    }
+  }
+});
+
+test('invalid AI rule templates are rejected without mutation', { skip: !available }, () => {
+  for (const template of [
+    'DOMAIN-SUFFIX,openai.com,DIRECT',
+    'DOMAIN-SUFFIX,openai.com,{AI},{AI}'
+  ]) {
+    const config = baseConfig();
+    const snapshot = structuredClone(config);
+    const original = engine.CLAUDE_EASY_POLICY.aiRules;
+    try {
+      engine.CLAUDE_EASY_POLICY.aiRules = [template];
+      assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config, template);
+      assert.deepEqual(config, snapshot, template);
+    } finally {
+      engine.CLAUDE_EASY_POLICY.aiRules = original;
+    }
+  }
+});
+
+test('wrong or ambiguous provider semantics are rejected without mutation', { skip: !available }, () => {
+  const domainProvider = engine.CLAUDE_EASY_POLICY.cnDomainProvider;
+  const ipProvider = engine.CLAUDE_EASY_POLICY.cnIpProvider;
+  const invalidProviders = [
+    { ...ipProvider, behavior: 'domain' },
+    { ...ipProvider, name: domainProvider.name, url: domainProvider.url, path: domainProvider.path }
+  ];
+  for (const invalid of invalidProviders) {
+    const config = baseConfig();
+    const snapshot = structuredClone(config);
+    try {
+      engine.CLAUDE_EASY_POLICY.cnIpProvider = invalid;
+      assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config);
+      assert.deepEqual(config, snapshot);
+    } finally {
+      engine.CLAUDE_EASY_POLICY.cnIpProvider = ipProvider;
+    }
+  }
+});
+
 test('policy validation survives user changes to Number helpers', { skip: !available }, () => {
   const sandbox = {};
   const source = fs.readFileSync(enginePath, 'utf8');

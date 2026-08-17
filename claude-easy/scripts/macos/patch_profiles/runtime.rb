@@ -241,13 +241,26 @@ module ClaudeEasy
                   providers = config["rule-providers"]
                   return nil unless providers.is_a?(Hash)
 
-                  cn_ip_provider = providers.find do |name, provider|
+                  cn_ip_entry = providers.find do |name, provider|
                     owned_rule_provider?(name, provider, policy["cn_ip_provider"])
-                  end&.first
-                  cn_domain_provider = providers.find do |name, provider|
+                  end
+                  cn_domain_entry = providers.find do |name, provider|
                     owned_rule_provider?(name, provider, policy["cn_domain_provider"])
-                  end&.first
-                  return nil unless cn_ip_provider && cn_domain_provider
+                  end
+                  return nil unless cn_ip_entry && cn_domain_entry
+
+                  cn_ip_provider, cn_ip_config = cn_ip_entry
+                  cn_domain_provider, cn_domain_config = cn_domain_entry
+                  route_group = cn_domain_config["proxy"]
+                  return nil unless route_group.is_a?(String) && !route_group.empty? &&
+                                    cn_ip_config["proxy"] == route_group
+                  return nil unless route_groups(config).any? { |group| group["name"] == route_group }
+                  return nil unless managed_rule_provider_config?(
+                    cn_domain_provider, cn_domain_config, policy["cn_domain_provider"], route_group
+                  )
+                  return nil unless managed_rule_provider_config?(
+                    cn_ip_provider, cn_ip_config, policy["cn_ip_provider"], route_group
+                  )
 
                   cn_udp = render_cn_udp_direct_rule(policy, cn_ip_provider)
                   cn_udp_index = rules.index do |rule|
@@ -290,6 +303,19 @@ module ClaudeEasy
     target
   rescue StandardError
     nil
+  end
+
+  def managed_rule_provider_config?(name, provider, expected, route_group)
+    provider == {
+      "type" => expected["type"],
+      "behavior" => expected["behavior"],
+      "format" => expected["format"],
+      "url" => expected["url"],
+      "path" => cn_provider_path(expected, name),
+      "interval" => expected["interval"],
+      "proxy" => route_group,
+      "size-limit" => expected["size_limit"]
+    }
   end
 
   def restore_candidate_valid?(path, usage_profile, policy: nil, validator: nil)

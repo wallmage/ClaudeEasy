@@ -77,15 +77,40 @@ module ClaudeEasy
       provider["size_limit"].is_a?(Integer) && provider["size_limit"].positive?
   end
 
+  def valid_string_array?(value, allow_empty: false)
+    value.is_a?(Array) && (allow_empty || !value.empty?) &&
+      value.all? { |item| item.is_a?(String) && !item.empty? }
+  end
+
+  def valid_ai_rule_templates?(value, allow_empty: false)
+    valid_string_array?(value, allow_empty: allow_empty) &&
+      value.all? { |template| template.scan("{AI}").length == 1 }
+  end
+
   def valid_policy?(policy)
-    local_udp_rules = policy.is_a?(Hash) ? policy["lan_udp_direct_rules"] : nil
-    cn_udp_rule = policy.is_a?(Hash) ? policy["cn_udp_direct_rule"] : nil
-    policy.is_a?(Hash) && policy["version"] == POLICY_VERSION &&
-      valid_rule_provider_policy?(policy["cn_domain_provider"]) &&
-      valid_rule_provider_policy?(policy["cn_ip_provider"]) &&
-      local_udp_rules.is_a?(Array) && !local_udp_rules.empty? &&
-      local_udp_rules.all? { |rule| rule.is_a?(String) && !rule.empty? } &&
-      cn_udp_rule.is_a?(String) && cn_udp_rule.scan("{CN_IP}").length == 1
+    return false unless policy.is_a?(Hash) && policy["version"] == POLICY_VERSION
+
+    required_arrays = %w[
+      resolvers direct_resolvers bootstrap_fallback_resolvers main_group_names
+      ai_group_names taiwan_tokens japan_tokens lan_udp_direct_rules
+    ]
+    return false unless required_arrays.all? { |key| valid_string_array?(policy[key]) }
+    return false unless valid_string_array?(policy["forbidden_ai_domains"], allow_empty: true)
+    return false unless valid_ai_rule_templates?(policy["legacy_ai_rules"], allow_empty: true)
+    return false unless valid_ai_rule_templates?(policy["ai_rules"])
+
+    domain_provider = policy["cn_domain_provider"]
+    ip_provider = policy["cn_ip_provider"]
+    return false unless valid_rule_provider_policy?(domain_provider) &&
+                        valid_rule_provider_policy?(ip_provider)
+    return false unless domain_provider["type"] == "http" && domain_provider["behavior"] == "domain" &&
+                        domain_provider["format"] == "mrs"
+    return false unless ip_provider["type"] == "http" && ip_provider["behavior"] == "ipcidr" &&
+                        ip_provider["format"] == "mrs"
+    return false if %w[name url path].all? { |key| domain_provider[key] == ip_provider[key] }
+
+    cn_udp_rule = policy["cn_udp_direct_rule"]
+    cn_udp_rule.is_a?(String) && cn_udp_rule.scan("{CN_IP}").length == 1
   end
 
   def managed_rule_provider_name?(name, provider_policy)
