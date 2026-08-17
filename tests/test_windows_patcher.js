@@ -820,6 +820,43 @@ test('missing local UDP policy is rejected without mutation', { skip: !available
   }
 });
 
+test('missing managed provider or domestic UDP template is rejected without mutation', { skip: !available }, () => {
+  for (const key of ['cnDomainProvider', 'cnIpProvider', 'cnUdpDirectRule']) {
+    const config = baseConfig();
+    const snapshot = structuredClone(config);
+    const original = engine.CLAUDE_EASY_POLICY[key];
+    try {
+      engine.CLAUDE_EASY_POLICY[key] = null;
+      let patched;
+      assert.doesNotThrow(() => {
+        patched = engine.claudeEasyTransform(config, 'fixture');
+      });
+      assert.deepEqual(patched, config);
+      assert.deepEqual(config, snapshot);
+    } finally {
+      engine.CLAUDE_EASY_POLICY[key] = original;
+    }
+  }
+});
+
+test('policy validation survives user changes to Number helpers', { skip: !available }, () => {
+  const sandbox = {};
+  const source = fs.readFileSync(enginePath, 'utf8');
+  vm.runInNewContext(
+    `${source}\n` +
+      'globalThis.claudeEasyTestTransform = claudeEasyTransform;\n' +
+      'globalThis.claudeEasyTestNumber = Number;\n',
+    sandbox
+  );
+  sandbox.claudeEasyTestNumber.isInteger = null;
+
+  let patched;
+  assert.doesNotThrow(() => {
+    patched = sandbox.claudeEasyTestTransform(baseConfig(), 'fixture');
+  });
+  assert.ok(patched.rules.includes('NETWORK,UDP,AI'));
+});
+
 test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvailable }, () => {
   const shared = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
   assert.equal(shared.schema_version, 1);

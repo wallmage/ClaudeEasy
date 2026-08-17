@@ -275,31 +275,16 @@ module ClaudeEasy
     return nil unless selectable_groups(config).any? { |group| group["name"] == target }
 
     if policy
-      required = render_ai_rules(policy, target).map { |rule| managed_rule_identity(rule) }
-      rejects = render_ai_rules(policy, target).map { |rule| managed_rule_identity(rule_with_target(rule, "REJECT")) }
-      return nil if required.empty? || required.any?(&:nil?) || rejects.any?(&:nil?)
-
-      identities = rules.map { |rule| managed_rule_identity(rule) }
-      positions = required.map { |identity| identities.index(identity) }
-      reject_positions = rejects.map { |identity| identities.index(identity) }
-      return nil if positions.any?(&:nil?) || reject_positions.any?(&:nil?)
-
+      required = render_ai_rules(policy, target)
+      rejects = required.map { |rule| rule_with_target(rule, "REJECT") }
       lan_rules = Array(policy["lan_udp_direct_rules"])
-      lan_positions = lan_rules.map do |required_rule|
-        rules.index do |rule|
-          rule.to_s.gsub(/\s+/, "").casecmp(required_rule.to_s.gsub(/\s+/, "")).zero?
-        end
-      end
-      return nil if lan_rules.empty? || lan_positions.any?(&:nil?)
-
-      cn_rule_index = rules.index do |rule|
-        info = rule_info(rule)
-        info[:type] == "RULE-SET" && info[:target].to_s.casecmp("DIRECT").zero? &&
-          info[:payload] == cn_domain_provider
-      end
-      return nil unless cn_rule_index && cn_rule_index + 2 == udp_index
-      return nil unless positions.max < reject_positions.min && reject_positions.max < lan_positions.min &&
-                        lan_positions.max < cn_rule_index
+      expected_prefix = required + rejects + lan_rules + [
+        "RULE-SET,#{cn_domain_provider},DIRECT",
+        cn_udp,
+        "NETWORK,UDP,#{target}",
+        "NETWORK,UDP,REJECT"
+      ]
+      return nil if required.empty? || lan_rules.empty? || rules.first(expected_prefix.length) != expected_prefix
     end
 
     target

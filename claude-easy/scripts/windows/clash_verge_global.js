@@ -932,13 +932,30 @@ function claudeEasyRules(config, aiGroup, routeGroup, cnProviderName, cnIpProvid
   ], remaining);
 }
 
+function claudeEasyValidProviderPolicy(provider) {
+  const stringKeys = ["name", "type", "behavior", "format", "url", "path"];
+  return provider && typeof provider === "object" && !Array.isArray(provider) &&
+    stringKeys.every(function (key) {
+      return typeof provider[key] === "string" && provider[key].length > 0;
+    }) && typeof provider.interval === "number" && provider.interval > 0 && provider.interval % 1 === 0 &&
+    typeof provider.size_limit === "number" && provider.size_limit > 0 && provider.size_limit % 1 === 0;
+}
+
+function claudeEasyValidPolicy() {
+  const cnUdpRule = CLAUDE_EASY_POLICY.cnUdpDirectRule;
+  return CLAUDE_EASY_POLICY.version === 2 &&
+    claudeEasyValidProviderPolicy(CLAUDE_EASY_POLICY.cnDomainProvider) &&
+    claudeEasyValidProviderPolicy(CLAUDE_EASY_POLICY.cnIpProvider) &&
+    Array.isArray(CLAUDE_EASY_POLICY.lanUdpDirectRules) &&
+    CLAUDE_EASY_POLICY.lanUdpDirectRules.length > 0 &&
+    CLAUDE_EASY_POLICY.lanUdpDirectRules.every(function (rule) {
+      return typeof rule === "string" && rule.length > 0;
+    }) && typeof cnUdpRule === "string" &&
+    (cnUdpRule.match(/\{CN_IP\}/g) || []).length === 1;
+}
+
 function claudeEasyApply(config, profileName, usageProfile) {
-  if (CLAUDE_EASY_POLICY.version !== 2 ||
-      !Array.isArray(CLAUDE_EASY_POLICY.lanUdpDirectRules) ||
-      CLAUDE_EASY_POLICY.lanUdpDirectRules.length === 0 ||
-      !CLAUDE_EASY_POLICY.lanUdpDirectRules.every(function (rule) {
-        return typeof rule === "string" && rule.length > 0;
-      })) return config;
+  if (!claudeEasyValidPolicy()) return config;
   if (!claudeEasyUsable(config)) return config;
   const patched = claudeEasyClone(config);
   if (!Array.isArray(patched.rules)) patched.rules = [];

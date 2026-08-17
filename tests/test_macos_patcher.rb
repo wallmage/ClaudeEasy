@@ -2572,6 +2572,29 @@ class MacosPatcherTest < Minitest::Test
     assert_equal snapshot, result.fetch(:config)
   end
 
+  def test_policy_without_managed_provider_or_domestic_udp_template_is_rejected_without_mutating_config
+    invalid_policies = ["cn_domain_provider", "cn_ip_provider", "cn_udp_direct_rule"].map do |key|
+      policy = Marshal.load(Marshal.dump(@policy))
+      policy.delete(key)
+      policy
+    end
+
+    invalid_policies.each do |policy|
+      config = base_config
+      snapshot = Marshal.load(Marshal.dump(config))
+      result = begin
+        ClaudeEasy.patch(config, policy)
+      rescue StandardError => error
+        error
+      end
+
+      assert_instance_of Hash, result
+      assert_equal :invalid_policy, result.fetch(:status)
+      assert_equal snapshot, config
+      assert_equal snapshot, result.fetch(:config)
+    end
+  end
+
   def test_locked_write_restores_original_bytes_after_a_partial_write_error
     fake = Class.new do
       attr_reader :bytes
@@ -8443,6 +8466,12 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.restore_candidate_valid?(
         path, 3, policy: @policy, validator: ->(_candidate) { true }
       )
+      incomplete["rules"].insert(1, "MATCH,DIRECT")
+      File.write(path, YAML.dump(incomplete))
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+      incomplete["rules"].delete_at(1)
       managed_cn_provider = Marshal.load(Marshal.dump(incomplete.fetch("rule-providers").fetch(cn_provider)))
       incomplete.fetch("rule-providers")[cn_provider] = {
         "type" => "file", "behavior" => "domain", "path" => "./user/cn-domain.mrs"
@@ -11058,9 +11087,15 @@ class MacosPatcherTest < Minitest::Test
   def test_run_rejects_bad_policy
     Dir.mktmpdir do |directory|
       invalid_policy = File.join(directory, "policy.json")
-      File.write(invalid_policy, JSON.generate("version" => -1))
-      assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.run(directory: directory, policy_path: invalid_policy)
+      [
+        { "version" => -1 },
+        @policy.reject { |key, _value| key == "cn_ip_provider" }
+      ].each do |policy|
+        File.write(invalid_policy, JSON.generate(policy))
+        error = assert_raises(ClaudeEasy::InvalidConfigError) do
+          ClaudeEasy.run(directory: directory, policy_path: invalid_policy)
+        end
+        assert_equal "策略版本或内容无效", error.message
       end
     end
   end

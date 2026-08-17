@@ -69,6 +69,25 @@ module ClaudeEasy
     }
   end
 
+  def valid_rule_provider_policy?(provider)
+    string_keys = %w[name type behavior format url path]
+    provider.is_a?(Hash) &&
+      string_keys.all? { |key| provider[key].is_a?(String) && !provider[key].empty? } &&
+      provider["interval"].is_a?(Integer) && provider["interval"].positive? &&
+      provider["size_limit"].is_a?(Integer) && provider["size_limit"].positive?
+  end
+
+  def valid_policy?(policy)
+    local_udp_rules = policy.is_a?(Hash) ? policy["lan_udp_direct_rules"] : nil
+    cn_udp_rule = policy.is_a?(Hash) ? policy["cn_udp_direct_rule"] : nil
+    policy.is_a?(Hash) && policy["version"] == POLICY_VERSION &&
+      valid_rule_provider_policy?(policy["cn_domain_provider"]) &&
+      valid_rule_provider_policy?(policy["cn_ip_provider"]) &&
+      local_udp_rules.is_a?(Array) && !local_udp_rules.empty? &&
+      local_udp_rules.all? { |rule| rule.is_a?(String) && !rule.empty? } &&
+      cn_udp_rule.is_a?(String) && cn_udp_rule.scan("{CN_IP}").length == 1
+  end
+
   def managed_rule_provider_name?(name, provider_policy)
     base = provider_policy["name"] if provider_policy.is_a?(Hash)
     base.is_a?(String) && name.is_a?(String) && name.match?(/\A#{Regexp.escape(base)}#{CN_PROVIDER_SUFFIX}\z/)
@@ -882,11 +901,7 @@ module ClaudeEasy
   end
 
   def patch(config, policy, usage_profile: 3)
-    local_udp_rules = policy.is_a?(Hash) ? policy["lan_udp_direct_rules"] : nil
-    valid_policy = policy.is_a?(Hash) && policy["version"] == POLICY_VERSION &&
-                   local_udp_rules.is_a?(Array) && !local_udp_rules.empty? &&
-                   local_udp_rules.all? { |rule| rule.is_a?(String) && !rule.empty? }
-    return base_result(config, :invalid_policy) unless valid_policy
+    return base_result(config, :invalid_policy) unless valid_policy?(policy)
     return base_result(config, :invalid_profile) unless [1, 2, 3].include?(usage_profile)
     return base_result(config, :invalid) unless usable_config?(config)
 

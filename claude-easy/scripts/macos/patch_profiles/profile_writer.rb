@@ -623,8 +623,8 @@ module ClaudeEasy
           socket: nil, requester: nil, connectivity_checker: nil, usage_profile: 3,
           guard_storage: false, expected_storage: nil)
     policy = JSON.parse(File.read(policy_path, encoding: "UTF-8"))
-    unless policy.is_a?(Hash) && policy["version"] == POLICY_VERSION
-      raise InvalidConfigError, "不支持的策略版本"
+    unless valid_policy?(policy)
+      raise InvalidConfigError, "策略版本或内容无效"
     end
     roots = directories || (directory ? [directory] : default_profile_directories)
     needs_runtime_context = selected_name.nil? && !dry_run
