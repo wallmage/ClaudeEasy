@@ -8,7 +8,7 @@ module ClaudeEasy
   MAX_PATCH_ATTEMPTS = 3
   MAX_YAML_AST_DEPTH = 256
   MAX_YAML_AST_NODES = 500_000
-  POLICY_VERSION = 1
+  POLICY_VERSION = 2
   AUTO_CORE = Object.new.freeze
   DIRECT_TYPES = %w[direct dns reject reject-drop pass pass-rule compatible rematch].freeze
   DIRECT_NAMES = %w[DIRECT REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH].freeze
@@ -67,10 +67,6 @@ module ClaudeEasy
       ai_group_created: false,
       ai_group_reset: false
     }
-  end
-
-  def managed_cn_provider_name?(name, policy)
-    managed_rule_provider_name?(name, policy["cn_domain_provider"])
   end
 
   def managed_rule_provider_name?(name, provider_policy)
@@ -802,6 +798,7 @@ module ClaudeEasy
                   owned_ai_names = [], owned_safe_names = [])
     managed = render_ai_rules(policy, ai_group)
     managed_rejects = managed.map { |rule| rule_with_target(rule, "REJECT") }
+    lan_udp_direct = Array(policy["lan_udp_direct_rules"])
     cn_direct = "RULE-SET,#{cn_provider_name},DIRECT"
     cn_udp_direct = render_cn_udp_direct_rule(policy, cn_ip_provider_name)
     managed_keys = managed.map { |rule| managed_rule_key(rule) }.compact
@@ -847,13 +844,16 @@ module ClaudeEasy
       next if patch_owned_ai || exact_current_ai || legacy_owned_ai || forbidden_ai || main_group_ai
 
       next if managed_keys.include?(key)
+      next if lan_udp_direct.any? do |managed_rule|
+        rule.to_s.gsub(/\s+/, "").casecmp(managed_rule.to_s.gsub(/\s+/, "")).zero?
+      end
       next if managed_rule_identity(rule) == managed_rule_identity(cn_direct)
       next if rule.to_s.gsub(/\s+/, "").casecmp(cn_udp_direct.gsub(/\s+/, "")).zero?
 
       remaining << rule
     end
 
-    config["rules"] = managed + managed_rejects + [
+    config["rules"] = managed + managed_rejects + lan_udp_direct + [
       cn_direct,
       cn_udp_direct,
       "NETWORK,UDP,#{ai_group}",
@@ -882,7 +882,11 @@ module ClaudeEasy
   end
 
   def patch(config, policy, usage_profile: 3)
-    return base_result(config, :invalid_policy) unless policy.is_a?(Hash) && policy["version"] == POLICY_VERSION
+    local_udp_rules = policy.is_a?(Hash) ? policy["lan_udp_direct_rules"] : nil
+    valid_policy = policy.is_a?(Hash) && policy["version"] == POLICY_VERSION &&
+                   local_udp_rules.is_a?(Array) && !local_udp_rules.empty? &&
+                   local_udp_rules.all? { |rule| rule.is_a?(String) && !rule.empty? }
+    return base_result(config, :invalid_policy) unless valid_policy
     return base_result(config, :invalid_profile) unless [1, 2, 3].include?(usage_profile)
     return base_result(config, :invalid) unless usable_config?(config)
 

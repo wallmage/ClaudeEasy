@@ -49,9 +49,9 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 | --- | --- | --- | --- |
 | **1｜普通浏览** | 国内站、Google、Twitter、YouTube 等 | 全部订阅的共同国内直连与安全节点启动解析；关闭订阅自动更新；使用 Clash 系统代理 | TUN、IPv6、WebRTC、AI 分组或节点改动 |
 | **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承档位 1；开启 TUN，关闭 Clash 自己的系统代理，避免重复接管 | WebRTC 或 AI 分组补丁 |
-| **3｜Claude/Claude Code** | Claude、Claude Code 或更强的泄漏防护 | 继承档位 2；增加 DNS 分流、AI 规则、国内 UDP 分流、其余 UDP/WebRTC 防护和区域指纹检查 | 自动切换订阅、代理组或节点 |
+| **3｜Claude/Claude Code** | Claude、Claude Code 或更强的泄漏防护 | 继承档位 2；增加 DNS 分流、AI 规则、局域网与国内 UDP 分流、其余 UDP/WebRTC 防护和区域指纹检查 | 自动切换订阅、代理组或节点 |
 
-档位 3 会让命中国内域名库或国内 IP 的 UDP 直连，其余 UDP 经过 AI 分组；QUIC、游戏、语音和视频都按这套规则处理，无法确认目的地时可能受影响。AI 节点可以建议台湾家宽优先、其次日本家宽，但不会替用户切换。
+档位 3 会让局域网 UDP，以及命中国内域名库或国内 IP 的 UDP 直连，其余 UDP 经过 AI 分组；QUIC、游戏、语音和视频都按这套规则处理，无法确认目的地时可能受影响。AI 节点可以建议台湾家宽优先、其次日本家宽，但不会替用户切换。
 
 升档只补新增能力。档位 3 降到 1 或 2 时先安全卸载，再安装新档位；只能撤销仍能确认属于本工具且未被用户继续修改的内容。Windows 卸载返回 `partial` 时保留旧档位，不继续降档。
 
@@ -70,7 +70,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 - 国内域名直连大陆 DoH；普通境外 DNS 随主代理组；AI DNS 随 AI 分组。
 - 复用已有可选 AI 分组，不改它的成员和当前选择；没有时才创建包含全部可用真实节点和代理提供者的独立选择器。
 - 补全 OpenAI、Anthropic、Claude 和 Gemini 相关规则；不把通用 GitHub 或 Google 存储域名塞进 AI 规则。
-- AI 流量先走 AI 分组；国内域名和国内 IP 的 UDP 直连；其余 UDP 走 AI 分组，节点不支持 UDP 时拒绝兜底。
+- AI 流量先走 AI 分组；局域网、国内域名和国内 IP 的 UDP 直连；其余 UDP 走 AI 分组，节点不支持 UDP 时拒绝兜底。
 
 详细解析器、域名和规则清单只在 `policy.json` 保存，避免文档复制后漂移。
 

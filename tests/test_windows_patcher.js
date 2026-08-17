@@ -178,6 +178,32 @@ test('routes UDP by deterministic destination and fails closed for AI', { skip: 
   assert.deepEqual(engine.claudeEasyTransform(structuredClone(patched), 'fixture'), patched);
 });
 
+test('routes local UDP direct before the global UDP guard', { skip: !available }, () => {
+  const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
+  const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
+  const globalUdp = patched.rules.indexOf(`NETWORK,UDP,${ai.name}`);
+  const localRules = [
+    'AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,100.64.0.0/10,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,127.0.0.0/8,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,169.254.0.0/16,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,172.16.0.0/12,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,192.168.0.0/16,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,224.0.0.0/4,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR,255.255.255.255/32,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR6,::1/128,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR6,fc00::/7,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR6,fe80::/10,no-resolve)),DIRECT',
+    'AND,((NETWORK,UDP),(IP-CIDR6,ff00::/8,no-resolve)),DIRECT'
+  ];
+
+  for (const rule of localRules) {
+    assert.ok(patched.rules.includes(rule), rule);
+    assert.ok(patched.rules.indexOf(rule) < globalUdp, rule);
+  }
+  assert.equal(patched.rules.some((rule) => rule.includes('198.18.0.0/15')), false);
+});
+
 test('lightweight profiles receive the common China-domain baseline only', { skip: !available }, () => {
   for (const usageProfile of [1, 2]) {
     const input = baseConfig();
@@ -196,7 +222,7 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
     assert.ok(patched.rules.indexOf(`RULE-SET,${providerName},DIRECT`) < patched.rules.indexOf('GEOSITE,CN,DIRECT'));
     assert.equal(patched.ipv6, true);
     assert.deepEqual(patched.tun, { enable: false });
-    assert.equal(patched.rules.some((rule) => rule.startsWith('NETWORK,UDP,')), false);
+    assert.equal(patched.rules.some((rule) => rule.includes('NETWORK,UDP')), false);
     assert.equal(patched.rules.includes(engine.CLAUDE_EASY_POLICY.cnUdpDirectRule), false);
     assert.equal(Object.hasOwn(patched['rule-providers'], engine.CLAUDE_EASY_POLICY.cnIpProvider.name), false);
     assert.deepEqual(engine.claudeEasyTransform(patched, 'fixture', usageProfile), patched);
@@ -773,11 +799,24 @@ test('unknown policy version is rejected without mutation', { skip: !available }
   const snapshot = JSON.parse(JSON.stringify(config));
   const originalVersion = engine.CLAUDE_EASY_POLICY.version;
   try {
-    engine.CLAUDE_EASY_POLICY.version = 2;
+    engine.CLAUDE_EASY_POLICY.version = 999;
     assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config);
     assert.deepEqual(config, snapshot);
   } finally {
     engine.CLAUDE_EASY_POLICY.version = originalVersion;
+  }
+});
+
+test('missing local UDP policy is rejected without mutation', { skip: !available }, () => {
+  const config = baseConfig();
+  const snapshot = structuredClone(config);
+  const originalRules = engine.CLAUDE_EASY_POLICY.lanUdpDirectRules;
+  try {
+    engine.CLAUDE_EASY_POLICY.lanUdpDirectRules = [];
+    assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config);
+    assert.deepEqual(config, snapshot);
+  } finally {
+    engine.CLAUDE_EASY_POLICY.lanUdpDirectRules = originalRules;
   }
 });
 

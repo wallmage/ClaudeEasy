@@ -508,7 +508,7 @@
   "transform_cases": [
     {
       "name": "automatic-main-group-receives-full-patch",
-      "expected_config_sha256": "655465717495a87d8d62a9e792a72fe8cf2773888e70c90018d194e9d74070cf",
+      "expected_config_sha256": "678f61f176540a282e8c274b5c0f704065883919fcdc32b556385e815880ff0c",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -527,8 +527,8 @@
     },
     {
       "name": "reuse-existing-ai-group",
-      "expected_config_sha256": "1638680f16a7559d7b6b6675ed5b9a1428251518a8e987af2f019ecb091b841f",
-      "expected_windows_config_sha256": "c12c28c4847f14a5f94748e706c43eea34c248c1794b9828a42a442f70669dd5",
+      "expected_config_sha256": "daa7fa3e52f5e69d7d16e18fa2c56d2a254f8af9b4e492081ab06af6234c05dc",
+      "expected_windows_config_sha256": "5c68f9fc7725a328c35a4ec5737983ff62641d88eb01a441204b86468daf8eb6",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -544,7 +544,7 @@
     },
     {
       "name": "create-independent-ai-from-provider",
-      "expected_config_sha256": "c5ee4f5c2a777a2fa9b9c09eb0d2c0c553bcc9b732b408b1ad44939277811f09",
+      "expected_config_sha256": "7eafa28393cfbca83dc0c0f035a0d4d22617616c14811062af48c4079a3a37fc",
       "input": {
         "proxy-providers": {
           "provider-a": { "type": "http", "url": "https://fixture.invalid/sub", "interval": 3600 }
@@ -561,7 +561,7 @@
     },
     {
       "name": "normalize-dns-and-managed-rule-whitespace",
-      "expected_config_sha256": "eb4a644e7d35e34f7e70d17bd62d33769abaa950596c4198b4b4eecedcd13fa6",
+      "expected_config_sha256": "6704269dd65ed8738efca70c4ba01fea25246d7578b5eb0f08d8e43f6ada628d",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -587,7 +587,7 @@
     },
     {
       "name": "normalize-owned-managed-groups",
-      "expected_config_sha256": "62c7e7e8edce1ee79d377459a57cb77332c649076f42498693099cb85b6d0ec2",
+      "expected_config_sha256": "4fa5c1b145e997bb306f2a494f694762f4469c83be99992958050285605a670c",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -633,7 +633,7 @@
     },
     {
       "name": "reuse-owned-cn-provider",
-      "expected_config_sha256": "52311e7b1e0c035e9ce0e329363cbe42baa290a7276fbb4e17a6b79550bf86e4",
+      "expected_config_sha256": "f870869beabf367e641255c5465167c306809da04f89c9465a57301a131109a3",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -672,7 +672,7 @@
     },
     {
       "name": "ai-only-main-receives-full-patch",
-      "expected_config_sha256": "497bd450b569fc2119f9703cf3420065005c2da8372dbaf5151608164de1a793",
+      "expected_config_sha256": "753e860d05ec678a1ec4541cb2a89cf3b255b46844e79b3b117527b7f157e363",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -692,7 +692,7 @@
     },
     {
       "name": "owned-safe-group-remains-when-it-is-the-only-main",
-      "expected_config_sha256": "8826db7bbf2b203921d256f7ff65d8edea3299fc996dda628012e3854a9eb7d5",
+      "expected_config_sha256": "3bdd1c03694c7660b4bb4bf7fb8ba0fb70b692abf2caa641001aa8aa477a5970",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [

@@ -238,13 +238,16 @@ module ClaudeEasy
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
     rules = Array(config["rules"])
     udp_index = if policy
-                  provider_policy = policy["cn_ip_provider"]
-                  cn_ip_provider = if config["rule-providers"].is_a?(Hash)
-                                     config["rule-providers"].find do |name, provider|
-                                       owned_rule_provider?(name, provider, provider_policy)
-                                     end&.first
-                                   end
-                  return nil unless cn_ip_provider
+                  providers = config["rule-providers"]
+                  return nil unless providers.is_a?(Hash)
+
+                  cn_ip_provider = providers.find do |name, provider|
+                    owned_rule_provider?(name, provider, policy["cn_ip_provider"])
+                  end&.first
+                  cn_domain_provider = providers.find do |name, provider|
+                    owned_rule_provider?(name, provider, policy["cn_domain_provider"])
+                  end&.first
+                  return nil unless cn_ip_provider && cn_domain_provider
 
                   cn_udp = render_cn_udp_direct_rule(policy, cn_ip_provider)
                   cn_udp_index = rules.index do |rule|
@@ -281,13 +284,22 @@ module ClaudeEasy
       reject_positions = rejects.map { |identity| identities.index(identity) }
       return nil if positions.any?(&:nil?) || reject_positions.any?(&:nil?)
 
+      lan_rules = Array(policy["lan_udp_direct_rules"])
+      lan_positions = lan_rules.map do |required_rule|
+        rules.index do |rule|
+          rule.to_s.gsub(/\s+/, "").casecmp(required_rule.to_s.gsub(/\s+/, "")).zero?
+        end
+      end
+      return nil if lan_rules.empty? || lan_positions.any?(&:nil?)
+
       cn_rule_index = rules.index do |rule|
         info = rule_info(rule)
         info[:type] == "RULE-SET" && info[:target].to_s.casecmp("DIRECT").zero? &&
-          managed_cn_provider_name?(info[:payload], policy)
+          info[:payload] == cn_domain_provider
       end
       return nil unless cn_rule_index && cn_rule_index + 2 == udp_index
-      return nil unless positions.max < reject_positions.min && reject_positions.max < cn_rule_index
+      return nil unless positions.max < reject_positions.min && reject_positions.max < lan_positions.min &&
+                        lan_positions.max < cn_rule_index
     end
 
     target

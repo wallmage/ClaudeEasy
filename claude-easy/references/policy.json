@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "resolvers": [
     "https://94.140.14.140/dns-query",
     "https://94.140.14.141/dns-query",
@@ -23,6 +23,20 @@
     "interval": 86400,
     "size_limit": 2097152
   },
+  "lan_udp_direct_rules": [
+    "AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,100.64.0.0/10,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,127.0.0.0/8,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,169.254.0.0/16,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,172.16.0.0/12,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,192.168.0.0/16,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,224.0.0.0/4,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,255.255.255.255/32,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,::1/128,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,fc00::/7,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,fe80::/10,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,ff00::/8,no-resolve)),DIRECT"
+  ],
   "cn_ip_provider": {
     "name": "claude-easy-cn-ip",
     "type": "http",

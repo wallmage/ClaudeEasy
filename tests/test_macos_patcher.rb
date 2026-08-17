@@ -1946,7 +1946,7 @@ class MacosPatcherTest < Minitest::Test
       assert_operator cn_index, :<, broad_index
       assert_equal true, patched.fetch("ipv6")
       assert_equal({ "enable" => false }, patched.fetch("tun"))
-      refute patched.fetch("rules").any? { |rule| rule.start_with?("NETWORK,UDP,") }
+      refute patched.fetch("rules").any? { |rule| rule.include?("NETWORK,UDP") }
       refute_includes patched.fetch("rules"), @policy.fetch("cn_udp_direct_rule")
       refute patched.fetch("rule-providers").key?(@policy.fetch("cn_ip_provider").fetch("name"))
       assert_equal patched, ClaudeEasy.patch(patched, @policy, usage_profile: usage_profile).fetch(:config)
@@ -2550,7 +2550,20 @@ class MacosPatcherTest < Minitest::Test
     config = base_config
     snapshot = Marshal.load(Marshal.dump(config))
     policy = Marshal.load(Marshal.dump(@policy))
-    policy["version"] = 2
+    policy["version"] = 999
+
+    result = ClaudeEasy.patch(config, policy)
+
+    assert_equal :invalid_policy, result.fetch(:status)
+    assert_equal snapshot, config
+    assert_equal snapshot, result.fetch(:config)
+  end
+
+  def test_policy_without_local_udp_rules_is_rejected_without_mutating_config
+    config = base_config
+    snapshot = Marshal.load(Marshal.dump(config))
+    policy = Marshal.load(Marshal.dump(@policy))
+    policy.delete("lan_udp_direct_rules")
 
     result = ClaudeEasy.patch(config, policy)
 
@@ -2653,6 +2666,32 @@ class MacosPatcherTest < Minitest::Test
     refute_includes indexes, nil
     indexes.each_cons(2) { |left, right| assert_operator left, :<, right }
     refute ClaudeEasy.patch(patched, @policy).fetch(:changed)
+  end
+
+  def test_routes_local_udp_direct_before_the_global_udp_guard
+    result = ClaudeEasy.patch(base_config, @policy)
+    rules = result.fetch(:config).fetch("rules")
+    global_udp = rules.index("NETWORK,UDP,#{result.fetch(:ai_group)}")
+    local_rules = [
+      "AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,100.64.0.0/10,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,127.0.0.0/8,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,169.254.0.0/16,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,172.16.0.0/12,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,192.168.0.0/16,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,224.0.0.0/4,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR,255.255.255.255/32,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR6,::1/128,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR6,fc00::/7,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR6,fe80::/10,no-resolve)),DIRECT",
+      "AND,((NETWORK,UDP),(IP-CIDR6,ff00::/8,no-resolve)),DIRECT"
+    ]
+
+    local_rules.each do |rule|
+      assert_includes rules, rule
+      assert_operator rules.index(rule), :<, global_udp
+    end
+    refute rules.any? { |rule| rule.include?("198.18.0.0/15") }
   end
 
   def test_reuses_existing_ai_group_without_creating_visible_groups
@@ -8385,7 +8424,7 @@ class MacosPatcherTest < Minitest::Test
 
       complete = ClaudeEasy.render_ai_rules(@policy, "AI")
       rejects = complete.map { |rule| ClaudeEasy.rule_with_target(rule, "REJECT") }
-      cn_provider = @policy.fetch("cn_domain_provider").fetch("name")
+      cn_provider = ClaudeEasy.ensure_cn_provider(incomplete, @policy, "Main")
       cn_ip_provider = ClaudeEasy.ensure_cn_ip_provider(incomplete, @policy, "Main")
       managed_tail = [
         "RULE-SET,#{cn_provider},DIRECT",
@@ -8395,9 +8434,24 @@ class MacosPatcherTest < Minitest::Test
       ]
       incomplete["rules"] = complete + rejects + managed_tail + ["MATCH,DIRECT"]
       File.write(path, YAML.dump(incomplete))
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+      incomplete["rules"] = complete + rejects + @policy.fetch("lan_udp_direct_rules") +
+                            managed_tail + ["MATCH,DIRECT"]
+      File.write(path, YAML.dump(incomplete))
       assert ClaudeEasy.restore_candidate_valid?(
         path, 3, policy: @policy, validator: ->(_candidate) { true }
       )
+      managed_cn_provider = Marshal.load(Marshal.dump(incomplete.fetch("rule-providers").fetch(cn_provider)))
+      incomplete.fetch("rule-providers")[cn_provider] = {
+        "type" => "file", "behavior" => "domain", "path" => "./user/cn-domain.mrs"
+      }
+      File.write(path, YAML.dump(incomplete))
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 3, policy: @policy, validator: ->(_candidate) { true }
+      )
+      incomplete.fetch("rule-providers")[cn_provider] = managed_cn_provider
       incomplete["rules"] = complete + managed_tail + rejects + ["MATCH,DIRECT"]
       File.write(path, YAML.dump(incomplete))
       refute ClaudeEasy.restore_candidate_valid?(

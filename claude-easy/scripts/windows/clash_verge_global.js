@@ -3,7 +3,7 @@
 
 // CLAUDEEASY POLICY BEGIN
 const CLAUDE_EASY_POLICY = {
-  "version": 1,
+  "version": 2,
   "resolvers": [
     "https://94.140.14.140/dns-query",
     "https://94.140.14.141/dns-query",
@@ -27,6 +27,20 @@ const CLAUDE_EASY_POLICY = {
     "interval": 86400,
     "size_limit": 2097152
   },
+  "lanUdpDirectRules": [
+    "AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,100.64.0.0/10,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,127.0.0.0/8,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,169.254.0.0/16,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,172.16.0.0/12,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,192.168.0.0/16,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,224.0.0.0/4,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,255.255.255.255/32,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,::1/128,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,fc00::/7,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,fe80::/10,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,ff00::/8,no-resolve)),DIRECT"
+  ],
   "cnIpProvider": {
     "name": "claude-easy-cn-ip",
     "type": "http",
@@ -858,6 +872,7 @@ function claudeEasyRuleWithTarget(rule, target) {
 function claudeEasyRules(config, aiGroup, routeGroup, cnProviderName, cnIpProviderName, ownedAiNames, ownedSafeNames) {
   const managed = claudeEasyRenderAiRules(aiGroup);
   const managedRejects = managed.map(function (rule) { return claudeEasyRuleWithTarget(rule, "REJECT"); });
+  const lanUdpDirect = CLAUDE_EASY_POLICY.lanUdpDirectRules.slice();
   const cnDirect = "RULE-SET," + cnProviderName + ",DIRECT";
   const cnUdpDirect = claudeEasyRenderCnUdpDirectRule(cnIpProviderName);
   const managedKeys = managed.map(claudeEasyManagedRuleKey);
@@ -900,12 +915,16 @@ function claudeEasyRules(config, aiGroup, routeGroup, cnProviderName, cnIpProvid
     const mainGroupAi = managedKeys.indexOf(key) !== -1 && info.target === routeGroup;
     if (patchOwnedAi || exactCurrentAi || legacyOwnedAi || forbiddenAi || mainGroupAi) return;
     if (managedKeys.indexOf(key) !== -1) return;
+    if (lanUdpDirect.some(function (managedRule) {
+      return String(rule).replace(/\s+/g, "").toUpperCase() ===
+        String(managedRule).replace(/\s+/g, "").toUpperCase();
+    })) return;
     if (claudeEasyManagedRuleIdentity(rule) === claudeEasyManagedRuleIdentity(cnDirect)) return;
     if (String(rule).replace(/\s+/g, "").toUpperCase() === String(cnUdpDirect).replace(/\s+/g, "").toUpperCase()) return;
     remaining.push(rule);
   });
 
-  config.rules = managed.concat(managedRejects, [
+  config.rules = managed.concat(managedRejects, lanUdpDirect, [
     cnDirect,
     cnUdpDirect,
     "NETWORK,UDP," + aiGroup,
@@ -914,7 +933,12 @@ function claudeEasyRules(config, aiGroup, routeGroup, cnProviderName, cnIpProvid
 }
 
 function claudeEasyApply(config, profileName, usageProfile) {
-  if (CLAUDE_EASY_POLICY.version !== 1) return config;
+  if (CLAUDE_EASY_POLICY.version !== 2 ||
+      !Array.isArray(CLAUDE_EASY_POLICY.lanUdpDirectRules) ||
+      CLAUDE_EASY_POLICY.lanUdpDirectRules.length === 0 ||
+      !CLAUDE_EASY_POLICY.lanUdpDirectRules.every(function (rule) {
+        return typeof rule === "string" && rule.length > 0;
+      })) return config;
   if (!claudeEasyUsable(config)) return config;
   const patched = claudeEasyClone(config);
   if (!Array.isArray(patched.rules)) patched.rules = [];

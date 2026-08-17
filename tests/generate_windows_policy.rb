@@ -10,6 +10,7 @@ mapping = {
   "direct_resolvers" => "directResolvers",
   "bootstrap_fallback_resolvers" => "bootstrapFallbackResolvers",
   "cn_domain_provider" => "cnDomainProvider",
+  "lan_udp_direct_rules" => "lanUdpDirectRules",
   "cn_ip_provider" => "cnIpProvider",
   "cn_udp_direct_rule" => "cnUdpDirectRule",
   "main_group_names" => "mainGroupNames",
