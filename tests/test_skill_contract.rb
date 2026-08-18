@@ -1219,7 +1219,7 @@ class SkillContractTest < Minitest::Test
     assert_includes baseline, "跨平台安全更新对等合同"
   end
 
-  def test_safe_update_never_checks_provider_switch_before_the_first_attempt
+  def test_safe_update_requires_provider_switch_confirmation_before_the_first_attempt
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
@@ -1227,13 +1227,23 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     ]
 
+    [documents[0], documents[1], documents[2]].each do |document|
+      assert_includes document, "请确保订阅开关已打开"
+      assert_includes document, "约 10 分钟有效"
+      assert_includes document, "打开了"
+      assert_includes document, "没问题"
+      assert_includes document, "订阅显示名称"
+    end
     [documents[2]].each do |document|
-      assert_includes document, "立即执行安全更新"
+      assert_includes document, "用户明确确认前不得取证、建立快照、下载或写入"
+      refute_includes document, "先做一次正常更新，不得在更新前推测开关状态"
+      refute_includes document, "只有更新确实失败且没有明确的本机故障时，才提示订阅开关"
       assert_includes document, "不得检查或操作服务商后台"
       assert_includes document, "Chrome、Browser 或 Computer Use"
       assert_includes document, "逐一报告哪些订阅下载与校验成功、哪些失败"
-      assert_includes document, "开关关闭时无法更新"
-      assert_includes document, "登录服务商网站"
+      assert_includes document, "请确保该订阅的开关仍然开启"
+      assert_includes document, "不得用节点名称代替订阅"
+      assert_includes document, "需要用户重新打开开关时"
     end
   end
 
