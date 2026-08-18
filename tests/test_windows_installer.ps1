@@ -2804,6 +2804,12 @@ items:
     $backupSecondBytes = [System.Text.Encoding]::UTF8.GetBytes("second subscription bytes`n")
     [System.IO.File]::WriteAllBytes((Join-Path $backupOnlyProfiles "R-first.yaml"), $backupFirstBytes)
     [System.IO.File]::WriteAllBytes((Join-Path $backupOnlyProfiles "R-second.yml"), $backupSecondBytes)
+    $backupOnlyJournalPath = Join-Path $backupOnlyCase ".claude-easy-transaction.json"
+    $backupOnlyPreparationPath = Join-Path $backupOnlyCase ".claude-easy-transaction-preparation.json"
+    $backupOnlyJournalBytes = [System.Text.Encoding]::UTF8.GetBytes("old transaction state")
+    $backupOnlyPreparationBytes = [System.Text.Encoding]::UTF8.GetBytes("old preparation state")
+    [System.IO.File]::WriteAllBytes($backupOnlyJournalPath, $backupOnlyJournalBytes)
+    [System.IO.File]::WriteAllBytes($backupOnlyPreparationPath, $backupOnlyPreparationBytes)
     $backupOnlyResult = Invoke-TestPowerShell $installer @(
         "-AppHome", $backupOnlyCase,
         "-BackupSubscriptions",
@@ -2825,6 +2831,10 @@ items:
     Assert-True (-not (
         Test-Path -LiteralPath (Join-Path $backupOnlyCase "claude-easy-safe-update.json")
     )) "subscription backup created a safe-update manifest"
+    Assert-True (
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($backupOnlyJournalPath)) -ceq [Convert]::ToBase64String($backupOnlyJournalBytes) -and
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($backupOnlyPreparationPath)) -ceq [Convert]::ToBase64String($backupOnlyPreparationBytes)
+    ) "subscription backup processed an unrelated interrupted transaction"
     $backupOnlyFiles = @(Get-ChildItem -LiteralPath (Join-Path $backupOnlyCase "claude-easy-backups") -Recurse -File)
     Assert-True ($backupOnlyFiles.Count -eq 4) "subscription backup did not create initial and pre-update backups for every remote subscription"
 

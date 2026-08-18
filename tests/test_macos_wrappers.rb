@@ -2829,6 +2829,27 @@ class MacosWrapperTest < Minitest::Test
           assert_equal original, File.binread(state)
         end
       end
+
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          state = usage_state_path(home)
+          FileUtils.mkdir_p(File.dirname(state))
+          File.binwrite(state, "not a plist")
+          staging = File.join(File.dirname(state), ".claude-easy-uninstall-staging")
+          FileUtils.mkdir_p(staging)
+          marker = File.join(staging, "keep")
+          File.binwrite(marker, "unchanged")
+
+          stdout, stderr, status = run_script(
+            installer, "--safe-update", "--json", home: home
+          )
+
+          assert status.success?, "#{stdout}\n#{stderr}"
+          assert_empty stderr
+          assert_equal "not a plist", File.binread(state)
+          assert_equal "unchanged", File.binread(marker)
+        end
+      end
     end
   end
 

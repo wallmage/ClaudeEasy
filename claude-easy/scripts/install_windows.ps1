@@ -143,7 +143,7 @@ $targetScript = Join-Path $profilesDirectory "Script.js"
 
 $mutationLock = $null
 try {
-    $mutationLock = Enter-AppHomeMutationLock $AppHome
+    $mutationLock = Enter-AppHomeMutationLock $AppHome -SkipRecovery:$BackupSubscriptions
 } catch {
     $lockMessage = $_.Exception.Message
     if ($lockMessage -eq "客户端保持运行；中断的客户端敏感事务等待恢复。") {

@@ -1144,6 +1144,10 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不拒绝覆盖"
       refute_includes document, "继续完成 `required_followups`"
     end
+
+    diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
+    assert_includes diagnostics, "客户端动作结束后立即完成，不追加检查、拒绝覆盖或恢复"
+    refute_includes diagnostics, "全部远程订阅都进入已验证成功、已恢复或明确失败状态"
   end
 
   def test_new_workflows_require_cross_platform_user_visible_parity
@@ -1747,9 +1751,13 @@ class SkillContractTest < Minitest::Test
       assert_includes source, '"$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"'
       assert_includes source, "operation_in_progress"
     end
-    pending_recovery = installer.index("recover_interrupted_uninstall\nresolve_usage_profile")
+    backup_only_branch = installer.index("if [ \"$SAFE_UPDATE\" -eq 1 ]; then\n  USAGE_PROFILE=\"\"")
+    refute_nil backup_only_branch
+    pending_recovery = installer.index("recover_interrupted_uninstall", backup_only_branch)
+    profile_resolution = installer.index("resolve_usage_profile", pending_recovery)
     client_preflight = installer.index('if [ ! -d "/Applications/ClashX Meta.app" ]')
     refute_nil pending_recovery
+    refute_nil profile_resolution
     refute_nil client_preflight
     assert_operator pending_recovery, :<, client_preflight
     assert_includes installer, 'recovery_json=$(/bin/sh "$UNINSTALLER_SOURCE" --json'

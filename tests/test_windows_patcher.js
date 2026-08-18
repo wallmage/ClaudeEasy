@@ -1116,6 +1116,7 @@ test('Windows subscription update entry only creates pre-update backups', () => 
   );
   const legacyStart = source.indexOf('if ($SnapshotProfiles -or $VerifySafeUpdate) {');
   assert.match(source, /\[switch\]\$BackupSubscriptions/);
+  assert.match(source, /Enter-AppHomeMutationLock \$AppHome -SkipRecovery:\$BackupSubscriptions/);
   assert.ok(backupStart !== -1 && legacyStart !== -1 && backupStart < legacyStart);
   const backupBranch = source.slice(backupStart, legacyStart);
   assert.match(backupBranch, /Backup-InitialOnce/);

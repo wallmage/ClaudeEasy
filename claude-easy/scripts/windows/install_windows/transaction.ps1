@@ -73,7 +73,7 @@ function Get-AppHomeRelativePath([string]$Path) {
     )
 }
 
-function Enter-AppHomeMutationLock([string]$AppHome) {
+function Enter-AppHomeMutationLock([string]$AppHome, [switch]$SkipRecovery) {
     $canonical = ConvertTo-NormalizedWindowsPath $AppHome
     Assert-NoReparsePointPath $canonical "Clash Verge Rev 配置目录"
     Initialize-VerifiedFileNative
@@ -103,8 +103,10 @@ function Enter-AppHomeMutationLock([string]$AppHome) {
         $script:ClaudeEasyTransactionPreparationPath = Join-Path $canonical ".claude-easy-transaction-preparation.json"
         $recoveredTransaction = Test-Path -LiteralPath $script:ClaudeEasyTransactionJournalPath -PathType Leaf
         $recoveredPreparation = Test-Path -LiteralPath $script:ClaudeEasyTransactionPreparationPath -PathType Leaf
-        Repair-InterruptedFileTransaction
-        Repair-InterruptedFilePreparation
+        if (-not $SkipRecovery) {
+            Repair-InterruptedFileTransaction
+            Repair-InterruptedFilePreparation
+        }
         return [pscustomobject]@{
             Root = $canonical
             RootHandle = $rootHandle

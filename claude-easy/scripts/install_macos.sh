@@ -725,7 +725,9 @@ if [ -n "$USAGE_PROFILE" ]; then
 fi
 
 if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
-  load_saved_profile_or_finish select_profile
+  if [ "$SAFE_UPDATE" -ne 1 ]; then
+    load_saved_profile_or_finish select_profile
+  fi
   if ! install_package_complete; then
     say "安装包不完整。"
     finish 6 failed incomplete_package "安装包不完整。" install
@@ -776,10 +778,15 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
   fi
 fi
 
-recover_interrupted_uninstall
-resolve_usage_profile
-if [ "$PROFILE_SOURCE" != "saved" ]; then
-  assert_profile_state_safe
+if [ "$SAFE_UPDATE" -eq 1 ]; then
+  USAGE_PROFILE=""
+  PROFILE_SOURCE="subscription_backup"
+else
+  recover_interrupted_uninstall
+  resolve_usage_profile
+  if [ "$PROFILE_SOURCE" != "saved" ]; then
+    assert_profile_state_safe
+  fi
 fi
 
 if [ "$(uname -s)" != "Darwin" ]; then
