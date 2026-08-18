@@ -5364,22 +5364,11 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_remote_subscription_curl_input_rejects_injection_and_empty_downloads
-    assert_raises(ClaudeEasy::InvalidConfigError) { ClaudeEasy.curl_config_value("safe\rnext") }
-    assert_raises(ClaudeEasy::InvalidConfigError) { ClaudeEasy.curl_config_value("safe\nnext") }
-    assert_equal "a\\\\b\\\"c", ClaudeEasy.curl_config_value("a\\b\"c")
-
-    failure = Struct.new(:success?).new(false)
-    success = Struct.new(:success?).new(true)
-    [[failure, "body"], [success, ""]].each do |status, body|
-      Open3.stub(:capture3, [body, "", status]) do
-        assert_raises(ClaudeEasy::InvalidConfigError) do
-          ClaudeEasy.fetch_remote_subscription(
-            { name: "friend", url: "https://example.invalid/subscription" }
-          )
-        end
-      end
-    end
+  def test_script_subscription_download_is_not_available
+    refute_respond_to ClaudeEasy, :curl_config_value
+    refute_respond_to ClaudeEasy, :fetch_remote_subscription
+    refute_respond_to ClaudeEasy, :fetch_remote_subscription_via_mihomo
+    refute ClaudeEasy.const_defined?(:MAX_REMOTE_SUBSCRIPTION_BYTES, false)
   end
 
   def test_update_candidate_rejects_encoding_transform_and_validation_failures
@@ -5452,9 +5441,6 @@ class MacosPatcherTest < Minitest::Test
     assert_raises(ClaudeEasy::InvalidConfigError) do
       ClaudeEasy.remote_subscription_records("not-base64")
     end
-    assert_raises(ClaudeEasy::InvalidConfigError) do
-      ClaudeEasy.fetch_remote_subscription({})
-    end
 
     missing = File.join(Dir.tmpdir, "missing-claude-easy-subscription")
     handle = Object.new
@@ -5469,109 +5455,6 @@ class MacosPatcherTest < Minitest::Test
         committed_identity: [1, 1], write_path: missing
       }
     ])
-  end
-
-  def test_remote_subscription_url_is_passed_to_curl_over_stdin_not_process_arguments
-    url = "https://subscriptions.invalid/private-token"
-    status = Struct.new(:success?).new(true)
-    capture = lambda do |*arguments, **options|
-      environment = arguments.shift
-      assert_equal ClaudeEasy::CURL_ISOLATED_ENVIRONMENT, environment
-      refute arguments.join(" ").include?(url)
-      assert_includes options.fetch(:stdin_data), url
-      assert_includes options.fetch(:stdin_data),
-                      "max-filesize = #{ClaudeEasy::MAX_REMOTE_SUBSCRIPTION_BYTES}"
-      [YAML.dump(base_config), "", status]
-    end
-
-    body = Open3.stub(:capture3, capture) do
-      ClaudeEasy.fetch_remote_subscription(
-        { name: "private", url: url }, proxy_url: "http://127.0.0.1:7890"
-      )
-    end
-
-    assert_includes body, "proxy-groups"
-  end
-
-  def test_remote_subscription_rejects_a_body_larger_than_the_curl_limit
-    status = Struct.new(:success?).new(true)
-    oversized = Object.new
-    oversized.define_singleton_method(:empty?) { false }
-    oversized.define_singleton_method(:bytesize) do
-      ClaudeEasy::MAX_REMOTE_SUBSCRIPTION_BYTES + 1
-    end
-
-    Open3.stub(:capture3, [oversized, "", status]) do
-      assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.fetch_remote_subscription(
-          { name: "friend", url: "https://example.invalid/subscription" },
-          proxy_url: "http://127.0.0.1:7890"
-        )
-      end
-    end
-  end
-
-  def test_remote_subscription_uses_clashx_meta_user_agent
-    status = Struct.new(:success?).new(true)
-    capture = lambda do |*arguments, **options|
-      assert_equal ClaudeEasy::CURL_ISOLATED_ENVIRONMENT, arguments.shift
-      assert_equal [
-        "/usr/bin/curl", "-q", "--proxy", "socks5h://127.0.0.1:7891", "--config", "-"
-      ], arguments
-      assert_includes options.fetch(:stdin_data), 'user-agent = "ClashX Meta"'
-      [YAML.dump(base_config), "", status]
-    end
-
-    Open3.stub(:capture3, capture) do
-      ClaudeEasy.fetch_remote_subscription(
-        { name: "friend", url: "https://example.invalid/subscription" },
-        proxy_url: "socks5h://127.0.0.1:7891"
-      )
-    end
-  end
-
-  def test_default_subscription_download_resolves_the_current_mihomo_listener
-    status = Struct.new(:success?).new(true)
-    requests = []
-    capture = lambda do |*arguments, **_options|
-      arguments.shift
-      proxy_index = arguments.index("--proxy")
-      assert_equal "http://127.0.0.1:7890", arguments.fetch(proxy_index + 1)
-      [YAML.dump(base_config), "", status]
-    end
-    requester = lambda do |_socket, method, endpoint, body|
-      requests << [method, endpoint, body]
-      [200, JSON.generate("mixed-port" => 7890)]
-    end
-
-    body = ClaudeEasy.stub(:controller_socket, "socket") do
-      ClaudeEasy.stub(:controller_request, requester) do
-        Open3.stub(:capture3, capture) do
-          ClaudeEasy.fetch_remote_subscription_via_mihomo(
-            { name: "friend", url: "https://example.invalid/subscription" }
-          )
-        end
-      end
-    end
-
-    assert_includes body, "proxy-groups"
-    assert_equal [["GET", "/configs", nil]], requests
-  end
-
-  def test_default_subscription_download_fails_closed_without_a_mihomo_listener
-    curl_calls = 0
-    ClaudeEasy.stub(:controller_socket, "socket") do
-      ClaudeEasy.stub(:controller_request, [200, JSON.generate("mixed-port" => 0)]) do
-        Open3.stub(:capture3, ->(*_arguments) { curl_calls += 1; raise "curl must not run" }) do
-          assert_raises(ClaudeEasy::InvalidConfigError) do
-            ClaudeEasy.fetch_remote_subscription_via_mihomo(
-              { name: "friend", url: "https://example.invalid/subscription" }
-            )
-          end
-        end
-      end
-    end
-    assert_equal 0, curl_calls
   end
 
   def test_recovered_safe_update_runtime_failure_is_reported_before_downloading
@@ -12208,20 +12091,21 @@ class MacosPatcherTest < Minitest::Test
 
   def test_cli_safe_update_and_auto_update_commands_cannot_bypass_wrapper_scope
     Dir.mktmpdir do |directory|
-      remote_calls = 0
-      ClaudeEasy.stub(:saved_usage_profile, 1) do
-        ClaudeEasy.stub(:remote_subscription_targets, ->(_directories) { remote_calls += 1 }) do
+      targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
+      ClaudeEasy.stub(:remote_subscription_targets, targets) do
+        ClaudeEasy.stub(:backup_remote_subscriptions, { count: 1, profiles: ["friend"] }) do
           output, error = capture_io do
-            assert_equal 10, ClaudeEasy.cli([
+            assert_equal 0, ClaudeEasy.cli([
               "--json", "--profile-dir", directory, "--safe-update-all",
               "--usage-profile", "3"
             ])
           end
           assert_empty error
-          assert_equal "usage_profile_mismatch", JSON.parse(output).fetch("code")
+          result = JSON.parse(output)
+          assert_equal "backup_subscriptions", result.fetch("operation")
+          assert_equal "subscription_backups_created", result.fetch("code")
         end
       end
-      assert_equal 0, remote_calls
 
       [
         ["--disable-subscription-auto-update", "disable_subscription_auto_update"],
@@ -12679,130 +12563,60 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_cli_safe_update_covers_every_human_and_json_result_class
+  def test_subscription_backup_preserves_files_and_cli_reports_completion
     Dir.mktmpdir do |directory|
-      cases = [
-        [{ status: :updated, count: 2, profiles: %w[first second] }, 0, "已安全更新"],
-        [{ status: :rollback_failed }, 1, "未能恢复"],
-        [{ status: :runtime_restore_pending }, 1, "订阅文件已恢复"],
-        [{ status: :runtime_restore_pending, rollback_superseded: true }, 1, "已保留新内容"],
-        [{ status: :aborted, reason: :rollback_superseded }, 1, "回滚后订阅又发生刷新"],
-        [{ status: :aborted }, 1, "保持原样"]
+      backup_root = File.join(directory, "backups")
+      first = File.join(directory, "first.yaml")
+      second = File.join(directory, "second.yaml")
+      originals = { first => "first bytes\n".b, second => "second bytes\n".b }
+      originals.each { |path, bytes| File.binwrite(path, bytes) }
+      targets = [
+        { name: "first", path: first },
+        { name: "second", path: second }
       ]
-      ClaudeEasy.stub(:saved_usage_profile, 3) do
-        cases.each do |result, expected_exit, expected_text|
-          ClaudeEasy.stub(:remote_subscription_targets, []) do
-            ClaudeEasy.stub(:selected_profile_name, "friend") do
-              ClaudeEasy.stub(:safe_update_all, result) do
-                output, error = capture_io do
-                  assert_equal expected_exit, ClaudeEasy.cli([
-                    "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-                  ])
-                end
-                assert_includes output + error, expected_text
-              end
-            end
-          end
-        end
 
-        json_cases = [
-          [{ status: :updated, count: 1, profiles: ["friend"] }, "safe_update_completed"],
-          [{ status: :rollback_failed }, "rollback_failed"],
-          [{ status: :aborted, reason: :rollback_superseded }, "safe_update_rollback_superseded"],
-          [{ status: :aborted }, "safe_update_failed"]
-        ]
-        json_cases.each do |result, expected_code|
-          ClaudeEasy.stub(:remote_subscription_targets, []) do
-            ClaudeEasy.stub(:selected_profile_name, "friend") do
-              ClaudeEasy.stub(:safe_update_all, result) do
-                output, error = capture_io do
-                  ClaudeEasy.cli([
-                    "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-                  ])
-                end
-                assert_empty error
-                parsed = JSON.parse(output)
-                assert_equal expected_code, parsed.fetch("code")
-                if expected_code == "safe_update_completed"
-                  assert_equal false, parsed.fetch("workflow_complete")
-                  assert_equal "subscription_update", parsed.fetch("completed_scope")
-                  assert_equal %w[
-                    route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-                    region_fingerprint_rescan final_state_audit
-                  ], parsed.fetch("required_followups")
-                end
-              end
-            end
-          end
-        end
+      result = ClaudeEasy.backup_remote_subscriptions(
+        targets: targets, backup_root: backup_root
+      )
+      assert_equal 2, result.fetch(:count)
+      assert_equal %w[first second], result.fetch(:profiles)
+      originals.each do |path, bytes|
+        assert_equal bytes, File.binread(path)
+        assert_equal 1, ClaudeEasy.backup_entries_for(path, backup_root, reason: "initial").length
+        assert_equal 1, ClaudeEasy.backup_entries_for(path, backup_root, reason: "pre-update").length
       end
 
-      {
-        1 => %w[client_switch_verification site_verification final_state_audit],
-        2 => %w[
-          client_switch_verification site_verification
-          agent_connectivity_verification final_state_audit
-        ]
-      }.each do |profile, followups|
-        ClaudeEasy.stub(:saved_usage_profile, profile) do
-          ClaudeEasy.stub(:remote_subscription_targets, []) do
-            ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 1, profiles: ["friend"] }) do
-              output, error = capture_io do
-                assert_equal 0, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--safe-update-all",
-                  "--usage-profile", profile.to_s
-                ])
-              end
-              assert_empty error
-              assert_equal followups, JSON.parse(output).fetch("required_followups")
-            end
-          end
+      ClaudeEasy.stub(:remote_subscription_targets, targets) do
+        output, error = capture_io do
+          assert_equal 0, ClaudeEasy.cli([
+            "--json", "--profile-dir", directory, "--backup-dir", backup_root,
+            "--safe-update-all"
+          ])
         end
+        assert_empty error
+        parsed = JSON.parse(output)
+        assert_equal "backup_subscriptions", parsed.fetch("operation")
+        assert_equal "subscription_backups_created", parsed.fetch("code")
+        assert_equal %w[unchanged unchanged], parsed.fetch("items").map { |item| item.fetch("status") }
       end
     end
   end
 
-  def test_cli_safe_update_failure_reports_each_subscription_and_switch_reminder
+  def test_cli_subscription_backup_failure_does_not_report_an_update
     Dir.mktmpdir do |directory|
-      result = {
-        status: :aborted, reason: :download_or_validation_failed,
-        items: [
-          { name: "first", status: :failed, reason: :download_failed, subscription_switch_possible: true },
-          { name: "second", status: :ready }
-        ]
-      }
-      ClaudeEasy.stub(:saved_usage_profile, 3) do
-        ClaudeEasy.stub(:remote_subscription_targets, []) do
-          ClaudeEasy.stub(:selected_profile_name, "friend") do
-            ClaudeEasy.stub(:safe_update_all, result) do
-              output, error = capture_io do
-                assert_equal 1, ClaudeEasy.cli([
-                  "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-                ])
-              end
-              assert_includes error, "更新失败：first"
-              assert_includes error, "下载与校验成功但未写入：second"
-              assert_includes error, "请登录服务商网站"
-              assert_includes error, "开关关闭时无法更新"
-              assert_empty output
-            end
-
-            ClaudeEasy.stub(:safe_update_all, result) do
-              output, error = capture_io do
-                assert_equal 1, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-                ])
-              end
-              assert_empty error
-              json = JSON.parse(output)
-              assert_equal ["failed", "pending"], json.fetch("items").map { |item| item.fetch("status") }
-              assert_equal ["download_failed", nil], json.fetch("items").map { |item| item["reason"] }
-              assert_equal ["first", "second"], json.fetch("items").map { |item| item.fetch("label") }
-              assert json.fetch("items").all? { |item| item.fetch("id").match?(/\Ace-subscription-v1-[0-9a-f]{64}\z/) }
-              assert json.fetch("warnings").any? { |warning| warning.include?("开关关闭时无法更新") }
-            end
-          end
+      ClaudeEasy.stub(:remote_subscription_targets, ->(_directories) {
+        raise ClaudeEasy::InvalidConfigError, "injected backup failure"
+      }) do
+        output, error = capture_io do
+          assert_equal 1, ClaudeEasy.cli([
+            "--json", "--profile-dir", directory, "--safe-update-all"
+          ])
         end
+        assert_empty error
+        result = JSON.parse(output)
+        assert_equal "backup_subscriptions", result.fetch("operation")
+        assert_equal "invalid_configuration", result.fetch("code")
+        refute_includes result.fetch("summary_zh"), "更新成功"
       end
     end
   end
@@ -13337,26 +13151,19 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_cli_safe_update_reports_unresolved_runtime_recovery
+  def test_cli_subscription_backup_never_calls_runtime_recovery
     Dir.mktmpdir do |directory|
-      ClaudeEasy.stub(:remote_subscription_targets, []) do
-        ClaudeEasy.stub(:selected_profile_name, "friend") do
-          ClaudeEasy.stub(:saved_usage_profile, 3) do
-            ClaudeEasy.stub(
-              :safe_update_all,
-              { status: :runtime_restore_pending, runtime_status: :reload_failed_restore_pending }
-            ) do
-              output, error = capture_io do
-                assert_equal 1, ClaudeEasy.cli([
-                  "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-                ])
-              end
-              assert_empty error
-              result = JSON.parse(output)
-              assert_equal "partial", result.fetch("status")
-              assert_equal "safe_update_runtime_pending", result.fetch("code")
-              assert_includes result.fetch("summary_zh"), "运行内核"
+      targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
+      ClaudeEasy.stub(:remote_subscription_targets, targets) do
+        ClaudeEasy.stub(:backup_remote_subscriptions, { count: 1, profiles: ["friend"] }) do
+          ClaudeEasy.stub(:safe_update_all, ->(**_arguments) { flunk "旧更新事务不应运行" }) do
+            output, error = capture_io do
+              assert_equal 0, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory, "--safe-update-all"
+              ])
             end
+            assert_empty error
+            assert_equal "subscription_backups_created", JSON.parse(output).fetch("code")
           end
         end
       end
@@ -13497,25 +13304,6 @@ class MacosPatcherTest < Minitest::Test
         end
       end
       assert_equal committed, File.binread(path)
-
-      File.binwrite(path, pending)
-      File.chmod(0o600, path)
-      safe_arguments = arguments.dup.concat(["--safe-update-all", "--policy", POLICY_PATH])
-      safe_result = { status: :updated, count: 1, profiles: ["a.yaml"] }
-      ClaudeEasy.stub(:saved_usage_profile, 3) do
-        ClaudeEasy.stub(:remote_subscription_targets, []) do
-          ClaudeEasy.stub(:safe_update_all, safe_result) do
-            original = $stdout
-            $stdout = failing_output
-            begin
-              assert_raises(Errno::ENOSPC) { ClaudeEasy.cli(safe_arguments) }
-            ensure
-              $stdout = original
-            end
-          end
-        end
-      end
-      assert_equal committed, File.binread(path)
     end
   end
 
@@ -13647,22 +13435,6 @@ class MacosPatcherTest < Minitest::Test
       end
       assert_includes error, "提交状态无法确认"
 
-      safe_output, safe_error = ClaudeEasy.stub(:saved_usage_profile, 3) do
-        ClaudeEasy.stub(:remote_subscription_targets, []) do
-          ClaudeEasy.stub(:safe_update_all, uncertain) do
-            capture_io do
-              assert_equal ClaudeEasy::PROFILE_COMMIT_STATE_UNCERTAIN_EXIT, ClaudeEasy.cli([
-                "--json", "--profile-dir", profiles, "--backup-dir", backup_root,
-                "--policy", POLICY_PATH, "--usage-profile", "3", "--safe-update-all"
-              ])
-            end
-          end
-        end
-      end
-      assert_empty safe_error
-      safe_result = JSON.parse(safe_output)
-      assert_equal "safe_update", safe_result.fetch("operation")
-      assert_equal "profile_commit_state_uncertain", safe_result.fetch("code")
     end
   end
 
@@ -13768,15 +13540,21 @@ class MacosPatcherTest < Minitest::Test
     assert_includes coverage_source, "MINIMUM_MODULE_LINE_COVERAGE"
   end
 
-  def test_cli_rejects_unknown_options_and_safe_updates_without_a_usage_profile
+  def test_cli_rejects_unknown_options_and_subscription_backup_needs_no_usage_profile
     _output, error = capture_io { assert_equal 64, ClaudeEasy.cli(["--unknown-option"]) }
     assert_includes error, "参数错误"
 
     Dir.mktmpdir do |directory|
-      _output, error = capture_io do
-        assert_equal 64, ClaudeEasy.cli(["--profile-dir", directory, "--safe-update-all"])
+      targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
+      ClaudeEasy.stub(:remote_subscription_targets, targets) do
+        ClaudeEasy.stub(:backup_remote_subscriptions, { count: 1, profiles: ["friend"] }) do
+          output, error = capture_io do
+            assert_equal 0, ClaudeEasy.cli(["--profile-dir", directory, "--safe-update-all"])
+          end
+          assert_empty error
+          assert_includes output, "已为全部远程订阅创建更新前备份"
+        end
       end
-      assert_includes error, "必须指定用途档位"
     end
   end
 
@@ -13888,18 +13666,6 @@ class MacosPatcherTest < Minitest::Test
 
   def test_runtime_helpers_fail_closed_on_controller_and_filesystem_errors
     assert_nil ClaudeEasy.runtime_loopback_proxy(->(*_arguments) { raise IOError, "gone" })
-    assert_raises(ClaudeEasy::InvalidConfigError) do
-      ClaudeEasy.fetch_remote_subscription(
-        { name: "missing-url" }, proxy_url: "http://127.0.0.1:7890"
-      )
-    end
-    ClaudeEasy.stub(:controller_socket, -> { raise IOError, "gone" }) do
-      assert_raises(ClaudeEasy::InvalidConfigError) do
-        ClaudeEasy.fetch_remote_subscription_via_mihomo(
-          { name: "friend", url: "https://example.invalid/subscription" }
-        )
-      end
-    end
 
     assert_includes [true, false], ClaudeEasy.mihomo_home_case_insensitive?
     File.stub(:exist?, false) do

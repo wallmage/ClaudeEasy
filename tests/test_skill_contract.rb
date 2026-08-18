@@ -424,11 +424,11 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "### 交付类型决策表"
     assert_includes policy, "| 分析或复核 | 只读 | 结论、证据、反证和未知项完整 |"
     assert_includes policy, "| 修复 | 已确认的问题、明确对象和写入授权 | 最小修复、原场景复测和受影响能力回归 |"
-    assert_includes policy, "| 更新 | 用户明确要求安全更新全部订阅 | 全部远程订阅逐份验收并报告生效状态 |"
+    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 备份后用 Computer Use 执行客户端更新，动作结束后停止 |"
     assert_includes policy, "| 监测 | 只读采集；内容采集另需授权 | 确认采集运行、记录范围并提供停止方法 |"
     assert_includes policy, "配置、用途档位变更和完整安全增强归入 Patch"
     assert_includes policy, "交付类型不能在执行中自行扩大"
-    assert_includes prompt, "按用户要求分析、复核、修复、配置、监测或安全更新"
+    assert_includes prompt, "按用户要求分析、复核、修复、配置、监测或更新 Clash"
     assert_includes prompt, "未获授权不写入"
     refute_includes prompt, "诊断要完成取证、修复、复测"
   end
@@ -669,7 +669,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "uninstall_macos.sh"
     assert_includes skill, "uninstall_windows.cmd"
     assert_includes policy, "旧订阅增强仍可能保留"
-    assert_includes policy, "三个档位都会关闭订阅自动更新"
+    assert_includes skill, "三个档位都处理当前存储位置中的全部订阅、关闭订阅自动更新"
     assert_includes mac_installer, '--usage-profile "$USAGE_PROFILE"'
     assert_includes windows_installer, 'if ($resolvedUsageProfile -ne 3)'
     assert_includes windows_installer, '$savedUsageProfile -eq 3'
@@ -1079,7 +1079,7 @@ class SkillContractTest < Minitest::Test
     end
 
     assert_includes policy, "症状出现前最近的一份"
-    assert_includes skill, "先备份当前版本"
+    assert_includes skill, "为全部远程订阅创建更新前备份"
     assert_includes policy, "不能仅凭时间接近"
     assert_includes policy, "预期 SHA-256"
     assert_includes policy, "不得自动删除历史备份"
@@ -1107,92 +1107,42 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "-ExpectedCurrentSha256"
   end
 
-  def test_safe_update_replaces_all_subscriptions_as_one_transaction
+  def test_subscription_update_uses_client_ui_after_backups
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
     patcher = mac_patcher_source
 
-    [readme, skill, policy, design].each { |document| assert_includes document, "安全更新" }
-    [policy].each do |document|
+    [readme, skill, policy].each do |document|
       assert_includes document, "全部远程订阅"
-      assert_includes document, "全部保持原样"
-      assert_includes document, "三个档位"
-      assert_includes document, "关闭自动更新"
-      assert_includes document, "请帮我安全更新全部订阅"
-      assert_includes document, "数月"
-      assert_includes document, "再次确认自动更新关闭"
+      assert_includes document, "更新前备份"
+      assert_includes document, "Computer Use"
+      assert_includes document, "自动更新"
+      assert_includes document, "客户端更新动作结束后立即结束"
+      assert_includes document, "不做防倒退"
+      assert_includes document, "不自动回滚"
+      assert_includes document, "不重新应用 Patch"
     end
     assert_includes installer, "--safe-update"
     assert_includes patcher, "--safe-update-all"
-    assert_includes patcher, "--print-subscription-auto-update-state"
-    assert_includes patcher, "--print-auto-update-ownership-state"
-    assert_includes patcher, "--disable-subscription-auto-update"
-    assert_includes installer, "--disable-subscription-auto-update"
-    assert_includes windows_installer_source, "allow_auto_update"
-    assert_includes windows_installer_source, "VerifySafeUpdate"
-    [policy].each do |document|
-      assert_includes document, "不依赖 Computer Use"
-    end
-    assert_includes policy, "不得安装永久监听"
-    refute_includes skill, "订阅以后刷新时，请再次运行"
+    assert_includes windows_installer_source, "BackupSubscriptions"
+    refute_includes File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb")),
+                    "fetch_remote_subscription"
+    refute_includes File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb")),
+                    "ClashX Meta\""
   end
 
-  def test_safe_update_cannot_stop_after_the_subscription_transaction
+  def test_subscription_update_stops_without_post_update_checks
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
-    baseline = File.read(File.join(ROOT, "tests/baseline.md"))
-    result_contract = JSON.parse(
-      File.read(File.join(SKILL, "references/result-contract.json"))
-    )
-
-    assert_includes policy, "完整任务顺序与完成条件"
-    assert_includes policy, "更新前区域指纹基线"
-    assert_includes policy, "分流验证、DNS 深度测试、WebRTC 测试 1、WebRTC 测试 2"
-    assert_includes policy, "更新后区域指纹重扫"
-    assert_includes policy, "最终状态复核"
-    assert_includes policy, "safe_update_completed"
-    assert_includes policy, "safe_update_verified"
-    assert_includes policy, "不代表用户要求的安全更新任务已经完成"
-    assert_includes policy, "自动把当前状态作为新的更新前基线"
-    assert_includes policy, "重新执行整套安全更新"
-    assert_includes policy, "不得因为仍有工作未做而停止"
-    assert_includes policy, "每一项都有本轮新证据"
-
-    assert_includes skill, "`workflow_complete: false`"
-    assert_includes skill, "继续完成 `required_followups`"
-    assert_includes skill, "不得输出最终说明"
-    assert_includes readme, "脚本返回更新成功不代表整项任务完成"
-    assert_includes readme, "自动继续完成当前档位的全部验收"
-    assert_includes baseline, "安全更新完整任务合同"
-
-    optional_fields = result_contract.fetch("optional_field_types")
-    assert_equal "boolean", optional_fields.fetch("workflow_complete")
-    assert_equal "string", optional_fields.fetch("completed_scope")
-    assert_equal "array", optional_fields.fetch("required_followups")
-    required_workflow = result_contract.fetch("required_workflow_metadata_by_code")
-    %w[safe_update_completed safe_update_verified].each do |code|
-      rule = required_workflow.fetch(code)
-      assert_equal false, rule.fetch("workflow_complete")
-      assert_equal "subscription_update", rule.fetch("completed_scope")
-      assert_equal "non_empty_array", rule.fetch("required_followups")
-    end
-    snapshot_rule = result_contract.fetch("required_workflow_metadata_by_operation_and_code")
-      .fetch("snapshot_profiles:snapshot_created")
-    assert_equal false, snapshot_rule.fetch("workflow_complete")
-    assert_equal "subscription_snapshot", snapshot_rule.fetch("completed_scope")
-    assert_equal "non_empty_array", snapshot_rule.fetch("required_followups")
-
-    result_sources = [
-      File.read(File.join(SKILL, "scripts/macos/result_contract.rb")),
-      File.read(File.join(SKILL, "scripts/windows/result_contract.ps1"))
-    ]
-    result_sources.each do |source|
-      assert_includes source, "workflow_complete"
-      assert_includes source, "required_followups"
+    [readme, skill, policy].each do |document|
+      assert_includes document, "动作结束后立即结束"
+      assert_includes document, "更新后不做"
+      assert_includes document, "连通"
+      assert_includes document, "不拒绝覆盖"
+      refute_includes document, "继续完成 `required_followups`"
     end
   end
 
@@ -1207,16 +1157,15 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "跨平台对等"
     assert_includes core, "执行顺序、完成条件、中间状态、后续项目和失败处理"
     assert_includes core, "两个平台都实现并通过对应测试"
-    assert_includes safe_update, "subscription_refresh"
-    assert_includes safe_update, "safe_update_verification"
-    assert_includes safe_update, "档位 1"
-    assert_includes safe_update, "档位 2"
-    assert_includes safe_update, "档位 3"
+    assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update`"
+    assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -BackupSubscriptions`"
+    assert_includes safe_update, "使用 Computer Use 操作已经运行的 Clash 客户端"
     assert_includes profiles_and_patch, "`profile.store-selected`"
     assert_includes profiles_and_patch, "macOS 与 Windows"
-    assert_includes skill, "同一用户请求和同一已保存档位"
-    assert_includes readme, "macOS 与 Windows 使用相同的完成条件"
-    assert_includes baseline, "跨平台安全更新对等合同"
+    assert_includes skill, "更新全部订阅"
+    assert_includes skill, "使用 `computer-use` Skill"
+    assert_includes readme, "macOS 与 Windows"
+    assert_includes baseline, "双平台订阅更新"
   end
 
   def test_safe_update_requires_provider_switch_confirmation_before_the_first_attempt
@@ -1232,18 +1181,13 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "约 10 分钟有效"
       assert_includes document, "打开了"
       assert_includes document, "没问题"
-      assert_includes document, "订阅显示名称"
     end
     [documents[2]].each do |document|
-      assert_includes document, "用户明确确认前不得取证、建立快照、下载或写入"
+      assert_includes document, "用户明确确认前不得读取订阅、建立备份或操作客户端"
       refute_includes document, "先做一次正常更新，不得在更新前推测开关状态"
       refute_includes document, "只有更新确实失败且没有明确的本机故障时，才提示订阅开关"
-      assert_includes document, "不得检查或操作服务商后台"
-      assert_includes document, "Chrome、Browser 或 Computer Use"
-      assert_includes document, "逐一报告哪些订阅下载与校验成功、哪些失败"
-      assert_includes document, "请确保该订阅的开关仍然开启"
-      assert_includes document, "不得用节点名称代替订阅"
-      assert_includes document, "需要用户重新打开开关时"
+      assert_includes document, "不得代替用户操作服务商后台"
+      assert_includes document, "任一备份失败时停止"
     end
   end
 
@@ -1885,9 +1829,6 @@ class SkillContractTest < Minitest::Test
     assert_includes cli, "def mark_wrapper_commit_receipt(options)"
     assert_includes cli, "io.fsync"
     assert_includes cli, "mark_wrapper_commit_receipt(options) if operation_succeeded"
-    assert_includes cli,
-                    "if result[:status] == :updated\n" \
-                    "        mark_wrapper_commit_receipt(options)"
     assert_includes patcher_tests,
                     "test_cli_marks_wrapper_receipt_before_success_result_output"
     assert_includes wrappers,
@@ -2217,12 +2158,6 @@ class SkillContractTest < Minitest::Test
     documents.each do |document|
       assert_includes document, "already_disabled_owned"
       assert_includes document, "client_running_profile_three_deferred"
-      assert_includes document, "safe_update_refresh_pending"
-      assert_includes document, "safe_update_legacy_recovery_pending"
-      assert_includes document, "safe_update_legacy_snapshot_required"
-      assert_includes document, "safe_update_verification_retry_pending"
-      assert_includes document, "updated: null"
-      assert_includes document, "只读版本锁"
     end
   end
 
@@ -2275,20 +2210,6 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_tests,
                     "safe update did not recreate a missing remote subscription"
 
-    documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
-      File.read(File.join(ROOT, "tests/baseline.md"))
-    ]
-    documents = [documents[2], documents[4]]
-    documents.each do |document|
-      assert_includes document, "订阅文件缺失"
-      assert_includes document, "原子重建"
-    end
   end
 
   def test_windows_preparation_recovery_accepts_targets_removed_by_the_main_journal

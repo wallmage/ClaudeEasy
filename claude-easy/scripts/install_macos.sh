@@ -654,19 +654,10 @@ parse_arguments() {
 resolve_usage_profile() {
   load_saved_profile_or_finish select_profile
   if [ "$SAFE_UPDATE" -eq 1 ]; then
-    if [ -z "$SAVED_PROFILE" ]; then
-      say "还没有选择用途档位。"
-      USAGE_PROFILE=""
-      finish 10 invalid_request usage_profile_required "还没有选择用途档位。" safe_update
-    fi
-    if [ -n "$USAGE_PROFILE" ] && [ "$USAGE_PROFILE" != "$SAVED_PROFILE" ]; then
-      say "请求档位与已保存档位不一致；未执行安全更新。"
-      USAGE_PROFILE=""
-      finish 64 invalid_request usage_profile_mismatch \
-        "请求档位与已保存档位不一致；未执行安全更新。" safe_update
-    fi
     USAGE_PROFILE=$SAVED_PROFILE
     PROFILE_SOURCE="saved"
+    PREVIOUS_PROFILE=$SAVED_PROFILE
+    return
   fi
   if [ -z "$USAGE_PROFILE" ]; then
     USAGE_PROFILE=$SAVED_PROFILE
@@ -822,6 +813,41 @@ if ! install_package_complete || ! install_package_dependencies_load; then
   finish 6 failed incomplete_package "安装包不完整。" install
 fi
 
+/bin/mkdir -p "$BACKUP_DIR"
+/bin/chmod 700 "$INSTALL_DIR" "$BACKUP_DIR"
+
+if [ "$SAFE_UPDATE" -eq 1 ]; then
+  if [ -n "$CUSTOM_PROFILE_DIR" ]; then
+    if [ "$JSON_OUTPUT" -eq 1 ]; then
+      if ! child_json=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+          --profile-dir "$CUSTOM_PROFILE_DIR" --backup-dir "$BACKUP_DIR" \
+          --safe-update-all --json 2>/dev/null); then
+        finish_json_child_failure "$child_json" failed backup_failed \
+          "无法创建更新前备份。" backup_subscriptions
+      fi
+    else
+      /usr/bin/ruby "$PATCHER_SOURCE" \
+        --profile-dir "$CUSTOM_PROFILE_DIR" --backup-dir "$BACKUP_DIR" \
+        --safe-update-all ||
+        { say "无法创建更新前备份。"; finish 1 failed backup_failed "无法创建更新前备份。" backup_subscriptions; }
+    fi
+  else
+    if [ "$JSON_OUTPUT" -eq 1 ]; then
+      if ! child_json=$(/usr/bin/ruby "$PATCHER_SOURCE" \
+          --backup-dir "$BACKUP_DIR" --safe-update-all --json 2>/dev/null); then
+        finish_json_child_failure "$child_json" failed backup_failed \
+          "无法创建更新前备份。" backup_subscriptions
+      fi
+    else
+      /usr/bin/ruby "$PATCHER_SOURCE" \
+        --backup-dir "$BACKUP_DIR" --safe-update-all ||
+        { say "无法创建更新前备份。"; finish 1 failed backup_failed "无法创建更新前备份。" backup_subscriptions; }
+    fi
+  fi
+  finish 0 ok subscription_backups_created \
+    "已为全部远程订阅创建更新前备份。" backup_subscriptions
+fi
+
 core_status=$(/usr/bin/ruby "$PATCHER_SOURCE" --print-core-status 2>/dev/null || true)
 if [ "$core_status" != "supported" ]; then
   case "$core_status" in
@@ -835,9 +861,6 @@ fi
 if [ "$PROFILE_SOURCE" != "saved" ]; then
   assert_profile_state_safe
 fi
-
-/bin/mkdir -p "$BACKUP_DIR"
-/bin/chmod 700 "$INSTALL_DIR" "$BACKUP_DIR"
 
 if [ -n "$CUSTOM_PROFILE_DIR" ]; then
   if [ "$JSON_OUTPUT" -eq 1 ]; then
@@ -885,57 +908,6 @@ case "$auto_update_result" in
     finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未继续处理订阅文件。" install
     ;;
 esac
-
-if [ "$SAFE_UPDATE" -eq 1 ]; then
-  if [ -n "$CUSTOM_PROFILE_DIR" ]; then
-    if ! run_committing_profile_operation \
-        --profile-dir "$CUSTOM_PROFILE_DIR" \
-        --policy "$POLICY_SOURCE" \
-        --backup-dir "$BACKUP_DIR" \
-        --safe-update-all --usage-profile "$USAGE_PROFILE"; then
-      finish_profile_operation_result_failure
-      if [ "$JSON_OUTPUT" -eq 1 ]; then
-        finish_json_child_failure "$child_json" failed safe_update_failed "安全更新失败。" safe_update
-      else
-        say "安全更新失败。"
-        finish 1 failed safe_update_failed "安全更新失败。" safe_update
-      fi
-    fi
-  else
-    if ! run_committing_profile_operation \
-        --policy "$POLICY_SOURCE" \
-        --backup-dir "$BACKUP_DIR" \
-        --safe-update-all --usage-profile "$USAGE_PROFILE"; then
-      finish_profile_operation_result_failure
-      if [ "$JSON_OUTPUT" -eq 1 ]; then
-        finish_json_child_failure "$child_json" failed safe_update_failed "安全更新失败。" safe_update
-      else
-        say "安全更新失败。"
-        finish 1 failed safe_update_failed "安全更新失败。" safe_update
-      fi
-    fi
-  fi
-  if ! run_subscription_auto_update_disable; then
-    AUTO_UPDATE_RECOVERY_PENDING=1
-    finish 9 partial auto_update_recheck_failed \
-      "订阅已经更新并重新应用当前档位补丁，但无法再次确认自动更新关闭；请按当前档位重试。" \
-      safe_update
-  fi
-  case "$auto_update_result" in
-    disabled|already_disabled|already_disabled_owned) ;;
-    *)
-      AUTO_UPDATE_RECOVERY_PENDING=1
-      finish 9 partial auto_update_recheck_failed \
-        "订阅已经更新并重新应用当前档位补丁，但自动更新回读结果异常；请按当前档位重试。" \
-        safe_update
-      ;;
-  esac
-  say "订阅、补丁和内部运行检查已完成：当前存储位置中的全部远程订阅已一起更新。"
-  say "已再次确认订阅自动更新关闭。"
-  say "当前档位的后续验收尚未完成，必须继续完成后才能结束任务。"
-  finish 0 ok safe_update_completed \
-    "订阅、补丁和内部运行检查已完成；当前档位的后续验收尚未完成。" safe_update
-fi
 
 if [ -n "$CUSTOM_PROFILE_DIR" ]; then
   if ! run_committing_profile_operation \

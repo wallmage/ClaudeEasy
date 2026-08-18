@@ -1974,7 +1974,7 @@ class MacosWrapperTest < Minitest::Test
       end
       exit 0 if ARGV.include?("--snapshot-initial")
       if ARGV.include?("--safe-update-all")
-        File.write(File.join(ENV.fetch("HOME"), "safe-update-profile"), profile)
+        File.write(File.join(ENV.fetch("HOME"), "subscription-backup"), "created")
         exit 0
       end
       File.write(File.join(ENV.fetch("HOME"), "applied-profile"), profile)
@@ -2044,7 +2044,7 @@ class MacosWrapperTest < Minitest::Test
 
           stdout, stderr, status = run_script(installer, "--safe-update", home: home)
           assert status.success?, "#{stdout}\n#{stderr}"
-          assert_equal "3", File.read(File.join(home, "safe-update-profile"))
+          assert_equal "created", File.read(File.join(home, "subscription-backup"))
         end
       end
     end
@@ -2081,7 +2081,7 @@ class MacosWrapperTest < Minitest::Test
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      %w[install safe-update].each do |operation|
+      %w[install].each do |operation|
         %w[parent group].each do |signal_scope|
           [false, true].each do |json|
             Dir.mktmpdir do |home|
@@ -2166,7 +2166,7 @@ class MacosWrapperTest < Minitest::Test
       raise Errno::ENOSPC, "injected result write failure"
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      %w[install safe-update].each do |operation|
+      %w[install].each do |operation|
         [false, true].each do |json|
           Dir.mktmpdir do |home|
             with_supported_app(home) do
@@ -2245,7 +2245,7 @@ class MacosWrapperTest < Minitest::Test
     }
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       expected_codes.each do |receipt_outcome, expected_code|
-        %w[install safe-update].each do |operation|
+        %w[install].each do |operation|
           [false, true].each do |json|
             Dir.mktmpdir do |home|
               with_supported_app(home) do
@@ -2568,7 +2568,7 @@ class MacosWrapperTest < Minitest::Test
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      [1, 2].product([[], ["--safe-update"]]).each do |profile, arguments|
+      [1, 2].product([[]]).each do |profile, arguments|
         Dir.mktmpdir do |home|
           with_supported_app(home) do
             state = usage_state_path(home)
@@ -2621,7 +2621,7 @@ class MacosWrapperTest < Minitest::Test
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      [1, 2].product([[], ["--safe-update"]]).each do |profile, arguments|
+      [1, 2].product([[]]).each do |profile, arguments|
         Dir.mktmpdir do |home|
           with_supported_app(home) do
             state = usage_state_path(home)
@@ -2743,70 +2743,75 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_json_wrapper_preserves_a_partial_safe_update_result
+  def test_json_wrapper_preserves_subscription_backup_result
     patcher = <<~RUBY
       require "json"
-      if ARGV.include?("--print-core-status")
-        puts "supported"
-        exit 0
-      end
-      exit 0 if ARGV.include?("--snapshot-initial")
-      if ARGV.include?("--disable-subscription-auto-update")
-        puts "already_disabled"
-        exit 0
-      end
       if ARGV.include?("--safe-update-all")
         result = {
           "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
-          "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
-          "ok" => false, "exit_code" => 1, "profile" => 1,
-          "changes" => [], "checks" => [], "messages" => []
+          "platform" => "macos", "client" => "clashx-meta", "operation" => "backup_subscriptions",
+          "ok" => true, "exit_code" => 0, "profile" => nil,
+          "changes" => ["profile_backups"], "checks" => [], "messages" => []
         }
         puts JSON.generate(result.merge(
-          "status" => "partial",
-          "code" => "safe_update_runtime_pending",
-          "summary_zh" => "订阅文件已恢复，但运行内核恢复失败。",
-          "items" => [{ "id" => "ce-subscription-v1-#{"a" * 64}", "label" => "订阅 A", "status" => "failed" }],
-          "warnings" => ["运行内核未恢复"]
+          "status" => "ok", "code" => "subscription_backups_created",
+          "summary_zh" => "已创建更新前备份。",
+          "items" => [{ "id" => "ce-subscription-v1-#{"a" * 64}", "label" => "订阅 A", "status" => "unchanged" }],
+          "warnings" => []
         ))
-        exit 1
+        exit 0
       end
       exit 0
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          write_usage_profile(home, 1)
           stdout, stderr, status = run_script(
-            installer, "--safe-update", "--profile", "1", "--json", home: home
+            installer, "--safe-update", "--json", home: home
           )
 
-          assert_equal 1, status.exitstatus
+          assert status.success?
           assert_empty stderr
           result = assert_json_result(stdout, status, command: "install")
-          assert_equal "partial", result.fetch("status")
-          assert_equal "safe_update_runtime_pending", result.fetch("code")
+          assert_equal "ok", result.fetch("status")
+          assert_equal "subscription_backups_created", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
-          assert_includes result.fetch("warnings"), "运行内核未恢复"
+          assert_equal ["profile_backups"], result.fetch("changes")
         end
       end
     end
   end
 
-  def test_safe_update_uses_only_the_saved_profile
-    with_supported_mihomo_installer do |installer|
+  def test_subscription_backup_does_not_require_or_change_a_usage_profile
+    patcher = <<~'RUBY'
+      require "json"
+      if ARGV.include?("--safe-update-all")
+        File.write(File.join(ENV.fetch("HOME"), "subscription-backup"), ARGV.join(" "))
+        if ARGV.include?("--json")
+          puts JSON.generate(
+            "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+            "platform" => "macos", "client" => "clashx-meta",
+            "operation" => "backup_subscriptions", "ok" => true, "status" => "ok",
+            "code" => "subscription_backups_created", "exit_code" => 0,
+            "summary_zh" => "已创建更新前备份。", "profile" => nil,
+            "changes" => ["profile_backups"], "checks" => [], "items" => [],
+            "messages" => [], "warnings" => []
+          )
+        end
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
           stdout, stderr, status = run_script(
-            installer, "--safe-update", "--profile", "1", "--json", home: home
+            installer, "--safe-update", home: home
           )
 
-          assert_equal 10, status.exitstatus
+          assert status.success?, "#{stdout}\n#{stderr}"
           assert_empty stderr
-          result = JSON.parse(stdout)
-          assert_equal "usage_profile_required", result.fetch("code")
-          assert_nil result.fetch("profile")
           refute File.exist?(usage_state_path(home))
+          refute_includes File.read(File.join(home, "subscription-backup")), "--usage-profile"
         end
       end
 
@@ -2819,18 +2824,15 @@ class MacosWrapperTest < Minitest::Test
             installer, "--safe-update", "--profile", "2", "--json", home: home
           )
 
-          assert_equal 64, status.exitstatus
+          assert status.success?, "#{stdout}\n#{stderr}"
           assert_empty stderr
-          result = JSON.parse(stdout)
-          assert_equal "usage_profile_mismatch", result.fetch("code")
-          assert_nil result.fetch("profile")
           assert_equal original, File.binread(state)
         end
       end
     end
   end
 
-  def test_json_wrapper_preserves_safe_update_followups
+  def test_json_subscription_backup_has_no_followup_checks
     patcher = <<~'RUBY'
       require "json"
       if ARGV.include?("--print-core-status")
@@ -2845,55 +2847,10 @@ class MacosWrapperTest < Minitest::Test
       if ARGV.include?("--safe-update-all")
         puts JSON.generate(
           "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
-          "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
-          "ok" => true, "status" => "ok", "code" => "safe_update_completed", "exit_code" => 0,
-          "summary_zh" => "订阅事务完成，后续检查尚未完成。", "profile" => 3,
-          "changes" => ["remote_subscriptions"], "checks" => [], "items" => [],
-          "messages" => [], "warnings" => [], "workflow_complete" => false,
-          "completed_scope" => "subscription_update",
-          "required_followups" => %w[route_verification final_state_audit]
-        )
-        exit 0
-      end
-      exit 0
-    RUBY
-    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
-      Dir.mktmpdir do |home|
-        with_supported_app(home) do
-          write_usage_profile(home, 3)
-          stdout, stderr, status = run_script(
-            installer, "--safe-update", "--profile", "3", "--json", home: home
-          )
-
-          assert status.success?, stderr
-          result = assert_json_result(stdout, status, command: "install")
-          assert_equal false, result.fetch("workflow_complete")
-          assert_equal "subscription_update", result.fetch("completed_scope")
-          assert_equal %w[route_verification final_state_audit], result.fetch("required_followups")
-        end
-      end
-    end
-  end
-
-  def test_json_wrapper_rejects_safe_update_success_without_workflow_metadata
-    patcher = <<~'RUBY'
-      require "json"
-      if ARGV.include?("--print-core-status")
-        puts "supported"
-        exit 0
-      end
-      exit 0 if ARGV.include?("--snapshot-initial")
-      if ARGV.include?("--disable-subscription-auto-update")
-        puts "already_disabled"
-        exit 0
-      end
-      if ARGV.include?("--safe-update-all")
-        puts JSON.generate(
-          "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
-          "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
-          "ok" => true, "status" => "ok", "code" => "safe_update_completed", "exit_code" => 0,
-          "summary_zh" => "订阅事务完成。", "profile" => 3,
-          "changes" => ["remote_subscriptions"], "checks" => [], "items" => [],
+          "platform" => "macos", "client" => "clashx-meta", "operation" => "backup_subscriptions",
+          "ok" => true, "status" => "ok", "code" => "subscription_backups_created", "exit_code" => 0,
+          "summary_zh" => "已创建更新前备份。", "profile" => nil,
+          "changes" => ["profile_backups"], "checks" => [], "items" => [],
           "messages" => [], "warnings" => []
         )
         exit 0
@@ -2903,17 +2860,59 @@ class MacosWrapperTest < Minitest::Test
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          write_usage_profile(home, 3)
           stdout, stderr, status = run_script(
-            installer, "--safe-update", "--profile", "3", "--json", home: home
+            installer, "--safe-update", "--json", home: home
           )
 
-          assert_equal 1, status.exitstatus
+          assert status.success?, stderr
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal "subscription_backups_created", result.fetch("code")
+          refute result.key?("workflow_complete")
+          refute result.key?("completed_scope")
+          refute result.key?("required_followups")
+        end
+      end
+    end
+  end
+
+  def test_json_wrapper_accepts_subscription_backup_without_workflow_metadata
+    patcher = <<~'RUBY'
+      require "json"
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        puts "already_disabled"
+        exit 0
+      end
+      if ARGV.include?("--safe-update-all")
+        puts JSON.generate(
+          "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+          "platform" => "macos", "client" => "clashx-meta", "operation" => "backup_subscriptions",
+          "ok" => true, "status" => "ok", "code" => "subscription_backups_created", "exit_code" => 0,
+          "summary_zh" => "已创建更新前备份。", "profile" => nil,
+          "changes" => ["profile_backups"], "checks" => [], "items" => [],
+          "messages" => [], "warnings" => []
+        )
+        exit 0
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, stderr, status = run_script(
+            installer, "--safe-update", "--json", home: home
+          )
+
+          assert status.success?
           assert_empty stderr
           result = assert_json_result(stdout, status, command: "install")
-          assert_equal false, result.fetch("ok")
-          assert_equal "partial", result.fetch("status")
-          assert_equal "operation_committed_result_failed", result.fetch("code")
+          assert result.fetch("ok")
+          assert_equal "ok", result.fetch("status")
+          assert_equal "subscription_backups_created", result.fetch("code")
         end
       end
     end
@@ -2974,14 +2973,13 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_safe_update_requires_the_same_mihomo_preflight
+  def test_subscription_backup_does_not_require_mihomo
     with_missing_mihomo_installer do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          write_usage_profile(home, 1)
-          stdout, _stderr, status = run_script(installer, "--safe-update", "--profile", "1", home: home)
-          assert_equal 8, status.exitstatus
-          assert_includes stdout, "没有找到可用的 Mihomo"
+          stdout, stderr, status = run_script(installer, "--safe-update", home: home)
+          assert status.success?, "#{stdout}\n#{stderr}"
+          refute_includes stdout, "没有找到可用的 Mihomo"
         end
       end
     end

@@ -2403,23 +2403,6 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_macos_safe_update_commit_receipt_publication_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "claude-easy/scripts/macos/patch_profiles/cli.rb",
-        "        mark_wrapper_commit_receipt(options)\n",
-        ""
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_cli_marks_wrapper_receipt_before_success_result_output"
-      )
-    end
-  end
-
   def test_macos_commit_receipt_failure_exit_mutation_is_killed
     with_repo_copy do |root|
       replace_once(

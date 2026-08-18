@@ -1109,6 +1109,22 @@ test('PowerShell installer uses the documented global script and app settings', 
   assert.ok(preflight !== -1 && firstBackup !== -1 && preflight < firstBackup, 'all transformations must be prepared before files change');
 });
 
+test('Windows subscription update entry only creates pre-update backups', () => {
+  const source = fs.readFileSync(installerPath, 'utf8');
+  const backupStart = source.indexOf(
+    'if ($BackupSubscriptions) {', source.indexOf('$needsUsageProfile')
+  );
+  const legacyStart = source.indexOf('if ($SnapshotProfiles -or $VerifySafeUpdate) {');
+  assert.match(source, /\[switch\]\$BackupSubscriptions/);
+  assert.ok(backupStart !== -1 && legacyStart !== -1 && backupStart < legacyStart);
+  const backupBranch = source.slice(backupStart, legacyStart);
+  assert.match(backupBranch, /Backup-InitialOnce/);
+  assert.match(backupBranch, /Backup-Versioned/);
+  assert.match(backupBranch, /"pre-update"/);
+  assert.match(backupBranch, /subscription_backups_created/);
+  assert.doesNotMatch(backupBranch, /Test-MihomoCandidate|VerifySafeUpdate|Restore-SafeUpdateFiles/);
+});
+
 test('PowerShell JavaScript analysis uses canonical executable tokens', () => {
   const source = fs.readFileSync(path.join(installerModuleDir, 'script_js.ps1'), 'utf8');
 

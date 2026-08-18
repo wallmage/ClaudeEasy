@@ -292,10 +292,10 @@ module ClaudeEasy
       opts.on("--compare-backup ID", "比较指定备份与当前配置") { |value| options[:compare_backup] = value }
       opts.on("--restore-backup ID", "恢复指定备份") { |value| options[:restore_backup] = value }
       opts.on("--expected-current-sha256 SHA256", "恢复前要求当前配置哈希匹配") { |value| options[:expected_current_sha256] = value }
-      opts.on("--safe-update-all", "安全更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
+      opts.on("--safe-update-all", "为当前存储位置中的全部远程订阅创建更新前备份") { options[:safe_update_all] = true }
       opts.on("--recover-profile-transaction", "恢复未完成的配置事务及当前运行配置") { options[:recover_profile_transaction] = true }
       opts.on("--repair-clashx-logs", "修复 ClashX Meta 文件日志目录权限") { options[:repair_clashx_logs] = true }
-      opts.on("--usage-profile N", Integer, "补丁与安全更新采用的用途档位") { |value| options[:usage_profile] = value }
+      opts.on("--usage-profile N", Integer, "补丁采用的用途档位") { |value| options[:usage_profile] = value }
       opts.on("--internal-uninstall-recovery-state PATH") do |value|
         options[:uninstall_recovery_state] = File.expand_path(value)
       end
@@ -739,121 +739,23 @@ module ClaudeEasy
     end
 
     if options[:safe_update_all]
-      unless [1, 2, 3].include?(options[:usage_profile])
-        return emit_cli_result(
-          operation: "safe_update", exit_code: 64, status: "invalid_request", code: "usage_profile_required",
-          summary_zh: "安全更新必须指定用途档位 1、2 或 3。"
-        ) if options[:json]
-        warn "安全更新必须指定用途档位 1、2 或 3。"
-        return 64
-      end
-      if (rejected = reject_unapproved_usage_profile(
-        options, operation: "safe_update", expected: options[:usage_profile]
-      ))
-        return rejected
-      end
-      policy = JSON.parse(File.read(options[:policy], encoding: "UTF-8"))
       targets = remote_subscription_targets(directories)
-      result = safe_update_all(
-        targets: targets, policy: policy, backup_root: options[:backup_root],
-        usage_profile: options[:usage_profile], guard_storage: guard_storage,
-        expected_storage: expected_storage
-      )
-      if result[:status] == :updated
-        mark_wrapper_commit_receipt(options)
-        required_followups = case options[:usage_profile]
-                             when 1
-                               %w[client_switch_verification site_verification final_state_audit]
-                             when 2
-                               %w[
-                                 client_switch_verification site_verification
-                                 agent_connectivity_verification final_state_audit
-                               ]
-                             else
-                               %w[
-                                 route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-                                 region_fingerprint_rescan final_state_audit
-                               ]
-                             end
-        return emit_cli_result(
-          operation: "safe_update", exit_code: 0, status: "ok", code: "safe_update_completed",
-          summary_zh: "订阅、补丁和内部运行检查已完成；当前档位的后续验收尚未完成。",
-          profile: options[:usage_profile],
-          changes: ["remote_subscriptions"],
-          checks: [{ "name" => "updated_count", "value" => result.fetch(:count) }],
-          items: result.fetch(:profiles).map do |name|
-            {
-              "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name.to_s)}",
-              "label" => safe_label(name), "status" => "updated"
-            }
-          end,
-          workflow_complete: false, completed_scope: "subscription_update",
-          required_followups: required_followups
-        ) if options[:json]
-        puts "全部远程订阅已安全更新：#{result.fetch(:count)} 份。"
-        result.fetch(:profiles).each { |name| puts "已更新：#{safe_label(name)}" }
-        return 0
-      end
-      if result[:status] == :rollback_failed
-        return emit_cli_result(
-          operation: "safe_update", exit_code: 1, status: "partial", code: "rollback_failed",
-          summary_zh: "安全更新失败，且至少一份订阅未能恢复。", profile: options[:usage_profile]
-        ) if options[:json]
-        warn "安全更新失败，且至少一份订阅未能恢复；请立即按备份记录处理。"
-        return 1
-      end
-      if result[:status] == :runtime_restore_pending
-        summary = if result[:rollback_superseded]
-                    "安全更新失败；订阅回滚后又发生刷新，已保留新内容，且运行内核恢复失败。"
-                  else
-                    "安全更新失败；订阅文件已恢复，但运行内核恢复失败。"
-                  end
-        return emit_cli_result(
-          operation: "safe_update", exit_code: 1, status: "partial", code: "safe_update_runtime_pending",
-          summary_zh: summary, profile: options[:usage_profile]
-        ) if options[:json]
-        warn summary
-        return 1
-      end
-      if result[:reason] == :rollback_superseded
-        return emit_cli_result(
-          operation: "safe_update", exit_code: 1, status: "failed",
-          code: "safe_update_rollback_superseded",
-          summary_zh: "安全更新失败；回滚后订阅又发生刷新，已保留新内容。",
-          profile: options[:usage_profile]
-        ) if options[:json]
-        warn "安全更新失败；回滚后订阅又发生刷新，已保留新内容。"
-        return 1
-      end
-      item_results = result.fetch(:items, [])
-      switch_warning = "服务商可能设置了订阅开关。请登录服务商网站，在控制面板找到订阅开关并打开；开关关闭时无法更新。打开后请立即重试安全更新。"
-      json_items = item_results.map do |item|
-        name = item.fetch(:name).to_s
-        output = {
-          "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name)}",
-          "label" => safe_label(name),
-          "status" => item.fetch(:status) == :ready ? "pending" : item.fetch(:status).to_s
+      result = backup_remote_subscriptions(targets: targets, backup_root: options[:backup_root])
+      items = result.fetch(:profiles).map do |name|
+        {
+          "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name.to_s)}",
+          "label" => safe_label(name), "status" => "unchanged"
         }
-        output["reason"] = item.fetch(:reason).to_s if item[:reason]
-        output
       end
-      warnings = item_results.any? { |item| item[:subscription_switch_possible] } ? [switch_warning] : []
       return emit_cli_result(
-        operation: "safe_update", exit_code: 1, status: "rolled_back", code: "safe_update_failed",
-        summary_zh: "安全更新失败，订阅已保持原样。", profile: options[:usage_profile],
-        items: json_items, warnings: warnings
+        operation: "backup_subscriptions", exit_code: 0, status: "ok",
+        code: "subscription_backups_created",
+        summary_zh: "已为全部远程订阅创建更新前备份。",
+        changes: ["profile_backups"], items: items
       ) if options[:json]
-      item_results.each do |item|
-        label = safe_label(item.fetch(:name))
-        if item.fetch(:status) == :ready
-          warn "下载与校验成功但未写入：#{label}"
-        else
-          warn "更新失败：#{label}"
-        end
-      end
-      warn switch_warning unless warnings.empty?
-      warn "安全更新失败；全部订阅保持原样。"
-      return 1
+      puts "已为全部远程订阅创建更新前备份：#{result.fetch(:count)} 份。"
+      result.fetch(:profiles).each { |name| puts "已备份：#{safe_label(name)}" }
+      return 0
     end
 
     unless [1, 2, 3].include?(options[:usage_profile])
@@ -929,7 +831,8 @@ module ClaudeEasy
     1
   rescue InvalidConfigError => error
     return emit_cli_result(
-      operation: "patch_profiles", exit_code: 1, status: "failed", code: "invalid_configuration",
+      operation: options[:safe_update_all] ? "backup_subscriptions" : "patch_profiles",
+      exit_code: 1, status: "failed", code: "invalid_configuration",
       summary_zh: "ClaudeEasy 运行失败。"
     ) if json_mode
     warn "ClaudeEasy 运行失败：#{safe_label(error.message)}。"
@@ -938,7 +841,7 @@ module ClaudeEasy
     begin
       if json_mode
         emit_cli_result(
-          operation: options[:safe_update_all] ? "safe_update" : "patch_profiles",
+          operation: options[:safe_update_all] ? "backup_subscriptions" : "patch_profiles",
           exit_code: WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT,
           status: "partial", code: "wrapper_commit_receipt_failed",
           summary_zh: "配置已经提交，但提交收据写入失败。",
@@ -954,8 +857,6 @@ module ClaudeEasy
   rescue ProfileCommitStateUncertainError
     operation = if options[:restore_backup]
                   "restore_backup"
-                elsif options[:safe_update_all]
-                  "safe_update"
                 else
                   "patch_profiles"
                 end

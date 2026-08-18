@@ -3,6 +3,7 @@
     [string]$MihomoPath = "",
     [int]$UsageProfile = 0,
     [switch]$ShowUsageProfile,
+    [switch]$BackupSubscriptions,
     [switch]$SnapshotProfiles,
     [switch]$VerifySafeUpdate,
     [switch]$ListBackups,
@@ -44,7 +45,7 @@ if (-not $resultContractLoaded) {
     exit 6
 }
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
-$script:ClaudeEasyOperation = if ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
+$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
@@ -76,7 +77,7 @@ try {
         "Backup-InitialOnce", "Backup-Versioned", "Invoke-VerifiedFileTransaction", "Get-BackupTarget", "Get-PublicBackupDescriptor", "Test-RestoreCandidate",
         "Get-InstallStateEntry", "Assert-InstallState", "Assert-StateSnapshotUnchanged", "New-InstallStateEntry",
         "Split-YamlLines", "Set-YamlTopLevelScalar", "Set-YamlTunMapping", "Test-GeneratedYaml", "Get-RedactedYamlChangedPaths",
-        "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionResult",
+        "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionTargets", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionResult",
         "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Merge-RemoteSubscriptionAutoUpdateOwnership", "Assert-ClaudeEasyProxyGroupCollection",
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning",
@@ -113,6 +114,7 @@ if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $App
 }
 
 $requestedOperations = @(
+    [bool]$BackupSubscriptions,
     [bool]$SnapshotProfiles,
     [bool]$VerifySafeUpdate,
     [bool]$ListBackups,
@@ -158,11 +160,11 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (
+$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
-)
+))
 if ($needsUsageProfile) {
     try {
         $usageProfileSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
@@ -174,6 +176,33 @@ if ($needsUsageProfile) {
 
 try {
 try {
+if ($BackupSubscriptions) {
+    if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
+    $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $indexText = $strictUtf8.GetString($indexSnapshot.Bytes)
+    if ($indexText.Length -gt 0 -and $indexText[0] -eq [char]0xFEFF) {
+        $indexText = $indexText.Substring(1)
+    }
+    $profiles = @(Get-RemoteSubscriptionTargets $indexText $profilesDirectory)
+    foreach ($profile in $profiles) {
+        $profileSnapshot = Get-OptionalFileSnapshot $profile.Path "远程订阅"
+        Backup-InitialOnce `
+            $profile.Path $backupRoot `
+            -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
+        Backup-Versioned `
+            $profile.Path $backupRoot "pre-update" `
+            -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
+    }
+    Write-Info "已为 $($profiles.Count) 份远程订阅创建更新前备份。"
+    $backupItems = @($profiles | ForEach-Object {
+        Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "unchanged"
+    })
+    Complete-InstallResult 0 "ok" "subscription_backups_created" `
+        "已为全部远程订阅创建更新前备份。" `
+        @("profile_backups") @() $backupItems
+}
+
 if ($SnapshotProfiles -or $VerifySafeUpdate) {
     if ($savedUsageProfile -eq 0) {
         Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"

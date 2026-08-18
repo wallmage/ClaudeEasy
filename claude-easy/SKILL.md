@@ -1,6 +1,6 @@
 ---
 name: claude-easy
-description: Use when an agent needs to diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; safely update all Clash subscriptions; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
+description: Use when an agent needs to diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; update all Clash subscriptions through the client UI; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
 ---
 
 # ClaudeEasy 配置与诊断
@@ -13,7 +13,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 | --- | --- | --- |
 | Diagnostics：慢、间歇失败、打不开、全红、分流异常或泄漏 | [references/diagnostics.md](references/diagnostics.md)；当前平台文件 | 涉及共同国内直连、DNS、TUN、代理组、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md)；需要改档或执行 Patch 时再读档位文件 |
 | Patch：首次安装、改变用途档位或完整安全增强 | [references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 涉及备份恢复或未完成事务时读 [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md) |
-| 安全更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 无 |
+| 更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)；当前平台文件；使用 `computer-use` Skill | 无 |
 | 列出、比较或恢复备份 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)；当前平台文件 | 恢复后验证 DNS、分流、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md) |
 | 维护、审查或测试 Skill | 与改动直接相关的策略文件 | 只有跨模块维护、权威归属审查或整体一致性检查才读取全部七个策略文件 |
 
@@ -32,7 +32,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 - **Patch 模块**：首次安装、改变用途档位，或用户明确要求配置网络时使用；只应用该档位的最少能力。
 - **Diagnostics 模块**：慢、间歇失败、打不开、全红、分流异常或泄漏时使用。不能因为用户提到 Clash 就先运行补丁。
-- **安全更新**：用户明确要求更新全部订阅时使用；它不是 Patch 或 Diagnostics 的隐含步骤。
+- **订阅更新**：用户明确要求更新全部订阅时使用；它不是 Patch 或 Diagnostics 的隐含步骤。
 
 ## 任务合同
 
@@ -42,7 +42,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 持久修复必须以已经确认的问题为依据，并同时具备修改权限和明确对象。为取得证据而做的隔离实验，或用户已授权、单变量、可完整恢复的现场对照可以先执行；**诊断对照不是持久修复**，不得把实验成功写成问题已经解决。
 
-完成条件按交付类型判断：分析或复核任务不要求执行修复或复测，只要求结论状态、证据、反证和未知项完整；修复任务必须完成最小修复、原场景复测和受影响能力回归；更新任务必须覆盖全部远程订阅并报告生效状态；监测任务必须确认采集确实运行并给出停止方法。历史问题已消失且无法重现时，只能说明证据边界，不能伪造复测。
+完成条件按交付类型判断：分析或复核任务不要求执行修复或复测，只要求结论状态、证据、反证和未知项完整；修复任务必须完成最小修复、原场景复测和受影响能力回归；更新任务必须完成全部远程订阅的备份和客户端界面更新；监测任务必须确认采集确实运行并给出停止方法。历史问题已消失且无法重现时，只能说明证据边界，不能伪造复测。
 
 ## Diagnostics 执行顺序
 
@@ -86,7 +86,7 @@ bash scripts/uninstall_macos.sh
 ruby scripts/macos/patch_profiles.rb --json
 ```
 
-当前订阅只有本地控制器自动刷新和运行检查通过，才能报告已经生效。失败恢复遵守持久事务状态；不得为了快速结束而覆盖外部变化。
+Patch 的运行加载和检查仍遵守平台策略；订阅更新不调用本地控制器。
 
 ### Windows
 
@@ -97,15 +97,15 @@ ruby scripts/macos/patch_profiles.rb --json
 
 平台脚本只完成安全的文件事务。脚本成功不等于档位完成；必须继续按策略通过客户端界面完成当前档位的客户端开关与验收。
 
-受保护写入只有客户端本来就未运行时才执行；客户端运行时整批延期，不要求用户退出、停止或重启。中断的客户端敏感事务同样遵守记录中的恢复权限；只有安全更新且目标严格限于本轮订阅清单时，才允许运行中恢复。
+受保护写入只有客户端本来就未运行时才执行；客户端运行时整批延期，不要求用户退出、停止或重启。中断的客户端敏感事务同样遵守记录中的恢复权限。
 
-## 安全更新全部订阅
+## 更新全部订阅
 
-只有用户明确要求“请帮我安全更新全部订阅”或同义请求时执行。首次收到更新请求时，先提醒：“请确保订阅开关已打开。请自行登录服务商管理后台，找到订阅开关并打开；部分服务默认关闭，开启后约 10 分钟有效，到期会自动关闭。打开后回复‘打开了’或‘没问题’，我再继续安全更新。”用户明确确认前不得取证、建立快照、下载或写入；不得代替用户登录或操作后台。确认后必须按 `safe-update-and-recovery.md` 的完整任务顺序连续做完；档位 3 要在更新写入前取得同一浏览器的区域指纹基线。先创建全部远程订阅的清单、哈希和版本化备份，再通过客户端界面一次触发“立即执行安全更新”。随后逐份确认本轮刷新证据、YAML、Mihomo、代理组、当前策略和自动更新仍关闭；一份失败时按平台事务规则保持整批一致，并按订阅显示名称报告失败项，再次提醒确认对应订阅的开关仍在有效期内。不得显示订阅地址或节点名称，不能把文件已下载写成已生效。
+只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。用户确认前不得读取订阅、建立备份或操作客户端。
 
-`safe_update_completed`、`safe_update_verified` 和 `workflow_complete: false` 都是中间状态；看到后必须继续完成 `required_followups`，不得输出最终说明。发现缺少不需要用户决定的检查就立即补做；更新前区域基线缺失时自动建立新基线并重新执行整套安全更新，直至全部订阅和当前档位的每项检查都有本轮证据。
+确认后严格执行：为全部远程订阅创建更新前备份；使用 Computer Use 操作已经运行的 Clash 客户端；确认订阅界面的“自动更新”未勾选；点击与用户手动更新相同的入口；客户端更新动作结束后立即结束。客户端未运行时保持未运行。
 
-同一用户请求和同一已保存档位在 macOS 与 Windows 上使用相同的执行顺序、完成条件和档位后续项目；平台入口可以分成不同数量的安全步骤，但不能省略共同流程或提前结束。
+不得用 `curl`、固定 User-Agent、本地控制器、直接 HTTP 请求或配置文件替换来更新订阅。更新后不做防倒退、协议、数量、哈希、时间戳、YAML、Mihomo、代理组、连通性或运行状态检查，不拒绝覆盖，不自动回滚，也不重新应用 Patch。
 
 ## 配置历史与恢复
 

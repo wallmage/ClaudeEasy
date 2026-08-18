@@ -13,7 +13,6 @@ module ClaudeEasy
 
   AUTO_UPDATE_OWNERSHIP_BASENAME = "clashx-meta-kAutoUpdateEnable.state.json".freeze
   AUTO_UPDATE_DOMAINS = %w[com.metacubex.ClashX.meta com.MetaCubeX.ClashX.meta].freeze
-  MAX_REMOTE_SUBSCRIPTION_BYTES = 32 * 1024 * 1024
 
   def auto_update_ownership_path(backup_root)
     File.join(File.expand_path(backup_root), AUTO_UPDATE_OWNERSHIP_BASENAME)
@@ -469,58 +468,35 @@ module ClaudeEasy
     targets
   end
 
-  def curl_config_value(value)
-    raise InvalidConfigError, "远程订阅地址无效" if value.include?("\r") || value.include?("\n")
-
-    value.gsub("\\") { "\\\\" }.gsub('"', '\\"')
-  end
-
   def mihomo_loopback_proxy_url?(value)
     value.is_a?(String) && value.match?(%r{\A(?:http|socks5h)://127\.0\.0\.1:(?:[1-9]\d{0,4})\z}) &&
       value.rpartition(":").last.to_i <= 65_535
   end
 
-  def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS,
-                                proxy_url: nil)
-    raise InvalidConfigError, "Mihomo 本机代理不可用" unless
-      mihomo_loopback_proxy_url?(proxy_url)
+  def backup_remote_subscriptions(targets:, backup_root:)
+    raise InvalidConfigError, "没有可备份的远程订阅" unless targets.is_a?(Array) && !targets.empty?
 
-    config = <<~CURL
-      url = "#{curl_config_value(target.fetch(:url))}"
-      silent
-      show-error
-      fail
-      location
-      user-agent = "ClashX Meta"
-      proto = "=https"
-      max-time = #{Integer(timeout_seconds)}
-      max-filesize = #{MAX_REMOTE_SUBSCRIPTION_BYTES}
-    CURL
-    stdout, _stderr, status = Open3.capture3(
-      CURL_ISOLATED_ENVIRONMENT,
-      "/usr/bin/curl", "-q", "--proxy", proxy_url, "--config", "-",
-      stdin_data: config, binmode: true
-    )
-    raise InvalidConfigError, "远程订阅下载失败" unless
-      status.success? && !stdout.empty? && stdout.bytesize <= MAX_REMOTE_SUBSCRIPTION_BYTES
-
-    stdout
-  rescue KeyError, ArgumentError
-    raise InvalidConfigError, "远程订阅下载失败"
-  end
-
-  def fetch_remote_subscription_via_mihomo(target,
-                                           timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
-    socket = controller_socket
-    raise InvalidConfigError, "Mihomo 本机代理不可用" unless socket
-
-    requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
-    proxy_url = runtime_loopback_proxy(requester)
-    raise InvalidConfigError, "Mihomo 本机代理不可用" unless proxy_url
-
-    fetch_remote_subscription(target, timeout_seconds: timeout_seconds, proxy_url: proxy_url)
-  rescue SystemCallError, IOError
-    raise InvalidConfigError, "远程订阅下载失败"
+    operation_lock = profile_operation_lock(backup_root)
+    snapshots = targets.map do |target|
+      path = File.expand_path(target.fetch(:path))
+      snapshot = regular_file_snapshot_once(path, "远程订阅")
+      { name: target.fetch(:name).to_s, path: path, bytes: snapshot.fetch(:bytes) }
+    end
+    snapshots.each do |snapshot|
+      if backup_entries_for(snapshot.fetch(:path), backup_root, reason: "initial").empty?
+        create_versioned_backup(
+          snapshot.fetch(:path), backup_root,
+          content: snapshot.fetch(:bytes), reason: "initial"
+        )
+      end
+      create_versioned_backup(
+        snapshot.fetch(:path), backup_root,
+        content: snapshot.fetch(:bytes), reason: "pre-update"
+      )
+    end
+    { count: snapshots.length, profiles: snapshots.map { |snapshot| snapshot.fetch(:name) } }
+  ensure
+    operation_lock&.close
   end
 
   def build_update_candidate(target, source, policy, usage_profile, validator)
@@ -708,11 +684,12 @@ module ClaudeEasy
   end
 
   def safe_update_all(targets:, policy:, backup_root:, usage_profile:,
-                      fetcher: method(:fetch_remote_subscription_via_mihomo),
+                      fetcher: nil,
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil)
     operation_lock = nil
     default_activation = activation.nil?
+    raise InvalidConfigError, "脚本订阅更新已经停用" unless fetcher.respond_to?(:call)
     raise InvalidConfigError, "用途档位无效" unless [1, 2, 3].include?(usage_profile)
     raise InvalidConfigError, "没有可更新的远程订阅" unless targets.is_a?(Array) && !targets.empty?
     roots = targets.map { |target| File.dirname(File.expand_path(target.fetch(:path))) }.uniq

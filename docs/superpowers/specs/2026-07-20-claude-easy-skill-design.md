@@ -13,7 +13,7 @@
 - `claude-easy/references/diagnostics.md`：诊断任务合同、证据方法、已知故障、修复和完成标准。
 - `claude-easy/references/profiles-and-patch.md`：用途档位、Patch 顺序和 Patch 验收。
 - `claude-easy/references/routing-and-security.md`：共同国内直连、DNS、TUN、代理组、AI 规则和 WebRTC。
-- `claude-easy/references/safe-update-and-recovery.md`：安全更新、配置历史、备份和恢复。
+- `claude-easy/references/safe-update-and-recovery.md`：订阅更新、配置历史、备份和恢复。
 - `claude-easy/references/macos.md` 与 `windows.md`：各平台文件事务、运行恢复和客户端边界。
 - `claude-easy/references/policy.json`：解析器、规则集、分组候选和 AI 规则等配置常量。
 - `claude-easy/references/result-contract.json`：JSON v1 字段、类型和状态枚举。
@@ -81,19 +81,19 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 
 - Shell 入口负责参数、环境和调用编排；Ruby 模块负责订阅发现、YAML 1.2 转换、备份、持久事务、Mihomo 校验、控制器刷新、日志权限修复和 JSON 输出。
 - 当前订阅写入后只通过本地控制器刷新，不用 AppleScript，不切换 TUN、订阅、代理组或节点。
-- 普通 Patch、安全更新和备份恢复共用操作锁与事务恢复。文件和运行配置共同组成提交条件；文件身份变化、外部刷新或未知提交状态保留现场和事务记录。
+- 普通 Patch、订阅更新前备份和备份恢复共用操作锁。Patch 与恢复继续使用原有文件事务。
 - ClashX Meta 日志权限修复保留旧日志及原权限，建立继承 ACL，恢复当前会话目录，不停止或重启 Clash。
 
 ### Windows
 
-- CMD 是兼容入口；PowerShell 负责 AppHome、档位、自动更新所有权、备份、事务、安全更新和 JSON；`clash_verge_global.js` 负责订阅加载时的配置转换。
+- CMD 是兼容入口；PowerShell 负责 AppHome、档位、自动更新所有权、备份、事务和 JSON；`clash_verge_global.js` 负责订阅加载时的配置转换。
 - 三档都安装带数字档位的全局脚本；档位 1、2 只应用共同基线，档位 3 再应用完整策略。
-- Windows 受保护写入只有客户端本来就未运行时才执行。客户端运行时整批延期，不要求用户关闭客户端；安全更新恢复只有目标严格绑定本轮清单时才可例外。
+- Windows 受保护写入只有客户端本来就未运行时才执行。客户端运行时整批延期，不要求用户关闭客户端。
 - 安装、卸载、备份恢复和事务恢复共用目录锁、文件身份、原字节和提交条件。新文件使用准备记录；中断后按持久恢复权限处理，不从路径猜用途。
 
-## 安全更新
+## 订阅更新
 
-安全更新是用户显式触发的批量流程，不是后台监听。三个档位都关闭订阅自动更新。更新前锁定全部远程订阅的当前版本并创建清单和备份；客户端界面一次触发全部更新；更新后逐份验证刷新证据、YAML、Mihomo、代理组、当前策略和自动更新状态。任何失败按平台事务保持整批一致；磁盘验证和运行生效分别报告。
+订阅更新只由用户显式触发，不是后台监听。先为全部远程订阅创建更新前备份，再用 Computer Use 操作已经运行的客户端，确认自动更新关闭并点击与用户手动更新相同的入口。客户端动作结束后立即结束，不做更新后检查、拒绝覆盖、回滚或 Patch。
 
 ## 公开接口
 
@@ -105,7 +105,7 @@ macOS 公开入口使用 `--json`，Windows 使用 `-Json`。JSON v1 的标准�
 
 当前订阅只有控制器自动刷新和运行检查都通过，才能报告已经生效。档位 1、2 只验收各自能力；档位 3 通过双平台分流脚本验证 Google、OpenAI、Anthropic 和 Claude 的实时连接链，并执行 DNS 深度测试和两项 WebRTC 页面。
 
-Claude 联网只由分流验证脚本完成。Patch、Diagnostics、复测和安全更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`、进入账号或发送测试消息。
+Claude 联网只由分流验证脚本完成。Patch、Diagnostics、复测和订阅更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`、进入账号或发送测试消息。
 
 ## 测试策略
 

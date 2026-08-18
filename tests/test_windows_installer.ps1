@@ -2796,6 +2796,38 @@ items:
     try { Set-RemoteSubscriptionAutoUpdateDisabled $flowListProfiles | Out-Null } catch { $flowListRejected = $true }
     Assert-True $flowListRejected "multiline flow YAML list was silently omitted"
 
+    $backupOnlyCase = Join-Path $sandbox "subscription-backup-only-case"
+    $backupOnlyProfiles = Join-Path $backupOnlyCase "profiles"
+    New-Item -ItemType Directory -Path $backupOnlyProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $backupOnlyCase "profiles.yaml"), $profilesIndexInput)
+    $backupFirstBytes = [System.Text.Encoding]::UTF8.GetBytes("first subscription bytes`n")
+    $backupSecondBytes = [System.Text.Encoding]::UTF8.GetBytes("second subscription bytes`n")
+    [System.IO.File]::WriteAllBytes((Join-Path $backupOnlyProfiles "R-first.yaml"), $backupFirstBytes)
+    [System.IO.File]::WriteAllBytes((Join-Path $backupOnlyProfiles "R-second.yml"), $backupSecondBytes)
+    $backupOnlyResult = Invoke-TestPowerShell $installer @(
+        "-AppHome", $backupOnlyCase,
+        "-BackupSubscriptions",
+        "-Json"
+    )
+    $backupOnlyJson = Assert-JsonResult $backupOnlyResult "install" 0
+    Assert-True (
+        $backupOnlyJson.operation -eq "backup_subscriptions" -and
+        $backupOnlyJson.code -eq "subscription_backups_created" -and
+        $null -eq $backupOnlyJson.profile
+    ) "subscription backup did not return the backup-only result"
+    Assert-True (
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $backupOnlyProfiles "R-first.yaml"))) -ceq [Convert]::ToBase64String($backupFirstBytes) -and
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $backupOnlyProfiles "R-second.yml"))) -ceq [Convert]::ToBase64String($backupSecondBytes)
+    ) "subscription backup changed a remote subscription"
+    Assert-True (-not (
+        Test-Path -LiteralPath (Join-Path $backupOnlyCase "claude-easy-usage-profile.json")
+    )) "subscription backup created a usage profile"
+    Assert-True (-not (
+        Test-Path -LiteralPath (Join-Path $backupOnlyCase "claude-easy-safe-update.json")
+    )) "subscription backup created a safe-update manifest"
+    $backupOnlyFiles = @(Get-ChildItem -LiteralPath (Join-Path $backupOnlyCase "claude-easy-backups") -Recurse -File)
+    Assert-True ($backupOnlyFiles.Count -eq 4) "subscription backup did not create initial and pre-update backups for every remote subscription"
+
     $safeUpdateCase = Join-Path $sandbox "safe-update-case"
     $unprofiledSafeUpdateCase = Join-Path $sandbox "safe-update-without-profile"
     New-Item -ItemType Directory -Path $unprofiledSafeUpdateCase -Force | Out-Null
