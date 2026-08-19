@@ -271,7 +271,7 @@ function Get-ClaudeEasyReactivationHotkey([string]$Text) {
     if (-not [string]::IsNullOrWhiteSpace($inline)) {
         throw "verge.yaml 的 hotkeys 不是受支持的块状清单。"
     }
-    $matches = @()
+    $reactivationMatches = @()
     for ($index = $node.Start + 1; $index -lt $node.End; $index++) {
         $line = [string]$lines[$index]
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
@@ -289,10 +289,10 @@ function Get-ClaudeEasyReactivationHotkey([string]$Text) {
             [string]::IsNullOrWhiteSpace($parts[1])) {
             throw "verge.yaml 的 hotkeys 包含无效项目。"
         }
-        if ($parts[0] -ceq "reactivate_profiles") { $matches += $parts[1] }
+        if ($parts[0] -ceq "reactivate_profiles") { $reactivationMatches += $parts[1] }
     }
-    if ($matches.Count -gt 1) { throw "verge.yaml 存在重复的重新激活订阅快捷键。" }
-    return $(if ($matches.Count -eq 1) { [string]$matches[0] } else { "" })
+    if ($reactivationMatches.Count -gt 1) { throw "verge.yaml 存在重复的重新激活订阅快捷键。" }
+    return $(if ($reactivationMatches.Count -eq 1) { [string]$reactivationMatches[0] } else { "" })
 }
 
 function Set-ClaudeEasyReactivationHotkey([string]$Text) {
