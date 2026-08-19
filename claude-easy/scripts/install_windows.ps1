@@ -210,7 +210,7 @@ if ($SafeUpdate) {
             OriginalIdentity = $_.Snapshot.Identity
         }
     })
-    Invoke-VerifiedFileTransaction $targets -InterruptedRecoveryPolicy "safe_update_running_client"
+    Invoke-VerifiedFileTransaction $targets
     $updatedItems = @($profiles | ForEach-Object {
         Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "updated"
     })

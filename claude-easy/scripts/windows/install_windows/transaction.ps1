@@ -926,28 +926,36 @@ function Remove-FileTransactionPreparation([byte[]]$ExpectedBytes) {
 }
 
 function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
-    $profileSeen = $false
+    $manifestPath = ConvertTo-NormalizedWindowsPath (
+        Join-Path $script:ClaudeEasyMutationRoot "claude-easy-safe-update.json"
+    )
+    $profilesRoot = ConvertTo-NormalizedWindowsPath (
+        Join-Path $script:ClaudeEasyMutationRoot "profiles"
+    )
+    $manifestSeen = $false
     foreach ($path in $Paths) {
-        $relativePath = Get-AppHomeRelativePath $path
+        $targetPath = ConvertTo-NormalizedWindowsPath $path
         if ([string]::Equals(
-            $relativePath,
-            "claude-easy-safe-update.json",
+            $targetPath,
+            $manifestPath,
             [StringComparison]::OrdinalIgnoreCase
         )) {
+            $manifestSeen = $true
             continue
         }
-        $parent = [System.IO.Path]::GetDirectoryName($relativePath)
-        $extension = [System.IO.Path]::GetExtension($relativePath)
+        $parent = ConvertTo-NormalizedWindowsPath (
+            [System.IO.Path]::GetDirectoryName($targetPath)
+        )
+        $extension = [System.IO.Path]::GetExtension($targetPath)
         if (-not [string]::Equals(
             $parent,
-            "profiles",
+            $profilesRoot,
             [StringComparison]::OrdinalIgnoreCase
         ) -or $extension -notin @(".yaml", ".yml")) {
             return $false
         }
-        $profileSeen = $true
     }
-    return $profileSeen
+    return $manifestSeen
 }
 
 function Test-InterruptedRecoveryRequiresStoppedClient(
