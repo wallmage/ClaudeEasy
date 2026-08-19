@@ -2,7 +2,11 @@
     $lines = @(Split-YamlLines $Text)
     $node = Find-YamlMappingNode $lines $Key 0 0 $lines.Count
     if ($null -eq $node) { return $null }
-    if ($node.End -ne $node.Start + 1) { throw "$Key 不是单值设置。" }
+    for ($i = $node.Start + 1; $i -lt $node.End; $i++) {
+        $line = $lines[$i]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        throw "$Key 不是单值设置。"
+    }
     return ConvertFrom-SubscriptionScalar ([string]$node.Value) $Key
 }
 
