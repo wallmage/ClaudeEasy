@@ -93,7 +93,7 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 
 ## 订阅更新
 
-订阅更新只由用户显式触发，不是后台监听。先为全部远程订阅创建更新前备份；macOS 自动下载更新，Windows 用 Computer Use 操作已经运行的客户端。两端都不得为订阅更新添加、固定或伪造 User-Agent，并保持自动更新关闭。
+订阅更新只由用户显式触发，不是后台监听。两端都先为全部远程订阅创建更新前备份，再用 `curl -q --config -` 自动下载更新；不得为订阅更新添加、固定或伪造 User-Agent，并保持自动更新关闭。
 
 ## 公开接口
 

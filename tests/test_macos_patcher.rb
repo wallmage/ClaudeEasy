@@ -5372,7 +5372,7 @@ class MacosPatcherTest < Minitest::Test
 
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
-      assert_equal ["/usr/bin/curl", "--config", "-"], arguments
+      assert_equal ["/usr/bin/curl", "-q", "--config", "-"], arguments
       config = options.fetch(:stdin_data)
       refute_match(/user-agent|--user-agent|header\s*=.*user-agent/i, config)
       [YAML.dump(base_config), "", status]

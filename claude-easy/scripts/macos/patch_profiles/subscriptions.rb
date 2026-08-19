@@ -485,7 +485,7 @@ module ClaudeEasy
       max-time = #{Integer(timeout_seconds)}
     CURL
     stdout, _stderr, status = Open3.capture3(
-      "/usr/bin/curl", "--config", "-", stdin_data: config, binmode: true
+      "/usr/bin/curl", "-q", "--config", "-", stdin_data: config, binmode: true
     )
     raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
 

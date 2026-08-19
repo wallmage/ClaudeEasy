@@ -1120,9 +1120,10 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "自动更新"
       assert_includes document, "不设置 User-Agent"
     end
+    assert_includes readme, "Windows `-SafeUpdate`"
     assert_includes installer, "--safe-update"
     assert_includes patcher, "--safe-update-all"
-    assert_includes windows_installer_source, "BackupSubscriptions"
+    assert_includes windows_installer_source, "SafeUpdate"
     subscriptions = File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb"))
     assert_includes subscriptions, "fetch_remote_subscription"
     refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, subscriptions)
@@ -1131,8 +1132,14 @@ class SkillContractTest < Minitest::Test
       *Dir.glob(File.join(SKILL, "scripts/windows/install_windows/*.ps1")).map { |path| File.read(path) }
     ].join("\n")
     refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, windows_update_sources)
+    assert_includes subscriptions, '"-q", "--config", "-"'
+    assert_includes windows_update_sources, "'-q --config -'"
     assert_includes File.read(File.join(ROOT, "AGENTS.md")),
                     "macOS 和 Windows 的订阅更新都不得添加、固定或伪造 User-Agent"
+    refute_includes File.read(File.join(SKILL, "references/safe-update-and-recovery.md")),
+                    "Computer Use"
+    update_section = skill.split("## 更新全部订阅", 2).last.split("## 配置历史与恢复", 2).first
+    refute_includes update_section, "Computer Use"
   end
 
   def test_subscription_update_stops_without_post_update_checks
@@ -1163,13 +1170,13 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "执行顺序、完成条件、中间状态、后续项目和失败处理"
     assert_includes core, "两个平台都实现并通过对应测试"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update`"
-    assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -BackupSubscriptions`"
-    assert_includes safe_update, "macOS 由 `--safe-update` 自动下载并更新全部远程订阅"
+    assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -SafeUpdate`"
+    assert_includes safe_update, "两端都用 `curl -q --config -` 自动下载并覆盖全部远程订阅"
     assert_includes safe_update, "macOS 和 Windows 都不得添加、固定或伪造 User-Agent"
     assert_includes profiles_and_patch, "`profile.store-selected`"
     assert_includes profiles_and_patch, "macOS 与 Windows"
     assert_includes skill, "更新全部订阅"
-    assert_includes skill, "Windows 使用 `computer-use` Skill"
+    refute_includes skill, "Windows 使用 `computer-use` Skill"
     assert_includes readme, "macOS 与 Windows"
     assert_includes baseline, "双平台订阅更新"
   end
@@ -2262,7 +2269,7 @@ class SkillContractTest < Minitest::Test
                     '$InterruptedRecoveryPolicy = "client_stopped"'
     assert_includes safe_update,
                     '-InterruptedRecoveryPolicy "safe_update_running_client"'
-    assert_equal 2, installer.scan('"safe_update_running_client"').length
+    assert_equal 3, installer.scan('"safe_update_running_client"').length
     assert_includes transaction,
                     "function Test-SafeUpdateRunningRecoveryTargets("
     assert_includes transaction, '"claude-easy-safe-update.json"'

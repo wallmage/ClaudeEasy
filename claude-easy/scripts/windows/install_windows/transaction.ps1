@@ -932,7 +932,7 @@ function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
     $profilesRoot = ConvertTo-NormalizedWindowsPath (
         Join-Path $script:ClaudeEasyMutationRoot "profiles"
     )
-    $manifestSeen = $false
+    $profileSeen = $false
     foreach ($path in $Paths) {
         $targetPath = ConvertTo-NormalizedWindowsPath $path
         if ([string]::Equals(
@@ -940,7 +940,6 @@ function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
             $manifestPath,
             [StringComparison]::OrdinalIgnoreCase
         )) {
-            $manifestSeen = $true
             continue
         }
         $parent = ConvertTo-NormalizedWindowsPath (
@@ -954,8 +953,9 @@ function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
         ) -or $extension -notin @(".yaml", ".yml")) {
             return $false
         }
+        $profileSeen = $true
     }
-    return $manifestSeen
+    return $profileSeen
 }
 
 function Test-InterruptedRecoveryRequiresStoppedClient(

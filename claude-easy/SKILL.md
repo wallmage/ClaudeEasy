@@ -1,6 +1,6 @@
 ---
 name: claude-easy
-description: Use when an agent needs to diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; update all Clash subscriptions through the client UI; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
+description: Use when an agent needs to diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; update all Clash subscriptions through isolated curl downloads; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
 ---
 
 # ClaudeEasy 配置与诊断
@@ -13,7 +13,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 | --- | --- | --- |
 | Diagnostics：慢、间歇失败、打不开、全红、分流异常或泄漏 | [references/diagnostics.md](references/diagnostics.md)；当前平台文件 | 涉及共同国内直连、DNS、TUN、代理组、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md)；需要改档或执行 Patch 时再读档位文件 |
 | Patch：首次安装、改变用途档位或完整安全增强 | [references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 涉及备份恢复或未完成事务时读 [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md) |
-| 更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)；当前平台文件；Windows 使用 `computer-use` Skill | 无 |
+| 更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)；当前平台文件 | 无 |
 | 列出、比较或恢复备份 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)；当前平台文件 | 恢复后验证 DNS、分流、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md) |
 | 维护、审查或测试 Skill | 与改动直接相关的策略文件 | 只有跨模块维护、权威归属审查或整体一致性检查才读取全部七个策略文件 |
 
@@ -103,9 +103,9 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。用户确认前不得读取订阅、建立备份或操作客户端。
 
-确认后严格执行：为全部远程订阅创建更新前备份；macOS 运行 `bash scripts/install_macos.sh --safe-update` 自动更新；Windows 使用 Computer Use 操作已经运行的 Clash Verge Rev，确认“自动更新”未勾选并点击与用户手动更新相同的入口；更新动作结束后立即结束。客户端未运行时保持未运行。
+确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份，再用 `curl -q --config -` 自动下载并覆盖，更新动作结束后立即结束。客户端未运行时保持未运行。
 
-macOS 的下载固定使用 `curl --config -` 且不设置 User-Agent。macOS 和 Windows 都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退、协议、数量、哈希、时间戳或连通性检查。
+macOS 和 Windows 的下载都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退、协议、数量、哈希、时间戳或连通性检查。
 
 ## 配置历史与恢复
 

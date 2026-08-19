@@ -41,6 +41,121 @@ function Get-PublicSubscriptionResult([string]$Uid, [string]$Name, [string]$Stat
     }
 }
 
+function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
+    if ([string]::IsNullOrWhiteSpace($Raw)) { throw "$Label 为空。" }
+    $value = ($Raw -replace '\s+#.*$', '').Trim()
+    if ($value.StartsWith("'") -and $value.EndsWith("'") -and $value.Length -ge 2) {
+        return $value.Substring(1, $value.Length - 2).Replace("''", "'")
+    }
+    if ($value.StartsWith('"') -and $value.EndsWith('"')) {
+        try {
+            $decoded = $value | ConvertFrom-Json
+        } catch {
+            throw "$Label 使用了无效的双引号字符串。"
+        }
+        if (-not ($decoded -is [string])) { throw "$Label 不是字符串。" }
+        return [string]$decoded
+    }
+    if ($value -match '[\r\n\t\[\]\{\},]') { throw "$Label 使用了不受支持的复杂标量。" }
+    return $value
+}
+
+function Get-RemoteSubscriptionUpdateTargets([string]$ProfilesIndexText, [string]$Directory) {
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { throw "找不到订阅目录。" }
+    $items = @(
+        Get-RemoteSubscriptionProfileItems @(Split-YamlLines $ProfilesIndexText) |
+            Where-Object { $_.Type -eq "remote" }
+    )
+    if ($items.Count -eq 0) { throw "没有可更新的远程订阅。" }
+    $targets = @()
+    $targetPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $items) {
+        if ([int]$item.UrlCount -ne 1) { throw "远程订阅缺少唯一地址。" }
+        $url = ConvertFrom-SubscriptionScalar ([string]$item.UrlRaw) "远程订阅地址"
+        $uri = $null
+        if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or
+            -not [string]::Equals($uri.Scheme, "https", [StringComparison]::OrdinalIgnoreCase)) {
+            throw "远程订阅地址不是 HTTPS。"
+        }
+
+        if ([int]$item.FileCount -gt 1) { throw "远程订阅存在重复 file。" }
+        if ([int]$item.FileCount -eq 1) {
+            $file = ConvertFrom-SubscriptionScalar ([string]$item.FileRaw) "远程订阅文件名"
+            if ($file -ne (Split-Path -Leaf $file) -or
+                [System.IO.Path]::GetExtension($file) -notin @(".yaml", ".yml")) {
+                throw "远程订阅文件名无效。"
+            }
+            $matches = @(Join-Path $Directory $file | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        } else {
+            $matches = @(
+                (Join-Path $Directory ($item.Uid + ".yaml")),
+                (Join-Path $Directory ($item.Uid + ".yml"))
+            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+        }
+        if ($matches.Count -ne 1) { throw "远程订阅无法对应到唯一配置文件。" }
+        $path = (Resolve-Path -LiteralPath $matches[0]).Path
+        if (-not $targetPaths.Add($path)) { throw "多个远程订阅对应到同一配置文件。" }
+        $targets += [pscustomobject]@{
+            Uid = [string]$item.Uid
+            Name = [string]$item.Name
+            Path = $path
+            Url = $url
+        }
+    }
+    return @($targets)
+}
+
+function ConvertTo-CurlConfigValue([string]$Value) {
+    if ($Value.Contains("`r") -or $Value.Contains("`n") -or $Value.IndexOf([char]0) -ge 0) {
+        throw "远程订阅地址无效。"
+    }
+    return $Value.Replace('\', '\\').Replace('"', '\"')
+}
+
+function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
+    $config = @(
+        'url = "' + (ConvertTo-CurlConfigValue $Url) + '"'
+        "silent"
+        "show-error"
+        "fail"
+        "location"
+        'proto = "=https"'
+        "max-time = 30"
+    ) -join "`r`n"
+    $config += "`r`n"
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $CurlPath
+    $startInfo.Arguments = '-q --config -'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardInputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $output = New-Object System.IO.MemoryStream
+    try {
+        if (-not $process.Start()) { throw "无法启动 curl.exe。" }
+        $process.StandardInput.Write($config)
+        $process.StandardInput.Close()
+        $copyTask = $process.StandardOutput.BaseStream.CopyToAsync($output)
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(35000)) {
+            $process.Kill()
+            throw "远程订阅下载超时。"
+        }
+        $copyTask.GetAwaiter().GetResult()
+        $null = $errorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or $output.Length -eq 0) { throw "远程订阅下载失败。" }
+        return ,$output.ToArray()
+    } finally {
+        $output.Dispose()
+        $process.Dispose()
+    }
+}
+
 function Get-PublicBackupId([string]$BackupName) {
     return [string]((Get-PublicBackupDescriptor $BackupName).id)
 }

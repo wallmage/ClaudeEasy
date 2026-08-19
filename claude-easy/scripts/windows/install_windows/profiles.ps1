@@ -96,6 +96,8 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
         $uidValues = @($fieldValues["uid"])
         $nameValues = @($fieldValues["name"])
         $updatedValues = @($fieldValues["updated"])
+        $fileValues = @($fieldValues["file"])
+        $urlValues = @($fieldValues["url"])
         $uidValue = if ($uidValues.Count -eq 1) { (($uidValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"") } else { "" }
         $nameValue = if ($nameValues.Count -eq 1) { (($nameValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"") } else { "" }
         $updatedRawValue = if ($updatedValues.Count -eq 1) { (($updatedValues[0] -replace '\s+#.*$', '').Trim()) } else { "" }
@@ -120,6 +122,10 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
             Uid = $uidValue
             Name = $nameValue
             Updated = $updatedValue
+            FileRaw = $(if ($fileValues.Count -eq 1) { [string]$fileValues[0] } else { $null })
+            FileCount = $fileValues.Count
+            UrlRaw = $(if ($urlValues.Count -eq 1) { [string]$urlValues[0] } else { $null })
+            UrlCount = $urlValues.Count
             OptionIndex = $(if ($optionIndexes.Count -eq 1) { [int]$optionIndexes[0] } else { -1 })
             OptionIsInline = ($optionIndexes.Count -eq 1 -and [int]$optionIndexes[0] -eq [int]$start.Index)
         }

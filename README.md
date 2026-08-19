@@ -114,6 +114,7 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 ## 公开命令
 
 - 查看档位：macOS `--show-profile`；Windows `-ShowUsageProfile`
+- 更新订阅：macOS `--safe-update`；Windows `-SafeUpdate`
 - 列出备份：macOS `--list-backups`；Windows `-ListBackups`
 - 比较备份：macOS `--compare-backup ID`；Windows `-CompareBackup ID`
 - 恢复备份：macOS `--restore-backup ID --expected-current-sha256 HASH`；Windows `-RestoreBackup ID -ExpectedCurrentSha256 HASH`
@@ -128,10 +129,10 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 
 1. 提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。
 2. 为全部远程订阅创建更新前备份。
-3. macOS 自动下载并更新全部订阅；Windows 用 Computer Use 操作已经运行的 Clash Verge Rev，确认“自动更新”未勾选，再点击与用户手动更新相同的入口。
+3. macOS 和 Windows 都用 `curl -q --config -` 自动下载并覆盖全部订阅；Windows 更新前确认 `allow_auto_update` 为 `false`。
 4. 更新动作结束后立即结束。
 
-macOS 恢复 2026 年 8 月 4 日前的 `curl --config -` 下载方式，不设置 User-Agent。macOS 和 Windows 都不会为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退或连通性检查。
+macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，不设置 User-Agent，也不会为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退或连通性检查。
 
 ## 配置历史与恢复
 

@@ -2115,6 +2115,23 @@ public static class FakeCurl {
     }
 
     public static int Main(string[] args) {
+        string subscriptionOutput = Environment.GetEnvironmentVariable(
+            "CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT"
+        );
+        if (subscriptionOutput != null) {
+            string config = Console.In.ReadToEnd();
+            File.AppendAllText(
+                Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH"),
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(config)) + Environment.NewLine
+            );
+            File.AppendAllText(
+                Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_ARGS_PATH"),
+                String.Join(" ", args) + Environment.NewLine
+            );
+            Console.OutputEncoding = new UTF8Encoding(false);
+            Console.Write(subscriptionOutput);
+            return 0;
+        }
         int processId = Process.GetCurrentProcess().Id;
         File.WriteAllText(
             Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_ARGS_PATH"),
@@ -2311,6 +2328,82 @@ public static class FakeCurl {
                 Stop-Job $routeControllerJob -ErrorAction SilentlyContinue
                 Remove-Job $routeControllerJob -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        $subscriptionUpdateCase = Join-Path $sandbox "curl-subscription-update"
+        $subscriptionUpdateProfiles = Join-Path $subscriptionUpdateCase "profiles"
+        New-Item -ItemType Directory -Path $subscriptionUpdateProfiles -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $subscriptionUpdateCase "profiles.yaml"),
+            @'
+items:
+- uid: R-first
+  type: remote
+  name: First
+  file: R-first.yaml
+  url: https://first.example.invalid/subscription
+  option:
+    allow_auto_update: false
+- uid: R-second
+  type: remote
+  name: Second
+  file: R-second.yml
+  url: "https://second.example.invalid/subscription?token=private"
+  option:
+    allow_auto_update: false
+'@
+        )
+        [System.IO.File]::WriteAllText((Join-Path $subscriptionUpdateProfiles "R-first.yaml"), "old first`n")
+        [System.IO.File]::WriteAllText((Join-Path $subscriptionUpdateProfiles "R-second.yml"), "old second`n")
+        $subscriptionCurlConfigPath = Join-Path $sandbox "subscription-curl-config.txt"
+        $subscriptionCurlArgsPath = Join-Path $sandbox "subscription-curl-args.txt"
+        $previousPath = $env:PATH
+        $previousSubscriptionOutput = $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT
+        $previousSubscriptionConfigPath = $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH
+        $previousSubscriptionArgsPath = $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH
+        try {
+            $env:PATH = $fakeCurlDirectory + [System.IO.Path]::PathSeparator + $previousPath
+            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT = "proxies: []`nproxy-groups: []`nrules: []`n"
+            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH = $subscriptionCurlConfigPath
+            $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $subscriptionCurlArgsPath
+            $subscriptionUpdate = Invoke-TestPowerShell $installer @(
+                "-AppHome", $subscriptionUpdateCase, "-SafeUpdate", "-Json"
+            )
+            $subscriptionUpdateJson = Assert-JsonResult $subscriptionUpdate "install" 0
+            Assert-True (
+                $subscriptionUpdateJson.operation -eq "safe_update" -and
+                $subscriptionUpdateJson.code -eq "subscription_update_completed"
+            ) "Windows curl subscription update did not complete"
+            foreach ($updatedPath in @(
+                (Join-Path $subscriptionUpdateProfiles "R-first.yaml"),
+                (Join-Path $subscriptionUpdateProfiles "R-second.yml")
+            )) {
+                Assert-True (
+                    (Read-TestUtf8Text $updatedPath) -ceq $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT
+                ) "Windows curl subscription update did not replace every remote profile"
+            }
+            $subscriptionCurlArguments = @(Get-Content -LiteralPath $subscriptionCurlArgsPath)
+            Assert-True (
+                $subscriptionCurlArguments.Count -eq 2 -and
+                @($subscriptionCurlArguments | Where-Object { $_ -cne "-q --config -" }).Count -eq 0
+            ) "Windows subscription update did not isolate curl configuration"
+            $subscriptionCurlConfigs = @(Get-Content -LiteralPath $subscriptionCurlConfigPath | ForEach-Object {
+                [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))
+            })
+            Assert-True (
+                $subscriptionCurlConfigs.Count -eq 2 -and
+                @($subscriptionCurlConfigs | Where-Object { $_ -match '(?i)user-agent' }).Count -eq 0
+            ) "Windows subscription update added a User-Agent"
+            Assert-True (@($subscriptionUpdateJson.checks).Count -eq 0) "Windows subscription update added post-update checks"
+            $subscriptionUpdateBackups = @(
+                Get-ChildItem -LiteralPath (Join-Path $subscriptionUpdateCase "claude-easy-backups") -Recurse -File
+            )
+            Assert-True ($subscriptionUpdateBackups.Count -eq 4) "Windows subscription update did not back up every profile first"
+        } finally {
+            $env:PATH = $previousPath
+            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT = $previousSubscriptionOutput
+            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH = $previousSubscriptionConfigPath
+            $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $previousSubscriptionArgsPath
         }
     }
 

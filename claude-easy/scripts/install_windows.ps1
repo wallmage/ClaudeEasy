@@ -3,6 +3,7 @@
     [string]$MihomoPath = "",
     [int]$UsageProfile = 0,
     [switch]$ShowUsageProfile,
+    [switch]$SafeUpdate,
     [switch]$BackupSubscriptions,
     [switch]$SnapshotProfiles,
     [switch]$VerifySafeUpdate,
@@ -45,7 +46,7 @@ if (-not $resultContractLoaded) {
     exit 6
 }
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
-$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
+$script:ClaudeEasyOperation = if ($SafeUpdate) { "safe_update" } elseif ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
@@ -82,6 +83,7 @@ try {
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning",
         "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
+        "Get-RemoteSubscriptionUpdateTargets", "Invoke-SubscriptionCurlDownload",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
     )) {
@@ -114,6 +116,7 @@ if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $App
 }
 
 $requestedOperations = @(
+    [bool]$SafeUpdate,
     [bool]$BackupSubscriptions,
     [bool]$SnapshotProfiles,
     [bool]$VerifySafeUpdate,
@@ -160,7 +163,7 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $BackupSubscriptions -and (
+$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $SafeUpdate -and -not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
@@ -176,6 +179,46 @@ if ($needsUsageProfile) {
 
 try {
 try {
+if ($SafeUpdate) {
+    if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
+    $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $indexText = $strictUtf8.GetString($indexSnapshot.Bytes)
+    if ($indexText.Length -gt 0 -and $indexText[0] -eq [char]0xFEFF) {
+        $indexText = $indexText.Substring(1)
+    }
+    Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
+    $profiles = @(Get-RemoteSubscriptionUpdateTargets $indexText $profilesDirectory)
+    $snapshots = @()
+    foreach ($profile in $profiles) {
+        $profileSnapshot = Get-OptionalFileSnapshot $profile.Path "远程订阅"
+        Backup-InitialOnce `
+            $profile.Path $backupRoot `
+            -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
+        Backup-Versioned `
+            $profile.Path $backupRoot "pre-update" `
+            -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
+        $snapshots += [pscustomobject]@{ Profile = $profile; Snapshot = $profileSnapshot }
+    }
+    $curlCommand = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $targets = @($snapshots | ForEach-Object {
+        [pscustomobject]@{
+            Path = $_.Profile.Path
+            Bytes = Invoke-SubscriptionCurlDownload ([string]$curlCommand.Source) ([string]$_.Profile.Url)
+            Existed = $true
+            OriginalBytes = $_.Snapshot.Bytes
+            OriginalIdentity = $_.Snapshot.Identity
+        }
+    })
+    Invoke-VerifiedFileTransaction $targets -InterruptedRecoveryPolicy "safe_update_running_client"
+    $updatedItems = @($profiles | ForEach-Object {
+        Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "updated"
+    })
+    Complete-InstallResult 0 "ok" "subscription_update_completed" `
+        "已备份并更新全部远程订阅。" `
+        @("profile_backups", "subscriptions") @() $updatedItems
+}
+
 if ($BackupSubscriptions) {
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
     $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
