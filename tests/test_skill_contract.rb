@@ -1563,6 +1563,9 @@ class SkillContractTest < Minitest::Test
     assert_includes source, "Google 的连接链必须包含当前主代理组"
     assert_includes source, "主代理组与 AI 分组不同时，Google 不能经过 AI 分组"
     assert_includes source, "AI 网站的连接链必须包含 AI 分组"
+    assert_includes source, "隔离用户 curl 配置和代理环境"
+    assert_includes source, "观察到连接后必须重新读取主代理组、AI 分组、当前选择和代理提供者"
+    assert_includes source, "`Rematch` 或 `Relay`"
     assert_includes source, "macOS 和 Windows 只要当前代理工具提供 Computer Use"
     assert_includes source, "当前环境没有 Computer Use 时，要求用户手动测试"
   end

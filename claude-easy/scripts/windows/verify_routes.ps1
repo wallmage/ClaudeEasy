@@ -292,7 +292,7 @@ function Test-UsableRouteGroupSelection([object]$Group) {
     }
     return $selection -notin @(
         "DIRECT", "DNS", "REJECT", "REJECT-DROP",
-        "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH"
+        "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "RELAY"
     )
 }
 
@@ -325,8 +325,8 @@ function Test-SafeLiveChain(
     $chainItems = @($Chains)
     $providerChainItems = @($ProviderChains)
     if ($chainItems.Count -eq 0) { return $false }
-    $nonProxyNames = @("DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "DNS")
-    $nonProxyTypes = @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")
+    $nonProxyNames = @("DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "DNS", "RELAY")
+    $nonProxyTypes = @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch", "Relay")
     for ($index = 0; $index -lt $chainItems.Count; $index++) {
         $name = [string]$chainItems[$index]
         if ([string]::IsNullOrWhiteSpace($name) -or $name -in $nonProxyNames) { return $false }
@@ -378,21 +378,62 @@ function Get-AvailableSourcePort {
     }
 }
 
-function Start-TestTraffic([string]$Url) {
+function Get-RouteLoopbackProxyUrl {
+    $config = Invoke-ControllerJson "/configs"
+    foreach ($field in @("mixed-port", "port", "socks-port")) {
+        $property = $config.PSObject.Properties[$field]
+        if ($null -eq $property) { continue }
+        $port = 0
+        if (-not [int]::TryParse([string]$property.Value, [ref]$port) -or
+            $port -lt 1 -or $port -gt 65535) {
+            continue
+        }
+        $scheme = if ($field -eq "socks-port") { "socks5h" } else { "http" }
+        return "${scheme}://127.0.0.1:$port"
+    }
+    throw "当前运行配置没有可用的本地代理端口。"
+}
+
+function Start-TestTraffic([string]$Url, [string]$ProxyUrl) {
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($null -eq $curl) { throw "找不到 Windows 自带的 curl.exe。" }
     $sourcePort = Get-AvailableSourcePort
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = $curl.Source
-    $start.Arguments = '--http1.1 -L --max-time 15 --limit-rate 2k --local-port ' + $sourcePort + ' --output NUL --silent "' + $Url.Replace('"', '\"') + '"'
+    $start.Arguments = '-q --http1.1 --fail -L --max-time 15 --limit-rate 2k --local-port ' + $sourcePort + ' --output NUL --silent --proxy "' + $ProxyUrl.Replace('"', '\"') + '" "' + $Url.Replace('"', '\"') + '"'
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    foreach ($name in @('http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'no_proxy', 'NO_PROXY')) {
+        $start.EnvironmentVariables[$name] = ""
+    }
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $start
     if (-not $process.Start()) { throw "无法启动分流测试请求。" }
     return [pscustomobject]@{ Process = $process; SourcePort = $sourcePort }
+}
+
+function Get-CurrentRouteSnapshot([object]$Expected) {
+    $proxies = (Invoke-ControllerJson "/proxies").proxies
+    $providers = (Invoke-ControllerJson "/providers/proxies").providers
+    if ($null -eq $proxies -or $null -eq $providers) {
+        return $null
+    }
+    $currentMain = Get-LiveMainGroup $proxies
+    $currentAi = Find-Group $proxies @($Expected.AiCandidates) "" "AI 分组"
+    if ($currentMain -cne [string]$Expected.MainGroup -or
+        $currentAi -cne [string]$Expected.AiGroup) { return $null }
+    $mainProperty = $proxies.PSObject.Properties[[string]$Expected.MainGroup]
+    $aiProperty = $proxies.PSObject.Properties[[string]$Expected.AiGroup]
+    if ($null -eq $mainProperty -or $null -eq $aiProperty -or
+        -not (Test-SupportedRouteGroupType ([string]$mainProperty.Value.type)) -or
+        -not (Test-SupportedRouteGroupType ([string]$aiProperty.Value.type)) -or
+        [string]$mainProperty.Value.now -cne [string]$Expected.MainSelection -or
+        [string]$aiProperty.Value.now -cne [string]$Expected.AiSelection) {
+        return $null
+    }
+    return [pscustomobject]@{ Proxies = $proxies; Providers = $providers }
 }
 
 function Test-RouteChains(
@@ -438,13 +479,13 @@ function Observe-Route(
     [string]$HostPattern,
     [string]$ExpectedGroup,
     [string]$ExpectedSelection,
-    [object]$Proxies,
     [string]$AiGroup,
     [bool]$AllowExplicitProxyGroup,
-    [object]$Providers = $null
+    [object]$ExpectedSnapshot = $null,
+    [string]$ProxyUrl = ""
 ) {
     $known = Get-ConnectionIds
-    $traffic = Start-TestTraffic $Url
+    $traffic = Start-TestTraffic $Url $ProxyUrl
     $process = $traffic.Process
     $sourcePort = [int]$traffic.SourcePort
     try {
@@ -475,7 +516,9 @@ function Observe-Route(
                             ForEach-Object { [string]$_ }
                     )
                 }
-                $passed = Test-RouteChains $Proxies $chains $ExpectedGroup $ExpectedSelection $AiGroup $AllowExplicitProxyGroup $Providers $providerChains
+                $current = Get-CurrentRouteSnapshot $ExpectedSnapshot
+                $passed = $null -ne $current -and
+                    (Test-RouteChains $current.Proxies $chains $ExpectedGroup $ExpectedSelection $AiGroup $AllowExplicitProxyGroup $current.Providers $providerChains)
                 [void]$script:ClaudeEasyChecks.Add([ordered]@{ name = $Label.ToLowerInvariant(); ok = $passed; status = $(if ($passed) { "passed" } else { "failed" }) })
                 if (-not $Json) { Write-ClaudeEasyVerificationText ("{0}：{1}" -f $Label, $(if ($passed) { "通过" } else { "失败" })) }
                 return $passed
@@ -519,16 +562,24 @@ try {
     if (-not (Test-UsableRouteGroupSelection $proxies.PSObject.Properties[$ai].Value)) {
         throw "AI 分组当前没有选择有效代理节点。"
     }
+    $routeSnapshot = [pscustomobject]@{
+        MainGroup = $main
+        MainSelection = $mainSelection
+        AiGroup = $ai
+        AiSelection = $aiSelection
+        AiCandidates = @($policy.ai_group_names)
+    }
+    $routeProxyUrl = Get-RouteLoopbackProxyUrl
 
     if (-not $Json) {
         Write-ClaudeEasyVerificationText "主代理组：已识别；当前选择已隐藏"
         Write-ClaudeEasyVerificationText "AI 分组：已识别；当前选择已隐藏"
     }
     $checks = @(
-        (Observe-Route "Google" "https://www.google.com/search?q=clash-route-verification" '(?i)(^|\.)google\.com$' $main $mainSelection $proxies $ai $true $providers),
-        (Observe-Route "OpenAI" "https://openai.com/" '(?i)(^|\.)openai\.com$' $ai $aiSelection $proxies $ai $false $providers),
-        (Observe-Route "Anthropic" "https://www.anthropic.com/" '(?i)(^|\.)anthropic\.com$' $ai $aiSelection $proxies $ai $false $providers),
-        (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $proxies $ai $false $providers)
+        (Observe-Route "Google" "https://www.google.com/search?q=clash-route-verification" '(?i)(^|\.)google\.com$' $main $mainSelection $ai $true $routeSnapshot $routeProxyUrl),
+        (Observe-Route "OpenAI" "https://openai.com/" '(?i)(^|\.)openai\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
+        (Observe-Route "Anthropic" "https://www.anthropic.com/" '(?i)(^|\.)anthropic\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
+        (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl)
     )
     if (@($checks | Where-Object { -not $_ }).Count -gt 0) {
         if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Checks @($script:ClaudeEasyChecks)) }

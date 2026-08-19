@@ -531,7 +531,7 @@ function Test-ClashRuntimeProxyPath(
     [object]$Providers = $null
 ) {
     if ([string]::IsNullOrWhiteSpace($Name) -or
-        $Name -in @("DIRECT", "DNS", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH")) {
+        $Name -in @("DIRECT", "DNS", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "RELAY")) {
         return $false
     }
     if ($null -eq $Seen) { $Seen = @{} }
@@ -548,7 +548,7 @@ function Test-ClashRuntimeProxyPath(
     }
     if ($candidates.Count -eq 0) { return $false }
     foreach ($proxy in $candidates) {
-        if ([string]$proxy.type -in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")) {
+        if ([string]$proxy.type -in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch", "Relay")) {
             return $false
         }
         if ([string]$proxy.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) { continue }

@@ -641,6 +641,11 @@ try {
     Assert-True (-not (
         Test-ClashRuntimeProxyPath $providerRuntimeProxies "AI" $null $runtimeProviders
     )) "runtime AI path accepted a provider-backed Direct target"
+    $runtimeProviders.remote.proxies += [pscustomobject]@{ name = "Provider Relay"; type = "Relay" }
+    $providerRuntimeProxies.AI.now = "Provider Relay"
+    Assert-True (-not (
+        Test-ClashRuntimeProxyPath $providerRuntimeProxies "AI" $null $runtimeProviders
+    )) "runtime AI path accepted a provider-backed Relay target"
     $runtimeAiPolicy = [pscustomobject]@{
         ai_rules = @(
             "DOMAIN-SUFFIX,anthropic.com,{AI}",
@@ -1943,7 +1948,7 @@ foreach ($rejectedControllerUrl in @(
     }
 }
 function Get-ConnectionIds { return @{} }
-function Start-TestTraffic([string]$Url) {
+function Start-TestTraffic([string]$Url, [string]$ProxyUrl) {
     $process = [pscustomobject]@{ HasExited = $true }
     $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
     return [pscustomobject]@{ Process = $process; SourcePort = 45555 }
@@ -1954,6 +1959,18 @@ function Invoke-ControllerJson([string]$Endpoint) {
         return [pscustomobject]@{
             rules = @([pscustomobject]@{ type = "Match"; proxy = "Main" })
         }
+    }
+    if ($Endpoint -eq "/proxies") {
+        return [pscustomobject]@{
+            proxies = [pscustomobject]@{
+                Main = [pscustomobject]@{ type = "LoadBalance"; now = "" }
+                AI = [pscustomobject]@{ type = "Selector"; now = "Fixture Node" }
+                "Fixture Node" = [pscustomobject]@{ type = "Shadowsocks" }
+            }
+        }
+    }
+    if ($Endpoint -eq "/providers/proxies") {
+        return [pscustomobject]@{ providers = [pscustomobject]@{} }
     }
     if ($Endpoint -ne "/connections") { throw "unexpected controller endpoint: $Endpoint" }
     return [pscustomobject]@{
@@ -2011,12 +2028,50 @@ try {
 if (-not $unsupportedRejected) {
     throw "Get-LiveMainGroup accepted a non-group MATCH target."
 }
-$proxies = [pscustomobject]@{
-    Main = [pscustomobject]@{ type = "LoadBalance" }
-    "Fixture Node" = [pscustomobject]@{ type = "Shadowsocks" }
+$routeSnapshot = [pscustomobject]@{
+    MainGroup = "Main"
+    MainSelection = ""
+    AiGroup = "AI"
+    AiSelection = "Fixture Node"
+    AiCandidates = @("AI")
 }
-$passed = Observe-Route "Google" "https://www.google.com/" "google" "Main" "" $proxies "AI" $true
+$passed = Observe-Route "Google" "https://www.google.com/" "google" "Main" "" "AI" $true $routeSnapshot "http://127.0.0.1:7890"
 if (-not $passed) { throw "Observe-Route rejected a matching routed connection." }
+$script:RouteSnapshotChanged = $true
+$script:ChangedConnectionReads = 0
+function Invoke-ControllerJson([string]$Endpoint) {
+    if ($Endpoint -eq "/rules") {
+        return [pscustomobject]@{ rules = @([pscustomobject]@{ type = "Match"; proxy = "Main" }) }
+    }
+    if ($Endpoint -eq "/proxies") {
+        return [pscustomobject]@{
+            proxies = [pscustomobject]@{
+                Main = [pscustomobject]@{ type = "LoadBalance"; now = "" }
+                AI = [pscustomobject]@{ type = "Selector"; now = "Changed Node" }
+                "Changed Node" = [pscustomobject]@{ type = "Shadowsocks" }
+            }
+        }
+    }
+    if ($Endpoint -eq "/providers/proxies") {
+        return [pscustomobject]@{ providers = [pscustomobject]@{} }
+    }
+    if ($Endpoint -eq "/connections") {
+        $script:ChangedConnectionReads += 1
+        if ($script:ChangedConnectionReads -eq 1) {
+            return [pscustomobject]@{ connections = @() }
+        }
+        return [pscustomobject]@{
+            connections = @([pscustomobject]@{
+                id = "changed-route"
+                metadata = [pscustomobject]@{ host = "www.google.com"; network = "tcp"; sourcePort = 45555 }
+                chains = @("Fixture Node", "Main")
+            })
+        }
+    }
+    throw "unexpected controller endpoint: $Endpoint"
+}
+$changedSnapshotPassed = Observe-Route "Google" "https://www.google.com/" "google" "Main" "" "AI" $true $routeSnapshot "http://127.0.0.1:7890"
+if ($changedSnapshotPassed) { throw "Observe-Route accepted a proxy selection changed during observation." }
 '@
     $routeHarness = (@($routeFunctionSources) + $routeHarnessMocks) -join "`r`n"
     [System.IO.File]::WriteAllText($routeHarnessPath, $routeHarness, (New-Object System.Text.UTF8Encoding($true)))
@@ -2272,7 +2327,7 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
             [System.IO.File]::WriteAllText($ReadyPath, "ready")
             $connectionRequest = 0
             try {
-                for ($requestNumber = 0; $requestNumber -lt 11; $requestNumber++) {
+                for ($requestNumber = 0; $requestNumber -lt 24; $requestNumber++) {
                     $client = $listener.AcceptTcpClient()
                     try {
                         $stream = $client.GetStream()
@@ -2318,6 +2373,8 @@ if (-not $passed) { throw "Observe-Route rejected a matching routed connection."
                                     }
                                 }
                             } | ConvertTo-Json -Depth 6 -Compress
+                        } elseif ($path -eq "/configs") {
+                            $body = @{ "mixed-port" = 7890 } | ConvertTo-Json -Compress
                         } elseif ($path -eq "/connections") {
                             $connectionRequest += 1
                             if (($connectionRequest % 2) -eq 1) {
@@ -2564,6 +2621,12 @@ public static class FakeCurl {
                     $routeSecretCanary
                 )
             ) "route verifier copied its controller secret into a child argument log"
+            $capturedRouteCurlArguments = Get-Content -LiteralPath $fakeCurlArgsPath -Raw
+            Assert-True (
+                $capturedRouteCurlArguments -match '(?:^|\s)-q(?:\s|$)' -and
+                $capturedRouteCurlArguments -match '--fail(?:\s|$)' -and
+                $capturedRouteCurlArguments -match '--proxy\s+http://127\.0\.0\.1:7890(?:\s|$)'
+            ) "route verifier did not isolate curl and use the live Mihomo proxy"
             $fakeCurlEnvironmentHashFiles = @(
                 Get-ChildItem -LiteralPath $sandbox `
                     -Filter "fake-curl-environment-hashes.*" -File
@@ -4307,7 +4370,7 @@ rules:
     Assert-True (-not (Test-RouteChains $routeChains @("Balance Node", "Main") "Main" "" "AI" $true)) "Windows route verifier accepted a selector without now"
     Assert-True (Test-RouteChains $routeChains @("Node B", "Auto") "Auto" "Node A" "AI" $true) "Windows route verifier rejected the observed URLTest leaf"
     Assert-True (Test-RouteChains $routeChains @("Node B", "Fallback") "Fallback" "Node A" "AI" $true) "Windows route verifier rejected the observed Fallback leaf"
-    foreach ($nonProxyType in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")) {
+    foreach ($nonProxyType in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch", "Relay")) {
         $routeChains.Local.type = $nonProxyType
         Assert-True (
             -not (Test-RouteChains $routeChains @("Local", "Main") "Main" "Local" "AI" $true)
@@ -4339,7 +4402,7 @@ rules:
     )) "Windows route verifier accepted an unknown provider"
     Invoke-DeferredProbe "non-proxy route termini" {
         $acceptedNonProxyTermini = @(
-            foreach ($terminus in @("REJECT", "REJECT-DROP", "PASS", "COMPATIBLE")) {
+            foreach ($terminus in @("REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "RELAY")) {
                 if (Test-RouteChains $routeChains @($terminus, "Japan", "AI") "AI" "Japan" "AI" $false) {
                     $terminus
                 }

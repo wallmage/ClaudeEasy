@@ -2,7 +2,7 @@ module ClaudeEasy
   module_function
 
   RUNTIME_NON_PROXY_NAMES = %w[
-    DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
+    DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH RELAY
   ].freeze
   RUNTIME_NON_PROXY_TYPES = %w[
     Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay

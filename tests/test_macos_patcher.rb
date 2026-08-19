@@ -14064,7 +14064,7 @@ class MacosPatcherTest < Minitest::Test
 
   def test_route_verifier_rejects_every_non_proxy_terminal_as_a_group_selection
     terminals = %w[
-      DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH
+      DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH RELAY
     ]
     proxies = terminals.to_h do |selection|
       [
