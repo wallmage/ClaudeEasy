@@ -851,10 +851,9 @@ rules:
     Assert-True $mismatchedRuntimeMainRejected "runtime checks accepted a different usable MATCH group"
     $profileTwoRuntimeState.Rules = @()
     foreach ($invalidProfileTwoRuntimeText in @(
-        $profileTwoRuntimeText.Replace(
-            "  - RULE-SET,ce-cn-domain,DIRECT`n  - MATCH,Main",
-            "  - MATCH,Main`n  - RULE-SET,ce-cn-domain,DIRECT"
-        ),
+        ($profileTwoRuntimeText -replace
+            '(?m)^  - RULE-SET,ce-cn-domain,DIRECT\r?\n  - MATCH,Main\r?$',
+            "  - MATCH,Main`n  - RULE-SET,ce-cn-domain,DIRECT"),
         $profileTwoRuntimeText.Replace("respect-rules: true", "respect-rules: false"),
         $profileTwoRuntimeText.Replace(
             "      - https://223.5.5.5/dns-query#DIRECT",
@@ -868,8 +867,8 @@ rules:
         Assert-True $invalidProfileTwoPatchRejected "profile 2 runtime checks accepted broken common policy"
     }
 
-    $providerCollisionRuntimeText = $profileTwoRuntimeText.Replace(
-        "rule-providers:`n  ce-cn-domain:",
+    $providerCollisionRuntimeText = $profileTwoRuntimeText -replace
+        'rule-providers:\r?\n  ce-cn-domain:',
         @'
 rule-providers:
   ce-cn-domain:
@@ -883,7 +882,7 @@ rule-providers:
     size-limit: 2097152
   ce-cn-domain-10:
 '@
-    ).Replace(
+    $providerCollisionRuntimeText = $providerCollisionRuntimeText.Replace(
         "path: ./ruleset/ce-cn-domain.mrs",
         "path: ./ruleset/ce-cn-domain-10.mrs"
     ).Replace(
