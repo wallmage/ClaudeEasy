@@ -241,6 +241,31 @@ function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousCo
     throw "Clash Verge Rev 没有重新生成运行配置。"
 }
 
+function Wait-ClashVergeRuntimeHealthy(
+    [string]$RuntimePath,
+    [object]$PreviousContext,
+    [hashtable]$Selections,
+    [bool]$TunEnabled,
+    [int]$Profile,
+    [string]$CurlPath,
+    [object]$Policy
+) {
+    Wait-ClashVergeRuntimeRefresh $RuntimePath $PreviousContext
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        try {
+            $context = Get-ClashControllerContext $RuntimePath
+            Assert-ClashRuntimeHealthy `
+                $context $Selections $TunEnabled $Profile $CurlPath $Policy
+            return $context
+        } catch {
+            $lastFailure = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Clash Verge Rev 热加载后没有恢复完整运行状态：$lastFailure"
+}
+
 function ConvertFrom-ClashRuntimeYamlScalar([string]$Value) {
     $scalar = ($Value -replace '\s+#.*$', '').Trim()
     if ($scalar.Length -ge 2 -and $scalar[0] -eq "'" -and $scalar[$scalar.Length - 1] -eq "'") {

@@ -181,6 +181,43 @@ module ClaudeEasy
     }
   end
 
+  def serialized_activation_state(identity, update_requested: false, rollback_requested: false)
+    valid = identity.is_a?(Hash) && identity.keys.sort == %i[executable pid started] &&
+            identity[:pid].is_a?(Integer) && identity[:pid] > 0 &&
+            identity[:started].is_a?(String) && !identity[:started].empty? &&
+            identity[:executable].is_a?(String) &&
+            identity[:executable] == File.expand_path(identity[:executable]) &&
+            identity[:executable].end_with?("/ClashX Meta.app/Contents/MacOS/ClashX Meta")
+    raise InvalidConfigError, "客户端运行记录无效" unless valid
+
+    {
+      "PID" => identity.fetch(:pid), "Started" => identity.fetch(:started),
+      "Executable" => identity.fetch(:executable),
+      "UpdateRequested" => update_requested == true,
+      "RollbackRequested" => rollback_requested == true
+    }
+  end
+
+  def parsed_activation_state(value)
+    valid = value.is_a?(Hash) && value.keys.sort == %w[
+      Executable PID RollbackRequested Started UpdateRequested
+    ].sort && value["PID"].is_a?(Integer) && value["PID"] > 0 &&
+            value["Started"].is_a?(String) && !value["Started"].empty? &&
+            value["Executable"].is_a?(String) &&
+            value["Executable"] == File.expand_path(value["Executable"]) &&
+            value["Executable"].end_with?("/ClashX Meta.app/Contents/MacOS/ClashX Meta") &&
+            [true, false].include?(value["UpdateRequested"]) &&
+            [true, false].include?(value["RollbackRequested"])
+    raise InvalidConfigError, "配置事务客户端运行记录无效" unless valid
+
+    {
+      pid: value.fetch("PID"), started: value.fetch("Started"),
+      executable: value.fetch("Executable"),
+      update_requested: value.fetch("UpdateRequested"),
+      rollback_requested: value.fetch("RollbackRequested")
+    }
+  end
+
   def remove_profile_transaction(snapshot, state_uncertain_on_sync_failure: false)
     path = snapshot.fetch(:path)
     flags = File::RDONLY
@@ -244,19 +281,36 @@ module ClaudeEasy
     text = snapshot.fetch(:bytes).dup.force_encoding(Encoding::UTF_8)
     raise InvalidConfigError, "配置事务记录无效" unless text.valid_encoding?
 
-    state = JSON.parse(text)
+    lines = text.lines
+    raise InvalidConfigError, "配置事务记录无效" unless text.end_with?("\n") && !lines.empty?
+
+    state = JSON.parse(lines.shift)
+    lines.each do |line|
+      event = JSON.parse(line)
+      raise InvalidConfigError, "配置事务加载记录无效" unless
+        [4, 5].include?(state["Version"]) && event.is_a?(Hash) &&
+        event.keys.sort == %w[Activation Version] && event["Version"] == 1
+
+      parsed_activation_state(event.fetch("Activation"))
+      state["Version"] = 5
+      state["Activation"] = event.fetch("Activation")
+    end
     if state == { "Version" => 3, "Committed" => true }
       remove_profile_transaction(snapshot)
       return :committed
     end
     version = state["Version"] if state.is_a?(Hash)
-    expected_state_keys = version == 4 ? %w[Items Runtime Version] : %w[Items Version]
+    expected_state_keys = case version
+                          when 5 then %w[Activation Items Runtime Version]
+                          when 4 then %w[Items Runtime Version]
+                          else %w[Items Version]
+                          end
     valid_state = state.is_a?(Hash) && state.keys.sort == expected_state_keys &&
-                  [1, 2, 4].include?(version) && state["Items"].is_a?(Array) &&
+                  [1, 2, 4, 5].include?(version) && state["Items"].is_a?(Array) &&
                   !state["Items"].empty?
     raise InvalidConfigError, "配置事务记录无效" unless valid_state
 
-    runtime_checkpoint = if version == 4
+    runtime_checkpoint = if [4, 5].include?(version)
                            parsed_runtime_checkpoint(
                              state["Runtime"], roots: roots,
                              write_paths: state.fetch("Items").each_with_object([]) do |item, paths|
@@ -278,7 +332,7 @@ module ClaudeEasy
                    item["Path"].is_a?(String) && item["WritePath"].is_a?(String) &&
                    item["OriginalBase64"].is_a?(String) &&
                    item["CandidateSha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
-      if [2, 4].include?(version)
+      if [2, 4, 5].include?(version)
         identity = item["OriginalIdentity"]
         valid_item &&= item["CandidateBase64"].is_a?(String) &&
                        identity.is_a?(Array) && identity.length == 2 &&
@@ -306,7 +360,7 @@ module ClaudeEasy
         next
       end
       current = current_snapshot.fetch(:bytes)
-      if [2, 4].include?(version)
+      if [2, 4, 5].include?(version)
         candidate = Base64.strict_decode64(item.fetch("CandidateBase64"))
         raise InvalidConfigError, "配置事务记录无效" unless
           Digest::SHA256.hexdigest(candidate) == item.fetch("CandidateSha256")
@@ -340,12 +394,14 @@ module ClaudeEasy
       raise InvalidConfigError, "旧版配置事务缺少文件身份，不能自动恢复"
     end
     remove_profile_transaction(snapshot) unless keep_transaction
-    snapshot.merge(runtime_checkpoint: runtime_checkpoint)
+    activation_state = parsed_activation_state(state.fetch("Activation")) if version == 5
+    snapshot.merge(runtime_checkpoint: runtime_checkpoint, activation_state: activation_state)
   rescue ArgumentError, JSON::ParserError
     raise InvalidConfigError, "配置事务记录无效"
   end
 
-  def prepare_profile_transaction(items, backup_root, roots:, runtime_checkpoint: nil)
+  def prepare_profile_transaction(items, backup_root, roots:, runtime_checkpoint: nil,
+                                  activation_identity: nil)
     root = secure_backup_root!(backup_root)
     path = profile_transaction_path(root)
     raise IOError, "发现尚未恢复的配置事务记录" if File.exist?(path) || File.symlink?(path)
@@ -379,11 +435,14 @@ module ClaudeEasy
 
     state = { "Version" => 2, "Items" => records }
     if runtime_checkpoint
-      state["Version"] = 4
+      state["Version"] = activation_identity ? 5 : 4
       state["Runtime"] = serialized_runtime_checkpoint(
         runtime_checkpoint, roots: roots,
         write_paths: records.map { |record| record.fetch("WritePath") }
       )
+      state["Activation"] = serialized_activation_state(activation_identity) if activation_identity
+    elsif activation_identity
+      raise InvalidConfigError, "客户端运行记录缺少运行时恢复记录"
     end
     bytes = (JSON.generate(state) + "\n").b
     Tempfile.create([".claude-easy-profile-transaction-", ".tmp"], root) do |temporary|
@@ -405,7 +464,77 @@ module ClaudeEasy
         }
       ]
     end
-    snapshot.merge(targets: targets, runtime_checkpoint: runtime_checkpoint)
+    snapshot.merge(
+      targets: targets, runtime_checkpoint: runtime_checkpoint,
+      activation_state: activation_identity && parsed_activation_state(state.fetch("Activation"))
+    )
+  end
+
+  def mark_profile_transaction_activation(transaction, phase, identity)
+    key = { update: "UpdateRequested", rollback: "RollbackRequested" }[phase]
+    raise InvalidConfigError, "配置事务加载阶段无效" unless key
+
+    path = transaction.fetch(:path)
+    write_path = File.realpath(path)
+    File.open(write_path, "r+b") do |source|
+      lock_exclusive_with_timeout(source)
+      source.rewind
+      current = source.read.b
+      original_bytes = transaction.fetch(:bytes)
+      stat = source.stat
+      return false unless locked_source_current?(source, path, write_path) &&
+                          [stat.dev, stat.ino] == transaction.fetch(:identity) &&
+                          current == original_bytes
+
+      lines = original_bytes.lines
+      raise InvalidConfigError, "配置事务加载记录无效" unless
+        original_bytes.end_with?("\n") && !lines.empty?
+      state = JSON.parse(lines.shift)
+      lines.each do |line|
+        event = JSON.parse(line)
+        raise InvalidConfigError, "配置事务加载记录无效" unless
+          [4, 5].include?(state["Version"]) && event.is_a?(Hash) &&
+          event.keys.sort == %w[Activation Version] && event["Version"] == 1
+        state["Version"] = 5
+        state["Activation"] = event.fetch("Activation")
+      end
+      raise InvalidConfigError, "配置事务缺少加载防重复记录" unless [4, 5].include?(state["Version"])
+
+      fresh = serialized_activation_state(identity)
+      previous = parsed_activation_state(state["Activation"]) if state["Activation"]
+      same_client = previous && previous.values_at(:pid, :started, :executable) ==
+                                identity.values_at(:pid, :started, :executable)
+      activation = same_client ? state.fetch("Activation").dup : fresh
+      return false if activation.fetch(key)
+
+      activation[key] = true
+      event_bytes = (JSON.generate("Version" => 1, "Activation" => activation) + "\n").b
+      source.seek(0, IO::SEEK_END)
+      written = source.write(event_bytes)
+      raise IOError, "配置事务加载记录写入不完整" unless written == event_bytes.bytesize
+
+      source.flush
+      source.fsync
+      source.rewind
+      verified_bytes = source.read.b
+      verified_stat = source.stat
+      raise IOError, "配置事务加载记录无法确认" unless
+        [verified_stat.dev, verified_stat.ino] == [stat.dev, stat.ino] &&
+        verified_bytes == original_bytes + event_bytes
+      updated = {
+        path: path, bytes: verified_bytes,
+        identity: [verified_stat.dev, verified_stat.ino]
+      }
+      transaction.replace(
+        updated.merge(
+          targets: transaction[:targets], runtime_checkpoint: transaction[:runtime_checkpoint],
+          activation_state: parsed_activation_state(activation)
+        )
+      )
+    end
+    true
+  rescue JSON::ParserError
+    raise InvalidConfigError, "配置事务加载记录无效"
   end
 
   def profile_work_items(roots, selected, active_root)

@@ -86,7 +86,7 @@ try {
         "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
         "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
         "Get-ClashControllerContext", "Get-ClashRuntimeState", "Invoke-ClashVergeReactivationShortcut",
-        "Wait-ClashVergeRuntimeRefresh", "Assert-ClashRuntimeHealthy",
+        "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
         "Get-RemoteSubscriptionUpdateTargets", "Invoke-SubscriptionCurlDownload",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
@@ -266,10 +266,9 @@ if ($SafeUpdate) {
         $filesCommitted = $true
         $runtimeRefreshAttempted = $true
         Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-        Wait-ClashVergeRuntimeRefresh $runtimeConfigPath $runtimeBefore
-        $runtimeAfter = Get-ClashControllerContext $runtimeConfigPath
-        Assert-ClashRuntimeHealthy `
-            $runtimeAfter $runtimeStateBefore.Selections $runtimeStateBefore.TunEnabled $savedUsageProfile `
+        $runtimeAfter = Wait-ClashVergeRuntimeHealthy `
+            $runtimeConfigPath $runtimeBefore $runtimeStateBefore.Selections `
+            $runtimeStateBefore.TunEnabled $savedUsageProfile `
             ([string]$curlCommand.Source) $policy
         $indexAfter = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
         if (-not $indexAfter.Exists) { throw "远程订阅清单在更新后消失。" }
@@ -297,10 +296,9 @@ if ($SafeUpdate) {
         if ($runtimeRefreshAttempted) {
             $rollbackRuntime = Get-ClashControllerContext $runtimeConfigPath
             Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-            Wait-ClashVergeRuntimeRefresh $runtimeConfigPath $rollbackRuntime
-            $rollbackAfter = Get-ClashControllerContext $runtimeConfigPath
-            Assert-ClashRuntimeHealthy `
-                $rollbackAfter $runtimeStateBefore.Selections $runtimeStateBefore.TunEnabled $savedUsageProfile `
+            $rollbackAfter = Wait-ClashVergeRuntimeHealthy `
+                $runtimeConfigPath $rollbackRuntime $runtimeStateBefore.Selections `
+                $runtimeStateBefore.TunEnabled $savedUsageProfile `
                 ([string]$curlCommand.Source) $policy
         }
         throw "更新后的配置检查失败，已恢复原订阅：$updateFailure"

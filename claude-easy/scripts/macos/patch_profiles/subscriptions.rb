@@ -664,7 +664,10 @@ module ClaudeEasy
   end
 
   def default_safe_update_activation(items, usage_profile, selected_name = selected_profile_name,
-                                     precommit_condition: nil, runtime_checkpoint: nil)
+                                     precommit_condition: nil, runtime_checkpoint: nil,
+                                     transaction: nil, client_identity: nil,
+                                     native_reloader: nil, runtime_waiter: nil,
+                                     generation_reader: nil)
     active = items.find { |item| active_profile?(item.fetch(:path), selected_name) }
     return runtime_precommit_allowed?(precommit_condition) unless active
 
@@ -673,37 +676,53 @@ module ClaudeEasy
       rollback_bytes: active.fetch(:original), patched_digest: Digest::SHA256.hexdigest(active.fetch(:candidate)),
       patched_identity: active[:patched_identity], patched_path: active[:patched_path]
     }
-    activate_updated_profile(
-      result, require_tun: runtime_tun_requirement(usage_profile),
+    activate_safe_updated_profile(
+      result, transaction: transaction, client_identity: client_identity,
       precommit_condition: precommit_condition,
       require_safe_ai: usage_profile == 3,
-      runtime_checkpoint: runtime_checkpoint
+      runtime_checkpoint: runtime_checkpoint,
+      native_reloader: native_reloader, runtime_waiter: runtime_waiter,
+      generation_reader: generation_reader
     )
   end
 
   def reload_recovered_safe_update_runtime(targets, usage_profile, selected_name,
-                                           precommit_condition: nil, runtime_checkpoint: nil)
+                                           precommit_condition: nil, runtime_checkpoint: nil,
+                                           transaction: nil, client_identity: nil,
+                                           native_reloader: nil, runtime_waiter: nil,
+                                           generation_reader: nil)
+    runtime_checkpoint ||= transaction && transaction[:runtime_checkpoint]
     active = targets.find { |target| active_profile?(target.fetch(:path), selected_name) }
+    active ||= { path: runtime_checkpoint[:path] } if runtime_checkpoint
     return true unless active
 
-    socket = controller_socket
-    return false unless socket
+    return false unless runtime_checkpoint && transaction && client_identity
+    return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
 
-    requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
-    roots = targets.map { |target| File.dirname(File.expand_path(target.fetch(:path))) }.uniq
-    unless precommit_condition
-      runtime_context = capture_runtime_profile_context(roots)
-      return false unless runtime_context && runtime_context.fetch(:selected) == selected_name
+    selections = runtime_selections_for_profile(
+      runtime_checkpoint[:selections], active.fetch(:path)
+    )
+    expected_tun = runtime_checkpoint[:expected_tun]
+    return false unless selections && %i[enabled disabled ignore].include?(expected_tun)
 
-      precommit_condition = lambda do
-        runtime_profile_context_current?(runtime_context, roots)
-      end
-    end
-    reload_recovered_profile_runtime(
-      [{ path: active.fetch(:path), active: true }],
-      require_tun: runtime_tun_requirement(usage_profile), requester: requester,
-      precommit_condition: precommit_condition,
-      runtime_checkpoint: runtime_checkpoint
+    required_proxy_group = profile_ai_runtime_group(active.fetch(:path)) if usage_profile == 3
+    return false if usage_profile == 3 && !required_proxy_group
+    return false unless runtime_precommit_allowed?(precommit_condition)
+
+    generation_reader ||= method(:clashx_runtime_generation)
+    native_reloader ||= method(:request_clashx_native_reload)
+    runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
+    generation = generation_reader.call
+    return false unless generation
+    return false unless
+      mark_profile_transaction_activation(transaction, :rollback, client_identity)
+    return false unless native_reloader.call(client_identity)
+
+    runtime_waiter.call(
+      client_identity, generation_before: generation,
+      selections: selections, expected_tun: expected_tun,
+      required_proxy_group: required_proxy_group,
+      precommit_condition: precommit_condition
     )
   rescue StandardError
     false
@@ -712,7 +731,9 @@ module ClaudeEasy
   def safe_update_all(targets:, policy:, backup_root:, usage_profile:,
                       fetcher: method(:fetch_remote_subscription),
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
-                      guard_storage: false, expected_storage: nil)
+                      guard_storage: false, expected_storage: nil,
+                      client_identity_reader: method(:clashx_running_identity),
+                      native_reloader: nil, runtime_waiter: nil, generation_reader: nil)
     operation_lock = nil
     default_activation = activation.nil?
     raise InvalidConfigError, "用途档位无效" unless [1, 2, 3].include?(usage_profile)
@@ -737,34 +758,40 @@ module ClaudeEasy
                           end
     if Dir.exist?(backup_root)
       operation_lock = profile_operation_lock(backup_root)
-      if profile_transaction_pending?(backup_root)
-        selected = selected_name
-        active_root = active_profile_root(roots, selected)
-        work_items = profile_work_items(roots, selected, active_root)
-        recovery = resume_profile_transaction(
-          backup_root, roots: roots, work_items: work_items, reload_runtime: true,
-          require_tun: runtime_tun_requirement(usage_profile),
-          precommit_condition: precommit_condition
+      journal_pending = profile_transaction_pending?(backup_root) ||
+                        File.exist?(profile_transaction_path(backup_root)) ||
+                        File.symlink?(profile_transaction_path(backup_root))
+      if journal_pending
+        transaction = recover_profile_transaction(
+          backup_root, roots: roots, keep_transaction: true
         )
-        if recovery == :runtime_restore_pending
-          return {
-            status: :runtime_restore_pending, failed_profile: "",
-            reason: :transaction_runtime_restore_failed
-          }
+        if transaction != :committed
+          client_identity = client_identity_reader.call
+          restored = transaction.is_a?(Hash) && client_identity &&
+                     reload_recovered_safe_update_runtime(
+                       targets, usage_profile, selected_name,
+                       precommit_condition: precommit_condition,
+                       runtime_checkpoint: transaction[:runtime_checkpoint],
+                       transaction: transaction, client_identity: client_identity,
+                       native_reloader: native_reloader, runtime_waiter: runtime_waiter,
+                       generation_reader: generation_reader
+                     ) && runtime_precommit_allowed?(precommit_condition)
+          if restored
+            begin
+              remove_profile_transaction(transaction)
+            rescue StandardError
+              restored = false
+            end
+          end
+          unless restored
+            return {
+              status: :runtime_restore_pending, failed_profile: "",
+              reason: :transaction_runtime_restore_failed
+            }
+          end
         end
-      end
-      pending_runtime_restore = File.exist?(profile_transaction_path(backup_root)) ||
-                                File.symlink?(profile_transaction_path(backup_root))
-      recover_profile_transaction(backup_root, roots: roots)
-      if pending_runtime_restore &&
-         !reload_recovered_safe_update_runtime(
-           targets, usage_profile, selected_name,
-           precommit_condition: precommit_condition
-         )
-        return {
-          status: :runtime_restore_pending, failed_profile: "",
-          reason: :transaction_runtime_restore_failed
-        }
+      else
+        recover_profile_transaction(backup_root, roots: roots)
       end
     end
 
@@ -821,9 +848,14 @@ module ClaudeEasy
     end
     begin
       runtime_checkpoint = nil
+      client_identity = nil
       if default_activation
         active = items.find { |item| active_profile?(item.fetch(:path), selected_name) }
         if active
+          client_identity = client_identity_reader.call
+          unless client_identity
+            return { status: :aborted, failed_profile: "", reason: :client_state_changed }
+          end
           runtime_checkpoint = capture_runtime_checkpoint(
             active.fetch(:path), require_tun: runtime_tun_requirement(usage_profile)
           )
@@ -833,7 +865,8 @@ module ClaudeEasy
         end
       end
       transaction = prepare_profile_transaction(
-        items, backup_root, roots: roots, runtime_checkpoint: runtime_checkpoint
+        items, backup_root, roots: roots, runtime_checkpoint: runtime_checkpoint,
+        activation_identity: client_identity
       )
     rescue ConcurrentProfileChangeError
       return { status: :aborted, failed_profile: "", reason: :concurrent_change }
@@ -930,7 +963,9 @@ module ClaudeEasy
       default_safe_update_activation(
         updated_items, usage_profile, selected_name,
         precommit_condition: precommit_condition,
-        runtime_checkpoint: runtime_checkpoint
+        runtime_checkpoint: runtime_checkpoint, transaction: transaction,
+        client_identity: client_identity, native_reloader: native_reloader,
+        runtime_waiter: runtime_waiter, generation_reader: generation_reader
       )
     end
     activation_result = begin

@@ -601,11 +601,10 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "      precommit_condition: precommit_condition,\n" \
-          "      runtime_checkpoint: runtime_checkpoint\n" \
-          "    )\n",
-        "      precommit_condition: precommit_condition\n" \
-          "    )\n"
+        "      selections: selections, expected_tun: expected_tun,\n" \
+          "      required_proxy_group: required_proxy_group,\n",
+        "      selections: selections, expected_tun: :ignore,\n" \
+          "      required_proxy_group: required_proxy_group,\n"
       )
 
       assert_mutation_is_killed(
@@ -673,26 +672,14 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        "      precommit_condition: precommit_condition, check_dns: false\n" \
-          "    )\n" \
-          "    healthy && runtime_precommit_allowed?(precommit_condition)\n" \
-          "  rescue StandardError\n" \
-          "    false\n" \
-          "  end\n\n" \
-          "  def verify_unchanged_profile_runtime",
-        "      precommit_condition: precommit_condition\n" \
-          "    )\n" \
-          "    healthy && runtime_precommit_allowed?(precommit_condition)\n" \
-          "  rescue StandardError\n" \
-          "    false\n" \
-          "  end\n\n" \
-          "  def verify_unchanged_profile_runtime"
+        "          required_proxy_group: required_proxy_group, flush_caches: false\n",
+        "          required_proxy_group: required_proxy_group, check_dns: false, flush_caches: false\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_recovered_safe_update_runtime_restores_tun_after_reloading_raw_subscription"
+        "--name", "test_clashx_runtime_waits_for_reload_generation_and_full_health"
       )
     end
   end
@@ -874,23 +861,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "      if profile_transaction_pending?(backup_root)\n" \
-          "        selected = selected_name\n" \
-          "        active_root = active_profile_root(roots, selected)\n" \
-          "        work_items = profile_work_items(roots, selected, active_root)\n" \
-          "        recovery = resume_profile_transaction(\n" \
-          "          backup_root, roots: roots, work_items: work_items, reload_runtime: true,\n" \
-          "          require_tun: runtime_tun_requirement(usage_profile),\n" \
-          "          precommit_condition: precommit_condition\n" \
-          "        )\n" \
-          "        if recovery == :runtime_restore_pending\n" \
-          "          return {\n" \
-          "            status: :runtime_restore_pending, failed_profile: \"\",\n" \
-          "            reason: :transaction_runtime_restore_failed\n" \
-          "          }\n" \
-          "        end\n" \
-          "      end\n",
-        ""
+        "      if journal_pending\n",
+        "      if false\n"
       )
 
       assert_mutation_is_killed(
@@ -3423,6 +3395,57 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
         "--name", "test_production_probe_inventory_and_ci_aggregation_are_fixed"
+      )
+    end
+  end
+
+  def test_macos_safe_update_native_reload_wiring_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
+        "    activate_safe_updated_profile(\n",
+        "    activate_updated_profile(\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_default_safe_update_wires_the_client_native_reload_path"
+      )
+    end
+  end
+
+  def test_macos_native_reload_repeat_guard_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "      return false if activation.fetch(key)\n",
+        "      return false if false\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_profile_transaction_allows_each_native_reload_phase_once_per_client_process"
+      )
+    end
+  end
+
+  def test_windows_runtime_health_wait_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/install_windows.ps1",
+        "        $runtimeAfter = Wait-ClashVergeRuntimeHealthy `\n",
+        "        $runtimeAfter = Wait-ClashVergeRuntimeRefresh `\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        "node", "--test", "--test-name-pattern=Windows curl update reloads",
+        "tests/test_windows_patcher.js"
       )
     end
   end

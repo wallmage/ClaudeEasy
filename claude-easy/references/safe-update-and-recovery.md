@@ -13,7 +13,7 @@
 1. macOS 运行 `bash scripts/install_macos.sh --safe-update`；Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止。
 2. 两端都用 `curl -q --config -` 自动下载全部远程订阅。
 3. 两端都按已保存用途档位检查下载结果，完成严格 UTF-8、YAML、代理组、二次转换一致性检查和 Mihomo 校验；全部候选通过后才整批写入。macOS 直接生成补丁候选；Windows 核对受管全局脚本，并让 Clash Verge Rev 重新激活当前订阅，由客户端执行同一用途档位的全局脚本。
-4. 两端都保留更新前的 TUN 与代理组选择，加载当前订阅后检查补丁已经进入运行配置，再完成该档位的 TUN、DNS 和实际连接检查；失败时恢复全部原订阅和原运行配置。成功后再次确认订阅自动更新关闭，再结束。
+4. 两端都保留更新前的 TUN 与代理组选择，并只通过已经运行的客户端原生入口热加载：macOS 向同一 ClashX Meta 进程发送官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。每次操作最多加载一次候选、一次恢复配置；配置文件变化后还必须等 TUN、代理组、DNS 和实际连接全部恢复。失败时恢复全部原订阅和原运行配置；同一客户端进程已经执行过的阶段不得重复。成功后再次确认订阅自动更新关闭，再结束。
 
 macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。macOS 和 Windows 都不得添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理，不能再靠 User-Agent 绕过。两端都不追加防倒退、协议、数量、哈希或时间戳检查，也不追加 WebRTC 或区域指纹检查。
 

@@ -1201,15 +1201,31 @@ test('Windows curl update reloads, checks, and restores the active runtime', () 
   const mihomo = update.indexOf('Test-MihomoCandidate');
   const write = update.indexOf('Invoke-VerifiedFileTransaction $targets');
   const reactivate = update.indexOf('Invoke-ClashVergeReactivationShortcut');
-  const runtime = update.indexOf('Assert-ClashRuntimeHealthy');
+  const runtime = update.indexOf('Wait-ClashVergeRuntimeHealthy');
   const autoUpdate = update.lastIndexOf('Assert-RemoteSubscriptionAutoUpdateDisabled');
   assert.ok(backup >= 0 && backup < download);
   assert.ok(download < yaml && yaml < mihomo && mihomo < write);
   assert.ok(write < reactivate && reactivate < runtime && runtime < autoUpdate);
-  assert.match(update, /\$runtimeAfter \$runtimeStateBefore\.Selections \$runtimeStateBefore\.TunEnabled \$savedUsageProfile/);
+  assert.equal((update.match(/Wait-ClashVergeRuntimeHealthy/g) || []).length, 2);
+  assert.match(update, /\$runtimeConfigPath \$runtimeBefore \$runtimeStateBefore\.Selections/);
+  assert.match(update, /\$runtimeConfigPath \$rollbackRuntime \$runtimeStateBefore\.Selections/);
   assert.match(update, /Invoke-VerifiedFileTransaction \$restoreTargets/);
   assert.match(update, /已恢复原订阅/);
   assert.doesNotMatch(update, /User-Agent|user-agent/);
+});
+
+test('Windows hot reload waits for runtime health after the generated config changes', () => {
+  const runtimeModule = fs.readFileSync(path.join(installerModuleDir, 'runtime.ps1'), 'utf8');
+  const start = runtimeModule.indexOf('function Wait-ClashVergeRuntimeHealthy');
+  const end = runtimeModule.indexOf('\nfunction ConvertFrom-ClashRuntimeYamlScalar', start);
+  const body = runtimeModule.slice(start, end);
+  const refresh = body.indexOf('Wait-ClashVergeRuntimeRefresh');
+  const health = body.indexOf('Assert-ClashRuntimeHealthy');
+  const retry = body.indexOf('Start-Sleep -Milliseconds 250');
+
+  assert.ok(start >= 0 && end > start);
+  assert.ok(refresh >= 0 && refresh < health && health < retry);
+  assert.match(body, /do\s*\{[\s\S]*Assert-ClashRuntimeHealthy[\s\S]*\}\s*while/);
 });
 
 test('PowerShell 5.1 keeps a single remote subscription path as an array', () => {
@@ -1732,7 +1748,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Initialize-ClaudeEasySendInput', 'Invoke-ClashVergeReactivationShortcut',
       'Get-ClashControllerContext', 'Invoke-ClashControllerRequest',
       'Get-ClashRuntimeState', 'Restore-ClashRuntimeSelections',
-      'Wait-ClashVergeRuntimeRefresh', 'ConvertFrom-ClashRuntimeYamlScalar',
+      'Wait-ClashVergeRuntimeRefresh', 'Wait-ClashVergeRuntimeHealthy',
+      'ConvertFrom-ClashRuntimeYamlScalar',
       'Get-ClashRuntimeYamlMappingEntry',
       'Get-ClashRuntimeYamlNode', 'Get-ClashRuntimeYamlMapping', 'Get-ClashRuntimeYamlSequence',
       'Get-ClashRuntimeManagedProvider', 'Assert-ClashRuntimePatch',

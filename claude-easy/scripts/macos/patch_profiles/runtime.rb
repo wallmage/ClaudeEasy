@@ -15,6 +15,111 @@ module ClaudeEasy
     "no_proxy" => nil, "NO_PROXY" => nil
   }.freeze
 
+  CLASHX_UPDATE_EVENT_SCRIPT = <<~'JAVASCRIPT'.freeze
+    ObjC.import("Foundation");
+    function run(argv) {
+      const pid = Number(argv[0]);
+      if (!Number.isInteger(pid) || pid <= 0) throw new Error("invalid pid");
+      const target = $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(pid);
+      const event = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(
+        0x4755524c, 0x4755524c, target, -1, 0
+      );
+      event.setParamDescriptorForKeyword(
+        $.NSAppleEventDescriptor.descriptorWithString("clash://update-config"), 0x2d2d2d2d
+      );
+      event.sendEventWithOptionsTimeoutError(1, 3, Ref());
+    }
+  JAVASCRIPT
+
+  def clashx_running_identity(runner: Open3.method(:capture3))
+    output, _error, status = runner.call(
+      "/bin/ps", "axww", "-o", "pid=", "-o", "lstart=", "-o", "comm="
+    )
+    return nil unless status.success?
+
+    matches = output.each_line.each_with_object([]) do |line, found|
+      match = line.match(/\A\s*(\d+)\s+(.{24})\s+(.+ClashX Meta\.app\/Contents\/MacOS\/ClashX Meta)\s*\z/)
+      next unless match
+
+      executable = match[3].strip
+      next unless executable == File.expand_path(executable)
+
+      found << { pid: match[1].to_i, started: match[2], executable: executable }
+    end
+    matches.length == 1 ? matches.first : nil
+  rescue StandardError
+    nil
+  end
+
+  def same_clashx_process?(left, right)
+    left.is_a?(Hash) && right.is_a?(Hash) &&
+      left.values_at(:pid, :started, :executable) == right.values_at(:pid, :started, :executable)
+  end
+
+  def request_clashx_native_reload(identity, runner: Open3.method(:capture3), process_reader: nil)
+    process_reader ||= method(:clashx_running_identity)
+    return false unless same_clashx_process?(identity, process_reader.call)
+
+    _output, _error, status = runner.call(
+      "/usr/bin/osascript", "-l", "JavaScript", "-e", CLASHX_UPDATE_EVENT_SCRIPT,
+      identity.fetch(:pid).to_s
+    )
+    status.success? && same_clashx_process?(identity, process_reader.call)
+  rescue StandardError
+    false
+  end
+
+  def clashx_runtime_generation
+    paths = running_mihomo_config_paths.sort
+    return nil if paths.empty?
+
+    values = paths.map do |path|
+      stat = File.stat(path)
+      [File.realpath(path), stat.mtime.to_f, stat.size, Digest::SHA256.file(path).hexdigest]
+    end
+    Digest::SHA256.hexdigest(JSON.generate(values))
+  rescue StandardError
+    nil
+  end
+
+  def current_runtime_requester
+    socket = controller_socket
+    return nil unless socket
+
+    ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+  end
+
+  def wait_for_clashx_safe_runtime(identity, generation_before:, selections:, expected_tun:,
+                                    required_proxy_group: nil, requester_factory: nil,
+                                    generation_reader: nil, process_reader: nil,
+                                    connectivity_checker: nil, precommit_condition: nil,
+                                    sleeper: nil, attempts: 120)
+    requester_factory ||= method(:current_runtime_requester)
+    generation_reader ||= method(:clashx_runtime_generation)
+    process_reader ||= method(:clashx_running_identity)
+    sleeper ||= ->(seconds) { sleep(seconds) }
+
+    attempts.times do |attempt|
+      return false unless same_clashx_process?(identity, process_reader.call)
+
+      generation = generation_reader.call
+      if generation && generation != generation_before
+        requester = requester_factory.call
+        healthy = requester && runtime_health_healthy?(
+          requester, selections: selections, expected_tun: expected_tun,
+          connectivity_checker: connectivity_checker,
+          precommit_condition: precommit_condition,
+          required_proxy_group: required_proxy_group, flush_caches: false
+        )
+        return same_clashx_process?(identity, process_reader.call) if healthy
+      end
+      sleeper.call(0.25) if attempt + 1 < attempts
+    end
+    false
+  rescue StandardError
+    false
+  end
+
   def running_mihomo_config_paths
     output, status = Open3.capture2("/bin/ps", "ax", "-o", "command=")
     return [] unless status.success?
@@ -661,6 +766,66 @@ module ClaudeEasy
     healthy ? result : result.merge(status: :runtime_check_failed)
   rescue StandardError
     result.merge(status: :runtime_check_failed)
+  end
+
+  def activate_safe_updated_profile(result, transaction:, client_identity:, runtime_checkpoint:,
+                                    precommit_condition: nil, require_safe_ai: false,
+                                    native_reloader: nil, runtime_waiter: nil,
+                                    generation_reader: nil)
+    pending = -> { result.merge(status: :reload_failed_restore_pending) }
+    native_reloader ||= method(:request_clashx_native_reload)
+    runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
+    generation_reader ||= method(:clashx_runtime_generation)
+    return pending.call unless profile_result_current?(result)
+    return result.merge(status: rollback_before_runtime_reload(result)) unless
+      runtime_checkpoint.is_a?(Hash) &&
+      runtime_checkpoint[:path] == File.realpath(result.fetch(:path))
+
+    selections = runtime_selections_for_profile(
+      runtime_checkpoint[:selections], result.fetch(:path)
+    )
+    expected_tun = runtime_checkpoint[:expected_tun]
+    return result.merge(status: rollback_before_runtime_reload(result)) unless
+      selections && %i[enabled disabled ignore].include?(expected_tun)
+
+    required_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
+    return result.merge(status: rollback_before_runtime_reload(result)) if
+      require_safe_ai && !required_proxy_group
+    unless runtime_precommit_allowed?(precommit_condition)
+      return result.merge(status: rollback_before_runtime_reload(result))
+    end
+
+    generation = generation_reader.call
+    return result.merge(status: rollback_before_runtime_reload(result)) unless generation
+    return pending.call unless
+      mark_profile_transaction_activation(transaction, :update, client_identity)
+
+    update_loaded = native_reloader.call(client_identity) &&
+                    runtime_waiter.call(
+                      client_identity, generation_before: generation,
+                      selections: selections, expected_tun: expected_tun,
+                      required_proxy_group: required_proxy_group,
+                      precommit_condition: precommit_condition
+                    )
+    return result.merge(reloaded: true) if
+      update_loaded && profile_result_current?(result) &&
+      runtime_precommit_allowed?(precommit_condition)
+
+    return result.merge(status: :reload_failed_rollback_conflict) unless restore_profile_bytes(result)
+    rollback_generation = generation_reader.call
+    return pending.call unless rollback_generation
+    return pending.call unless
+      mark_profile_transaction_activation(transaction, :rollback, client_identity)
+    return pending.call unless native_reloader.call(client_identity)
+
+    restored = runtime_waiter.call(
+      client_identity, generation_before: rollback_generation,
+      selections: selections, expected_tun: expected_tun,
+      precommit_condition: precommit_condition
+    )
+    result.merge(status: restored ? :reload_failed_rolled_back : :reload_failed_restore_pending)
+  rescue StandardError
+    pending.call
   end
 
   def activate_updated_profile(result, socket: nil, requester: nil, connectivity_checker: nil,

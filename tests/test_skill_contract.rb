@@ -1926,16 +1926,16 @@ class SkillContractTest < Minitest::Test
     refute_nil safe_recovery_start
     refute_nil safe_recovery_end
     safe_recovery = subscriptions[safe_recovery_start...safe_recovery_end]
-    safe_load = [
-      safe_recovery.index('"PUT", "/configs?force=true"'),
-      safe_recovery.index("reload_recovered_profile_runtime(")
-    ].compact.min
+    guard = safe_recovery.index("runtime_precommit_allowed?(precommit_condition)")
+    stage = safe_recovery.index("mark_profile_transaction_activation(transaction, :rollback")
+    safe_load = safe_recovery.index("native_reloader.call(client_identity)")
+    refute_nil guard
+    refute_nil stage
     refute_nil safe_load
-    assert_operator(
-      safe_recovery.index("capture_runtime_profile_context(roots)"),
-      :<,
-      safe_load
-    )
+    assert_operator guard, :<, stage
+    assert_operator stage, :<, safe_load
+    refute_includes safe_recovery, '"PUT", "/configs?force=true"'
+    refute_includes safe_recovery, "reload_recovered_profile_runtime("
 
     assert_includes subscriptions, "def capture_runtime_profile_context"
     assert_includes subscriptions, "def selected_profile_name(runner:"
