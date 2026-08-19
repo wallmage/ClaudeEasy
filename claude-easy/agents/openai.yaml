@@ -1,4 +1,4 @@
 interface:
   display_name: "ClaudeEasy 配置与诊断"
   short_description: "按用途配置、诊断或更新 Clash 订阅"
-  default_prompt: "使用 $claude-easy 按用户要求分析、复核、修复、配置、监测或更新 Clash；更新前先提醒用户打开每份订阅的订阅开关并等待明确确认，随后备份并用不带 User-Agent 的 curl 自动更新，确认自动更新关闭，动作结束后不做检查；诊断前读取用途档位并只处理当前存储位置，未获授权不写入，绝对不要退出、停止或重启 Clash 客户端。"
+  default_prompt: "使用 $claude-easy 按用户要求分析、复核、修复、配置、监测或更新 Clash；更新前先提醒用户打开每份订阅的订阅开关并等待明确确认，随后备份并用不带 User-Agent 的 curl 自动更新，按当前档位完成候选检查、加载和运行检查，成功后再次确认自动更新关闭；诊断前读取用途档位并只处理当前存储位置，未获授权不写入，绝对不要退出、停止或重启 Clash 客户端。"

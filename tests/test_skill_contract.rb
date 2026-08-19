@@ -429,6 +429,8 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "配置、用途档位变更和完整安全增强归入 Patch"
     assert_includes policy, "交付类型不能在执行中自行扩大"
     assert_includes prompt, "按用户要求分析、复核、修复、配置、监测或更新 Clash"
+    assert_includes prompt, "按当前档位完成候选检查、加载和运行检查"
+    refute_includes prompt, "动作结束后不做检查"
     assert_includes prompt, "未获授权不写入"
     refute_includes prompt, "诊断要完成取证、修复、复测"
   end
