@@ -103,9 +103,9 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。用户确认前不得读取订阅、建立备份或操作客户端。
 
-确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份，再用 `curl -q --config -` 自动下载并覆盖，更新动作结束后立即结束。客户端未运行时保持未运行。
+确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份，再用 `curl -q --config -` 自动下载。Windows 以文件事务直接覆盖下载结果后结束。macOS 按已保存档位解析并应用现行 Patch，完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载及档位运行检查；失败时恢复，成功后再次确认订阅自动更新关闭。客户端未运行时保持未运行。
 
-macOS 和 Windows 的下载都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退、协议、数量、哈希、时间戳或连通性检查。
+macOS 和 Windows 的下载都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。两端都不追加防倒退、协议、数量、哈希或时间戳检查；Windows 不追加连通性检查，macOS 只执行上述既有流程，不追加 WebRTC 或区域指纹检查。
 
 ## 配置历史与恢复
 

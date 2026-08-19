@@ -8,13 +8,13 @@
 
 首次收到请求时，先提醒：“请确保订阅开关已打开。请自行登录服务商管理后台，找到订阅开关并打开；部分服务默认关闭，开启后约 10 分钟有效，到期会自动关闭。打开后回复‘打开了’或‘没问题’，我再继续更新。”用户明确确认前不得读取订阅、建立备份或操作客户端；不得代替用户操作服务商后台。
 
-确认后只执行：
+确认后执行：
 
 1. macOS 运行 `bash scripts/install_macos.sh --safe-update`；Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止。
-2. 两端都用 `curl -q --config -` 自动下载并覆盖全部远程订阅。
-3. 两端都保持订阅自动更新关闭；Windows 在更新前从 `profiles.yaml` 确认全部远程订阅的 `allow_auto_update` 都是 `false`。
-4. 更新动作结束后立即结束，只报告成功或失败。
+2. 两端都用 `curl -q --config -` 自动下载全部远程订阅。
+3. Windows 在下载前从 `profiles.yaml` 确认全部远程订阅的 `allow_auto_update` 都是 `false`，然后用同一文件事务直接覆盖下载结果；写入完成后立即结束，不追加内容或连通性检查。
+4. macOS 按已保存用途档位解析下载结果、应用现行 Patch、重读 YAML、执行二次转换一致性检查和 Mihomo 校验；全部候选通过后才整批写入。更新目标中的当前订阅随后通过本地控制器加载，并完成该档位规定的 TUN、代理选择、DNS 和实际连接检查；失败时按 macOS 事务规则恢复。成功后再次确认订阅自动更新关闭，再结束。
 
-macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。macOS 和 Windows 都不得添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理，不能再靠 User-Agent 绕过。更新后不追加防倒退、协议、数量、哈希、时间戳、连通性、DNS、WebRTC 或区域指纹检查。
+macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。macOS 和 Windows 都不得添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理，不能再靠 User-Agent 绕过。两端都不追加防倒退、协议、数量、哈希或时间戳检查；Windows 不追加连通性检查，macOS 只执行上述既有的候选校验、运行加载与档位检查，不追加 WebRTC 或区域指纹检查。
 
 配置历史用于诊断与回滚：当用户说某次改动后变慢或断网，先列出备份，按 `created_at` 选择症状出现前最近的一份作为候选，再把当前配置与候选做配置差异比较；两端公开的备份 ID 统一为不含真实文件名的 `ce-backup-v1-<64 位十六进制>`，旧原始编号只作为兼容输入，不能再次输出。JSON 列表在 `items` 返回含 `id` 与 RFC 3339 `created_at` 的对象；JSON 比较在 `items` 返回 ID、是否相同、备份 SHA-256 与恢复所需的当前 SHA-256，使列出、比较、恢复可以直接衔接。只输出字段路径与哈希；不返回配置文件名，provider 等动态映射名用固定占位符表示，不输出配置值。时间接近只能帮助选备份，不能仅凭时间接近就判定某项变化造成故障。不得自动删除历史备份。macOS 使用 `--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`；Windows 使用 `-ListBackups`、`-CompareBackup ID`、`-RestoreBackup ID -ExpectedCurrentSha256 SHA256`。恢复前验证备份 YAML 与 Mihomo、核对目标文件和预期 SHA-256，并为当前版本再建备份；恢复后复测原始症状，恢复或运行检查失败时恢复回滚前版本。macOS 备份恢复、Patch 与订阅更新前备份共用操作锁，并在读取备份和写配置前先恢复未完成的批量事务；事务恢复改变当前字节时，本次请求按预期哈希冲突停止，必须重新比较。备份事务把提交后的真实路径和文件身份交给运行加载与失败回退；外部以相同字节替换目标也不得覆盖。macOS 恢复当前订阅后必须通过本地控制器重新加载，保持恢复前的 TUN 开关与目标仍保留的代理组选择，并完成缓存、DNS 和连接检查；失败时恢复回滚前版本。文件恢复但运行内核未恢复时必须单独报告；恢复非当前订阅时不得切换当前订阅。Windows 客户端运行时不得为了恢复而停止客户端，只能完成比较并报告当前无法安全自动恢复。

@@ -129,10 +129,10 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 
 1. 提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。
 2. 为全部远程订阅创建更新前备份。
-3. macOS 和 Windows 都用 `curl -q --config -` 自动下载并覆盖全部订阅；Windows 更新前确认 `allow_auto_update` 为 `false`。
-4. 更新动作结束后立即结束。
+3. macOS 和 Windows 都用 `curl -q --config -` 自动下载全部订阅；Windows 更新前确认 `allow_auto_update` 为 `false`，然后直接覆盖并结束。
+4. macOS 按已保存用途档位解析下载结果并应用现行 Patch，完成 YAML 重读、二次转换一致性检查、Mihomo 校验和整批写入；更新目标中的当前订阅加载并通过该档位的运行检查后，再次确认订阅自动更新关闭。失败时按事务规则恢复。
 
-macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，不设置 User-Agent，也不会为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退或连通性检查。
+macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，不设置 User-Agent，也不会为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。两端都不追加防倒退检查；Windows 不追加连通性检查，macOS 保留上述既有的候选校验、运行加载和档位检查。
 
 ## 配置历史与恢复
 

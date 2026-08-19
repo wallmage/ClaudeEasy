@@ -1142,19 +1142,22 @@ class SkillContractTest < Minitest::Test
     refute_includes update_section, "Computer Use"
   end
 
-  def test_subscription_update_stops_without_post_update_checks
+  def test_subscription_update_documents_platform_specific_completion
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
     [readme, skill, policy].each do |document|
-      assert_includes document, "动作结束后立即结束"
-      assert_includes document, "更新后不追加"
-      assert_includes document, "连通"
+      assert_includes document, "Windows"
+      assert_includes document, "直接覆盖"
+      assert_includes document, "macOS"
+      assert_includes document, "二次转换一致性检查"
+      assert_includes document, "Mihomo 校验"
+      assert_includes document, "再次确认订阅自动更新关闭"
       refute_includes document, "继续完成 `required_followups`"
     end
 
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
-    assert_includes diagnostics, "更新动作结束后立即完成，不追加检查"
+    assert_includes diagnostics, "macOS 完成候选校验、现行 Patch、运行加载、档位检查和自动更新关闭复查后完成"
     refute_includes diagnostics, "全部远程订阅都进入已验证成功、已恢复或明确失败状态"
   end
 
@@ -1166,12 +1169,14 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     baseline = File.read(File.join(ROOT, "tests/baseline.md"))
 
-    assert_includes core, "跨平台对等"
-    assert_includes core, "执行顺序、完成条件、中间状态、后续项目和失败处理"
-    assert_includes core, "两个平台都实现并通过对应测试"
+    assert_includes core, "跨平台共同边界"
+    assert_includes core, "平台文件分别定义各自的执行顺序、完成条件和失败处理"
+    assert_includes core, "不得把两端不同的实际流程写成相同"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update`"
     assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -SafeUpdate`"
-    assert_includes safe_update, "两端都用 `curl -q --config -` 自动下载并覆盖全部远程订阅"
+    assert_includes safe_update, "两端都用 `curl -q --config -` 自动下载全部远程订阅"
+    assert_includes safe_update, "Windows 在下载前"
+    assert_includes safe_update, "macOS 按已保存用途档位"
     assert_includes safe_update, "macOS 和 Windows 都不得添加、固定或伪造 User-Agent"
     assert_includes profiles_and_patch, "`profile.store-selected`"
     assert_includes profiles_and_patch, "macOS 与 Windows"
