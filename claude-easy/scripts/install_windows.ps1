@@ -792,7 +792,8 @@ try {
         $installState = $strictUtf8.GetString($stateOriginalBytes) | ConvertFrom-Json
         Assert-InstallState $installState
     }
-    if ($savedUsageProfile -eq 3 -and $resolvedUsageProfile -ne 3) {
+    if (($savedUsageProfile -eq 3 -or ($stateExisted -and $savedUsageProfile -eq 0)) -and
+        $resolvedUsageProfile -ne 3) {
         throw "从档位 3 改为轻量档位前，必须先运行安全卸载。"
     }
     if ($clientRunning) {
