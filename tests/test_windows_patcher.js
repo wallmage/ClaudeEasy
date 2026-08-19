@@ -16,7 +16,7 @@ const resultContractPath = path.join(root, 'claude-easy/scripts/windows/result_c
 const installerModuleDir = path.join(root, 'claude-easy/scripts/windows/install_windows');
 const installerModuleNames = [
   'common.ps1', 'yaml.ps1', 'profiles.ps1', 'mihomo.ps1',
-  'transaction.ps1', 'script_js.ps1', 'safe_update.ps1'
+  'transaction.ps1', 'script_js.ps1', 'runtime.ps1', 'safe_update.ps1'
 ];
 const installerModulePaths = installerModuleNames.map((name) => path.join(installerModuleDir, name));
 function readInstallerBundle() {
@@ -1191,6 +1191,28 @@ test('PowerShell safe update checks installed script and proxy-group prerequisit
   );
 });
 
+test('Windows curl update reloads, checks, and restores the active runtime', () => {
+  const source = fs.readFileSync(installerPath, 'utf8');
+  const start = source.indexOf('\nif ($SafeUpdate) {', source.indexOf('$needsUsageProfile'));
+  const end = source.indexOf('\nif ($BackupSubscriptions) {', start);
+  const update = source.slice(start, end);
+  const backup = update.indexOf('Backup-Versioned');
+  const download = update.indexOf('Invoke-SubscriptionCurlDownload');
+  const yaml = update.indexOf('Test-GeneratedYaml');
+  const mihomo = update.indexOf('Test-MihomoCandidate');
+  const write = update.indexOf('Invoke-VerifiedFileTransaction $targets');
+  const reactivate = update.indexOf('Invoke-ClashVergeReactivationShortcut');
+  const runtime = update.indexOf('Assert-ClashRuntimeHealthy');
+  const autoUpdate = update.lastIndexOf('Assert-RemoteSubscriptionAutoUpdateDisabled');
+  assert.ok(backup >= 0 && backup < download);
+  assert.ok(download < yaml && yaml < mihomo && mihomo < write);
+  assert.ok(write < reactivate && reactivate < runtime && runtime < autoUpdate);
+  assert.match(update, /\$runtimeAfter \$runtimeStateBefore\.Selections \$runtimeStateBefore\.TunEnabled \$savedUsageProfile/);
+  assert.match(update, /Invoke-VerifiedFileTransaction \$restoreTargets/);
+  assert.match(update, /已恢复原订阅/);
+  assert.doesNotMatch(update, /User-Agent|user-agent/);
+});
+
 test('PowerShell 5.1 keeps a single remote subscription path as an array', () => {
   const profilesModule = fs.readFileSync(path.join(installerModuleDir, 'profiles.ps1'), 'utf8');
 
@@ -1670,7 +1692,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'yaml.ps1': [
       'Split-YamlLines', 'Join-YamlLines', 'Get-YamlIndent', 'Get-YamlMappingEntry', 'Get-YamlPathFingerprints',
       'Get-RedactedYamlChangedPaths', 'Find-YamlMappingNode', 'Replace-YamlRange', 'Set-YamlTopLevelScalar',
-      'Get-ManagedTunLines', 'New-ManagedTunBlock', 'Set-YamlTunMapping', 'Test-GeneratedYaml'
+      'Get-ManagedTunLines', 'New-ManagedTunBlock', 'Set-YamlTunMapping', 'Test-GeneratedYaml',
+      'Get-ClaudeEasyReactivationHotkey', 'Set-ClaudeEasyReactivationHotkey'
     ],
     'profiles.ps1': [
       'Get-RemoteSubscriptionItemMappingEntry', 'Get-RemoteSubscriptionProfileItems',
@@ -1693,6 +1716,15 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Assert-JavaScriptDoesNotUseDynamicCode',
       'Assert-JavaScriptDoesNotBindMain', 'Assert-JavaScriptDoesNotReferenceMain',
       'Assert-JavaScriptCanCompose', 'Build-GlobalScript'
+    ],
+    'runtime.ps1': [
+      'Get-ClaudeEasyTopLevelScalar', 'Get-ClashVergeReactivationShortcut',
+      'Initialize-ClaudeEasySendInput', 'Invoke-ClashVergeReactivationShortcut',
+      'Get-ClashControllerContext', 'Invoke-ClashControllerRequest',
+      'Get-ClashRuntimeState', 'Restore-ClashRuntimeSelections',
+      'Wait-ClashVergeRuntimeRefresh', 'Assert-ClashRuntimePatch',
+      'Test-ClashRuntimeConnectivity', 'Test-ClashRuntimeProxyPath',
+      'Assert-ClashRuntimeAiGroup', 'Assert-ClashRuntimeHealthy'
     ],
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',

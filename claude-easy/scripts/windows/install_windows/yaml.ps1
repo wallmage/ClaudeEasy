@@ -261,3 +261,67 @@ function Test-GeneratedYaml([string]$Text, [string]$Label) {
     }
     return $true
 }
+
+function Get-ClaudeEasyReactivationHotkey([string]$Text) {
+    $lines = @(Split-YamlLines $Text)
+    $node = Find-YamlMappingNode $lines "hotkeys" 0 0 $lines.Count
+    if ($null -eq $node) { return "" }
+    $inline = ([string]$node.Value).Trim()
+    if ($inline -eq "[]") { return "" }
+    if (-not [string]::IsNullOrWhiteSpace($inline)) {
+        throw "verge.yaml 的 hotkeys 不是受支持的块状清单。"
+    }
+    $matches = @()
+    for ($index = $node.Start + 1; $index -lt $node.End; $index++) {
+        $line = [string]$lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        if ($line -notmatch '^\s*-\s+(.+?)\s*$') {
+            throw "verge.yaml 的 hotkeys 包含不受支持的项目。"
+        }
+        $entry = ConvertFrom-SubscriptionScalar ([string]$Matches[1]) "verge.yaml hotkey"
+        $parts = @($entry.Split(",", 2) | ForEach-Object { $_.Trim() })
+        if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or
+            [string]::IsNullOrWhiteSpace($parts[1])) {
+            throw "verge.yaml 的 hotkeys 包含无效项目。"
+        }
+        if ($parts[0] -ceq "reactivate_profiles") { $matches += $parts[1] }
+    }
+    if ($matches.Count -gt 1) { throw "verge.yaml 存在重复的重新激活订阅快捷键。" }
+    return $(if ($matches.Count -eq 1) { [string]$matches[0] } else { "" })
+}
+
+function Set-ClaudeEasyReactivationHotkey([string]$Text) {
+    $shortcut = Get-ClaudeEasyReactivationHotkey $Text
+    if (-not [string]::IsNullOrWhiteSpace($shortcut)) { return $Text }
+
+    $managedShortcut = "CTRL+ALT+SHIFT+F24"
+    $lines = @(Split-YamlLines $Text)
+    $node = Find-YamlMappingNode $lines "hotkeys" 0 0 $lines.Count
+    if ($null -eq $node) {
+        while ($lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($lines[$lines.Count - 1])) {
+            $lines = if ($lines.Count -eq 1) { @() } else { @($lines[0..($lines.Count - 2)]) }
+        }
+        $replacement = @("hotkeys:", "  - reactivate_profiles,$managedShortcut")
+        return (Join-YamlLines -Lines (Replace-YamlRange -Lines $lines -Start $lines.Count -End $lines.Count -Replacement $replacement))
+    }
+
+    $inline = ([string]$node.Value).Trim()
+    if ($inline -eq "[]") {
+        $replacement = @("hotkeys:", "  - reactivate_profiles,$managedShortcut")
+        return (Join-YamlLines -Lines (Replace-YamlRange -Lines $lines -Start $node.Start -End $node.End -Replacement $replacement))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($inline)) {
+        throw "verge.yaml 的 hotkeys 不是受支持的块状清单。"
+    }
+
+    $itemIndent = 2
+    for ($index = $node.Start + 1; $index -lt $node.End; $index++) {
+        $line = [string]$lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        if ($line -notmatch '^(\s*)-\s+') { throw "verge.yaml 的 hotkeys 包含不受支持的项目。" }
+        $itemIndent = $Matches[1].Length
+        break
+    }
+    $replacement = @((" " * $itemIndent) + "- reactivate_profiles,$managedShortcut")
+    return (Join-YamlLines -Lines (Replace-YamlRange -Lines $lines -Start $node.End -End $node.End -Replacement $replacement))
+}

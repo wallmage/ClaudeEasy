@@ -58,6 +58,7 @@ $installerModules = @(
     "mihomo.ps1",
     "transaction.ps1",
     "script_js.ps1",
+    "runtime.ps1",
     "safe_update.ps1"
 )
 try {
@@ -83,6 +84,9 @@ try {
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning",
         "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
+        "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
+        "Get-ClashControllerContext", "Get-ClashRuntimeState", "Invoke-ClashVergeReactivationShortcut",
+        "Wait-ClashVergeRuntimeRefresh", "Assert-ClashRuntimeHealthy",
         "Get-RemoteSubscriptionUpdateTargets", "Invoke-SubscriptionCurlDownload",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
@@ -138,6 +142,7 @@ $backupRoot = Join-Path $AppHome "claude-easy-backups"
 $profilesIndexPath = Join-Path $AppHome "profiles.yaml"
 $vergePath = Join-Path $AppHome "verge.yaml"
 $configPath = Join-Path $AppHome "config.yaml"
+$runtimeConfigPath = Join-Path $AppHome "clash-verge.yaml"
 $statePath = Join-Path $AppHome "claude-easy-install-state.json"
 $autoUpdateStatePath = Join-Path $AppHome "claude-easy-auto-update-state.json"
 $usageStatePath = Join-Path $AppHome "claude-easy-usage-profile.json"
@@ -163,7 +168,7 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $SafeUpdate -and -not $BackupSubscriptions -and (
+$needsUsageProfile = $SafeUpdate -or $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
@@ -180,6 +185,16 @@ if ($needsUsageProfile) {
 try {
 try {
 if ($SafeUpdate) {
+    if ($savedUsageProfile -eq 0) {
+        Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
+    }
+    if ($UsageProfile -ne 0 -and $UsageProfile -ne $savedUsageProfile) {
+        Complete-InstallResult 64 "invalid_request" "usage_profile_mismatch" "请求档位与已保存档位不一致；未执行安全更新。"
+    }
+    $script:ClaudeEasyProfile = $savedUsageProfile
+    if (-not (Test-ClashVergeRunning)) {
+        throw "Clash Verge Rev 没有运行，无法加载并检查更新后的配置。"
+    }
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
     $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
     $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
@@ -188,6 +203,23 @@ if ($SafeUpdate) {
         $indexText = $indexText.Substring(1)
     }
     Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
+    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
+    if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
+    $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
+    Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedUsageProfile $enginePath $targetScript
+    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+    if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
+    $vergeText = $strictUtf8.GetString($vergeSnapshot.Bytes)
+    $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
+    $runtimeBefore = Get-ClashControllerContext $runtimeConfigPath
+    $runtimeStateBefore = Get-ClashRuntimeState $runtimeBefore
+    if ($savedUsageProfile -eq 3 -and -not $runtimeStateBefore.TunEnabled) {
+        throw "档位 3 的 TUN 当前没有开启。"
+    }
+    $core = Find-MihomoCore $MihomoPath
+    Test-MihomoVersion $core | Out-Null
+    $policyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+    $policy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($policyPath)) | ConvertFrom-Json
     $profiles = @(Get-RemoteSubscriptionUpdateTargets $indexText $profilesDirectory)
     $snapshots = @()
     foreach ($profile in $profiles) {
@@ -201,22 +233,85 @@ if ($SafeUpdate) {
         $snapshots += [pscustomobject]@{ Profile = $profile; Snapshot = $profileSnapshot }
     }
     $curlCommand = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $targets = @($snapshots | ForEach-Object {
-        [pscustomobject]@{
-            Path = $_.Profile.Path
-            Bytes = Invoke-SubscriptionCurlDownload ([string]$curlCommand.Source) ([string]$_.Profile.Url)
+    $targets = @()
+    foreach ($entry in $snapshots) {
+        $downloadedBytes = Invoke-SubscriptionCurlDownload ([string]$curlCommand.Source) ([string]$entry.Profile.Url)
+        $downloadedText = $strictUtf8.GetString($downloadedBytes)
+        Test-GeneratedYaml $downloadedText (Split-Path -Leaf $entry.Profile.Path) | Out-Null
+        Assert-ClaudeEasyProxyGroupCollection $downloadedText (Split-Path -Leaf $entry.Profile.Path)
+        Test-MihomoCandidate $core $downloadedText $profilesDirectory
+        $targets += [pscustomobject]@{
+            Path = $entry.Profile.Path
+            Bytes = $downloadedBytes
             Existed = $true
-            OriginalBytes = $_.Snapshot.Bytes
-            OriginalIdentity = $_.Snapshot.Identity
+            OriginalBytes = $entry.Snapshot.Bytes
+            OriginalIdentity = $entry.Snapshot.Identity
         }
-    })
-    Invoke-VerifiedFileTransaction $targets
+    }
+    foreach ($control in @(
+        [pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot; Label = "远程订阅清单" },
+        [pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot; Label = "全局扩展脚本" },
+        [pscustomobject]@{ Path = $vergePath; Snapshot = $vergeSnapshot; Label = "verge.yaml" }
+    )) {
+        $current = Get-OptionalFileSnapshot $control.Path $control.Label
+        if (-not $current.Exists -or $current.Identity -cne $control.Snapshot.Identity -or
+            (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $control.Snapshot.Bytes)) {
+            throw "$($control.Label) 在更新期间发生变化。"
+        }
+    }
+    $runtimeRefreshAttempted = $false
+    $filesCommitted = $false
+    try {
+        Invoke-VerifiedFileTransaction $targets -InterruptedRecoveryPolicy "safe_update_running_client"
+        $filesCommitted = $true
+        $runtimeRefreshAttempted = $true
+        Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+        Wait-ClashVergeRuntimeRefresh $runtimeConfigPath $runtimeBefore
+        $runtimeAfter = Get-ClashControllerContext $runtimeConfigPath
+        Assert-ClashRuntimeHealthy `
+            $runtimeAfter $runtimeStateBefore.Selections $runtimeStateBefore.TunEnabled $savedUsageProfile `
+            ([string]$curlCommand.Source) $policy
+        $indexAfter = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
+        if (-not $indexAfter.Exists) { throw "远程订阅清单在更新后消失。" }
+        $indexTextAfter = $strictUtf8.GetString($indexAfter.Bytes)
+        Assert-RemoteSubscriptionAutoUpdateDisabled $indexTextAfter | Out-Null
+    } catch {
+        $updateFailure = $_.Exception.Message
+        if (-not $filesCommitted) { throw $updateFailure }
+        $restoreTargets = @()
+        foreach ($target in $targets) {
+            $current = Get-OptionalFileSnapshot $target.Path "更新后的订阅"
+            if (-not $current.Exists -or
+                (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $target.Bytes)) {
+                throw "更新失败，且订阅同时发生变化，不能安全恢复。"
+            }
+            $restoreTargets += [pscustomobject]@{
+                Path = $target.Path
+                Bytes = $target.OriginalBytes
+                Existed = $true
+                OriginalBytes = $current.Bytes
+                OriginalIdentity = $current.Identity
+            }
+        }
+        Invoke-VerifiedFileTransaction $restoreTargets -InterruptedRecoveryPolicy "safe_update_running_client"
+        if ($runtimeRefreshAttempted) {
+            $rollbackRuntime = Get-ClashControllerContext $runtimeConfigPath
+            Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            Wait-ClashVergeRuntimeRefresh $runtimeConfigPath $rollbackRuntime
+            $rollbackAfter = Get-ClashControllerContext $runtimeConfigPath
+            Assert-ClashRuntimeHealthy `
+                $rollbackAfter $runtimeStateBefore.Selections $runtimeStateBefore.TunEnabled $savedUsageProfile `
+                ([string]$curlCommand.Source) $policy
+        }
+        throw "更新后的配置检查失败，已恢复原订阅：$updateFailure"
+    }
     $updatedItems = @($profiles | ForEach-Object {
         Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "updated"
     })
     Complete-InstallResult 0 "ok" "subscription_update_completed" `
-        "已备份并更新全部远程订阅。" `
-        @("profile_backups", "subscriptions") @() $updatedItems
+        "已备份、更新、加载并检查全部远程订阅。" `
+        @("profile_backups", "subscriptions", "runtime_config") `
+        @("global_script", "yaml", "mihomo", "runtime", "dns", "connectivity", "auto_update") $updatedItems
 }
 
 if ($BackupSubscriptions) {
@@ -697,7 +792,7 @@ try {
         $installState = $strictUtf8.GetString($stateOriginalBytes) | ConvertFrom-Json
         Assert-InstallState $installState
     }
-    if (($savedUsageProfile -eq 3 -or $stateExisted) -and $resolvedUsageProfile -ne 3) {
+    if ($savedUsageProfile -eq 3 -and $resolvedUsageProfile -ne 3) {
         throw "从档位 3 改为轻量档位前，必须先运行安全卸载。"
     }
     if ($clientRunning) {
@@ -771,6 +866,21 @@ try {
         OriginalIdentity = $usageProfileSnapshot.Identity
     }
 
+    $previousVerge = Get-InstallStateEntry $installState "VergeYaml"
+    $previousConfig = Get-InstallStateEntry $installState "ConfigYaml"
+    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+    $vergeExisted = [bool]$vergeSnapshot.Exists
+    $vergeOriginalBytes = $vergeSnapshot.Bytes
+    Assert-StateSnapshotUnchanged $previousVerge $vergeSnapshot "verge.yaml"
+    $vergeInput = if ($vergeExisted) { $strictUtf8.GetString($vergeOriginalBytes) } else { "" }
+    $vergeOutput = Set-ClaudeEasyReactivationHotkey $vergeInput
+    $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_global_hotkey" "true"
+    $configSnapshot = Get-OptionalFileSnapshot $configPath "config.yaml"
+    $configExisted = [bool]$configSnapshot.Exists
+    $configOriginalBytes = $configSnapshot.Bytes
+    Assert-StateSnapshotUnchanged $previousConfig $configSnapshot "config.yaml"
+    $vergeBytes = ConvertTo-Utf8Bytes $vergeOutput
+
     if ($resolvedUsageProfile -ne 3) {
         $scriptTarget = [pscustomobject]@{
             Path = $targetScript
@@ -787,9 +897,29 @@ try {
                 Existed = $true
                 OriginalBytes = $profilesIndexOriginalBytes
                 OriginalIdentity = $profilesIndexSnapshot.Identity
+            },
+            [pscustomobject]@{
+                Path = $vergePath
+                Bytes = $vergeBytes
+                Existed = $vergeExisted
+                OriginalBytes = $vergeOriginalBytes
+                OriginalIdentity = $vergeSnapshot.Identity
             }
         )
         if ($null -ne $autoUpdateStateTarget) { $lightTargets += $autoUpdateStateTarget }
+        $lightStateObject = [ordered]@{
+            Version = 1
+            VergeYaml = (New-InstallStateEntry $previousVerge $vergePath $vergeBytes)
+            ConfigYaml = (New-InstallStateEntry $previousConfig $configPath $configOriginalBytes)
+        }
+        $lightStateBytes = ConvertTo-Utf8Bytes (($lightStateObject | ConvertTo-Json -Depth 5) + "`r`n")
+        $lightTargets += [pscustomobject]@{
+            Path = $statePath
+            Bytes = $lightStateBytes
+            Existed = $stateExisted
+            OriginalBytes = $stateOriginalBytes
+            OriginalIdentity = $stateSnapshot.Identity
+        }
         $lightTargets += $usageProfileTarget
         foreach ($target in $lightTargets) {
             if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
@@ -801,24 +931,11 @@ try {
             throw "检测到 Clash Verge Rev 在安装期间启动；已撤销本次文件修改。"
         }
         if ($profileSource -ne "saved") { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
-        Write-Info "已为全部订阅安装共享国内域名直连规则，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
-        Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则，并关闭订阅自动更新。" @("global_script", "cn_domain_baseline", "auto_update")
+        Write-Info "已为全部订阅安装共享国内域名直连规则、自动重新加载入口，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
+        Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。" @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update")
     }
-
-    $previousVerge = Get-InstallStateEntry $installState "VergeYaml"
-    $previousConfig = Get-InstallStateEntry $installState "ConfigYaml"
-
-    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
-    $vergeExisted = [bool]$vergeSnapshot.Exists
-    $vergeOriginalBytes = $vergeSnapshot.Bytes
-    Assert-StateSnapshotUnchanged $previousVerge $vergeSnapshot "verge.yaml"
-    $vergeInput = if ($vergeExisted) { $strictUtf8.GetString($vergeOriginalBytes) } else { "" }
-    $vergeOutput = Set-YamlTopLevelScalar $vergeInput "enable_tun_mode" "true"
+    $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_tun_mode" "true"
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_dns_settings" "false"
-    $configSnapshot = Get-OptionalFileSnapshot $configPath "config.yaml"
-    $configExisted = [bool]$configSnapshot.Exists
-    $configOriginalBytes = $configSnapshot.Bytes
-    Assert-StateSnapshotUnchanged $previousConfig $configSnapshot "config.yaml"
     $configInput = if ($configExisted) { $strictUtf8.GetString($configOriginalBytes) } else { "" }
     $configOutput = Set-YamlTopLevelScalar $configInput "ipv6" "false"
     $configOutput = Set-YamlTunMapping $configOutput
@@ -863,7 +980,7 @@ try {
     Write-Info "已开启 TUN，并让全局脚本接管 DNS 配置。下次订阅刷新时应用补丁。"
     Write-Info "安装程序从未退出、停止或重启 Clash Verge Rev。"
     Write-Info "已有 AI 分组只补全规则；没有时创建包含全部可用节点和代理提供者的独立选择器。安装程序不会替你选择节点。"
-    Complete-InstallResult 0 "ok" "installed" "Windows ClaudeEasy 已安装。" @("global_script", "auto_update", "tun", "dns", "ipv6")
+    Complete-InstallResult 0 "ok" "installed" "Windows ClaudeEasy 已安装。" @("global_script", "subscription_reactivation", "auto_update", "tun", "dns", "ipv6")
     exit 0
 } catch {
     Complete-InstallResult 1 $(if ($_.Exception.Message -match "已撤销|恢复") { "rolled_back" } else { "failed" }) "install_failed" ("安装失败：" + $_.Exception.Message)

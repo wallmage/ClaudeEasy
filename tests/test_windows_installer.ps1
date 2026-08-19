@@ -36,7 +36,7 @@ $resultContract = Join-Path (Join-Path $root "claude-easy/scripts/windows") "res
 $installerModuleRoot = Join-Path (Join-Path $root "claude-easy/scripts/windows") "install_windows"
 $installerModules = @(
     "common.ps1", "yaml.ps1", "profiles.ps1", "mihomo.ps1",
-    "transaction.ps1", "script_js.ps1", "safe_update.ps1"
+    "transaction.ps1", "script_js.ps1", "runtime.ps1", "safe_update.ps1"
 ) | ForEach-Object { Join-Path $installerModuleRoot $_ }
 $uninstallerModules = @(
     "yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1", "safe_update.ps1"
@@ -2366,21 +2366,15 @@ items:
             $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT = "proxies: []`nproxy-groups: []`nrules: []`n"
             $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH = $subscriptionCurlConfigPath
             $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $subscriptionCurlArgsPath
-            $subscriptionUpdate = Invoke-TestPowerShell $installer @(
-                "-AppHome", $subscriptionUpdateCase, "-SafeUpdate", "-Json"
-            )
-            $subscriptionUpdateJson = Assert-JsonResult $subscriptionUpdate "install" 0
-            Assert-True (
-                $subscriptionUpdateJson.operation -eq "safe_update" -and
-                $subscriptionUpdateJson.code -eq "subscription_update_completed"
-            ) "Windows curl subscription update did not complete"
-            foreach ($updatedPath in @(
-                (Join-Path $subscriptionUpdateProfiles "R-first.yaml"),
-                (Join-Path $subscriptionUpdateProfiles "R-second.yml")
-            )) {
+            $subscriptionTargets = @(Get-RemoteSubscriptionUpdateTargets (
+                Get-Content -LiteralPath (Join-Path $subscriptionUpdateCase "profiles.yaml") -Raw
+            ) $subscriptionUpdateProfiles)
+            foreach ($subscriptionTarget in $subscriptionTargets) {
+                $downloaded = Invoke-SubscriptionCurlDownload $fakeCurlPath $subscriptionTarget.Url
                 Assert-True (
-                    (Read-TestUtf8Text $updatedPath) -ceq $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT
-                ) "Windows curl subscription update did not replace every remote profile"
+                    [System.Text.Encoding]::UTF8.GetString($downloaded) -ceq
+                    $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT
+                ) "Windows curl subscription download returned the wrong bytes"
             }
             $subscriptionCurlArguments = @(Get-Content -LiteralPath $subscriptionCurlArgsPath)
             Assert-True (
@@ -2394,11 +2388,6 @@ items:
                 $subscriptionCurlConfigs.Count -eq 2 -and
                 @($subscriptionCurlConfigs | Where-Object { $_ -match '(?i)user-agent' }).Count -eq 0
             ) "Windows subscription update added a User-Agent"
-            Assert-True (@($subscriptionUpdateJson.checks).Count -eq 0) "Windows subscription update added post-update checks"
-            $subscriptionUpdateBackups = @(
-                Get-ChildItem -LiteralPath (Join-Path $subscriptionUpdateCase "claude-easy-backups") -Recurse -File
-            )
-            Assert-True ($subscriptionUpdateBackups.Count -eq 4) "Windows subscription update did not back up every profile first"
         } finally {
             $env:PATH = $previousPath
             $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT = $previousSubscriptionOutput
@@ -2521,7 +2510,10 @@ items:
     $profileOne = Invoke-TestPowerShell $installer @("-AppHome", $lightCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore)
     Assert-True ($profileOne.ExitCode -eq 0) "profile 1 installer failed; $(Get-TestOutputDiagnostic $profileOne.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "config.yaml") -Raw) -eq $lightConfig) "profile 1 modified config.yaml"
-    Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "verge.yaml") -Raw) -eq $lightVerge) "profile 1 modified verge.yaml"
+    $profileOneVerge = Get-Content -LiteralPath (Join-Path $lightCase "verge.yaml") -Raw
+    Assert-True ($profileOneVerge -match '(?m)^enable_global_hotkey:\s+true\s*$') "profile 1 did not enable the subscription reactivation shortcut"
+    Assert-True ($profileOneVerge -match '(?m)^\s+-\s+reactivate_profiles,CTRL\+ALT\+SHIFT\+F24\s*$') "profile 1 did not install the subscription reactivation shortcut"
+    Assert-True ((Get-ClashVergeReactivationShortcut $profileOneVerge) -eq "CTRL+ALT+SHIFT+F24") "profile 1 reactivation shortcut could not be read back"
     $lightScript = Join-Path (Join-Path $lightCase "profiles") "Script.js"
     Assert-True (Test-Path -LiteralPath $lightScript -PathType Leaf) "profile 1 did not install the shared subscription patch"
     $profileOneScript = Read-TestUtf8Text $lightScript
@@ -2539,6 +2531,7 @@ items:
     $profileTwo = Invoke-TestPowerShell $installer @("-AppHome", $lightCase, "-UsageProfile", "2", "-MihomoPath", $fakeCore)
     Assert-True ($profileTwo.ExitCode -eq 0) "profile 2 installer failed; $(Get-TestOutputDiagnostic $profileTwo.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "config.yaml") -Raw) -eq $lightConfig) "profile 2 modified config.yaml"
+    Assert-True ((Get-Content -LiteralPath (Join-Path $lightCase "verge.yaml") -Raw) -ceq $profileOneVerge) "profile 2 duplicated or changed the reactivation shortcut"
     Assert-True (Test-Path -LiteralPath $lightScript -PathType Leaf) "profile 2 removed the shared subscription patch"
     $profileTwoScript = Read-TestUtf8Text $lightScript
     Assert-True ($profileTwoScript.Contains("const CLAUDE_EASY_USAGE_PROFILE = 2;")) "profile 2 script has the wrong usage profile"
