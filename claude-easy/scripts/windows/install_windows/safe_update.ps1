@@ -146,7 +146,7 @@ function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
             $process.Kill()
             throw "远程订阅下载超时。"
         }
-        $copyTask.GetAwaiter().GetResult()
+        $null = $copyTask.GetAwaiter().GetResult()
         $null = $errorTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0 -or $output.Length -eq 0) { throw "远程订阅下载失败。" }
         return ,$output.ToArray()
