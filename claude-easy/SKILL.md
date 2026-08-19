@@ -13,7 +13,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 | --- | --- | --- |
 | Diagnostics：慢、间歇失败、打不开、全红、分流异常或泄漏 | [references/diagnostics.md](references/diagnostics.md)；当前平台文件 | 涉及共同国内直连、DNS、TUN、代理组、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md)；需要改档或执行 Patch 时再读档位文件 |
 | Patch：首次安装、改变用途档位或完整安全增强 | [references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 涉及备份恢复或未完成事务时读 [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md) |
-| 更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)；当前平台文件；使用 `computer-use` Skill | 无 |
+| 更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)；当前平台文件；Windows 使用 `computer-use` Skill | 无 |
 | 列出、比较或恢复备份 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)；当前平台文件 | 恢复后验证 DNS、分流、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md) |
 | 维护、审查或测试 Skill | 与改动直接相关的策略文件 | 只有跨模块维护、权威归属审查或整体一致性检查才读取全部七个策略文件 |
 
@@ -42,7 +42,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 持久修复必须以已经确认的问题为依据，并同时具备修改权限和明确对象。为取得证据而做的隔离实验，或用户已授权、单变量、可完整恢复的现场对照可以先执行；**诊断对照不是持久修复**，不得把实验成功写成问题已经解决。
 
-完成条件按交付类型判断：分析或复核任务不要求执行修复或复测，只要求结论状态、证据、反证和未知项完整；修复任务必须完成最小修复、原场景复测和受影响能力回归；更新任务必须完成全部远程订阅的备份和客户端界面更新；监测任务必须确认采集确实运行并给出停止方法。历史问题已消失且无法重现时，只能说明证据边界，不能伪造复测。
+完成条件按交付类型判断：分析或复核任务不要求执行修复或复测，只要求结论状态、证据、反证和未知项完整；修复任务必须完成最小修复、原场景复测和受影响能力回归；更新任务必须完成全部远程订阅的备份和当前平台更新；监测任务必须确认采集确实运行并给出停止方法。历史问题已消失且无法重现时，只能说明证据边界，不能伪造复测。
 
 ## Diagnostics 执行顺序
 
@@ -86,7 +86,7 @@ bash scripts/uninstall_macos.sh
 ruby scripts/macos/patch_profiles.rb --json
 ```
 
-Patch 的运行加载和检查仍遵守平台策略；订阅更新不调用本地控制器。
+Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载不通过本地控制器。
 
 ### Windows
 
@@ -103,9 +103,9 @@ Patch 的运行加载和检查仍遵守平台策略；订阅更新不调用本�
 
 只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。用户确认前不得读取订阅、建立备份或操作客户端。
 
-确认后严格执行：为全部远程订阅创建更新前备份；使用 Computer Use 操作已经运行的 Clash 客户端；确认订阅界面的“自动更新”未勾选；点击与用户手动更新相同的入口；客户端更新动作结束后立即结束。客户端未运行时保持未运行。
+确认后严格执行：为全部远程订阅创建更新前备份；macOS 运行 `bash scripts/install_macos.sh --safe-update` 自动更新；Windows 使用 Computer Use 操作已经运行的 Clash Verge Rev，确认“自动更新”未勾选并点击与用户手动更新相同的入口；更新动作结束后立即结束。客户端未运行时保持未运行。
 
-不得用 `curl`、固定 User-Agent、本地控制器、直接 HTTP 请求或配置文件替换来更新订阅。更新后不做防倒退、协议、数量、哈希、时间戳、YAML、Mihomo、代理组、连通性或运行状态检查，不拒绝覆盖，不自动回滚，也不重新应用 Patch。
+macOS 的下载固定使用 `curl --config -` 且不设置 User-Agent。macOS 和 Windows 都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。更新后不追加防倒退、协议、数量、哈希、时间戳或连通性检查。
 
 ## 配置历史与恢复
 

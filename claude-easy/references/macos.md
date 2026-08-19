@@ -4,7 +4,7 @@
 
 ## macOS
 
-当前订阅更新只按 `safe-update-and-recovery.md` 使用更新前备份和 Computer Use；本文件中的旧安全更新事务只用于兼容已有恢复状态，不得用于新的订阅更新。
+当前订阅更新按 `safe-update-and-recovery.md` 运行 `bash scripts/install_macos.sh --safe-update`；下载使用 `curl --config -`，不得设置 User-Agent。
 
 备份恢复必须先读取有效的已保存用途档位，再按该档位校验；档位缺失或损坏时零写入。
 

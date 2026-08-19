@@ -424,7 +424,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "### 交付类型决策表"
     assert_includes policy, "| 分析或复核 | 只读 | 结论、证据、反证和未知项完整 |"
     assert_includes policy, "| 修复 | 已确认的问题、明确对象和写入授权 | 最小修复、原场景复测和受影响能力回归 |"
-    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 备份后用 Computer Use 执行客户端更新，动作结束后停止 |"
+    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 备份后按当前平台执行更新，动作结束后停止 |"
     assert_includes policy, "| 监测 | 只读采集；内容采集另需授权 | 确认采集运行、记录范围并提供停止方法 |"
     assert_includes policy, "配置、用途档位变更和完整安全增强归入 Patch"
     assert_includes policy, "交付类型不能在执行中自行扩大"
@@ -1107,7 +1107,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "-ExpectedCurrentSha256"
   end
 
-  def test_subscription_update_uses_client_ui_after_backups
+  def test_subscription_update_uses_no_fixed_user_agent
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
@@ -1117,20 +1117,22 @@ class SkillContractTest < Minitest::Test
     [readme, skill, policy].each do |document|
       assert_includes document, "全部远程订阅"
       assert_includes document, "更新前备份"
-      assert_includes document, "Computer Use"
       assert_includes document, "自动更新"
-      assert_includes document, "客户端更新动作结束后立即结束"
-      assert_includes document, "不做防倒退"
-      assert_includes document, "不自动回滚"
-      assert_includes document, "不重新应用 Patch"
+      assert_includes document, "不设置 User-Agent"
     end
     assert_includes installer, "--safe-update"
     assert_includes patcher, "--safe-update-all"
     assert_includes windows_installer_source, "BackupSubscriptions"
-    refute_includes File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb")),
-                    "fetch_remote_subscription"
-    refute_includes File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb")),
-                    "ClashX Meta\""
+    subscriptions = File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb"))
+    assert_includes subscriptions, "fetch_remote_subscription"
+    refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, subscriptions)
+    windows_update_sources = [
+      File.read(File.join(SKILL, "scripts/install_windows.ps1")),
+      *Dir.glob(File.join(SKILL, "scripts/windows/install_windows/*.ps1")).map { |path| File.read(path) }
+    ].join("\n")
+    refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, windows_update_sources)
+    assert_includes File.read(File.join(ROOT, "AGENTS.md")),
+                    "macOS 和 Windows 的订阅更新都不得添加、固定或伪造 User-Agent"
   end
 
   def test_subscription_update_stops_without_post_update_checks
@@ -1139,14 +1141,13 @@ class SkillContractTest < Minitest::Test
     policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
     [readme, skill, policy].each do |document|
       assert_includes document, "动作结束后立即结束"
-      assert_includes document, "更新后不做"
+      assert_includes document, "更新后不追加"
       assert_includes document, "连通"
-      assert_includes document, "不拒绝覆盖"
       refute_includes document, "继续完成 `required_followups`"
     end
 
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
-    assert_includes diagnostics, "客户端动作结束后立即完成，不追加检查、拒绝覆盖或恢复"
+    assert_includes diagnostics, "更新动作结束后立即完成，不追加检查"
     refute_includes diagnostics, "全部远程订阅都进入已验证成功、已恢复或明确失败状态"
   end
 
@@ -1163,11 +1164,12 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "两个平台都实现并通过对应测试"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update`"
     assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -BackupSubscriptions`"
-    assert_includes safe_update, "使用 Computer Use 操作已经运行的 Clash 客户端"
+    assert_includes safe_update, "macOS 由 `--safe-update` 自动下载并更新全部远程订阅"
+    assert_includes safe_update, "macOS 和 Windows 都不得添加、固定或伪造 User-Agent"
     assert_includes profiles_and_patch, "`profile.store-selected`"
     assert_includes profiles_and_patch, "macOS 与 Windows"
     assert_includes skill, "更新全部订阅"
-    assert_includes skill, "使用 `computer-use` Skill"
+    assert_includes skill, "Windows 使用 `computer-use` Skill"
     assert_includes readme, "macOS 与 Windows"
     assert_includes baseline, "双平台订阅更新"
   end
@@ -1751,9 +1753,7 @@ class SkillContractTest < Minitest::Test
       assert_includes source, '"$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"'
       assert_includes source, "operation_in_progress"
     end
-    backup_only_branch = installer.index("if [ \"$SAFE_UPDATE\" -eq 1 ]; then\n  USAGE_PROFILE=\"\"")
-    refute_nil backup_only_branch
-    pending_recovery = installer.index("recover_interrupted_uninstall", backup_only_branch)
+    pending_recovery = installer.index("recover_interrupted_uninstall")
     profile_resolution = installer.index("resolve_usage_profile", pending_recovery)
     client_preflight = installer.index('if [ ! -d "/Applications/ClashX Meta.app" ]')
     refute_nil pending_recovery

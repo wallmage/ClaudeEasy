@@ -5364,11 +5364,27 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_script_subscription_download_is_not_available
-    refute_respond_to ClaudeEasy, :curl_config_value
-    refute_respond_to ClaudeEasy, :fetch_remote_subscription
+  def test_script_subscription_download_does_not_set_a_user_agent
+    assert_respond_to ClaudeEasy, :curl_config_value
+    assert_respond_to ClaudeEasy, :fetch_remote_subscription
     refute_respond_to ClaudeEasy, :fetch_remote_subscription_via_mihomo
     refute ClaudeEasy.const_defined?(:MAX_REMOTE_SUBSCRIPTION_BYTES, false)
+
+    status = Struct.new(:success?).new(true)
+    capture = lambda do |*arguments, **options|
+      assert_equal ["/usr/bin/curl", "--config", "-"], arguments
+      config = options.fetch(:stdin_data)
+      refute_match(/user-agent|--user-agent|header\s*=.*user-agent/i, config)
+      [YAML.dump(base_config), "", status]
+    end
+    Open3.stub(:capture3, capture) do
+      ClaudeEasy.fetch_remote_subscription(
+        { name: "friend", url: "https://example.invalid/subscription" }
+      )
+    end
+    assert_raises(ClaudeEasy::InvalidConfigError) do
+      ClaudeEasy.fetch_remote_subscription({ name: "missing-url" })
+    end
   end
 
   def test_update_candidate_rejects_encoding_transform_and_validation_failures
@@ -12092,18 +12108,20 @@ class MacosPatcherTest < Minitest::Test
   def test_cli_safe_update_and_auto_update_commands_cannot_bypass_wrapper_scope
     Dir.mktmpdir do |directory|
       targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
-      ClaudeEasy.stub(:remote_subscription_targets, targets) do
-        ClaudeEasy.stub(:backup_remote_subscriptions, { count: 1, profiles: ["friend"] }) do
-          output, error = capture_io do
-            assert_equal 0, ClaudeEasy.cli([
-              "--json", "--profile-dir", directory, "--safe-update-all",
-              "--usage-profile", "3"
-            ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:remote_subscription_targets, targets) do
+          ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 1, profiles: ["friend"] }) do
+            output, error = capture_io do
+              assert_equal 0, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory, "--safe-update-all",
+                "--usage-profile", "3"
+              ])
+            end
+            assert_empty error
+            result = JSON.parse(output)
+            assert_equal "safe_update", result.fetch("operation")
+            assert_equal "subscription_update_completed", result.fetch("code")
           end
-          assert_empty error
-          result = JSON.parse(output)
-          assert_equal "backup_subscriptions", result.fetch("operation")
-          assert_equal "subscription_backups_created", result.fetch("code")
         end
       end
 
@@ -12586,37 +12604,43 @@ class MacosPatcherTest < Minitest::Test
         assert_equal 1, ClaudeEasy.backup_entries_for(path, backup_root, reason: "pre-update").length
       end
 
-      ClaudeEasy.stub(:remote_subscription_targets, targets) do
-        output, error = capture_io do
-          assert_equal 0, ClaudeEasy.cli([
-            "--json", "--profile-dir", directory, "--backup-dir", backup_root,
-            "--safe-update-all"
-          ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:remote_subscription_targets, targets) do
+          ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 2, profiles: %w[first second] }) do
+            output, error = capture_io do
+              assert_equal 0, ClaudeEasy.cli([
+                "--json", "--profile-dir", directory, "--backup-dir", backup_root,
+                "--safe-update-all", "--usage-profile", "3"
+              ])
+            end
+            assert_empty error
+            parsed = JSON.parse(output)
+            assert_equal "safe_update", parsed.fetch("operation")
+            assert_equal "subscription_update_completed", parsed.fetch("code")
+            assert_equal %w[updated updated], parsed.fetch("items").map { |item| item.fetch("status") }
+          end
         end
-        assert_empty error
-        parsed = JSON.parse(output)
-        assert_equal "backup_subscriptions", parsed.fetch("operation")
-        assert_equal "subscription_backups_created", parsed.fetch("code")
-        assert_equal %w[unchanged unchanged], parsed.fetch("items").map { |item| item.fetch("status") }
       end
     end
   end
 
   def test_cli_subscription_backup_failure_does_not_report_an_update
     Dir.mktmpdir do |directory|
-      ClaudeEasy.stub(:remote_subscription_targets, ->(_directories) {
-        raise ClaudeEasy::InvalidConfigError, "injected backup failure"
-      }) do
-        output, error = capture_io do
-          assert_equal 1, ClaudeEasy.cli([
-            "--json", "--profile-dir", directory, "--safe-update-all"
-          ])
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:remote_subscription_targets, ->(_directories) {
+          raise ClaudeEasy::InvalidConfigError, "injected update failure"
+        }) do
+          output, error = capture_io do
+            assert_equal 1, ClaudeEasy.cli([
+              "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
+            ])
+          end
+          assert_empty error
+          result = JSON.parse(output)
+          assert_equal "safe_update", result.fetch("operation")
+          assert_equal "invalid_configuration", result.fetch("code")
+          refute_includes result.fetch("summary_zh"), "更新成功"
         end
-        assert_empty error
-        result = JSON.parse(output)
-        assert_equal "backup_subscriptions", result.fetch("operation")
-        assert_equal "invalid_configuration", result.fetch("code")
-        refute_includes result.fetch("summary_zh"), "更新成功"
       end
     end
   end
@@ -13151,19 +13175,66 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_cli_subscription_backup_never_calls_runtime_recovery
+  def test_cli_subscription_update_calls_the_update_transaction
     Dir.mktmpdir do |directory|
       targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
-      ClaudeEasy.stub(:remote_subscription_targets, targets) do
-        ClaudeEasy.stub(:backup_remote_subscriptions, { count: 1, profiles: ["friend"] }) do
-          ClaudeEasy.stub(:safe_update_all, ->(**_arguments) { flunk "旧更新事务不应运行" }) do
+      called = false
+      update = lambda do |**_arguments|
+        called = true
+        { status: :updated, count: 1, profiles: ["friend"] }
+      end
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:remote_subscription_targets, targets) do
+          ClaudeEasy.stub(:safe_update_all, update) do
             output, error = capture_io do
               assert_equal 0, ClaudeEasy.cli([
-                "--json", "--profile-dir", directory, "--safe-update-all"
+                "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
               ])
             end
             assert_empty error
-            assert_equal "subscription_backups_created", JSON.parse(output).fetch("code")
+            assert_equal "subscription_update_completed", JSON.parse(output).fetch("code")
+          end
+        end
+      end
+      assert called
+    end
+  end
+
+  def test_cli_subscription_update_reports_profile_rejection_success_and_failure
+    Dir.mktmpdir do |directory|
+      targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
+      arguments = [
+        "--profile-dir", directory, "--policy", POLICY_PATH,
+        "--safe-update-all", "--usage-profile", "3"
+      ]
+
+      output, error = ClaudeEasy.stub(:saved_usage_profile, nil) do
+        capture_io { assert_equal 10, ClaudeEasy.cli(arguments.dup) }
+      end
+      assert_empty output
+      assert_includes error, "尚未保存用途档位"
+
+      ClaudeEasy.stub(:saved_usage_profile, 3) do
+        ClaudeEasy.stub(:remote_subscription_targets, targets) do
+          ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 1, profiles: ["friend"] }) do
+            output, error = capture_io { assert_equal 0, ClaudeEasy.cli(arguments.dup) }
+            assert_empty error
+            assert_includes output, "全部远程订阅已更新：1 份"
+            assert_includes output, "已更新：friend"
+          end
+
+          ClaudeEasy.stub(:safe_update_all, { status: :rollback_failed }) do
+            output, error = capture_io { assert_equal 1, ClaudeEasy.cli(["--json", *arguments]) }
+            assert_empty error
+            result = JSON.parse(output)
+            assert_equal "partial", result.fetch("status")
+            assert_equal "rollback_failed", result.fetch("code")
+          end
+
+          ClaudeEasy.stub(:safe_update_all, { status: :aborted }) do
+            output, error = capture_io { assert_equal 1, ClaudeEasy.cli(arguments.dup) }
+            assert_empty output
+            assert_includes error, "订阅更新失败"
           end
         end
       end
@@ -13540,21 +13611,16 @@ class MacosPatcherTest < Minitest::Test
     assert_includes coverage_source, "MINIMUM_MODULE_LINE_COVERAGE"
   end
 
-  def test_cli_rejects_unknown_options_and_subscription_backup_needs_no_usage_profile
+  def test_cli_rejects_unknown_options_and_subscription_update_needs_a_usage_profile
     _output, error = capture_io { assert_equal 64, ClaudeEasy.cli(["--unknown-option"]) }
     assert_includes error, "参数错误"
 
     Dir.mktmpdir do |directory|
-      targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
-      ClaudeEasy.stub(:remote_subscription_targets, targets) do
-        ClaudeEasy.stub(:backup_remote_subscriptions, { count: 1, profiles: ["friend"] }) do
-          output, error = capture_io do
-            assert_equal 0, ClaudeEasy.cli(["--profile-dir", directory, "--safe-update-all"])
-          end
-          assert_empty error
-          assert_includes output, "已为全部远程订阅创建更新前备份"
-        end
+      output, error = capture_io do
+        assert_equal 64, ClaudeEasy.cli(["--profile-dir", directory, "--safe-update-all"])
       end
+      assert_empty output
+      assert_includes error, "必须指定用途档位"
     end
   end
 

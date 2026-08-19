@@ -3048,8 +3048,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        "  recover_interrupted_uninstall\n  resolve_usage_profile",
-        "  : # mutant: skip pending uninstall recovery\n  resolve_usage_profile"
+        "recover_interrupted_uninstall\nresolve_usage_profile",
+        ": # mutant: skip pending uninstall recovery\nresolve_usage_profile"
       )
 
       assert_mutation_is_killed(

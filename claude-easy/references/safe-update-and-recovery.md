@@ -11,11 +11,10 @@
 确认后只执行：
 
 1. 为全部远程订阅创建更新前备份。macOS 运行 `bash scripts/install_macos.sh --safe-update`；Windows 运行 `.\scripts\install_windows.cmd -BackupSubscriptions`。任一备份失败时停止。
-2. 使用 Computer Use 操作已经运行的 Clash 客户端；客户端未运行时保持未运行。
-3. 在客户端订阅界面确认“自动更新”未勾选；已勾选时通过界面取消。
-4. macOS 点击 ClashX Meta 中与用户手动刷新相同的入口；Windows 点击 Clash Verge Rev 的“全部更新”，没有该入口时逐份点击更新。
-5. 客户端更新动作结束后立即结束，只报告客户端显示的成功或失败。
+2. macOS 由 `--safe-update` 自动下载并更新全部远程订阅；Windows 使用 Computer Use 点击 Clash Verge Rev 的“全部更新”，没有该入口时逐份点击更新。
+3. 两端都保持订阅自动更新关闭。Windows 更新前先在客户端确认“自动更新”未勾选；已勾选时通过界面取消。
+4. 更新动作结束后立即结束，只报告成功或失败。
 
-订阅更新不得使用 `curl`、固定或伪造的 User-Agent、本地控制器、直接 HTTP 请求、订阅文件替换或自建下载器。更新后不做防倒退、协议、数量、哈希、时间戳、YAML、Mihomo、代理组、连通性、DNS、WebRTC、区域指纹或运行状态检查，不拒绝覆盖，不自动回滚，也不重新应用 Patch。三个档位都保持订阅自动更新关闭。
+macOS 恢复 2026 年 8 月 4 日前的下载方式：`curl --config -`，不设置 User-Agent。macOS 和 Windows 都不得添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理，不能再靠 User-Agent 绕过。Windows 继续使用客户端自己的更新请求。更新后不追加防倒退、协议、数量、哈希、时间戳、连通性、DNS、WebRTC 或区域指纹检查。
 
 配置历史用于诊断与回滚：当用户说某次改动后变慢或断网，先列出备份，按 `created_at` 选择症状出现前最近的一份作为候选，再把当前配置与候选做配置差异比较；两端公开的备份 ID 统一为不含真实文件名的 `ce-backup-v1-<64 位十六进制>`，旧原始编号只作为兼容输入，不能再次输出。JSON 列表在 `items` 返回含 `id` 与 RFC 3339 `created_at` 的对象；JSON 比较在 `items` 返回 ID、是否相同、备份 SHA-256 与恢复所需的当前 SHA-256，使列出、比较、恢复可以直接衔接。只输出字段路径与哈希；不返回配置文件名，provider 等动态映射名用固定占位符表示，不输出配置值。时间接近只能帮助选备份，不能仅凭时间接近就判定某项变化造成故障。不得自动删除历史备份。macOS 使用 `--list-backups`、`--compare-backup ID`、`--restore-backup ID --expected-current-sha256 SHA256`；Windows 使用 `-ListBackups`、`-CompareBackup ID`、`-RestoreBackup ID -ExpectedCurrentSha256 SHA256`。恢复前验证备份 YAML 与 Mihomo、核对目标文件和预期 SHA-256，并为当前版本再建备份；恢复后复测原始症状，恢复或运行检查失败时恢复回滚前版本。macOS 备份恢复、Patch 与订阅更新前备份共用操作锁，并在读取备份和写配置前先恢复未完成的批量事务；事务恢复改变当前字节时，本次请求按预期哈希冲突停止，必须重新比较。备份事务把提交后的真实路径和文件身份交给运行加载与失败回退；外部以相同字节替换目标也不得覆盖。macOS 恢复当前订阅后必须通过本地控制器重新加载，保持恢复前的 TUN 开关与目标仍保留的代理组选择，并完成缓存、DNS 和连接检查；失败时恢复回滚前版本。文件恢复但运行内核未恢复时必须单独报告；恢复非当前订阅时不得切换当前订阅。Windows 客户端运行时不得为了恢复而停止客户端，只能完成比较并报告当前无法安全自动恢复。

@@ -292,7 +292,7 @@ module ClaudeEasy
       opts.on("--compare-backup ID", "比较指定备份与当前配置") { |value| options[:compare_backup] = value }
       opts.on("--restore-backup ID", "恢复指定备份") { |value| options[:restore_backup] = value }
       opts.on("--expected-current-sha256 SHA256", "恢复前要求当前配置哈希匹配") { |value| options[:expected_current_sha256] = value }
-      opts.on("--safe-update-all", "为当前存储位置中的全部远程订阅创建更新前备份") { options[:safe_update_all] = true }
+      opts.on("--safe-update-all", "更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
       opts.on("--recover-profile-transaction", "恢复未完成的配置事务及当前运行配置") { options[:recover_profile_transaction] = true }
       opts.on("--repair-clashx-logs", "修复 ClashX Meta 文件日志目录权限") { options[:repair_clashx_logs] = true }
       opts.on("--usage-profile N", Integer, "补丁采用的用途档位") { |value| options[:usage_profile] = value }
@@ -739,23 +739,52 @@ module ClaudeEasy
     end
 
     if options[:safe_update_all]
-      targets = remote_subscription_targets(directories)
-      result = backup_remote_subscriptions(targets: targets, backup_root: options[:backup_root])
-      items = result.fetch(:profiles).map do |name|
-        {
-          "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name.to_s)}",
-          "label" => safe_label(name), "status" => "unchanged"
-        }
+      unless [1, 2, 3].include?(options[:usage_profile])
+        return emit_cli_result(
+          operation: "safe_update", exit_code: 64, status: "invalid_request", code: "usage_profile_required",
+          summary_zh: "更新订阅必须指定用途档位 1、2 或 3。"
+        ) if options[:json]
+        warn "更新订阅必须指定用途档位 1、2 或 3。"
+        return 64
       end
+      if (rejected = reject_unapproved_usage_profile(
+        options, operation: "safe_update", expected: options[:usage_profile]
+      ))
+        return rejected
+      end
+      policy = JSON.parse(File.read(options[:policy], encoding: "UTF-8"))
+      targets = remote_subscription_targets(directories)
+      result = safe_update_all(
+        targets: targets, policy: policy, backup_root: options[:backup_root],
+        usage_profile: options[:usage_profile], guard_storage: guard_storage,
+        expected_storage: expected_storage
+      )
+      if result[:status] == :updated
+        mark_wrapper_commit_receipt(options)
+        return emit_cli_result(
+          operation: "safe_update", exit_code: 0, status: "ok", code: "subscription_update_completed",
+          summary_zh: "全部远程订阅已经更新。", profile: options[:usage_profile],
+          changes: ["remote_subscriptions"],
+          checks: [{ "name" => "updated_count", "value" => result.fetch(:count) }],
+          items: result.fetch(:profiles).map do |name|
+            {
+              "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(name.to_s)}",
+              "label" => safe_label(name), "status" => "updated"
+            }
+          end
+        ) if options[:json]
+        puts "全部远程订阅已更新：#{result.fetch(:count)} 份。"
+        result.fetch(:profiles).each { |name| puts "已更新：#{safe_label(name)}" }
+        return 0
+      end
+      status = result[:status] == :rollback_failed ? "partial" : "failed"
+      code = result[:status] == :rollback_failed ? "rollback_failed" : "safe_update_failed"
       return emit_cli_result(
-        operation: "backup_subscriptions", exit_code: 0, status: "ok",
-        code: "subscription_backups_created",
-        summary_zh: "已为全部远程订阅创建更新前备份。",
-        changes: ["profile_backups"], items: items
+        operation: "safe_update", exit_code: 1, status: status, code: code,
+        summary_zh: "订阅更新失败。", profile: options[:usage_profile]
       ) if options[:json]
-      puts "已为全部远程订阅创建更新前备份：#{result.fetch(:count)} 份。"
-      result.fetch(:profiles).each { |name| puts "已备份：#{safe_label(name)}" }
-      return 0
+      warn "订阅更新失败。"
+      return 1
     end
 
     unless [1, 2, 3].include?(options[:usage_profile])
@@ -831,7 +860,7 @@ module ClaudeEasy
     1
   rescue InvalidConfigError => error
     return emit_cli_result(
-      operation: options[:safe_update_all] ? "backup_subscriptions" : "patch_profiles",
+      operation: options[:safe_update_all] ? "safe_update" : "patch_profiles",
       exit_code: 1, status: "failed", code: "invalid_configuration",
       summary_zh: "ClaudeEasy 运行失败。"
     ) if json_mode
@@ -841,7 +870,7 @@ module ClaudeEasy
     begin
       if json_mode
         emit_cli_result(
-          operation: options[:safe_update_all] ? "backup_subscriptions" : "patch_profiles",
+          operation: options[:safe_update_all] ? "safe_update" : "patch_profiles",
           exit_code: WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT,
           status: "partial", code: "wrapper_commit_receipt_failed",
           summary_zh: "配置已经提交，但提交收据写入失败。",

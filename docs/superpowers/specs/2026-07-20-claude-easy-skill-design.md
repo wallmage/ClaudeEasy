@@ -81,7 +81,7 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 
 - Shell 入口负责参数、环境和调用编排；Ruby 模块负责订阅发现、YAML 1.2 转换、备份、持久事务、Mihomo 校验、控制器刷新、日志权限修复和 JSON 输出。
 - 当前订阅写入后只通过本地控制器刷新，不用 AppleScript，不切换 TUN、订阅、代理组或节点。
-- 普通 Patch、订阅更新前备份和备份恢复共用操作锁。Patch 与恢复继续使用原有文件事务。
+- 普通 Patch、订阅更新和备份恢复共用操作锁。Patch 与恢复继续使用原有文件事务。
 - ClashX Meta 日志权限修复保留旧日志及原权限，建立继承 ACL，恢复当前会话目录，不停止或重启 Clash。
 
 ### Windows
@@ -93,7 +93,7 @@ ClaudeEasy 为 macOS ClashX Meta 和 Windows Clash Verge Rev 提供两种能力�
 
 ## 订阅更新
 
-订阅更新只由用户显式触发，不是后台监听。先为全部远程订阅创建更新前备份，再用 Computer Use 操作已经运行的客户端，确认自动更新关闭并点击与用户手动更新相同的入口。客户端动作结束后立即结束，不做更新后检查、拒绝覆盖、回滚或 Patch。
+订阅更新只由用户显式触发，不是后台监听。先为全部远程订阅创建更新前备份；macOS 自动下载更新，Windows 用 Computer Use 操作已经运行的客户端。两端都不得为订阅更新添加、固定或伪造 User-Agent，并保持自动更新关闭。
 
 ## 公开接口
 

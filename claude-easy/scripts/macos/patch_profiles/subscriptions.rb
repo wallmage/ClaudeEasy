@@ -468,6 +468,32 @@ module ClaudeEasy
     targets
   end
 
+  def curl_config_value(value)
+    raise InvalidConfigError, "远程订阅地址无效" if value.include?("\r") || value.include?("\n")
+
+    value.gsub("\\") { "\\\\" }.gsub('"', '\\"')
+  end
+
+  def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
+    config = <<~CURL
+      url = "#{curl_config_value(target.fetch(:url))}"
+      silent
+      show-error
+      fail
+      location
+      proto = "=https"
+      max-time = #{Integer(timeout_seconds)}
+    CURL
+    stdout, _stderr, status = Open3.capture3(
+      "/usr/bin/curl", "--config", "-", stdin_data: config, binmode: true
+    )
+    raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
+
+    stdout
+  rescue KeyError, ArgumentError
+    raise InvalidConfigError, "远程订阅下载失败"
+  end
+
   def mihomo_loopback_proxy_url?(value)
     value.is_a?(String) && value.match?(%r{\A(?:http|socks5h)://127\.0\.0\.1:(?:[1-9]\d{0,4})\z}) &&
       value.rpartition(":").last.to_i <= 65_535
@@ -684,12 +710,11 @@ module ClaudeEasy
   end
 
   def safe_update_all(targets:, policy:, backup_root:, usage_profile:,
-                      fetcher: nil,
+                      fetcher: method(:fetch_remote_subscription),
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil)
     operation_lock = nil
     default_activation = activation.nil?
-    raise InvalidConfigError, "脚本订阅更新已经停用" unless fetcher.respond_to?(:call)
     raise InvalidConfigError, "用途档位无效" unless [1, 2, 3].include?(usage_profile)
     raise InvalidConfigError, "没有可更新的远程订阅" unless targets.is_a?(Array) && !targets.empty?
     roots = targets.map { |target| File.dirname(File.expand_path(target.fetch(:path))) }.uniq

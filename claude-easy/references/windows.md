@@ -4,7 +4,7 @@
 
 ## Windows
 
-当前订阅更新只按 `safe-update-and-recovery.md` 使用更新前备份和 Computer Use；`-SnapshotProfiles`、`-VerifySafeUpdate` 及相关清单只用于兼容旧流程，不得用于新的订阅更新。
+当前订阅更新按 `safe-update-and-recovery.md` 使用更新前备份和 Computer Use；ClaudeEasy 不得给客户端更新请求添加、固定或伪造 User-Agent。`-SnapshotProfiles`、`-VerifySafeUpdate` 及相关清单只用于兼容旧流程，不得用于新的订阅更新。
 
 `profiles.yaml` 的远程订阅项目允许 `option` 出现在列表项首字段或后续字段；两种位置都必须记录唯一字段位置和原始形态。重复 `option`、重复 `allow_auto_update` 或无法唯一归属的嵌套结构必须在候选写入前拒绝，不能追加第二份字段。
 
