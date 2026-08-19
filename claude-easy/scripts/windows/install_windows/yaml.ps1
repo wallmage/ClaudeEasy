@@ -278,7 +278,12 @@ function Get-ClaudeEasyReactivationHotkey([string]$Text) {
         if ($line -notmatch '^\s*-\s+(.+?)\s*$') {
             throw "verge.yaml 的 hotkeys 包含不受支持的项目。"
         }
-        $entry = ConvertFrom-SubscriptionScalar ([string]$Matches[1]) "verge.yaml hotkey"
+        $entry = ([string]$Matches[1] -replace '\s+#.*$', '').Trim()
+        if ($entry.StartsWith("'") -or $entry.StartsWith('"')) {
+            $entry = ConvertFrom-SubscriptionScalar $entry "verge.yaml hotkey"
+        } elseif ($entry -match '[\r\n\t\[\]\{\}]') {
+            throw "verge.yaml hotkey 使用了不受支持的复杂标量。"
+        }
         $parts = @($entry.Split(",", 2) | ForEach-Object { $_.Trim() })
         if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or
             [string]::IsNullOrWhiteSpace($parts[1])) {
