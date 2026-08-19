@@ -787,10 +787,9 @@ rules:
             '"rule-set:ce-cn-domain":',
             '"rule-set:wrong-provider":'
         ),
-        $exactRuntimeText.Replace(
-            "  - DOMAIN-SUFFIX,anthropic.com,Actual AI`n  - DOMAIN,ai.example,Actual AI",
-            "  - DOMAIN,ai.example,Actual AI`n  - DOMAIN-SUFFIX,anthropic.com,Actual AI"
-        )
+        ($exactRuntimeText -replace
+            '(?m)^  - DOMAIN-SUFFIX,anthropic\.com,Actual AI\r?\n  - DOMAIN,ai\.example,Actual AI\r?$',
+            "  - DOMAIN,ai.example,Actual AI`n  - DOMAIN-SUFFIX,anthropic.com,Actual AI")
     )) {
         $invalidRuntimePatchRejected = $false
         try {
