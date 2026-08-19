@@ -926,29 +926,21 @@ function Remove-FileTransactionPreparation([byte[]]$ExpectedBytes) {
 }
 
 function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
-    $manifestPath = ConvertTo-NormalizedWindowsPath (
-        Join-Path $script:ClaudeEasyMutationRoot "claude-easy-safe-update.json"
-    )
-    $profilesRoot = ConvertTo-NormalizedWindowsPath (
-        Join-Path $script:ClaudeEasyMutationRoot "profiles"
-    )
     $profileSeen = $false
     foreach ($path in $Paths) {
-        $targetPath = ConvertTo-NormalizedWindowsPath $path
+        $relativePath = Get-AppHomeRelativePath $path
         if ([string]::Equals(
-            $targetPath,
-            $manifestPath,
+            $relativePath,
+            "claude-easy-safe-update.json",
             [StringComparison]::OrdinalIgnoreCase
         )) {
             continue
         }
-        $parent = ConvertTo-NormalizedWindowsPath (
-            [System.IO.Path]::GetDirectoryName($targetPath)
-        )
-        $extension = [System.IO.Path]::GetExtension($targetPath)
+        $parent = [System.IO.Path]::GetDirectoryName($relativePath)
+        $extension = [System.IO.Path]::GetExtension($relativePath)
         if (-not [string]::Equals(
             $parent,
-            $profilesRoot,
+            "profiles",
             [StringComparison]::OrdinalIgnoreCase
         ) -or $extension -notin @(".yaml", ".yml")) {
             return $false

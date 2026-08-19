@@ -132,7 +132,6 @@ function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.StandardInputEncoding = New-Object System.Text.UTF8Encoding($false)
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
     $output = New-Object System.IO.MemoryStream
