@@ -180,12 +180,17 @@ function Invoke-ClashControllerRequest(
 function Get-ClashRuntimeState([object]$Context) {
     $configResponse = Invoke-ClashControllerRequest $Context "GET" "/configs"
     $proxyResponse = Invoke-ClashControllerRequest $Context "GET" "/proxies"
-    if ($configResponse.Status -ne 200 -or $proxyResponse.Status -ne 200) {
+    $ruleResponse = Invoke-ClashControllerRequest $Context "GET" "/rules"
+    $providerResponse = Invoke-ClashControllerRequest $Context "GET" "/providers/proxies"
+    if ($configResponse.Status -ne 200 -or $proxyResponse.Status -ne 200 -or
+        $ruleResponse.Status -ne 200 -or $providerResponse.Status -ne 200) {
         throw "Clash Verge Rev 没有返回当前运行状态。"
     }
     $config = $configResponse.Content | ConvertFrom-Json
     $proxies = ($proxyResponse.Content | ConvertFrom-Json).proxies
-    if ($null -eq $proxies) { throw "Clash Verge Rev 没有返回代理组。" }
+    $rules = @((($ruleResponse.Content | ConvertFrom-Json).rules))
+    $providers = ($providerResponse.Content | ConvertFrom-Json).providers
+    if ($null -eq $proxies -or $null -eq $providers) { throw "Clash Verge Rev 没有返回代理组。" }
     $selections = @{}
     foreach ($property in @($proxies.PSObject.Properties)) {
         if ([string]$property.Value.type -eq "Selector" -and
@@ -196,6 +201,8 @@ function Get-ClashRuntimeState([object]$Context) {
     return [pscustomobject]@{
         Config = $config
         Proxies = $proxies
+        Rules = $rules
+        Providers = $providers
         Selections = $selections
         TunEnabled = ($null -ne $config.tun -and [bool]$config.tun.enable)
     }
@@ -234,17 +241,251 @@ function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousCo
     throw "Clash Verge Rev 没有重新生成运行配置。"
 }
 
-function Assert-ClashRuntimePatch([string]$RuntimeText, [object]$Policy, [int]$UsageProfile) {
-    foreach ($required in @([string]$Policy.cn_domain_provider.url, [string]$Policy.direct_resolvers[0])) {
-        if (-not $RuntimeText.Contains($required)) { throw "Clash Verge Rev 运行配置没有应用当前补丁。" }
+function ConvertFrom-ClashRuntimeYamlScalar([string]$Value) {
+    $scalar = ($Value -replace '\s+#.*$', '').Trim()
+    if ($scalar.Length -ge 2 -and $scalar[0] -eq "'" -and $scalar[$scalar.Length - 1] -eq "'") {
+        return $scalar.Substring(1, $scalar.Length - 2).Replace("''", "'")
     }
-    if ($UsageProfile -eq 3) {
-        foreach ($required in @([string]$Policy.cn_ip_provider.url, [string]$Policy.ai_rules[0])) {
-            $rendered = $required.Replace("{AI}", "")
-            $prefix = $rendered.Substring(0, $rendered.LastIndexOf(",") + 1)
-            if (-not $RuntimeText.Contains($prefix)) { throw "Clash Verge Rev 运行配置没有应用档位 3 补丁。" }
+    if ($scalar.Length -ge 2 -and $scalar[0] -eq '"' -and $scalar[$scalar.Length - 1] -eq '"') {
+        try { return [string]($scalar | ConvertFrom-Json) } catch { throw "运行配置包含无法读取的 YAML 标量。" }
+    }
+    return $scalar
+}
+
+function Get-ClashRuntimeYamlMappingEntry([string]$Line) {
+    $trimmed = $Line.TrimStart()
+    if ($trimmed -match '^("(?:\\.|[^"\\])*")\s*:\s*(.*)$') {
+        try { $key = [string]($Matches[1] | ConvertFrom-Json) } catch {
+            throw "运行配置包含无法读取的 YAML 键。"
+        }
+        return [pscustomobject]@{ Key = $key; Value = [string]$Matches[2] }
+    }
+    if ($trimmed -match "^('(?:''|[^'])*')\s*:\s*(.*)$") {
+        $key = $Matches[1].Substring(1, $Matches[1].Length - 2).Replace("''", "'")
+        return [pscustomobject]@{ Key = $key; Value = [string]$Matches[2] }
+    }
+    if ($trimmed -notmatch '^(.+?):(?=\s|$)\s*(.*)$') { return $null }
+    $key = [string]$Matches[1]
+    if ([string]::IsNullOrWhiteSpace($key) -or $key.Contains("#")) { return $null }
+    return [pscustomobject]@{ Key = $key.Trim(); Value = [string]$Matches[2] }
+}
+
+function Get-ClashRuntimeYamlNode([string]$Text, [string[]]$Path) {
+    $lines = @(Split-YamlLines $Text)
+    $searchStart = 0
+    $searchEnd = $lines.Count
+    $indent = 0
+    $node = $null
+    foreach ($key in $Path) {
+        $matchingIndexes = @()
+        for ($index = $searchStart; $index -lt $searchEnd; $index++) {
+            $line = [string]$lines[$index]
+            if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#") -or
+                (Get-YamlIndent $line) -ne $indent) { continue }
+            $entry = Get-ClashRuntimeYamlMappingEntry $line
+            if ($null -ne $entry -and [string]$entry.Key -ceq $key) { $matchingIndexes += $index }
+        }
+        if ($matchingIndexes.Count -ne 1) { throw "Clash Verge Rev 运行配置缺少唯一的受管设置。" }
+        $start = [int]$matchingIndexes[0]
+        $finish = $searchEnd
+        for ($index = $start + 1; $index -lt $searchEnd; $index++) {
+            $line = [string]$lines[$index]
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            if ((Get-YamlIndent $line) -le $indent -and -not $line.TrimStart().StartsWith("#")) {
+                $finish = $index
+                break
+            }
+        }
+        $node = [pscustomobject]@{ Start = $start; End = $finish; Indent = $indent }
+        $searchStart = $node.Start + 1
+        $searchEnd = $node.End
+        $indent = -1
+        for ($index = $searchStart; $index -lt $searchEnd; $index++) {
+            $line = [string]$lines[$index]
+            if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+            $indent = Get-YamlIndent $line
+            break
+        }
+        if ($key -ne $Path[$Path.Count - 1] -and $indent -le $node.Indent) {
+            throw "Clash Verge Rev 运行配置缺少受管设置。"
         }
     }
+    return [pscustomobject]@{ Lines = $lines; Node = $node }
+}
+
+function Get-ClashRuntimeYamlMapping([string]$Text, [string[]]$Path) {
+    $located = Get-ClashRuntimeYamlNode $Text $Path
+    $values = @{}
+    $childIndent = -1
+    for ($index = $located.Node.Start + 1; $index -lt $located.Node.End; $index++) {
+        $line = [string]$located.Lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        if ($childIndent -lt 0) { $childIndent = Get-YamlIndent $line }
+        if ((Get-YamlIndent $line) -ne $childIndent) { continue }
+        $entry = Get-ClashRuntimeYamlMappingEntry $line
+        if ($null -eq $entry -or [string]::IsNullOrWhiteSpace([string]$entry.Value)) { continue }
+        if ($values.ContainsKey([string]$entry.Key)) { throw "运行配置包含重复的受管设置。" }
+        $values[[string]$entry.Key] = ConvertFrom-ClashRuntimeYamlScalar ([string]$entry.Value)
+    }
+    return $values
+}
+
+function Get-ClashRuntimeYamlSequence([string]$Text, [string[]]$Path) {
+    $located = Get-ClashRuntimeYamlNode $Text $Path
+    $items = @()
+    for ($index = $located.Node.Start + 1; $index -lt $located.Node.End; $index++) {
+        $line = [string]$located.Lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        if ($line -notmatch '^\s*-\s+(.+?)\s*$') { throw "运行配置包含无法读取的受管清单。" }
+        $items += ConvertFrom-ClashRuntimeYamlScalar ([string]$Matches[1])
+    }
+    return @($items)
+}
+
+function Get-ClashRuntimeManagedProvider(
+    [string]$RuntimeText,
+    [object]$Expected,
+    [string]$ExpectedProxy = ""
+) {
+    $located = Get-ClashRuntimeYamlNode $RuntimeText @("rule-providers")
+    $providerMatches = @()
+    $providerIndent = -1
+    for ($index = $located.Node.Start + 1; $index -lt $located.Node.End; $index++) {
+        $line = [string]$located.Lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        if ($providerIndent -lt 0) { $providerIndent = Get-YamlIndent $line }
+        if ((Get-YamlIndent $line) -ne $providerIndent) { continue }
+        $entry = Get-ClashRuntimeYamlMappingEntry $line
+        if ($null -eq $entry -or -not [string]::IsNullOrWhiteSpace([string]$entry.Value)) { continue }
+        $name = [string]$entry.Key
+        if ($name -notmatch ('^' + [regex]::Escape([string]$Expected.name) + '(?:-(?:[2-9]|[1-9][0-9]+))?$')) { continue }
+        $values = Get-ClashRuntimeYamlMapping $RuntimeText @("rule-providers", $name)
+        $suffix = $name.Substring(([string]$Expected.name).Length)
+        $expectedPath = [string]$Expected.path
+        if (-not [string]::IsNullOrEmpty($suffix)) {
+            $dot = $expectedPath.LastIndexOf(".")
+            $expectedPath = if ($dot -lt 0) {
+                $expectedPath + $suffix
+            } else {
+                $expectedPath.Substring(0, $dot) + $suffix + $expectedPath.Substring($dot)
+            }
+        }
+        $expectedValues = [ordered]@{
+            type = [string]$Expected.type
+            behavior = [string]$Expected.behavior
+            format = [string]$Expected.format
+            url = [string]$Expected.url
+            path = $expectedPath
+            interval = [string]$Expected.interval
+            proxy = if ([string]::IsNullOrWhiteSpace($ExpectedProxy)) { [string]$values.proxy } else { $ExpectedProxy }
+            "size-limit" = [string]$Expected.size_limit
+        }
+        $complete = -not [string]::IsNullOrWhiteSpace([string]$values.proxy) -and
+            @($values.Keys).Count -eq @($expectedValues.Keys).Count
+        foreach ($key in $expectedValues.Keys) {
+            if (-not $values.ContainsKey($key) -or
+                [string]$values[$key] -cne [string]$expectedValues[$key]) { $complete = $false }
+        }
+        if ($complete) {
+            $providerMatches += [pscustomobject]@{ Name = $name; Proxy = [string]$values.proxy }
+        }
+    }
+    if ($providerMatches.Count -ne 1) { throw "Clash Verge Rev 运行配置缺少唯一的受管规则提供器。" }
+    return $providerMatches[0]
+}
+
+function Assert-ClashRuntimePatch(
+    [string]$RuntimeText,
+    [object]$State,
+    [object]$Policy,
+    [int]$UsageProfile
+) {
+    $profile = Get-ClashRuntimeYamlMapping $RuntimeText @("profile")
+    if ([string]$profile["store-selected"] -cne "true") {
+        throw "Clash Verge Rev 运行配置没有保存代理组选择。"
+    }
+    $dns = Get-ClashRuntimeYamlMapping $RuntimeText @("dns")
+    if ([string]$dns.enable -cne "true" -or [string]$dns["respect-rules"] -cne "true" -or
+        [string]$dns["direct-nameserver-follow-policy"] -cne "false") {
+        throw "Clash Verge Rev 运行配置没有应用共同 DNS 设置。"
+    }
+    $directResolvers = @(Get-ClashRuntimeYamlSequence $RuntimeText @("dns", "direct-nameserver"))
+    if ($directResolvers.Count -ne @($Policy.direct_resolvers).Count) {
+        throw "Clash Verge Rev 运行配置没有应用直连 DNS。"
+    }
+    for ($index = 0; $index -lt $directResolvers.Count; $index++) {
+        if ([string]$directResolvers[$index] -cne [string]$Policy.direct_resolvers[$index]) {
+            throw "Clash Verge Rev 运行配置没有应用直连 DNS。"
+        }
+    }
+    $rules = @($State.Rules)
+    $domainProviderInfo = Get-ClashRuntimeManagedProvider $RuntimeText $Policy.cn_domain_provider
+    $domainProvider = [string]$domainProviderInfo.Name
+    $mainGroup = [string]$domainProviderInfo.Proxy
+    $mainProperty = $State.Proxies.PSObject.Properties[$mainGroup]
+    if ($null -eq $mainProperty -or
+        [string]$mainProperty.Value.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) {
+        throw "Clash Verge Rev 运行配置中的受管规则提供器没有指向主代理组。"
+    }
+    $liveMainGroup = ""
+    for ($index = $rules.Count - 1; $index -ge 0; $index--) {
+        if (([string]$rules[$index].type).Replace("-", "") -ieq "Match") {
+            $candidate = [string]$rules[$index].proxy
+            $candidateProperty = $State.Proxies.PSObject.Properties[$candidate]
+            if ($null -ne $candidateProperty -and
+                [string]$candidateProperty.Value.type -in @("Selector", "URLTest", "Fallback", "LoadBalance")) {
+                $liveMainGroup = $candidate
+                break
+            }
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($liveMainGroup) -and $liveMainGroup -cne $mainGroup) {
+        throw "Clash Verge Rev 运行配置中的主代理组不一致。"
+    }
+    $policyResolvers = @(Get-ClashRuntimeYamlSequence $RuntimeText @(
+        "dns", "nameserver-policy", "rule-set:$domainProvider"
+    ))
+    if ($policyResolvers.Count -ne @($Policy.direct_resolvers).Count) {
+        throw "Clash Verge Rev 运行配置没有应用国内 DNS 分流。"
+    }
+    for ($index = 0; $index -lt $policyResolvers.Count; $index++) {
+        if ([string]$policyResolvers[$index] -cne [string]$Policy.direct_resolvers[$index]) {
+            throw "Clash Verge Rev 运行配置没有应用国内 DNS 分流。"
+        }
+    }
+    $runtimeRules = @(Get-ClashRuntimeYamlSequence $RuntimeText @("rules"))
+    $domainRule = "RULE-SET,$domainProvider,DIRECT"
+    $firstBroadRule = @($runtimeRules | Where-Object {
+        ([string]$_).Split(",", 2)[0].ToUpperInvariant() -in @("MATCH", "GEOSITE", "GEOIP", "RULE-SET")
+    } | Select-Object -First 1)
+    if ($firstBroadRule.Count -ne 1 -or [string]$firstBroadRule[0] -cne $domainRule) {
+        throw "Clash Verge Rev 运行配置没有按顺序应用共同规则。"
+    }
+    if ($UsageProfile -lt 3) {
+        return
+    }
+    $aiGroup = Get-ClashRuntimeAiGroupName $rules $Policy
+    $ipProviderInfo = Get-ClashRuntimeManagedProvider $RuntimeText $Policy.cn_ip_provider $mainGroup
+    $ipProvider = [string]$ipProviderInfo.Name
+    $managed = @($Policy.ai_rules | ForEach-Object { ([string]$_).Replace("{AI}", $aiGroup) })
+    $expectedPrefix = @(
+        $managed +
+        @($Policy.ai_rules | ForEach-Object { ([string]$_).Replace("{AI}", "REJECT") }) +
+        @($Policy.lan_udp_direct_rules) +
+        @("RULE-SET,$domainProvider,DIRECT") +
+        @(([string]$Policy.cn_udp_direct_rule).Replace("{CN_IP}", $ipProvider)) +
+        @("NETWORK,UDP,$aiGroup", "NETWORK,UDP,REJECT")
+    )
+    if ($runtimeRules.Count -lt $expectedPrefix.Count) { throw "Clash Verge Rev 运行配置没有应用档位 3 补丁。" }
+    for ($index = 0; $index -lt $expectedPrefix.Count; $index++) {
+        if ([string]$runtimeRules[$index] -cne [string]$expectedPrefix[$index]) {
+            throw "Clash Verge Rev 运行配置没有应用档位 3 补丁。"
+        }
+    }
+}
+
+function Test-ClashRuntimeRequiresTun([int]$UsageProfile) {
+    return $UsageProfile -ge 2
 }
 
 function Test-ClashRuntimeConnectivity([object]$Context, [object]$State, [string]$CurlPath, [bool]$UseTun) {
@@ -283,43 +524,87 @@ function Test-ClashRuntimeConnectivity([object]$Context, [object]$State, [string
     return $false
 }
 
-function Test-ClashRuntimeProxyPath([object]$Proxies, [string]$Name, [hashtable]$Seen = $null) {
+function Test-ClashRuntimeProxyPath(
+    [object]$Proxies,
+    [string]$Name,
+    [hashtable]$Seen = $null,
+    [object]$Providers = $null
+) {
     if ([string]::IsNullOrWhiteSpace($Name) -or
         $Name -in @("DIRECT", "DNS", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH")) {
         return $false
     }
     if ($null -eq $Seen) { $Seen = @{} }
     if ($Seen.ContainsKey($Name)) { return $false }
+    $candidates = @()
     $property = $Proxies.PSObject.Properties[$Name]
-    if ($null -eq $property) { return $true }
-    $proxy = $property.Value
-    if ([string]$proxy.type -in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")) {
-        return $false
+    if ($null -ne $property) { $candidates += $property.Value }
+    if ($null -ne $Providers) {
+        foreach ($provider in @($Providers.PSObject.Properties)) {
+            $candidates += @($provider.Value.proxies | Where-Object {
+                $null -ne $_ -and [string]$_.name -ceq $Name
+            })
+        }
     }
-    if ([string]$proxy.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) { return $true }
-    $visited = @{}
-    foreach ($key in $Seen.Keys) { $visited[$key] = $true }
-    $visited[$Name] = $true
-    if ([string]$proxy.type -eq "LoadBalance") {
-        $members = @($proxy.all)
-        return $members.Count -gt 0 -and @($members | Where-Object {
-            -not (Test-ClashRuntimeProxyPath $Proxies ([string]$_) $visited)
-        }).Count -eq 0
+    if ($candidates.Count -eq 0) { return $false }
+    foreach ($proxy in $candidates) {
+        if ([string]$proxy.type -in @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch")) {
+            return $false
+        }
+        if ([string]$proxy.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) { continue }
+        $visited = @{}
+        foreach ($key in $Seen.Keys) { $visited[$key] = $true }
+        $visited[$Name] = $true
+        if ([string]$proxy.type -eq "LoadBalance") {
+            $members = @($proxy.all)
+            if ($members.Count -eq 0 -or @($members | Where-Object {
+                -not (Test-ClashRuntimeProxyPath $Proxies ([string]$_) $visited $Providers)
+            }).Count -ne 0) { return $false }
+        } elseif (-not (Test-ClashRuntimeProxyPath $Proxies ([string]$proxy.now) $visited $Providers)) {
+            return $false
+        }
     }
-    return Test-ClashRuntimeProxyPath $Proxies ([string]$proxy.now) $visited
+    return $true
 }
 
-function Assert-ClashRuntimeAiGroup([object]$Proxies, [object]$Policy) {
-    $candidates = @($Policy.ai_group_names)
-    $candidates += @($Proxies.PSObject.Properties | Where-Object {
-        [string]$_.Name -match '(?i)(^|[^A-Za-z])AI([^A-Za-z]|$)|OpenAI|人工智能|🤖'
-    } | ForEach-Object { [string]$_.Name })
-    foreach ($name in @($candidates | Select-Object -Unique)) {
-        $property = $Proxies.PSObject.Properties[[string]$name]
-        if ($null -eq $property -or [string]$property.Value.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) { continue }
-        if (Test-ClashRuntimeProxyPath $Proxies ([string]$name)) { return }
+function Get-ClashRuntimeAiGroupName([object[]]$Rules, [object]$Policy) {
+    $templates = @($Policy.ai_rules)
+    if ($templates.Count -eq 0 -or $Rules.Count -lt $templates.Count) {
+        throw "档位 3 的受管 AI 规则不完整。"
     }
-    throw "档位 3 的 AI 分组当前没有可用代理路径。"
+    $aiGroup = ""
+    for ($index = 0; $index -lt $templates.Count; $index++) {
+        $parts = @(([string]$templates[$index]).Split(","))
+        if ($parts.Count -lt 3) { throw "档位 3 的 AI 策略无效。" }
+        $expectedType = ([string]$parts[0]).Replace("-", "")
+        $actual = $Rules[$index]
+        $actualType = ([string]$actual.type).Replace("-", "")
+        if ($actualType -ine $expectedType -or [string]$actual.payload -ine [string]$parts[1]) {
+            throw "档位 3 的受管 AI 规则不完整。"
+        }
+        $target = [string]$actual.proxy
+        if ([string]::IsNullOrWhiteSpace($target) -or $target -in @("DIRECT", "REJECT")) {
+            throw "档位 3 的受管 AI 规则目标无效。"
+        }
+        if ([string]::IsNullOrWhiteSpace($aiGroup)) { $aiGroup = $target }
+        elseif ($target -cne $aiGroup) { throw "档位 3 的受管 AI 规则目标不一致。" }
+    }
+    return $aiGroup
+}
+
+function Assert-ClashRuntimeAiGroup(
+    [object]$Proxies,
+    [object[]]$Rules,
+    [object]$Providers,
+    [object]$Policy
+) {
+    $name = Get-ClashRuntimeAiGroupName $Rules $Policy
+    $property = $Proxies.PSObject.Properties[$name]
+    if ($null -eq $property -or
+        [string]$property.Value.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance") -or
+        -not (Test-ClashRuntimeProxyPath $Proxies $name $null $Providers)) {
+        throw "档位 3 的 AI 分组当前没有可用代理路径。"
+    }
 }
 
 function Assert-ClashRuntimeHealthy(
@@ -340,7 +625,9 @@ function Assert-ClashRuntimeHealthy(
         }
     }
     if ($state.TunEnabled -ne $ExpectedTunEnabled) { throw "Clash Verge Rev 没有保留原 TUN 状态。" }
-    if ($UsageProfile -eq 3) { Assert-ClashRuntimeAiGroup $state.Proxies $Policy }
+    if ($UsageProfile -eq 3) {
+        Assert-ClashRuntimeAiGroup $state.Proxies $state.Rules $state.Providers $Policy
+    }
     $flush = Invoke-ClashControllerRequest $Context "POST" "/cache/dns/flush"
     if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
     $dns = Invoke-ClashControllerRequest $Context "GET" "/dns/query?name=www.baidu.com&type=A"
@@ -349,8 +636,8 @@ function Assert-ClashRuntimeHealthy(
     $answers = if ($null -ne $dnsPayload.Answer) { @($dnsPayload.Answer) } else { @($dnsPayload.answer) }
     $dnsStatus = if ($null -ne $dnsPayload.Status) { [int]$dnsPayload.Status } else { [int]$dnsPayload.status }
     if ($dnsStatus -ne 0 -or $answers.Count -eq 0) { throw "Clash Verge Rev DNS 检查失败。" }
-    Assert-ClashRuntimePatch ([string]$Context.RuntimeText) $Policy $UsageProfile
-    if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath ($UsageProfile -eq 3))) {
+    Assert-ClashRuntimePatch ([string]$Context.RuntimeText) $state $Policy $UsageProfile
+    if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath (Test-ClashRuntimeRequiresTun $UsageProfile))) {
         throw "更新后的配置无法连接 Google。"
     }
 }

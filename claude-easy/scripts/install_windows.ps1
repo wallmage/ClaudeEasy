@@ -213,8 +213,8 @@ if ($SafeUpdate) {
     $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
     $runtimeBefore = Get-ClashControllerContext $runtimeConfigPath
     $runtimeStateBefore = Get-ClashRuntimeState $runtimeBefore
-    if ($savedUsageProfile -eq 3 -and -not $runtimeStateBefore.TunEnabled) {
-        throw "档位 3 的 TUN 当前没有开启。"
+    if ((Test-ClashRuntimeRequiresTun $savedUsageProfile) -and -not $runtimeStateBefore.TunEnabled) {
+        throw "当前用途档位的 TUN 没有开启。"
     }
     $core = Find-MihomoCore $MihomoPath
     Test-MihomoVersion $core | Out-Null

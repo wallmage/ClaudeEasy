@@ -373,6 +373,10 @@ function claudeEasyManagedSafeFingerprint(group) {
 function claudeEasyOwnedAiGroup(config, name) {
   const group = claudeEasySelectableGroups(config).find(function (item) { return item.name === name; });
   if (!claudeEasyManagedAiFingerprint(group)) return false;
+  const sources = claudeEasyAiGroupSources(config);
+  const providers = Object.prototype.hasOwnProperty.call(group, "use") ? group.use : [];
+  if (JSON.stringify(group.proxies) !== JSON.stringify(sources.proxies) ||
+      JSON.stringify(providers) !== JSON.stringify(sources.providers)) return false;
   const keys = CLAUDE_EASY_POLICY.aiRules.concat(CLAUDE_EASY_POLICY.legacyAiRules || []).map(claudeEasyManagedRuleKey);
   const matches = (config.rules || []).filter(function (rule) {
     const info = claudeEasyRuleInfo(rule);
@@ -976,7 +980,7 @@ function claudeEasyValidPolicy() {
     (cnUdpRule.match(/\{CN_IP\}/g) || []).length === 1;
 }
 
-function claudeEasyApply(config, profileName, usageProfile) {
+function claudeEasyApply(config, profileName, usageProfile, originalOwnedNames) {
   if (!claudeEasyValidPolicy()) return config;
   if (!claudeEasyUsable(config)) return config;
   const patched = claudeEasyClone(config);
@@ -990,11 +994,12 @@ function claudeEasyApply(config, profileName, usageProfile) {
   const profile = [1, 2, 3].indexOf(usageProfile) !== -1 ? usageProfile : 3;
   const cnProviderName = claudeEasyCommonCn(patched, mainGroup);
   if (profile < 3) return patched;
-  const ownedNames = claudeEasyOwnedManagedNames(patched);
+  const ownedNames = originalOwnedNames || claudeEasyOwnedManagedNames(patched);
   const existingAi = claudeEasyExistingAiGroup(patched);
   let aiGroup;
   if (existingAi) {
-    if (!claudeEasyConfigureManagedAiGroup(existingAi, patched)) return config;
+    if (ownedNames.ai.indexOf(existingAi.name) !== -1 &&
+        !claudeEasyConfigureManagedAiGroup(existingAi, patched)) return config;
     aiGroup = existingAi.name;
   } else {
     aiGroup = claudeEasyEnsureAiGroup(patched);
@@ -1023,9 +1028,10 @@ function claudeEasyApply(config, profileName, usageProfile) {
 }
 
 function claudeEasyTransform(config, profileName, usageProfile) {
-  const candidate = claudeEasyApply(config, profileName, usageProfile);
+  const originalOwnedNames = claudeEasyOwnedManagedNames(config);
+  const candidate = claudeEasyApply(config, profileName, usageProfile, originalOwnedNames);
   if (candidate === config) return config;
-  const secondPass = claudeEasyApply(claudeEasyClone(candidate), profileName, usageProfile);
+  const secondPass = claudeEasyApply(claudeEasyClone(candidate), profileName, usageProfile, originalOwnedNames);
   if (JSON.stringify(candidate) !== JSON.stringify(secondPass)) return config;
   return candidate;
 }

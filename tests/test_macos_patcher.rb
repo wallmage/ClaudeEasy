@@ -2863,7 +2863,7 @@ class MacosPatcherTest < Minitest::Test
     assert_equal config, result.fetch(:config)
   end
 
-  def test_normalizes_owned_single_main_ai_group_to_independent_node_selector
+  def test_preserves_ambiguous_single_main_ai_group_ownership
     config = base_config
     config["proxy-groups"].reject! { |group| group["name"] == "AI" }
     ai_name = ClaudeEasy::AI_GROUP_BASE
@@ -2873,9 +2873,9 @@ class MacosPatcherTest < Minitest::Test
     result = ClaudeEasy.patch(config, @policy)
     ai_group = result.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == ai_name }
 
-    assert result.fetch(:ai_group_reset)
-    assert_equal ["台湾家宽 01", "日本家宽 01", "美国家宽 01"], ai_group.fetch("proxies")
-    refute_includes ai_group.fetch("proxies"), "Main"
+    refute result.fetch(:ai_group_reset)
+    assert_equal ["Main"], ai_group.fetch("proxies")
+    refute ClaudeEasy.patch(result.fetch(:config), @policy).fetch(:changed)
   end
 
   def test_removes_obsolete_managed_groups
@@ -2883,7 +2883,10 @@ class MacosPatcherTest < Minitest::Test
     ai_name = ClaudeEasy::AI_GROUP_BASE
     safe_name = ClaudeEasy::SAFE_GROUP_BASE
     assert_equal "Direct|Dns|Reject|RejectDrop|Pass|PassRule|Compatible|Rematch", ClaudeEasy::EXCLUDED_SAFE_TYPES
-    config["proxy-groups"] << { "name" => ai_name, "type" => "select", "proxies" => ["台湾家宽 01"] }
+    config["proxy-groups"] << {
+      "name" => ai_name, "type" => "select",
+      "proxies" => ["台湾家宽 01", "日本家宽 01", "美国家宽 01"]
+    }
     config["proxy-groups"] << {
       "name" => safe_name, "type" => "select", "proxies" => ["台湾家宽 01", "日本家宽 01"],
       "include-all" => true, "exclude-type" => ClaudeEasy::EXCLUDED_SAFE_TYPES, "empty-fallback" => "REJECT"
@@ -9200,8 +9203,7 @@ class MacosPatcherTest < Minitest::Test
     user_group = {
       "name" => ClaudeEasy::AI_GROUP_BASE,
       "type" => "select",
-      "proxies" => ["Main", "日本家宽 01"],
-      "icon" => "https://example.invalid/user-icon.png"
+      "proxies" => ["Main"]
     }
     config["proxy-groups"] << user_group
 
@@ -9210,6 +9212,7 @@ class MacosPatcherTest < Minitest::Test
     preserved = first.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == user_group["name"] }
 
     assert_equal user_group, preserved
+    assert_equal user_group, second.fetch(:config).fetch("proxy-groups").find { |group| group["name"] == user_group["name"] }
     assert_equal ClaudeEasy::AI_GROUP_BASE, first.fetch(:ai_group)
     refute second.fetch(:changed)
   end
@@ -9259,7 +9262,10 @@ class MacosPatcherTest < Minitest::Test
     old["proxy-groups"].reject! { |group| group["name"] == "AI" }
     ai_group = ClaudeEasy::AI_GROUP_BASE
     safe_group = ClaudeEasy::SAFE_GROUP_BASE
-    old["proxy-groups"] << { "name" => ai_group, "type" => "select", "proxies" => ["台湾家宽 01"] }
+    old["proxy-groups"] << {
+      "name" => ai_group, "type" => "select",
+      "proxies" => ["台湾家宽 01", "日本家宽 01", "美国家宽 01"]
+    }
     old["proxy-groups"] << {
       "name" => safe_group, "type" => "select", "proxies" => ["台湾家宽 01"], "include-all" => true,
       "exclude-type" => ClaudeEasy::EXCLUDED_SAFE_TYPES, "empty-fallback" => "REJECT"
@@ -9957,7 +9963,10 @@ class MacosPatcherTest < Minitest::Test
     config = base_config
     config["proxy-groups"].reject! { |group| group["name"] == "AI" }
     name = ClaudeEasy::AI_GROUP_BASE
-    config["proxy-groups"] << { "name" => name, "type" => "select", "proxies" => ["台湾家宽 01"] }
+    config["proxy-groups"] << {
+      "name" => name, "type" => "select",
+      "proxies" => ["台湾家宽 01", "日本家宽 01", "美国家宽 01"]
+    }
     config["rules"] = ClaudeEasy.render_ai_rules(@policy, name) + config.fetch("rules")
 
     group = ClaudeEasy.find_managed_select_group(config, ClaudeEasy::AI_GROUP_BASE, :ai, @policy)

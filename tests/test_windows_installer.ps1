@@ -608,6 +608,294 @@ function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$
 }
 
 try {
+    Assert-True (-not (Test-ClashRuntimeRequiresTun 1)) "profile 1 unexpectedly required TUN"
+    Assert-True (Test-ClashRuntimeRequiresTun 2) "profile 2 did not require TUN"
+    Assert-True (Test-ClashRuntimeRequiresTun 3) "profile 3 did not require TUN"
+    Assert-True (
+        (Get-ClashRuntimeYamlMappingEntry "'rule-set:managed':").Key -ceq "rule-set:managed"
+    ) "runtime YAML parser rejected a single-quoted policy key"
+    Assert-True (
+        (Get-ClashRuntimeYamlMappingEntry "rule-set:managed:").Key -ceq "rule-set:managed"
+    ) "runtime YAML parser rejected a plain policy key"
+    $missingRuntimeProxy = [pscustomobject]@{
+        AI = [pscustomobject]@{ type = "Selector"; now = "Missing Node" }
+    }
+    Assert-True (-not (
+        Test-ClashRuntimeProxyPath $missingRuntimeProxy "AI"
+    )) "runtime AI path accepted a missing target"
+    $providerRuntimeProxies = [pscustomobject]@{
+        AI = [pscustomobject]@{ type = "Selector"; now = "Provider Node" }
+    }
+    $runtimeProviders = [pscustomobject]@{
+        remote = [pscustomobject]@{
+            proxies = @(
+                [pscustomobject]@{ name = "Provider Node"; type = "Shadowsocks" },
+                [pscustomobject]@{ name = "Provider Direct"; type = "Direct" }
+            )
+        }
+    }
+    Assert-True (
+        Test-ClashRuntimeProxyPath $providerRuntimeProxies "AI" $null $runtimeProviders
+    ) "runtime AI path rejected a provider-backed proxy"
+    $providerRuntimeProxies.AI.now = "Provider Direct"
+    Assert-True (-not (
+        Test-ClashRuntimeProxyPath $providerRuntimeProxies "AI" $null $runtimeProviders
+    )) "runtime AI path accepted a provider-backed Direct target"
+    $runtimeAiPolicy = [pscustomobject]@{
+        ai_rules = @(
+            "DOMAIN-SUFFIX,anthropic.com,{AI}",
+            "DOMAIN,ai.example,{AI}"
+        )
+    }
+    $runtimeAiRules = @(
+        [pscustomobject]@{ type = "DomainSuffix"; payload = "anthropic.com"; proxy = "Custom AI" },
+        [pscustomobject]@{ type = "Domain"; payload = "ai.example"; proxy = "Custom AI" }
+    )
+    Assert-True (
+        (Get-ClashRuntimeAiGroupName $runtimeAiRules $runtimeAiPolicy) -ceq "Custom AI"
+    ) "runtime checks did not bind to the AI group used by managed rules"
+    $runtimeAiRules[1].proxy = "Decoy AI"
+    $inconsistentRuntimeAiRejected = $false
+    try { Get-ClashRuntimeAiGroupName $runtimeAiRules $runtimeAiPolicy | Out-Null } catch {
+        $inconsistentRuntimeAiRejected = $true
+    }
+    Assert-True $inconsistentRuntimeAiRejected "runtime checks accepted inconsistent managed AI targets"
+    $runtimeAiRules[1].proxy = "Actual Group"
+    $runtimeAiRules[0].proxy = "Actual Group"
+    $exactRuntimeProxies = [pscustomobject][ordered]@{
+        "Decoy AI" = [pscustomobject]@{ type = "Selector"; now = "Safe Node" }
+        "Actual Group" = [pscustomobject]@{ type = "Selector"; now = "Missing Node" }
+        "Safe Node" = [pscustomobject]@{ type = "Shadowsocks" }
+    }
+    $wrongRuntimeAiRejected = $false
+    try {
+        Assert-ClashRuntimeAiGroup $exactRuntimeProxies $runtimeAiRules $null $runtimeAiPolicy
+    } catch { $wrongRuntimeAiRejected = $true }
+    Assert-True $wrongRuntimeAiRejected "runtime checks accepted a healthy decoy AI group"
+    $exactRuntimeProxies."Actual Group".now = "Provider Node"
+    Assert-ClashRuntimeAiGroup $exactRuntimeProxies $runtimeAiRules $runtimeProviders $runtimeAiPolicy
+    $originalRuntimeRequest = (Get-Item Function:Invoke-ClashControllerRequest).ScriptBlock
+    function Invoke-ClashControllerRequest(
+        [object]$Context,
+        [string]$Method,
+        [string]$Endpoint,
+        [string]$Body = ""
+    ) {
+        $content = switch ($Endpoint) {
+            "/configs" { '{"tun":{"enable":true}}' }
+            "/proxies" { '{"proxies":{"Main":{"type":"Selector","now":"Node"},"Node":{"type":"Shadowsocks"}}}' }
+            "/rules" { '{"rules":[{"type":"Match","payload":"","proxy":"Main"}]}' }
+            "/providers/proxies" { '{"providers":{"remote":{"proxies":[{"name":"Provider Node","type":"Shadowsocks"}]}}}' }
+            default { throw "unexpected runtime endpoint" }
+        }
+        return [pscustomobject]@{ Status = 200; Content = $content }
+    }
+    try {
+        $completeRuntimeState = Get-ClashRuntimeState ([pscustomobject]@{})
+        Assert-True (
+            $null -ne $completeRuntimeState.Rules -and @($completeRuntimeState.Rules).Count -eq 1
+        ) "runtime state omitted rules"
+        Assert-True (
+            $null -ne $completeRuntimeState.Providers -and
+            @($completeRuntimeState.Providers.remote.proxies).Count -eq 1
+        ) "runtime state omitted provider proxies"
+    } finally {
+        Set-Item Function:Invoke-ClashControllerRequest $originalRuntimeRequest
+    }
+    $exactRuntimePolicy = [pscustomobject]@{
+        ai_rules = @(
+            "DOMAIN-SUFFIX,anthropic.com,{AI}",
+            "DOMAIN,ai.example,{AI}"
+        )
+        lan_udp_direct_rules = @("AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT")
+        cn_udp_direct_rule = "AND,((NETWORK,UDP),(RULE-SET,{CN_IP})),DIRECT"
+        direct_resolvers = @("https://223.5.5.5/dns-query#DIRECT")
+        cn_domain_provider = [pscustomobject]@{
+            name = "ce-cn-domain"; type = "http"; behavior = "domain"; format = "mrs"
+            url = "https://example.invalid/cn-domain.mrs"; path = "./ruleset/ce-cn-domain.mrs"
+            interval = 86400; size_limit = 2097152
+        }
+        cn_ip_provider = [pscustomobject]@{
+            name = "ce-cn-ip"; type = "http"; behavior = "ipcidr"; format = "mrs"
+            url = "https://example.invalid/cn-ip.mrs"; path = "./ruleset/ce-cn-ip.mrs"
+            interval = 86400; size_limit = 2097152
+        }
+    }
+    $exactRuntimeText = @'
+profile:
+  store-selected: true
+dns:
+  enable: true
+  respect-rules: true
+  direct-nameserver:
+    - https://223.5.5.5/dns-query#DIRECT
+  direct-nameserver-follow-policy: false
+  nameserver-policy:
+    "rule-set:ce-cn-domain":
+      - https://223.5.5.5/dns-query#DIRECT
+rule-providers:
+  ce-cn-domain:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://example.invalid/cn-domain.mrs
+    path: ./ruleset/ce-cn-domain.mrs
+    interval: 86400
+    proxy: Main
+    size-limit: 2097152
+  ce-cn-ip:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    url: https://example.invalid/cn-ip.mrs
+    path: ./ruleset/ce-cn-ip.mrs
+    interval: 86400
+    proxy: Main
+    size-limit: 2097152
+rules:
+  - DOMAIN-SUFFIX,anthropic.com,Actual AI
+  - DOMAIN,ai.example,Actual AI
+  - DOMAIN-SUFFIX,anthropic.com,REJECT
+  - DOMAIN,ai.example,REJECT
+  - AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT
+  - RULE-SET,ce-cn-domain,DIRECT
+  - AND,((NETWORK,UDP),(RULE-SET,ce-cn-ip)),DIRECT
+  - NETWORK,UDP,Actual AI
+  - NETWORK,UDP,REJECT
+  - MATCH,Main
+'@
+    $exactRuntimeState = [pscustomobject]@{
+        Proxies = [pscustomobject]@{
+            Main = [pscustomobject]@{ type = "Selector"; now = "Node" }
+            Node = [pscustomobject]@{ type = "Shadowsocks" }
+        }
+        Rules = @(
+            [pscustomobject]@{ type = "DomainSuffix"; payload = "anthropic.com"; proxy = "Actual AI" },
+            [pscustomobject]@{ type = "Domain"; payload = "ai.example"; proxy = "Actual AI" },
+            [pscustomobject]@{ type = "DomainSuffix"; payload = "anthropic.com"; proxy = "REJECT" },
+            [pscustomobject]@{ type = "Domain"; payload = "ai.example"; proxy = "REJECT" },
+            [pscustomobject]@{ type = "RuleSet"; payload = "ce-cn-domain"; proxy = "DIRECT" },
+            [pscustomobject]@{ type = "Match"; payload = ""; proxy = "Main" }
+        )
+    }
+    Assert-ClashRuntimePatch $exactRuntimeText $exactRuntimeState $exactRuntimePolicy 3
+    foreach ($invalidRuntimeText in @(
+        $exactRuntimeText.Replace("store-selected: true", "store-selected: false"),
+        $exactRuntimeText.Replace("behavior: ipcidr", "behavior: domain"),
+        $exactRuntimeText.Replace("direct-nameserver-follow-policy: false", "direct-nameserver-follow-policy: true"),
+        $exactRuntimeText.Replace(
+            '"rule-set:ce-cn-domain":',
+            '"rule-set:wrong-provider":'
+        ),
+        $exactRuntimeText.Replace(
+            "  - DOMAIN-SUFFIX,anthropic.com,Actual AI`n  - DOMAIN,ai.example,Actual AI",
+            "  - DOMAIN,ai.example,Actual AI`n  - DOMAIN-SUFFIX,anthropic.com,Actual AI"
+        )
+    )) {
+        $invalidRuntimePatchRejected = $false
+        try {
+            Assert-ClashRuntimePatch $invalidRuntimeText $exactRuntimeState $exactRuntimePolicy 3
+        } catch { $invalidRuntimePatchRejected = $true }
+        Assert-True $invalidRuntimePatchRejected "runtime checks accepted an incomplete managed patch"
+    }
+
+    $profileTwoRuntimeText = @'
+profile:
+  store-selected: true
+dns:
+  enable: true
+  respect-rules: true
+  direct-nameserver:
+    - https://223.5.5.5/dns-query#DIRECT
+  direct-nameserver-follow-policy: false
+  nameserver-policy:
+    "rule-set:ce-cn-domain":
+      - https://223.5.5.5/dns-query#DIRECT
+rule-providers:
+  ce-cn-domain:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://example.invalid/cn-domain.mrs
+    path: ./ruleset/ce-cn-domain.mrs
+    interval: 86400
+    proxy: Main
+    size-limit: 2097152
+rules:
+  - DOMAIN,example.com,Main
+  - RULE-SET,ce-cn-domain,DIRECT
+  - MATCH,Main
+'@
+    $profileTwoRuntimeState = [pscustomobject]@{
+        Proxies = [pscustomobject]@{
+            Main = [pscustomobject]@{ type = "Selector"; now = "Node" }
+            Other = [pscustomobject]@{ type = "Selector"; now = "Node" }
+            Node = [pscustomobject]@{ type = "Shadowsocks" }
+        }
+        Rules = @()
+    }
+    Assert-ClashRuntimePatch $profileTwoRuntimeText $profileTwoRuntimeState $exactRuntimePolicy 2
+    foreach ($unusableMatchTarget in @("DIRECT", "Missing Group")) {
+        $profileTwoRuntimeState.Rules = @(
+            [pscustomobject]@{ type = "Match"; payload = ""; proxy = $unusableMatchTarget }
+        )
+        Assert-ClashRuntimePatch $profileTwoRuntimeText $profileTwoRuntimeState $exactRuntimePolicy 2
+    }
+    $profileTwoRuntimeState.Rules = @()
+    $profileTwoRuntimeState.Rules = @(
+        [pscustomobject]@{ type = "Match"; payload = ""; proxy = "Other" }
+    )
+    $mismatchedRuntimeMainRejected = $false
+    try {
+        Assert-ClashRuntimePatch $profileTwoRuntimeText $profileTwoRuntimeState $exactRuntimePolicy 2
+    } catch { $mismatchedRuntimeMainRejected = $true }
+    Assert-True $mismatchedRuntimeMainRejected "runtime checks accepted a different usable MATCH group"
+    $profileTwoRuntimeState.Rules = @()
+    foreach ($invalidProfileTwoRuntimeText in @(
+        $profileTwoRuntimeText.Replace(
+            "  - RULE-SET,ce-cn-domain,DIRECT`n  - MATCH,Main",
+            "  - MATCH,Main`n  - RULE-SET,ce-cn-domain,DIRECT"
+        ),
+        $profileTwoRuntimeText.Replace("respect-rules: true", "respect-rules: false"),
+        $profileTwoRuntimeText.Replace(
+            "      - https://223.5.5.5/dns-query#DIRECT",
+            "      - https://1.1.1.1/dns-query#DIRECT"
+        )
+    )) {
+        $invalidProfileTwoPatchRejected = $false
+        try {
+            Assert-ClashRuntimePatch $invalidProfileTwoRuntimeText $profileTwoRuntimeState $exactRuntimePolicy 2
+        } catch { $invalidProfileTwoPatchRejected = $true }
+        Assert-True $invalidProfileTwoPatchRejected "profile 2 runtime checks accepted broken common policy"
+    }
+
+    $providerCollisionRuntimeText = $profileTwoRuntimeText.Replace(
+        "rule-providers:`n  ce-cn-domain:",
+        @'
+rule-providers:
+  ce-cn-domain:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://example.invalid/cn-domain.mrs
+    path: ./user-cache/cn-domain.mrs
+    interval: 86400
+    proxy: Main
+    size-limit: 2097152
+  ce-cn-domain-10:
+'@
+    ).Replace(
+        "path: ./ruleset/ce-cn-domain.mrs",
+        "path: ./ruleset/ce-cn-domain-10.mrs"
+    ).Replace(
+        '"rule-set:ce-cn-domain":',
+        '"rule-set:ce-cn-domain-10":'
+    ).Replace(
+        "RULE-SET,ce-cn-domain,DIRECT",
+        "RULE-SET,ce-cn-domain-10,DIRECT"
+    )
+    Assert-ClashRuntimePatch $providerCollisionRuntimeText $profileTwoRuntimeState $exactRuntimePolicy 2
+
     New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $failureDiagnosticCanary = "https://subscription.invalid/private?token=fixture-secret password=fixture-password 11111111-2222-3333-4444-555555555555"
     $failureDiagnostic = Get-TestOutputDiagnostic $failureDiagnosticCanary

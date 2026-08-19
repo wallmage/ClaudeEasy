@@ -1582,9 +1582,9 @@ class SkillContractTest < Minitest::Test
     ruby_patcher = mac_patcher_source
     windows_patcher = File.read(File.join(SKILL, "scripts/windows/clash_verge_global.js"))
 
-    assert_includes policy, "macOS 直接复用已有分组"
-    assert_includes policy, "Windows 保留已有分组名称"
-    assert_includes policy, "不能信任订阅声明的原成员"
+    assert_includes policy, "macOS 与 Windows 都直接复用已有分组"
+    assert_includes policy, "保持分组类型、成员、顺序、图标和当前选择"
+    assert_includes policy, "现有节点和提供者清单都完整符合 ClaudeEasy 生成结构"
     assert_includes policy, "全部可用节点和代理提供者"
     assert_includes policy, "普通流量与 AI 流量选择不同节点"
     assert_includes policy, "不创建安全代理分组"

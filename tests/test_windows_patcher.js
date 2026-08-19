@@ -145,7 +145,7 @@ test('global transform applies common policy', { skip: !available }, () => {
   assert.equal(patched.dns['direct-nameserver-follow-policy'], false);
   assert.deepEqual(patched.dns['nameserver-policy']['geosite:cn'], engine.CLAUDE_EASY_POLICY.directResolvers);
   assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith(`#${ai.name}`)));
-  assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
+  assert.deepEqual(ai, { name: 'AI', type: 'select', proxies: ['Main'] });
   const udpIndex = patched.rules.indexOf(`NETWORK,UDP,${ai.name}`);
   assert.ok(udpIndex >= 0);
   assert.equal(patched.rules[udpIndex + 1], 'NETWORK,UDP,REJECT');
@@ -365,17 +365,14 @@ for (const distinctPath of [
   });
 }
 
-test('rebuilds an existing AI group before using it for managed policy', { skip: !available }, () => {
+test('preserves an existing user AI group before using it for managed policy', { skip: !available }, () => {
   const config = baseConfig();
+  const originalAi = structuredClone(config['proxy-groups'].find((group) => group.name === 'AI'));
 
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
 
-  assert.deepEqual(ai, {
-    name: 'AI',
-    type: 'select',
-    proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
-  });
+  assert.deepEqual(ai, originalAi);
   assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
   assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
@@ -389,7 +386,7 @@ for (const [name, declaredMembership] of [
   ['OpenAI', ['美国家宽 01']],
   ['AI Tools', ['REJECT']]
 ]) {
-  test(`rebuilds untrusted AI group membership: ${name}`, { skip: !available }, () => {
+  test(`preserves user AI group membership: ${name}`, { skip: !available }, () => {
     const config = baseConfig();
     config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
     config['proxy-groups'].push({ name, type: 'select', proxies: declaredMembership });
@@ -397,7 +394,7 @@ for (const [name, declaredMembership] of [
     const patched = engine.main(config, 'subscription');
     const ai = patched['proxy-groups'].find((group) => group.name === name);
 
-    assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
+    assert.deepEqual(ai, { name, type: 'select', proxies: declaredMembership });
     assert.equal(patched.rules[0], `DOMAIN-SUFFIX,anthropic.com,${name}`);
     assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${name}`));
     assert.deepEqual(engine.main(structuredClone(patched), 'subscription'), patched);
@@ -461,7 +458,7 @@ test('does not create an AI group without nodes or providers', { skip: !availabl
   assert.deepEqual(engine.claudeEasyTransform(config, 'fixture'), config);
 });
 
-test('migrates owned single-main AI group to an independent node selector', { skip: !available }, () => {
+test('preserves ambiguous single-main AI group ownership', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const aiName = '🤖 AI · ClaudeEasy';
@@ -471,15 +468,17 @@ test('migrates owned single-main AI group to an independent node selector', { sk
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === aiName);
 
-  assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
-  assert.equal(ai.proxies.includes('Main'), false);
+  assert.deepEqual(ai.proxies, ['Main']);
+  assert.deepEqual(engine.claudeEasyTransform(structuredClone(patched), 'fixture'), patched);
 });
 
 test('removes groups created by an older patch', { skip: !available }, () => {
   const config = baseConfig();
   const aiName = '🤖 AI · ClaudeEasy';
   const safeName = '🛡 安全代理 · ClaudeEasy';
-  config['proxy-groups'].push({ name: aiName, type: 'select', proxies: ['台湾家宽 01'] });
+  config['proxy-groups'].push({
+    name: aiName, type: 'select', proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
+  });
   config['proxy-groups'].push({
     name: safeName, type: 'select', proxies: ['台湾家宽 01', '日本家宽 01'],
     'include-all': true, 'exclude-type': 'Direct|Dns|Reject|RejectDrop|Pass|PassRule|Compatible|Rematch', 'empty-fallback': 'REJECT'
@@ -657,13 +656,13 @@ test('new AI group lists US home broadband without auto selecting it', { skip: !
   assert.equal(Object.hasOwn(ai, 'now'), false);
 });
 
-test('does not select Japan home broadband automatically', { skip: !available }, () => {
+test('does not alter the user AI group while Japan nodes remain available', { skip: !available }, () => {
   const config = baseConfig();
   config.proxies = config.proxies.filter((proxy) => !proxy.name.includes('台湾'));
   config['proxy-groups'][0].proxies = config['proxy-groups'][0].proxies.filter((name) => !name.includes('台湾'));
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
-  assert.deepEqual(ai.proxies, ['日本家宽 01', '美国家宽 01']);
+  assert.deepEqual(ai.proxies, ['Main']);
   assert.equal(Object.hasOwn(ai, 'now'), false);
 });
 
@@ -1409,7 +1408,7 @@ test('direct and rematch home names are not selected automatically', { skip: !av
   const patched = engine.claudeEasyTransform(config, 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   const mainGroup = patched['proxy-groups'].find((group) => group.name === 'Main');
-  assert.deepEqual(ai.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
+  assert.deepEqual(ai.proxies, ['Main']);
   assert.equal(ai.proxies.includes('台湾家宽 DIRECT'), false);
   assert.equal(ai.proxies.includes('台湾家宽 REMATCH'), false);
   assert.ok(mainGroup.proxies.includes('台湾家宽 DIRECT'));
@@ -1437,7 +1436,7 @@ test('owned AI group is independent and collision safe', { skip: !available }, (
   assert.deepEqual(managed.proxies, ['台湾家宽 01', '日本家宽 01', '美国家宽 01']);
 });
 
-test('user-owned branded select group is rebuilt before carrying managed policy', { skip: !available }, () => {
+test('user-owned branded select group is preserved while carrying managed policy', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const userGroup = {
@@ -1449,17 +1448,31 @@ test('user-owned branded select group is rebuilt before carrying managed policy'
   config['proxy-groups'].push(userGroup);
   const first = engine.claudeEasyTransform(config, 'fixture');
   const second = engine.claudeEasyTransform(first, 'fixture');
-  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), {
-    name: userGroup.name,
-    type: 'select',
-    proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
-  });
+  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
   assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'), false);
   assert.ok(first.rules.includes('DOMAIN-SUFFIX,openai.com,🤖 AI · ClaudeEasy'));
   assert.deepEqual(second, first);
 });
 
-test('branded user group with AI rules is rebuilt regardless of claimed ownership', { skip: !available }, () => {
+test('managed-looking user AI group without prior ownership evidence is preserved idempotently', { skip: !available }, () => {
+  const config = baseConfig();
+  config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
+  const userGroup = {
+    name: '🤖 AI · ClaudeEasy',
+    type: 'select',
+    proxies: ['Main']
+  };
+  config['proxy-groups'].push(userGroup);
+
+  const patched = engine.claudeEasyTransform(config, 'fixture');
+
+  assert.notDeepEqual(patched, config);
+  assert.deepEqual(patched['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
+  assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${userGroup.name}`));
+  assert.deepEqual(engine.claudeEasyTransform(structuredClone(patched), 'fixture'), patched);
+});
+
+test('branded user group with AI rules is preserved without ownership evidence', { skip: !available }, () => {
   const config = baseConfig();
   config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
   const userGroup = {
@@ -1475,13 +1488,8 @@ test('branded user group with AI rules is rebuilt regardless of claimed ownershi
   );
   const first = engine.claudeEasyTransform(config, 'fixture');
   const second = engine.claudeEasyTransform(first, 'fixture');
-  const expectedGroup = {
-    name: userGroup.name,
-    type: 'select',
-    proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
-  };
-  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), expectedGroup);
-  assert.deepEqual(second['proxy-groups'].find((group) => group.name === userGroup.name), expectedGroup);
+  assert.deepEqual(first['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
+  assert.deepEqual(second['proxy-groups'].find((group) => group.name === userGroup.name), userGroup);
   assert.equal(first['proxy-groups'].some((group) => group.name === '🤖 AI · ClaudeEasy 2'), false);
   assert.deepEqual(second, first);
 });
@@ -1503,7 +1511,9 @@ test('migrates legacy owned AI rules and DNS pattern', { skip: !available }, () 
   old['proxy-groups'] = old['proxy-groups'].filter((group) => group.name !== 'AI');
   const aiGroup = '🤖 AI · ClaudeEasy';
   const safeGroup = '🛡 安全代理 · ClaudeEasy';
-  old['proxy-groups'].push({ name: aiGroup, type: 'select', proxies: ['台湾家宽 01'] });
+  old['proxy-groups'].push({
+    name: aiGroup, type: 'select', proxies: ['台湾家宽 01', '日本家宽 01', '美国家宽 01']
+  });
   old['proxy-groups'].push({
     name: safeGroup, type: 'select', proxies: ['台湾家宽 01'], 'include-all': true,
     'exclude-type': 'Direct|Dns|Reject|Pass|Compatible|Rematch', 'empty-fallback': 'REJECT'
@@ -1722,9 +1732,12 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Initialize-ClaudeEasySendInput', 'Invoke-ClashVergeReactivationShortcut',
       'Get-ClashControllerContext', 'Invoke-ClashControllerRequest',
       'Get-ClashRuntimeState', 'Restore-ClashRuntimeSelections',
-      'Wait-ClashVergeRuntimeRefresh', 'Assert-ClashRuntimePatch',
-      'Test-ClashRuntimeConnectivity', 'Test-ClashRuntimeProxyPath',
-      'Assert-ClashRuntimeAiGroup', 'Assert-ClashRuntimeHealthy'
+      'Wait-ClashVergeRuntimeRefresh', 'ConvertFrom-ClashRuntimeYamlScalar',
+      'Get-ClashRuntimeYamlMappingEntry',
+      'Get-ClashRuntimeYamlNode', 'Get-ClashRuntimeYamlMapping', 'Get-ClashRuntimeYamlSequence',
+      'Get-ClashRuntimeManagedProvider', 'Assert-ClashRuntimePatch',
+      'Test-ClashRuntimeRequiresTun', 'Test-ClashRuntimeConnectivity', 'Test-ClashRuntimeProxyPath',
+      'Get-ClashRuntimeAiGroupName', 'Assert-ClashRuntimeAiGroup', 'Assert-ClashRuntimeHealthy'
     ],
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',

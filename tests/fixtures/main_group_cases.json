@@ -528,7 +528,6 @@
     {
       "name": "reuse-existing-ai-group",
       "expected_config_sha256": "daa7fa3e52f5e69d7d16e18fa2c56d2a254f8af9b4e492081ab06af6234c05dc",
-      "expected_windows_config_sha256": "5c68f9fc7725a328c35a4ec5737983ff62641d88eb01a441204b86468daf8eb6",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [

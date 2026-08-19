@@ -486,6 +486,8 @@ module ClaudeEasy
   def owned_ai_group?(config, name, policy)
     group = selectable_groups(config).find { |item| item["name"] == name }
     return false unless managed_ai_group_fingerprint?(group)
+    proxies, providers = ai_group_sources(config)
+    return false unless group["proxies"] == proxies && Array(group["use"]) == providers
 
     templates = Array(policy["ai_rules"]) + Array(policy["legacy_ai_rules"])
     keys = templates.map { |template| managed_rule_key(template) }.compact.uniq
