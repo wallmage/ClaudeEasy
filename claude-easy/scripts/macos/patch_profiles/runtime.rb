@@ -86,8 +86,11 @@ module ClaudeEasy
 
       return false unless generation_reader.call
       requester = requester_factory.call
-      healthy = requester && runtime_health_healthy?(
-        requester, selections: selections, expected_tun: expected_tun,
+      restorable_selections = requester && runtime_restorable_selections(requester, selections)
+      selections_restored = requester && restorable_selections &&
+                            restore_runtime_selections(requester, restorable_selections)
+      healthy = selections_restored && runtime_health_healthy?(
+        requester, selections: restorable_selections, expected_tun: expected_tun,
         connectivity_checker: connectivity_checker,
         precommit_condition: precommit_condition,
         required_proxy_group: required_proxy_group, flush_caches: false
@@ -583,6 +586,24 @@ module ClaudeEasy
     restored.is_a?(Hash) && selections.all? { |name, selected| restored[name] == selected }
   rescue StandardError
     false
+  end
+
+  def runtime_restorable_selections(requester, selections)
+    return nil unless selections.is_a?(Hash)
+
+    proxies = runtime_proxies(requester)
+    return nil unless proxies
+
+    selections.each_with_object({}) do |(name, selected), restorable|
+      proxy = proxies[name]
+      return nil unless proxy.is_a?(Hash) &&
+                        proxy["type"].to_s.casecmp("Selector").zero? &&
+                        proxy["all"].is_a?(Array)
+
+      restorable[name] = selected if proxy["all"].include?(selected)
+    end
+  rescue StandardError
+    nil
   end
 
   def runtime_tun_requirement(usage_profile)

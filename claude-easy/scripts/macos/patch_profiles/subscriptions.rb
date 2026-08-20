@@ -13,6 +13,70 @@ module ClaudeEasy
 
   AUTO_UPDATE_OWNERSHIP_BASENAME = "clashx-meta-kAutoUpdateEnable.state.json".freeze
   AUTO_UPDATE_DOMAINS = %w[com.metacubex.ClashX.meta com.MetaCubeX.ClashX.meta].freeze
+  CLASHX_NATIVE_FETCH_SCRIPT = <<~'JAVASCRIPT'.freeze
+    ObjC.import("Foundation");
+    ObjC.import("AppKit");
+
+    function unwrap(value) {
+      return ObjC.unwrap(value);
+    }
+
+    function fail(message) {
+      throw new Error(message);
+    }
+
+    var input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+    var inputLines = unwrap($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding)).trim().split("\n");
+    var timeoutSeconds = Number(inputLines.shift());
+    var urlText = inputLines.join("\n");
+    if (!isFinite(timeoutSeconds) || timeoutSeconds <= 0) fail("invalid timeout");
+    if (!urlText.match(/^https:\/\//)) fail("invalid subscription URL");
+
+    var applications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.metacubex.ClashX.meta");
+    if (applications.count === 0) {
+      applications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.MetaCubeX.ClashX.meta");
+    }
+    if (applications.count === 0) fail("ClashX Meta is not running");
+
+    var bundle = $.NSBundle.bundleWithURL(applications.objectAtIndex(0).bundleURL);
+    var executable = unwrap(bundle.objectForInfoDictionaryKey("CFBundleExecutable"));
+    var version = unwrap(bundle.objectForInfoDictionaryKey("CFBundleShortVersionString"));
+    var identifier = unwrap(bundle.objectForInfoDictionaryKey("CFBundleIdentifier"));
+    var build = unwrap(bundle.objectForInfoDictionaryKey("CFBundleVersion"));
+    var systemVersion = unwrap($.NSProcessInfo.processInfo.operatingSystemVersionString).match(/\d+\.\d+(?:\.\d+)?/);
+    if (!executable || !version || !identifier || !build || !systemVersion) fail("incomplete ClashX Meta identity");
+
+    var userAgent = executable + "/" + version + " (" + identifier + "; build:" + build +
+      "; macOS " + systemVersion[0] + ") Alamofire/5.5.0";
+    var url = $.NSURL.URLWithString(urlText);
+    if (!url) fail("invalid subscription URL");
+    var request = $.NSMutableURLRequest.requestWithURL(url);
+    request.HTTPMethod = "GET";
+    request.cachePolicy = $.NSURLRequestReloadIgnoringLocalCacheData;
+    request.timeoutInterval = timeoutSeconds;
+    request.setValueForHTTPHeaderField(userAgent, "User-Agent");
+    request.setValueForHTTPHeaderField("br;q=1.0, gzip;q=0.9, deflate;q=0.8", "Accept-Encoding");
+
+    var data = null;
+    var response = null;
+    var finished = false;
+    var session = $.NSURLSession.sessionWithConfiguration($.NSURLSessionConfiguration.ephemeralSessionConfiguration);
+    var task = session.dataTaskWithRequestCompletionHandler(request, function(receivedData, receivedResponse, error) {
+      data = receivedData;
+      response = receivedResponse;
+      finished = true;
+    });
+    task.resume;
+    var deadline = $.NSDate.dateWithTimeIntervalSinceNow(timeoutSeconds + 5);
+    while (!finished && deadline.timeIntervalSinceNow > 0) {
+      $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
+    }
+    session.finishTasksAndInvalidate;
+    if (!finished || !data || !response) fail("subscription request failed");
+    var statusCode = Number(response.statusCode);
+    if (statusCode < 200 || statusCode >= 300 || data.length === 0) fail("subscription request failed");
+    $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
+  JAVASCRIPT
 
   def auto_update_ownership_path(backup_root)
     File.join(File.expand_path(backup_root), AUTO_UPDATE_OWNERSHIP_BASENAME)
@@ -468,56 +532,18 @@ module ClaudeEasy
     targets
   end
 
-  def curl_config_value(value)
-    raise InvalidConfigError, "远程订阅地址无效" if value.include?("\r") || value.include?("\n")
-
-    value.gsub("\\") { "\\\\" }.gsub('"', '\\"')
-  end
-
-  def subscription_format_urls(url)
-    uri = URI.parse(url)
-    query = URI.decode_www_form(uri.query.to_s).reject { |key, _value| key == "flag" }
-    [url, "clashmeta", "clash"].map do |format|
-      next url if format == url
-
-      formatted = uri.dup
-      formatted.query = URI.encode_www_form(query + [["flag", format]])
-      formatted.to_s
-    end.uniq
-  rescue URI::InvalidURIError
-    [url]
-  end
-
-  def clash_subscription_yaml?(bytes, name)
-    text = bytes.dup.force_encoding(Encoding::UTF_8)
-    text.valid_encoding? && usable_config?(load_yaml(text, name))
-  rescue StandardError
-    false
-  end
-
   def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
-    last_body = nil
-    subscription_format_urls(target.fetch(:url)).each do |url|
-      config = <<~CURL
-        url = "#{curl_config_value(url)}"
-        silent
-        show-error
-        fail
-        location
-        proto = "=https"
-        max-time = #{Integer(timeout_seconds)}
-      CURL
-      stdout, _stderr, status = Open3.capture3(
-        "/usr/bin/curl", "-q", "--config", "-", stdin_data: config, binmode: true
-      )
-      next unless status.success? && !stdout.empty?
+    url = target.fetch(:url)
+    raise InvalidConfigError, "远程订阅地址无效" unless url.start_with?("https://")
+    raise InvalidConfigError, "远程订阅地址无效" if url.include?("\r") || url.include?("\n")
+    timeout_seconds = Integer(timeout_seconds)
+    stdout, _stderr, status = Open3.capture3(
+      "/usr/bin/osascript", "-l", "JavaScript", "-e", CLASHX_NATIVE_FETCH_SCRIPT,
+      stdin_data: "#{timeout_seconds}\n#{url}\n", binmode: true
+    )
+    raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
 
-      last_body = stdout
-      return stdout if clash_subscription_yaml?(stdout, target.fetch(:name))
-    end
-    raise InvalidConfigError, "远程订阅下载失败" unless last_body
-
-    last_body
+    stdout
   rescue KeyError, ArgumentError
     raise InvalidConfigError, "远程订阅下载失败"
   end

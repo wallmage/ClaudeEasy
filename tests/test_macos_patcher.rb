@@ -5367,17 +5367,17 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_script_subscription_download_does_not_set_a_user_agent
-    assert_respond_to ClaudeEasy, :curl_config_value
+  def test_script_subscription_download_uses_the_clashx_native_request_without_exposing_the_url
+    refute_respond_to ClaudeEasy, :curl_config_value
     assert_respond_to ClaudeEasy, :fetch_remote_subscription
     refute_respond_to ClaudeEasy, :fetch_remote_subscription_via_mihomo
     refute ClaudeEasy.const_defined?(:MAX_REMOTE_SUBSCRIPTION_BYTES, false)
 
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
-      assert_equal ["/usr/bin/curl", "-q", "--config", "-"], arguments
-      config = options.fetch(:stdin_data)
-      refute_match(/user-agent|--user-agent|header\s*=.*user-agent/i, config)
+      assert_equal ["/usr/bin/osascript", "-l", "JavaScript", "-e", ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT], arguments
+      refute_includes arguments.join(" "), "example.invalid"
+      assert_equal "30\nhttps://example.invalid/subscription\n", options.fetch(:stdin_data)
       [YAML.dump(base_config), "", status]
     end
     Open3.stub(:capture3, capture) do
@@ -5388,31 +5388,6 @@ class MacosPatcherTest < Minitest::Test
     assert_raises(ClaudeEasy::InvalidConfigError) do
       ClaudeEasy.fetch_remote_subscription({ name: "missing-url" })
     end
-  end
-
-  def test_subscription_download_requests_clash_yaml_when_default_is_base64
-    status = Struct.new(:success?).new(true)
-    configs = []
-    base64 = Base64.strict_encode64("anytls://fixture@example.invalid:443#node")
-    capture = lambda do |*arguments, **options|
-      assert_equal ["/usr/bin/curl", "-q", "--config", "-"], arguments
-      config = options.fetch(:stdin_data)
-      refute_match(/user-agent|--user-agent|header\s*=.*user-agent/i, config)
-      configs << config
-      body = configs.length < 3 ? base64 : YAML.dump(base_config)
-      [body, "", status]
-    end
-
-    result = Open3.stub(:capture3, capture) do
-      ClaudeEasy.fetch_remote_subscription(
-        { name: "friend", url: "https://example.invalid/subscription" }
-      )
-    end
-
-    assert_equal YAML.dump(base_config), result
-    assert_match(%r{url = "https://example\.invalid/subscription"}, configs.fetch(0))
-    assert_match(/flag=clashmeta/, configs.fetch(1))
-    assert_match(/flag=clash/, configs.fetch(2))
   end
 
   def test_update_candidate_rejects_encoding_transform_and_validation_failures
@@ -14613,9 +14588,14 @@ class MacosPatcherTest < Minitest::Test
       dns_checks << options.fetch(:check_dns, true)
       health.shift
     }) do
+      requester = ->(*_arguments) {
+        [200, JSON.generate("proxies" => {
+          "Main" => { "type" => "Selector", "now" => "Taiwan", "all" => ["Taiwan"] }
+        })]
+      }
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
         identity, generation_before: "before", selections: { "Main" => "Taiwan" },
-        expected_tun: :enabled, requester_factory: -> { ->(*_arguments) { [200, "{}"] } },
+        expected_tun: :enabled, requester_factory: -> { requester },
         generation_reader: -> { "before" },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
@@ -14624,6 +14604,41 @@ class MacosPatcherTest < Minitest::Test
 
     assert_equal 1, sleeps
     assert_equal [true, true], dns_checks
+  end
+
+  def test_clashx_runtime_wait_drops_only_selections_removed_by_the_update
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    health_selections = nil
+    requester = lambda do |method, endpoint, _body = nil|
+      raise "unexpected request: #{method} #{endpoint}" unless method == "GET" && endpoint == "/proxies"
+
+      [200, JSON.generate("proxies" => {
+        "Main" => {
+          "type" => "Selector", "now" => "New Node", "all" => ["New Node"]
+        },
+        "AI" => {
+          "type" => "Selector", "now" => "Taiwan", "all" => ["Taiwan", "Japan"]
+        }
+      })]
+    end
+
+    ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
+      health_selections = options.fetch(:selections)
+      true
+    }) do
+      assert ClaudeEasy.wait_for_clashx_safe_runtime(
+        identity, generation_before: "before",
+        selections: { "Main" => "Old Node", "AI" => "Taiwan" },
+        expected_tun: :enabled, requester_factory: -> { requester },
+        generation_reader: -> { "after" }, process_reader: -> { identity },
+        sleeper: ->(_seconds) {}, attempts: 1
+      )
+    end
+
+    assert_equal({ "AI" => "Taiwan" }, health_selections)
   end
 
   def test_profile_transaction_allows_each_native_reload_phase_once_per_client_process

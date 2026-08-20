@@ -1109,7 +1109,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "-ExpectedCurrentSha256"
   end
 
-  def test_subscription_update_uses_no_fixed_user_agent
+  def test_subscription_update_uses_the_native_clashx_identity_without_a_fixed_user_agent
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
@@ -1120,7 +1120,8 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "全部远程订阅"
       assert_includes document, "更新前备份"
       assert_includes document, "自动更新"
-      assert_includes document, "不设置 User-Agent"
+      assert_includes document, "Foundation"
+      assert_includes document, "动态生成"
     end
     assert_includes readme, "Windows `-SafeUpdate`"
     assert_includes installer, "--safe-update"
@@ -1128,16 +1129,17 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer_source, "SafeUpdate"
     subscriptions = File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb"))
     assert_includes subscriptions, "fetch_remote_subscription"
-    refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, subscriptions)
+    assert_includes subscriptions, "NSURLSession"
+    assert_includes subscriptions, "CFBundleShortVersionString"
+    refute_includes subscriptions, '"/usr/bin/curl"'
     windows_update_sources = [
       File.read(File.join(SKILL, "scripts/install_windows.ps1")),
       *Dir.glob(File.join(SKILL, "scripts/windows/install_windows/*.ps1")).map { |path| File.read(path) }
     ].join("\n")
     refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, windows_update_sources)
-    assert_includes subscriptions, '"-q", "--config", "-"'
     assert_includes windows_update_sources, "'-q --config -'"
     assert_includes File.read(File.join(ROOT, "AGENTS.md")),
-                    "macOS 和 Windows 的订阅更新都不得添加、固定或伪造 User-Agent"
+                    "macOS 订阅下载必须使用 Foundation 原生请求"
     refute_includes File.read(File.join(SKILL, "references/safe-update-and-recovery.md")),
                     "Computer Use"
     update_section = skill.split("## 更新全部订阅", 2).last.split("## 配置历史与恢复", 2).first
@@ -1177,10 +1179,11 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "不得把两端不同的实现方式写成相同"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update`"
     assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -SafeUpdate`"
-    assert_includes safe_update, "两端都用 `curl -q --config -` 自动下载全部远程订阅"
+    assert_includes safe_update, "macOS 通过 Foundation 原生网络请求自动下载全部远程订阅"
+    assert_includes safe_update, "Windows 使用 `curl -q --config -`"
     assert_includes safe_update, "两端都按已保存用途档位"
     assert_includes safe_update, "两端都保留更新前的 TUN 与代理组选择"
-    assert_includes safe_update, "macOS 和 Windows 都不得添加、固定或伪造 User-Agent"
+    assert_includes safe_update, "macOS 不得用 curl 下载订阅"
     assert_includes profiles_and_patch, "`profile.store-selected`"
     assert_includes profiles_and_patch, "macOS 与 Windows"
     assert_includes skill, "更新全部订阅"
