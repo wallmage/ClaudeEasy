@@ -112,6 +112,12 @@ function ConvertTo-CurlConfigValue([string]$Value) {
     return $Value.Replace('\', '\\').Replace('"', '\"')
 }
 
+function Get-SubscriptionFormatUrls([string]$Url) {
+    if ($Url -match '(?i)(?:\?|&)flag=') { return @($Url) }
+    $separator = if ($Url.Contains("?")) { "&" } else { "?" }
+    return @($Url, "$Url${separator}flag=clashmeta", "$Url${separator}flag=clash")
+}
+
 function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
     $config = @(
         'url = "' + (ConvertTo-CurlConfigValue $Url) + '"'

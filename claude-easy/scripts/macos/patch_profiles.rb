@@ -14,6 +14,40 @@ require "tempfile"
 require "time"
 require "uri"
 
+module ClaudeEasyAppleEvents
+  extend Fiddle::Importer
+
+  dlload "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+  AEDesc = struct ["unsigned int descriptorType", "void* dataHandle"]
+  extern "int AECreateDesc(unsigned int, void*, long, void*)"
+  extern "int AECreateAppleEvent(unsigned int, unsigned int, void*, short, int, void*)"
+  extern "int AEPutParamPtr(void*, unsigned int, unsigned int, void*, long)"
+  extern "int AESendMessage(void*, void*, int, int)"
+  extern "int AEDisposeDesc(void*)"
+
+  def self.send_get_url(pid, url)
+    target = Fiddle::Pointer.malloc(AEDesc.size)
+    event = Fiddle::Pointer.malloc(AEDesc.size)
+    reply = Fiddle::Pointer.malloc(AEDesc.size)
+    [target, event, reply].each { |descriptor| descriptor[0, AEDesc.size] = "\0" * AEDesc.size }
+    pid_bytes = [Integer(pid)].pack("i")
+    url_bytes = url.to_s.b
+    return false unless AECreateDesc(0x6b706964, Fiddle::Pointer[pid_bytes], pid_bytes.bytesize, target).zero?
+    return false unless AECreateAppleEvent(0x4755524c, 0x4755524c, target, -1, 0, event).zero?
+    return false unless AEPutParamPtr(
+      event, 0x2d2d2d2d, 0x75746638, Fiddle::Pointer[url_bytes], url_bytes.bytesize
+    ).zero?
+
+    AESendMessage(event, reply, 3, 180).zero?
+  rescue StandardError
+    false
+  ensure
+    AEDisposeDesc(reply) if reply
+    AEDisposeDesc(event) if event
+    AEDisposeDesc(target) if target
+  end
+end
+
 module ClaudeEasyDarwinFilesystem
   extend Fiddle::Importer
 

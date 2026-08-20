@@ -87,7 +87,7 @@ try {
         "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
         "Get-ClashControllerContext", "Get-ClashRuntimeState", "Invoke-ClashVergeReactivationShortcut",
         "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
-        "Get-RemoteSubscriptionUpdateTargets", "Invoke-SubscriptionCurlDownload",
+        "Get-RemoteSubscriptionUpdateTargets", "Get-SubscriptionFormatUrls", "Invoke-SubscriptionCurlDownload",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
     )) {
@@ -235,9 +235,22 @@ if ($SafeUpdate) {
     $curlCommand = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $targets = @()
     foreach ($entry in $snapshots) {
-        $downloadedBytes = Invoke-SubscriptionCurlDownload ([string]$curlCommand.Source) ([string]$entry.Profile.Url)
-        $downloadedText = $strictUtf8.GetString($downloadedBytes)
-        Test-GeneratedYaml $downloadedText (Split-Path -Leaf $entry.Profile.Path) | Out-Null
+        $downloadedBytes = $null
+        $downloadedText = $null
+        $downloadFailure = $null
+        foreach ($downloadUrl in @(Get-SubscriptionFormatUrls ([string]$entry.Profile.Url))) {
+            try {
+                $candidateBytes = Invoke-SubscriptionCurlDownload ([string]$curlCommand.Source) $downloadUrl
+                $candidateText = $strictUtf8.GetString($candidateBytes)
+                Test-GeneratedYaml $candidateText (Split-Path -Leaf $entry.Profile.Path) | Out-Null
+                $downloadedBytes = $candidateBytes
+                $downloadedText = $candidateText
+                break
+            } catch {
+                $downloadFailure = $_
+            }
+        }
+        if ($null -eq $downloadedBytes) { throw $downloadFailure }
         Assert-ClaudeEasyProxyGroupCollection $downloadedText (Split-Path -Leaf $entry.Profile.Path)
         Test-MihomoCandidate $core $downloadedText $profilesDirectory
         $targets += [pscustomobject]@{

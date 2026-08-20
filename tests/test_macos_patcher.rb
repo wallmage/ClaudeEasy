@@ -14569,29 +14569,24 @@ class MacosPatcherTest < Minitest::Test
       executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
     }
     calls = []
-    status = Struct.new(:success?).new(true)
-    runner = lambda do |*arguments|
-      calls << arguments
-      ["", "", status]
+    sender = lambda do |pid, url|
+      calls << [pid, url]
+      true
     end
 
     assert ClaudeEasy.request_clashx_native_reload(
-      identity, runner: runner, process_reader: -> { identity }
+      identity, sender: sender, process_reader: -> { identity }
     )
-    assert_equal 1, calls.length
-    assert_equal "/usr/bin/osascript", calls.fetch(0).fetch(0)
-    assert_includes calls.fetch(0), identity.fetch(:pid).to_s
-    refute calls.fetch(0).any? { |argument| argument == "open" || argument.include?("LaunchServices") }
+    assert_equal [[identity.fetch(:pid), "clash://update-config"]], calls
 
     refute ClaudeEasy.request_clashx_native_reload(
-      identity, runner: ->(*_arguments) { flunk "stale PID must not receive an event" },
+      identity, sender: ->(*_arguments) { flunk "stale PID must not receive an event" },
       process_reader: -> { identity.merge(pid: 54_321) }
     )
   end
 
   def test_clashx_runtime_waits_for_reload_generation_and_full_health
     identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
-    generations = %w[before after after]
     health = [false, true]
     dns_checks = []
     sleeps = 0
@@ -14603,13 +14598,13 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
         identity, generation_before: "before", selections: { "Main" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { ->(*_arguments) { [200, "{}"] } },
-        generation_reader: -> { generations.shift || "after" },
+        generation_reader: -> { "before" },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
       )
     end
 
-    assert_equal 2, sleeps
+    assert_equal 1, sleeps
     assert_equal [true, true], dns_checks
   end
 

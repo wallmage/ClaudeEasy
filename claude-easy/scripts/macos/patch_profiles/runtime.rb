@@ -15,22 +15,6 @@ module ClaudeEasy
     "no_proxy" => nil, "NO_PROXY" => nil
   }.freeze
 
-  CLASHX_UPDATE_EVENT_SCRIPT = <<~'JAVASCRIPT'.freeze
-    ObjC.import("Foundation");
-    function run(argv) {
-      const pid = Number(argv[0]);
-      if (!Number.isInteger(pid) || pid <= 0) throw new Error("invalid pid");
-      const target = $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(pid);
-      const event = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(
-        0x4755524c, 0x4755524c, target, -1, 0
-      );
-      event.setParamDescriptorForKeyword(
-        $.NSAppleEventDescriptor.descriptorWithString("clash://update-config"), 0x2d2d2d2d
-      );
-      event.sendEventWithOptionsTimeoutError(1, 3, Ref());
-    }
-  JAVASCRIPT
-
   def clashx_running_identity(runner: Open3.method(:capture3))
     output, _error, status = runner.call(
       "/bin/ps", "axww", "-o", "pid=", "-o", "lstart=", "-o", "comm="
@@ -56,15 +40,13 @@ module ClaudeEasy
       left.values_at(:pid, :started, :executable) == right.values_at(:pid, :started, :executable)
   end
 
-  def request_clashx_native_reload(identity, runner: Open3.method(:capture3), process_reader: nil)
+  def request_clashx_native_reload(identity, sender: ClaudeEasyAppleEvents.method(:send_get_url),
+                                   process_reader: nil)
     process_reader ||= method(:clashx_running_identity)
     return false unless same_clashx_process?(identity, process_reader.call)
 
-    _output, _error, status = runner.call(
-      "/usr/bin/osascript", "-l", "JavaScript", "-e", CLASHX_UPDATE_EVENT_SCRIPT,
-      identity.fetch(:pid).to_s
-    )
-    status.success? && same_clashx_process?(identity, process_reader.call)
+    sender.call(identity.fetch(:pid), "clash://update-config") &&
+      same_clashx_process?(identity, process_reader.call)
   rescue StandardError
     false
   end
@@ -102,17 +84,15 @@ module ClaudeEasy
     attempts.times do |attempt|
       return false unless same_clashx_process?(identity, process_reader.call)
 
-      generation = generation_reader.call
-      if generation && generation != generation_before
-        requester = requester_factory.call
-        healthy = requester && runtime_health_healthy?(
-          requester, selections: selections, expected_tun: expected_tun,
-          connectivity_checker: connectivity_checker,
-          precommit_condition: precommit_condition,
-          required_proxy_group: required_proxy_group, flush_caches: false
-        )
-        return same_clashx_process?(identity, process_reader.call) if healthy
-      end
+      return false unless generation_reader.call
+      requester = requester_factory.call
+      healthy = requester && runtime_health_healthy?(
+        requester, selections: selections, expected_tun: expected_tun,
+        connectivity_checker: connectivity_checker,
+        precommit_condition: precommit_condition,
+        required_proxy_group: required_proxy_group, flush_caches: false
+      )
+      return same_clashx_process?(identity, process_reader.call) if healthy
       sleeper.call(0.25) if attempt + 1 < attempts
     end
     false

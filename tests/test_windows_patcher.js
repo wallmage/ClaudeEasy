@@ -1214,6 +1214,16 @@ test('Windows curl update reloads, checks, and restores the active runtime', () 
   assert.doesNotMatch(update, /User-Agent|user-agent/);
 });
 
+test('Windows subscription download retries Clash formats without a User-Agent', () => {
+  const installer = fs.readFileSync(installerPath, 'utf8');
+  const safeUpdate = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
+  assert.match(safeUpdate, /function Get-SubscriptionFormatUrls/);
+  assert.match(safeUpdate, /flag=clashmeta/);
+  assert.match(safeUpdate, /flag=clash/);
+  assert.match(installer, /foreach \(\$downloadUrl in @\(Get-SubscriptionFormatUrls/);
+  assert.doesNotMatch(safeUpdate, /User-Agent|user-agent/);
+});
+
 test('Windows hot reload waits for runtime health after the generated config changes', () => {
   const runtimeModule = fs.readFileSync(path.join(installerModuleDir, 'runtime.ps1'), 'utf8');
   const start = runtimeModule.indexOf('function Wait-ClashVergeRuntimeHealthy');
@@ -1759,7 +1769,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
       'ConvertFrom-SubscriptionScalar', 'Get-RemoteSubscriptionUpdateTargets',
-      'ConvertTo-CurlConfigValue', 'Invoke-SubscriptionCurlDownload',
+      'ConvertTo-CurlConfigValue', 'Get-SubscriptionFormatUrls', 'Invoke-SubscriptionCurlDownload',
       'Get-PublicBackupId', 'Get-BackupTarget',
       'Get-ClaudeEasyManagedScriptBlock',
       'Get-ClaudeEasyManagedScriptEnvelope',
