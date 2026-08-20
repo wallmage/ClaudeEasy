@@ -14644,6 +14644,50 @@ class MacosPatcherTest < Minitest::Test
     refute health_checked
   end
 
+  def test_safe_update_preserves_selections_when_only_group_and_node_names_are_localized
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original, candidate = localized_selection_configs
+      original_bytes = YAML.dump(original)
+      candidate_bytes = YAML.dump(candidate)
+      File.binwrite(profile, candidate_bytes)
+      stat = File.stat(profile)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "Taiwan 1", "AI" => "Main" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: candidate_bytes, candidate: candidate_bytes }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      result = {
+        path: profile, rollback_bytes: original_bytes,
+        patched_digest: Digest::SHA256.hexdigest(candidate_bytes),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      restored = nil
+
+      activated = ClaudeEasy.activate_safe_updated_profile(
+        result, transaction: transaction, client_identity: identity,
+        runtime_checkpoint: checkpoint,
+        native_reloader: ->(_current) { true },
+        runtime_waiter: lambda { |_identity, **options|
+          restored = options.fetch(:selections)
+          true
+        },
+        generation_reader: -> { "before" }
+      )
+
+      assert_equal true, activated[:reloaded]
+      assert_equal({ "主节点" => "台湾 1", "人工智能" => "主节点" }, restored)
+    end
+  end
+
   def test_safe_update_rejects_candidate_that_cannot_preserve_every_previous_selection
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
@@ -14874,6 +14918,30 @@ class MacosPatcherTest < Minitest::Test
   end
 
   private
+
+  def localized_selection_configs
+    english = {
+      "proxies" => [
+        { "name" => "Taiwan 1", "type" => "vless", "server" => "tw.example", "port" => 443 },
+        { "name" => "Hong Kong 1", "type" => "vless", "server" => "hk.example", "port" => 443 }
+      ],
+      "proxy-groups" => [
+        { "name" => "Main", "type" => "select", "proxies" => ["Taiwan 1", "Hong Kong 1"] },
+        { "name" => "AI", "type" => "select", "proxies" => ["Main", "DIRECT"] }
+      ]
+    }
+    chinese = {
+      "proxies" => [
+        { "name" => "台湾 1", "type" => "vless", "server" => "tw-new.example", "port" => 443 },
+        { "name" => "香港 1", "type" => "vless", "server" => "hk.example", "port" => 443 }
+      ],
+      "proxy-groups" => [
+        { "name" => "主节点", "type" => "select", "proxies" => ["台湾 1", "香港 1"] },
+        { "name" => "人工智能", "type" => "select", "proxies" => ["主节点", "DIRECT"] }
+      ]
+    }
+    [english, chinese]
+  end
 
   def with_home(home)
     original = ENV["HOME"]

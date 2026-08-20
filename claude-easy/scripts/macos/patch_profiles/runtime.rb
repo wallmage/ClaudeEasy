@@ -431,6 +431,114 @@ module ClaudeEasy
     nil
   end
 
+  def localized_runtime_selections(selections, original_bytes, candidate_path)
+    return nil unless selections.is_a?(Hash)
+
+    original = load_yaml(original_bytes.dup.force_encoding(Encoding::UTF_8), "previous subscription")
+    candidate = load_yaml(File.read(candidate_path, encoding: "UTF-8"), candidate_path)
+    original_proxies = Array(original["proxies"]).select { |item| item.is_a?(Hash) && item["name"].is_a?(String) }
+    candidate_proxies = Array(candidate["proxies"]).select { |item| item.is_a?(Hash) && item["name"].is_a?(String) }
+    candidate_by_identity = candidate_proxies.group_by { |item| item.reject { |key, _value| key == "name" } }
+    proxy_names = original_proxies.map { |item| item.fetch("name") }
+    proxy_map = original_proxies.each_with_object({}) do |item, mapping|
+      matches = candidate_by_identity[item.reject { |key, _value| key == "name" }]
+      mapping[item.fetch("name")] = matches.first.fetch("name") if matches && matches.length == 1
+    end
+    proxy_positions_match = original_proxies.length == candidate_proxies.length &&
+                            proxy_map.length * 2 >= original_proxies.length &&
+                            proxy_map.all? do |old_name, new_name|
+                              original_proxies.index { |item| item.fetch("name") == old_name } ==
+                                candidate_proxies.index { |item| item.fetch("name") == new_name }
+                            end
+    if proxy_positions_match
+      original_proxies.each_with_index do |item, index|
+        next if proxy_map.key?(item.fetch("name"))
+        candidate_proxy = candidate_proxies.fetch(index)
+        next unless item["type"].to_s.casecmp(candidate_proxy["type"].to_s).zero?
+        next if proxy_map.value?(candidate_proxy.fetch("name"))
+
+        proxy_map[item.fetch("name")] = candidate_proxy.fetch("name")
+      end
+    end
+
+    original_groups = Array(original["proxy-groups"]).select { |item| item.is_a?(Hash) && item["name"].is_a?(String) }
+    candidate_groups = Array(candidate["proxy-groups"]).select { |item| item.is_a?(Hash) && item["name"].is_a?(String) }
+    original_group_names = original_groups.map { |item| item.fetch("name") }
+    candidate_group_names = candidate_groups.map { |item| item.fetch("name") }
+    group_map = original_group_names.each_with_object({}) do |name, mapping|
+      mapping[name] = name if candidate_group_names.include?(name)
+    end
+
+    loop do
+      changed = false
+      original_groups.each do |group|
+        name = group.fetch("name")
+        next if group_map.key?(name)
+
+        translated = []
+        Array(group["proxies"]).each do |member|
+          mapped = proxy_map[member] || group_map[member]
+          if mapped.nil? && (proxy_names.include?(member) || original_group_names.include?(member))
+            next
+          end
+          translated << (mapped || member)
+        end
+        next if translated.empty?
+
+        body = group.reject { |key, _value| %w[name proxies].include?(key) }
+        matches = candidate_groups.select do |candidate_group|
+          candidate_group.reject { |key, _value| %w[name proxies].include?(key) } == body &&
+            translated.all? { |member| Array(candidate_group["proxies"]).include?(member) }
+        end
+        next unless matches.length == 1
+        next if group_map.value?(matches.first.fetch("name"))
+
+        group_map[name] = matches.first.fetch("name")
+        changed = true
+      end
+      break unless changed
+    end
+
+    group_positions_match = original_groups.length == candidate_groups.length &&
+                            group_map.length * 2 >= original_groups.length &&
+                            group_map.all? do |old_name, new_name|
+                              original_groups.index { |item| item.fetch("name") == old_name } ==
+                                candidate_groups.index { |item| item.fetch("name") == new_name }
+                            end
+    if group_positions_match
+      original_groups.each_with_index do |group, index|
+        next if group_map.key?(group.fetch("name"))
+        candidate_group = candidate_groups.fetch(index)
+        next unless group["type"].to_s.casecmp(candidate_group["type"].to_s).zero?
+        next if group_map.value?(candidate_group.fetch("name"))
+
+        translated = Array(group["proxies"]).map { |member| proxy_map[member] || group_map[member] }.compact
+        next if translated.length * 2 < Array(group["proxies"]).length
+        next unless Array(group["proxies"]).length == Array(candidate_group["proxies"]).length
+        next unless translated.all? { |member| Array(candidate_group["proxies"]).include?(member) }
+
+        group_map[group.fetch("name")] = candidate_group.fetch("name")
+      end
+    end
+
+    candidate_groups_by_name = candidate_groups.each_with_object({}) do |group, mapping|
+      mapping[group.fetch("name")] = group
+    end
+    translated = selections.each_with_object({}) do |(group_name, selected), mapping|
+      candidate_group_name = group_map[group_name]
+      return nil unless candidate_group_name
+      candidate_group = candidate_groups_by_name[candidate_group_name]
+      candidate_selection = proxy_map[selected] || group_map[selected] || selected
+      return nil unless Array(candidate_group["proxies"]).include?(candidate_selection)
+      return nil if mapping.key?(candidate_group_name)
+
+      mapping[candidate_group_name] = candidate_selection
+    end
+    translated
+  rescue StandardError
+    nil
+  end
+
   def dns_runtime_healthy?(requester, name)
     status, body = requester.call("GET", "/dns/query?name=#{name}&type=A", nil)
     return false unless status == 200
@@ -782,8 +890,12 @@ module ClaudeEasy
       runtime_checkpoint.is_a?(Hash) &&
       runtime_checkpoint[:path] == File.realpath(result.fetch(:path))
 
+    original_selections = runtime_checkpoint[:selections]
     selections = runtime_selections_for_profile(
       runtime_checkpoint[:selections], result.fetch(:path), preserve_all: true
+    )
+    selections ||= localized_runtime_selections(
+      original_selections, result.fetch(:rollback_bytes), result.fetch(:path)
     )
     expected_tun = runtime_checkpoint[:expected_tun]
     return result.merge(status: rollback_before_runtime_reload(result)) unless
@@ -821,7 +933,7 @@ module ClaudeEasy
 
     restored = runtime_waiter.call(
       client_identity, generation_before: rollback_generation,
-      selections: selections, expected_tun: expected_tun,
+      selections: original_selections, expected_tun: expected_tun,
       precommit_condition: precommit_condition
     )
     result.merge(status: restored ? :reload_failed_rolled_back : :reload_failed_restore_pending)
