@@ -5615,6 +5615,36 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_recovered_safe_update_runtime_accepts_original_profile_without_ai_group
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      File.binwrite(path, YAML.dump(base_config))
+      identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+      checkpoint = { path: File.realpath(path), expected_tun: :enabled, selections: {} }
+      bytes = File.binread(path)
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: path, original: bytes, candidate: bytes }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      required_group = :not_observed
+
+      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ name: "active", path: path }], 3, "active",
+        precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
+        transaction: transaction, client_identity: identity,
+        native_reloader: ->(_current) { true },
+        runtime_waiter: lambda { |_current, **options|
+          required_group = options.fetch(:required_proxy_group)
+          true
+        }, generation_reader: -> { "generation" }
+      )
+
+      assert restored
+      assert_nil required_group
+    end
+  end
+
   def test_safe_update_legacy_recovery_check_stops_if_the_shared_precheck_misses_a_journal
     Dir.mktmpdir do |directory|
       path = File.join(directory, "active.yaml")

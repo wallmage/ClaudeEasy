@@ -705,8 +705,6 @@ module ClaudeEasy
     expected_tun = runtime_checkpoint[:expected_tun]
     return false unless selections && %i[enabled disabled ignore].include?(expected_tun)
 
-    required_proxy_group = profile_ai_runtime_group(active.fetch(:path)) if usage_profile == 3
-    return false if usage_profile == 3 && !required_proxy_group
     return false unless runtime_precommit_allowed?(precommit_condition)
 
     generation_reader ||= method(:clashx_runtime_generation)
@@ -721,7 +719,7 @@ module ClaudeEasy
     runtime_waiter.call(
       client_identity, generation_before: generation,
       selections: selections, expected_tun: expected_tun,
-      required_proxy_group: required_proxy_group,
+      required_proxy_group: nil,
       precommit_condition: precommit_condition
     )
   rescue StandardError
