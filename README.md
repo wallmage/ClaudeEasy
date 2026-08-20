@@ -48,7 +48,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 | 档位 | 用途 | 安装能力 | 不会增加 |
 | --- | --- | --- | --- |
 | **1｜普通浏览** | 国内站、Google、Twitter、YouTube 等 | 全部订阅的共同国内直连与安全节点启动解析；关闭订阅自动更新；使用 Clash 系统代理 | TUN、IPv6、WebRTC、AI 分组或节点改动 |
-| **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承档位 1；开启 TUN，关闭 Clash 自己的系统代理，避免重复接管 | WebRTC 或 AI 分组补丁 |
+| **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承共同补丁和站点验收；直接开启 TUN，关闭 Clash 自己的系统代理 | WebRTC 或 AI 分组补丁 |
 | **3｜Claude/Claude Code** | Claude、Claude Code 或更强的泄漏防护 | 继承档位 2；增加 DNS 分流、AI 规则、局域网与国内 UDP 分流、其余 UDP/WebRTC 防护和区域指纹检查 | 自动切换订阅、代理组或节点 |
 
 档位 3 会让局域网 UDP，以及命中国内域名库或国内 IP 的 UDP 直连，其余 UDP 经过 AI 分组；QUIC、游戏、语音和视频都按这套规则处理，无法确认目的地时可能受影响。AI 节点可以建议台湾家宽优先、其次日本家宽，但不会替用户切换。
@@ -114,7 +114,7 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 ## 公开命令
 
 - 查看档位：macOS `--show-profile`；Windows `-ShowUsageProfile`
-- 更新订阅：macOS `--safe-update`；Windows `-SafeUpdate`
+- 更新订阅：macOS `--safe-update --json`；Windows `-SafeUpdate -Json`
 - 列出备份：macOS `--list-backups`；Windows `-ListBackups`
 - 比较备份：macOS `--compare-backup ID`；Windows `-CompareBackup ID`
 - 恢复备份：macOS `--restore-backup ID --expected-current-sha256 HASH`；Windows `-RestoreBackup ID -ExpectedCurrentSha256 HASH`
@@ -131,7 +131,7 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试；只为全部远程订阅创建更新前备份。
 3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求，Windows 使用 `curl -q --config -` 自动下载全部订阅并核对受管全局脚本；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`，并按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。
 4. 两端都由已经运行的客户端原生热加载，保留原 TUN 与代理选择；任一原代理组或节点选择无法恢复时拒绝更新。随后等待补丁、DNS 和实际连接全部恢复；macOS 使用 ClashX Meta 官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。候选与恢复各最多加载一次，失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
-5. 更新命令成功只是中间状态；Skill 按已保存档位重新完成首次 Patch 的动作和验收。档位 2 继承档位 1；档位 3 继承档位 1、2，再完成完整补丁、分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。最终状态复核通过后才报告完成。
+5. 更新命令成功只是中间状态；订阅文件补丁已在安全更新中重新应用，不再次运行安装命令。Skill 按已保存档位继续客户端动作和全部验收；档位 2 继承档位 1 的站点验收，但直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。最终状态复核通过后才报告完成。
 
 macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时会拒绝覆盖，其他更新仍只执行上述候选检查、运行加载和档位检查。
 

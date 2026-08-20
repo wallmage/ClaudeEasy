@@ -799,7 +799,8 @@ module ClaudeEasy
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil,
                       client_identity_reader: method(:clashx_running_identity),
-                      native_reloader: nil, runtime_waiter: nil, generation_reader: nil)
+                      native_reloader: nil, runtime_waiter: nil, generation_reader: nil,
+                      auto_update_disabler: nil)
     operation_lock = nil
     default_activation = activation.nil?
     raise InvalidConfigError, "用途档位无效" unless [1, 2, 3].include?(usage_profile)
@@ -872,28 +873,7 @@ module ClaudeEasy
         item_results << { name: name, status: :failed, reason: :local_profile_failed }
         next
       end
-      begin
-        source = fetcher.call(target)
-      rescue StandardError
-        item_results << {
-          name: name, status: :failed, reason: :download_failed,
-          subscription_switch_possible: true
-        }
-        next
-      end
-      begin
-        candidate = build_update_candidate(target, source, policy, usage_profile, validator)
-      rescue SafeUpdateCandidateError => error
-        failure = { name: name, status: :failed, reason: error.reason }
-        failure[:subscription_switch_possible] = true if error.subscription_switch_possible
-        item_results << failure
-        next
-      rescue StandardError
-        item_results << { name: name, status: :failed, reason: :validation_failed }
-        next
-      end
-      items << { name: name, path: path, original: original, candidate: candidate }
-      item_results << { name: name, status: :ready }
+      items << { name: name, path: path, original: original, target: target }
     end
     if item_results.any? { |item| item.fetch(:status) == :failed }
       failed = item_results.find { |item| item.fetch(:status) == :failed }
@@ -913,6 +893,58 @@ module ClaudeEasy
       return { status: :aborted, failed_profile: "", reason: :duplicate_target }
     end
     begin
+      items.each do |item|
+        create_versioned_backup(
+          item.fetch(:path), backup_root,
+          content: item.fetch(:original), reason: "pre-update"
+        )
+      end
+    rescue StandardError
+      return { status: :aborted, failed_profile: "", reason: :backup_failed }
+    end
+    if auto_update_disabler
+      begin
+        auto_update_disabler.call(operation_lock)
+      rescue StandardError
+        return { status: :aborted, failed_profile: "", reason: :auto_update_failed }
+      end
+    end
+
+    item_results = []
+    items.each do |item|
+      name = item.fetch(:name)
+      begin
+        source = fetcher.call(item.fetch(:target))
+      rescue StandardError
+        item_results << {
+          name: name, status: :failed, reason: :download_failed,
+          subscription_switch_possible: true
+        }
+        next
+      end
+      begin
+        item[:candidate] = build_update_candidate(
+          item.fetch(:target), source, policy, usage_profile, validator
+        )
+      rescue SafeUpdateCandidateError => error
+        failure = { name: name, status: :failed, reason: error.reason }
+        failure[:subscription_switch_possible] = true if error.subscription_switch_possible
+        item_results << failure
+        next
+      rescue StandardError
+        item_results << { name: name, status: :failed, reason: :validation_failed }
+        next
+      end
+      item_results << { name: name, status: :ready }
+    end
+    if item_results.any? { |item| item.fetch(:status) == :failed }
+      failed = item_results.find { |item| item.fetch(:status) == :failed }
+      return {
+        status: :aborted, failed_profile: failed.fetch(:name),
+        reason: :download_or_validation_failed, items: item_results
+      }
+    end
+    begin
       runtime_checkpoint = nil
       client_identity = nil
       if default_activation
@@ -923,7 +955,7 @@ module ClaudeEasy
             return { status: :aborted, failed_profile: "", reason: :client_state_changed }
           end
           runtime_checkpoint = capture_runtime_checkpoint(
-            active.fetch(:path), require_tun: runtime_tun_requirement(usage_profile)
+            active.fetch(:path), require_tun: :preserve
           )
           unless runtime_checkpoint
             return { status: :aborted, failed_profile: "", reason: :client_state_changed }
@@ -964,9 +996,6 @@ module ClaudeEasy
         return { status: :aborted, failed_profile: "", reason: :concurrent_change }
       end
 
-      handles.each do |item, _handle|
-        create_versioned_backup(item.fetch(:path), backup_root, content: item.fetch(:original), reason: "pre-update")
-      end
       handles.each do |item, handle|
         opened = handle.stat
         unless locked_profile_current?(handle, item.fetch(:path)) &&

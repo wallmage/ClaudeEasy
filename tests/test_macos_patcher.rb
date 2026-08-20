@@ -16,6 +16,9 @@ OPERATION_LOCK_PATH = File.join(ROOT, "claude-easy/scripts/macos/operation_lock.
 USAGE_PROFILE_STATE_PATH = File.join(
   ROOT, "claude-easy/scripts/macos/usage_profile_state.rb"
 )
+SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH = File.join(
+  ROOT, "tests/fixtures/macos_safe_update_runtime_crash_probe.rb"
+)
 POLICY_PATH = File.join(ROOT, "claude-easy/references/policy.json")
 MAIN_GROUP_FIXTURES = File.join(ROOT, "tests/fixtures/main_group_cases.json")
 PATCHER_AVAILABLE = File.file?(PATCHER_PATH) && File.file?(POLICY_PATH)
@@ -1763,9 +1766,12 @@ class MacosPatcherTest < Minitest::Test
       target = {
         name: "active", path: profile, url: "https://fixture.invalid/active"
       }
-      ready_reader, ready_writer = IO.pipe
-      gate_reader, gate_writer = IO.pipe
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
       child_id = nil
+      child_input = child_output = child_error = child_waiter = nil
       requester = lambda do |_socket, method, endpoint, body = nil|
         case [method, endpoint]
         when ["GET", "/proxies"]
@@ -1774,17 +1780,6 @@ class MacosPatcherTest < Minitest::Test
           })]
         when ["GET", "/configs"]
           [200, JSON.generate("tun" => { "enable" => true })]
-        when ["PUT", "/configs?force=true"]
-          path = JSON.parse(body).fetch("path")
-          marker = ClaudeEasy.load_yaml(File.read(path)).fetch("subscription-marker")
-          File.write(runtime_marker, marker)
-          if marker == "new-active" && !File.exist?(gate_seen)
-            File.write(gate_seen, "1")
-            ready_writer.write(".")
-            ready_writer.flush
-            gate_reader.read(1)
-          end
-          [204, ""]
         when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
           [204, ""]
         else
@@ -1795,45 +1790,42 @@ class MacosPatcherTest < Minitest::Test
           end
         end
       end
+      native_reloader = lambda do |_current|
+        marker = ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
+        File.write(runtime_marker, marker)
+        true
+      end
 
       begin
-        child_id = fork do
-          ready_reader.close
-          gate_writer.close
-          ClaudeEasy.stub(:controller_socket, "socket") do
-            ClaudeEasy.stub(:controller_request, requester) do
-              ClaudeEasy.stub(:default_connectivity_healthy?, true) do
-                ClaudeEasy.safe_update_all(
-                  targets: [target], policy: @policy, backup_root: backup_root,
-                  usage_profile: 1, selected_name: "active",
-                  fetcher: ->(_item) {
-                    YAML.dump(base_config.merge("subscription-marker" => "new-active"))
-                  },
-                  validator: ->(_path) { true }
-                )
-              end
-            end
-          end
-          exit! 0
-        end
-        ready_writer.close
-        gate_reader.close
-        assert IO.select([ready_reader], nil, nil, 10), "child never loaded the candidate profile"
-        ready_reader.read(1)
+        child_input, child_output, child_error, child_waiter = Open3.popen3(
+          RbConfig.ruby, SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH, directory
+        )
+        child_id = child_waiter.pid
+        assert IO.select([child_output], nil, nil, 10), "child never loaded the candidate profile"
+        ready = child_output.read(1)
+        flunk "child failed before candidate load: #{child_error.read}" unless ready == "."
         Process.kill("KILL", child_id)
-        _waited_id, status = Process.wait2(child_id)
+        status = child_waiter.value
         child_id = nil
         assert_equal 9, status.termsig
         assert_equal "new-active", File.read(runtime_marker)
 
         result = ClaudeEasy.stub(:controller_socket, "socket") do
           ClaudeEasy.stub(:controller_request, requester) do
-            ClaudeEasy.stub(:default_connectivity_healthy?, true) do
+            connectivity = lambda do |**_options|
+              current = ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
+              File.read(runtime_marker) == current
+            end
+            ClaudeEasy.stub(:default_connectivity_healthy?, connectivity) do
               ClaudeEasy.safe_update_all(
                 targets: [target], policy: @policy, backup_root: backup_root,
                 usage_profile: 1, selected_name: "active",
                 fetcher: ->(_item) { raise IOError, "injected preflight failure" },
-                validator: ->(_path) { true }
+                validator: ->(_path) { true },
+                client_identity_reader: -> { identity },
+                native_reloader: native_reloader,
+                runtime_waiter: ->(*_arguments, **_options) { true },
+                generation_reader: -> { "generation" }
               )
             end
           end
@@ -1844,10 +1836,10 @@ class MacosPatcherTest < Minitest::Test
         assert_equal original.b, File.binread(profile)
         assert_equal "old-active", File.read(runtime_marker)
       ensure
-        gate_writer.write(".") rescue nil
+        child_input.write(".") rescue nil
         Process.kill("KILL", child_id) rescue nil
-        Process.waitpid(child_id) rescue nil
-        [ready_reader, ready_writer, gate_reader, gate_writer].each { |io| io.close rescue nil }
+        child_waiter&.value rescue nil
+        [child_input, child_output, child_error].each { |io| io&.close rescue nil }
       end
     end
   end
@@ -6057,6 +6049,7 @@ class MacosPatcherTest < Minitest::Test
 
   def test_safe_update_all_leaves_every_profile_untouched_when_one_download_is_invalid
     Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
       targets = %w[first second third].map do |name|
         path = File.join(directory, "#{name}.yaml")
         File.write(path, YAML.dump(base_config.merge("subscription-marker" => "old-#{name}")))
@@ -6068,7 +6061,7 @@ class MacosPatcherTest < Minitest::Test
       end
 
       result = ClaudeEasy.safe_update_all(
-        targets: targets, policy: @policy, backup_root: File.join(directory, "backups"), usage_profile: 3,
+        targets: targets, policy: @policy, backup_root: backup_root, usage_profile: 3,
         fetcher: fetcher, validator: ->(_path) { true },
         activation: ->(_items) { flunk "must not activate" }, selected_name: "first"
       )
@@ -6076,13 +6069,14 @@ class MacosPatcherTest < Minitest::Test
       assert_equal :aborted, result.fetch(:status)
       assert_equal "second", result.fetch(:failed_profile)
       targets.each { |target| assert_equal originals.fetch(target.fetch(:path)), File.binread(target.fetch(:path)) }
-      refute Dir.exist?(File.join(directory, "backups"))
+      assert_equal 3, Dir.children(backup_root).count { |name| name.include?("--pre-update--") }
       refute_includes JSON.generate(result), "subscriptions.invalid"
     end
   end
 
   def test_safe_update_all_attempts_every_subscription_and_reports_each_candidate
     Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
       targets = %w[first second third].map do |name|
         path = File.join(directory, "#{name}.yaml")
         File.write(path, YAML.dump(base_config.merge("subscription-marker" => "old-#{name}")))
@@ -6091,6 +6085,7 @@ class MacosPatcherTest < Minitest::Test
       originals = targets.to_h { |target| [target.fetch(:path), File.binread(target.fetch(:path))] }
       calls = []
       fetcher = lambda do |target|
+        assert_equal 3, Dir.children(backup_root).count { |name| name.include?("--pre-update--") }
         name = target.fetch(:name)
         calls << name
         raise ClaudeEasy::InvalidConfigError, "download unavailable" if name == "first"
@@ -6099,7 +6094,7 @@ class MacosPatcherTest < Minitest::Test
       end
 
       result = ClaudeEasy.safe_update_all(
-        targets: targets, policy: @policy, backup_root: File.join(directory, "backups"),
+        targets: targets, policy: @policy, backup_root: backup_root,
         usage_profile: 3, fetcher: fetcher, validator: ->(_path) { true },
         activation: ->(_items) { flunk "a partial batch must not activate" }, selected_name: "first"
       )
@@ -6113,8 +6108,36 @@ class MacosPatcherTest < Minitest::Test
         { name: "third", status: :failed, reason: :invalid_content, subscription_switch_possible: true }
       ], result.fetch(:items)
       targets.each { |target| assert_equal originals.fetch(target.fetch(:path)), File.binread(target.fetch(:path)) }
-      refute Dir.exist?(File.join(directory, "backups"))
+      assert_equal 3, Dir.children(backup_root).count { |name| name.include?("--pre-update--") }
       refute_includes JSON.generate(result), "subscriptions.invalid"
+    end
+  end
+
+  def test_safe_update_all_disables_auto_update_only_after_every_backup_succeeds
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      targets = %w[first second].map do |name|
+        path = File.join(directory, "#{name}.yaml")
+        File.write(path, YAML.dump(base_config))
+        { name: name, path: path, url: "https://subscriptions.invalid/#{name}" }
+      end
+      disable_called = false
+
+      result = ClaudeEasy.safe_update_all(
+        targets: targets, policy: @policy, backup_root: backup_root, usage_profile: 3,
+        auto_update_disabler: lambda do |operation_lock|
+          disable_called = true
+          refute_nil operation_lock
+          assert_equal 2, Dir.children(backup_root).count { |name| name.include?("--pre-update--") }
+          raise IOError, "injected"
+        end,
+        fetcher: ->(_target) { flunk "must not download after auto-update failure" },
+        validator: ->(_path) { true }, selected_name: "first"
+      )
+
+      assert disable_called
+      assert_equal :aborted, result.fetch(:status)
+      assert_equal :auto_update_failed, result.fetch(:reason)
     end
   end
 
@@ -6128,7 +6151,8 @@ class MacosPatcherTest < Minitest::Test
         { name: "present", path: present, url: "https://subscriptions.invalid/present" }
       ]
 
-      result = ClaudeEasy.stub(:build_update_candidate, ->(*_arguments) { raise "injected" }) do
+      candidate_called = false
+      result = ClaudeEasy.stub(:build_update_candidate, ->(*_arguments) { candidate_called = true; raise "injected" }) do
         ClaudeEasy.safe_update_all(
           targets: targets, policy: @policy, backup_root: File.join(directory, "backups"),
           usage_profile: 3, fetcher: ->(_target) { YAML.dump(base_config) },
@@ -6137,10 +6161,10 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert_equal [
-        { name: "missing", status: :failed, reason: :local_profile_failed },
-        { name: "present", status: :failed, reason: :validation_failed }
+        { name: "missing", status: :failed, reason: :local_profile_failed }
       ], result.fetch(:items)
       assert_equal :aborted, result.fetch(:status)
+      refute candidate_called
     end
   end
 
@@ -13170,8 +13194,10 @@ class MacosPatcherTest < Minitest::Test
     Dir.mktmpdir do |directory|
       targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
       called = false
-      update = lambda do |**_arguments|
+      update_arguments = nil
+      update = lambda do |**arguments|
         called = true
+        update_arguments = arguments
         { status: :updated, count: 1, profiles: ["friend"] }
       end
       ClaudeEasy.stub(:saved_usage_profile, 3) do
@@ -13188,6 +13214,7 @@ class MacosPatcherTest < Minitest::Test
         end
       end
       assert called
+      assert_kind_of Proc, update_arguments.fetch(:auto_update_disabler)
     end
   end
 
@@ -14838,8 +14865,13 @@ class MacosPatcherTest < Minitest::Test
         selections: { "Main" => "台湾家宽 01", "AI" => "Main" }
       }
       reloads = 0
+      checkpoint_requirement = nil
+      checkpoint_reader = lambda do |_path, require_tun:, **_options|
+        checkpoint_requirement = require_tun
+        checkpoint
+      end
 
-      result = ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+      result = ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint_reader) do
         ClaudeEasy.safe_update_all(
           targets: [{ name: "friend", path: profile, url: "https://subscriptions.invalid/friend" }],
           policy: @policy, backup_root: backup_root, usage_profile: 1,
@@ -14853,6 +14885,7 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert_equal :updated, result.fetch(:status), result.inspect
+      assert_equal :preserve, checkpoint_requirement
       assert_equal 1, reloads
       assert_equal "new", ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
     end

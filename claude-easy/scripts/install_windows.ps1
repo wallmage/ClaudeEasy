@@ -202,24 +202,6 @@ if ($SafeUpdate) {
     if ($indexText.Length -gt 0 -and $indexText[0] -eq [char]0xFEFF) {
         $indexText = $indexText.Substring(1)
     }
-    Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
-    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
-    if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
-    $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
-    Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedUsageProfile $enginePath $targetScript
-    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
-    if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
-    $vergeText = $strictUtf8.GetString($vergeSnapshot.Bytes)
-    $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
-    $runtimeBefore = Get-ClashControllerContext $runtimeConfigPath
-    $runtimeStateBefore = Get-ClashRuntimeState $runtimeBefore
-    if ((Test-ClashRuntimeRequiresTun $savedUsageProfile) -and -not $runtimeStateBefore.TunEnabled) {
-        throw "当前用途档位的 TUN 没有开启。"
-    }
-    $core = Find-MihomoCore $MihomoPath
-    Test-MihomoVersion $core | Out-Null
-    $policyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
-    $policy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($policyPath)) | ConvertFrom-Json
     $profiles = @(Get-RemoteSubscriptionUpdateTargets $indexText $profilesDirectory)
     $snapshots = @()
     foreach ($profile in $profiles) {
@@ -232,6 +214,21 @@ if ($SafeUpdate) {
             -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
         $snapshots += [pscustomobject]@{ Profile = $profile; Snapshot = $profileSnapshot }
     }
+    Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
+    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
+    if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
+    $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
+    Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedUsageProfile $enginePath $targetScript
+    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+    if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
+    $vergeText = $strictUtf8.GetString($vergeSnapshot.Bytes)
+    $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
+    $runtimeBefore = Get-ClashControllerContext $runtimeConfigPath
+    $runtimeStateBefore = Get-ClashRuntimeState $runtimeBefore
+    $core = Find-MihomoCore $MihomoPath
+    Test-MihomoVersion $core | Out-Null
+    $policyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+    $policy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($policyPath)) | ConvertFrom-Json
     $curlCommand = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $targets = @()
     foreach ($entry in $snapshots) {

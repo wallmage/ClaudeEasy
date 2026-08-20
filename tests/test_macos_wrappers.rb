@@ -2648,6 +2648,40 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_safe_update_failure_before_download_does_not_change_auto_update
+    patcher = <<~'RUBY'
+      home = ENV.fetch("HOME")
+      File.open(File.join(home, "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(home, "auto-update-changed"), "yes")
+        puts "disabled"
+        exit 0
+      end
+      exit 1 if ARGV.include?("--safe-update-all")
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          write_usage_profile(home, 3)
+
+          _stdout, _stderr, status = run_script(installer, "--safe-update", home: home)
+
+          assert_equal 1, status.exitstatus
+          refute File.exist?(File.join(home, "auto-update-changed"))
+          calls = File.read(File.join(home, "patcher-calls.log"))
+          assert_includes calls, "--safe-update-all"
+          refute_includes calls, "--disable-subscription-auto-update"
+        end
+      end
+    end
+  end
+
   def test_failed_profile_three_reinstall_preserves_preexisting_auto_update_ownership
     patcher = <<~RUBY
       File.open(File.join(ENV.fetch("HOME"), "patcher-calls.log"), "a") { |file| file.puts(ARGV.join(" ")) }

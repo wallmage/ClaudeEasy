@@ -35,7 +35,7 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 | 档位 | 用途 | 必须做 | 明确不做 | 验收 |
 | --- | --- | --- | --- | --- |
 | **档位 1｜普通浏览** | 国内网站、Twitter、Facebook、YouTube 等 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；用 Computer Use 确认 Clash 客户端的“设置为系统代理”已开启 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 国内站、Google、Twitter 和一个用户常用站点能稳定打开，速度无明显异常 |
-| **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；用 Computer Use 开启 TUN，并关闭 Clash 客户端自己的系统代理开关 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 国内站、Google、Twitter、ChatGPT、Gemini 能稳定打开；命令行或 Agent 应用能联网 |
+| **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，直接用 Computer Use 开启 TUN，并关闭 Clash 客户端自己的系统代理开关 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 国内站、Google、Twitter、一个用户常用站点、ChatGPT、Gemini 能稳定打开，速度无明显异常；命令行或 Agent 应用能联网 |
 | **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、Claude、分流、DNS 深度测试和两项 WebRTC 测试 |
 
 档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；除下述 AdGuard for Mac 已知兼容路径外，不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
@@ -79,7 +79,7 @@ macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，Windows 用
 
 ## Patch 验证标准
 
-档位 1 只验收系统代理与 Google、Twitter、用户常用站点；档位 2 只验收 TUN、Clash 自己的系统代理开关、Google、Twitter、ChatGPT、Gemini 和一个命令行或 Agent 连接。不能因为未运行泄漏测试而把档位 1、2判为失败。以下完整验收只属于档位 3。
+档位 1 只验收系统代理、国内站、Google、Twitter、用户常用站点和速度；档位 2 验收 TUN、Clash 自己的系统代理开关、国内站、Google、Twitter、用户常用站点、速度、ChatGPT、Gemini 和一个命令行或 Agent 连接。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
 
 先生成 Google、OpenAI 和 Claude/Anthropic 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows `-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段；控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝，请求禁用系统代理和重定向，命令行、环境变量、输出与日志都不能出现密钥。两端都从 `/rules` 的最后一个 `MATCH` 读取当前运行配置实际使用的主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不再从磁盘配置或固定名称单独推断。每个测试请求都通过当前 Mihomo 回环代理发出，隔离用户 curl 配置和代理环境，先绑定独立源端口；观察器只接受启动后出现且 TCP、源端口和目标域名全部匹配的连接 ID，同域名的浏览器、更新器或后台连接不得代替测试请求。观察到连接后必须重新读取主代理组、AI 分组、当前选择和代理提供者；检测期间任一项变化，本项失败。验收结合 `chains` 与 `providerChains` 查出本次连接的实际叶子类型，整条链出现 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible`、`Rematch` 或 `Relay` 均失败，即使出站使用自定义名称也一样。Google 的连接链必须包含当前主代理组；若订阅有明确的 Google 专用组，也可包含该非 AI 组。主代理组与 AI 分组不同时，Google 不能经过 AI 分组；两者相同时允许共用。AI 网站的连接链必须包含 AI 分组。`Selector`、`URLTest`、`Fallback` 和 `LoadBalance` 都以实际连接链为准；没有 `now` 的主代理组或 AI `LoadBalance` 都使用观察到的叶子，请求前的 `now` 只用于预检或显示。JSON 成功码为 `routes_verified`，失败码为 `route_verification_failed`；每项检查状态只取 `passed`、`failed` 或 `not_observed`。只看配置文件或网页出口 IP 不足以证明分流正确。
 

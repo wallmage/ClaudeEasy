@@ -876,28 +876,30 @@ child_json=""
 
 stage_profile_selection
 
-if [ -z "$PREVIOUS_PROFILE" ]; then
-  AUTO_UPDATE_RECOVERY_REQUIRED=1
-fi
-if ! run_subscription_auto_update_disable; then
-  if [ -n "$PREVIOUS_PROFILE" ]; then
-    AUTO_UPDATE_RECOVERY_PENDING=1
+if [ "$SAFE_UPDATE" -ne 1 ]; then
+  if [ -z "$PREVIOUS_PROFILE" ]; then
+    AUTO_UPDATE_RECOVERY_REQUIRED=1
   fi
-  say "无法完成 ClashX Meta 的订阅自动更新设置；未继续处理订阅文件，请按当前档位重试。"
-  finish 9 failed auto_update_failed "无法完成订阅自动更新设置；未继续处理订阅文件。" install
-fi
-case "$auto_update_result" in
-  disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;
-  already_disabled) AUTO_UPDATE_RECOVERY_REQUIRED=0; say "订阅自动更新已经关闭。" ;;
-  already_disabled_owned) say "订阅自动更新已经由 ClaudeEasy 关闭。" ;;
-  *)
+  if ! run_subscription_auto_update_disable; then
     if [ -n "$PREVIOUS_PROFILE" ]; then
       AUTO_UPDATE_RECOVERY_PENDING=1
     fi
-    say "订阅自动更新回读结果异常；未继续处理订阅文件，请按当前档位重试。"
-    finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未继续处理订阅文件。" install
-    ;;
-esac
+    say "无法完成 ClashX Meta 的订阅自动更新设置；未继续处理订阅文件，请按当前档位重试。"
+    finish 9 failed auto_update_failed "无法完成订阅自动更新设置；未继续处理订阅文件。" install
+  fi
+  case "$auto_update_result" in
+    disabled) say "已自动关闭订阅更新，并保存修改前状态。" ;;
+    already_disabled) AUTO_UPDATE_RECOVERY_REQUIRED=0; say "订阅自动更新已经关闭。" ;;
+    already_disabled_owned) say "订阅自动更新已经由 ClaudeEasy 关闭。" ;;
+    *)
+      if [ -n "$PREVIOUS_PROFILE" ]; then
+        AUTO_UPDATE_RECOVERY_PENDING=1
+      fi
+      say "订阅自动更新回读结果异常；未继续处理订阅文件，请按当前档位重试。"
+      finish 9 failed auto_update_verify_failed "订阅自动更新回读结果异常；未继续处理订阅文件。" install
+      ;;
+  esac
+fi
 
 if [ "$SAFE_UPDATE" -eq 1 ]; then
   if [ -n "$CUSTOM_PROFILE_DIR" ]; then

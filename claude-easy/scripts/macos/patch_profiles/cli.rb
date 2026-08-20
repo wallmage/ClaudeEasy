@@ -757,7 +757,12 @@ module ClaudeEasy
       result = safe_update_all(
         targets: targets, policy: policy, backup_root: options[:backup_root],
         usage_profile: options[:usage_profile], guard_storage: guard_storage,
-        expected_storage: expected_storage
+        expected_storage: expected_storage,
+        auto_update_disabler: lambda do |operation_lock|
+          disable_subscription_auto_update(
+            backup_root: options[:backup_root], operation_lock: operation_lock
+          )
+        end
       )
       if result[:status] == :updated
         mark_wrapper_commit_receipt(options)

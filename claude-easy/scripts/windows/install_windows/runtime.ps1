@@ -666,7 +666,7 @@ function Assert-ClashRuntimeHealthy(
     $dnsStatus = if ($null -ne $dnsPayload.Status) { [int]$dnsPayload.Status } else { [int]$dnsPayload.status }
     if ($dnsStatus -ne 0 -or $answers.Count -eq 0) { throw "Clash Verge Rev DNS 检查失败。" }
     Assert-ClashRuntimePatch ([string]$Context.RuntimeText) $state $Policy $UsageProfile
-    if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath (Test-ClashRuntimeRequiresTun $UsageProfile))) {
+    if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled)) {
         throw "更新后的配置无法连接 Google。"
     }
 }

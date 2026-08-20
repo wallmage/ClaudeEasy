@@ -2284,10 +2284,12 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_macos.sh",
-        "if [ -z \"$PREVIOUS_PROFILE\" ]; then\n" \
-          "  AUTO_UPDATE_RECOVERY_REQUIRED=1\n" \
-          "fi\n",
-        "AUTO_UPDATE_RECOVERY_REQUIRED=0\n"
+        "if [ \"$SAFE_UPDATE\" -ne 1 ]; then\n" \
+          "  if [ -z \"$PREVIOUS_PROFILE\" ]; then\n" \
+          "    AUTO_UPDATE_RECOVERY_REQUIRED=1\n" \
+          "  fi\n",
+        "if [ \"$SAFE_UPDATE\" -ne 1 ]; then\n" \
+          "  AUTO_UPDATE_RECOVERY_REQUIRED=0\n"
       )
 
       assert_mutation_is_killed(

@@ -609,9 +609,23 @@ function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$
 }
 
 try {
+    $installerSource = [System.IO.File]::ReadAllText($installer)
+    $safeUpdateStart = $installerSource.IndexOf('if ($SafeUpdate) {', [StringComparison]::Ordinal)
+    $backupStart = $installerSource.IndexOf('Backup-Versioned', $safeUpdateStart, [StringComparison]::Ordinal)
+    $downloadStart = $installerSource.IndexOf('$curlCommand = Get-Command curl.exe', $safeUpdateStart, [StringComparison]::Ordinal)
+    Assert-True (
+        $safeUpdateStart -ge 0 -and $backupStart -gt $safeUpdateStart -and $downloadStart -gt $backupStart
+    ) "safe update did not back up every remote subscription before downloading"
+    $preDownloadSafeUpdate = $installerSource.Substring($safeUpdateStart, $downloadStart - $safeUpdateStart)
+    Assert-True (
+        -not $preDownloadSafeUpdate.Contains('Test-ClashRuntimeRequiresTun')
+    ) "safe update still required the final profile TUN state before backup and download"
     Assert-True (-not (Test-ClashRuntimeRequiresTun 1)) "profile 1 unexpectedly required TUN"
     Assert-True (Test-ClashRuntimeRequiresTun 2) "profile 2 did not require TUN"
     Assert-True (Test-ClashRuntimeRequiresTun 3) "profile 3 did not require TUN"
+    Assert-True (
+        $runtimeSource.Contains('Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled')
+    ) "safe update runtime validation did not preserve the pre-update TUN state"
     Assert-True (
         (Get-ClashRuntimeYamlMappingEntry "'rule-set:managed':").Key -ceq "rule-set:managed"
     ) "runtime YAML parser rejected a single-quoted policy key"

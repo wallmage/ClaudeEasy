@@ -424,12 +424,13 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "### 交付类型决策表"
     assert_includes policy, "| 分析或复核 | 只读 | 结论、证据、反证和未知项完整 |"
     assert_includes policy, "| 修复 | 已确认的问题、明确对象和写入授权 | 最小修复、原场景复测和受影响能力回归 |"
-    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 不做更新前测试；备份并更新后，按已保存档位重新完成首次 Patch 的动作、验收和最终复核 |"
+    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 不做更新前测试；备份并更新后，按已保存档位完成首次 Patch 的客户端动作、全部验收和最终复核 |"
     assert_includes policy, "| 监测 | 只读采集；内容采集另需授权 | 确认采集运行、记录范围并提供停止方法 |"
     assert_includes policy, "配置、用途档位变更和完整安全增强归入 Patch"
     assert_includes policy, "交付类型不能在执行中自行扩大"
     assert_includes prompt, "按用户要求分析、复核、修复、配置、监测或更新 Clash"
-    assert_includes prompt, "按当前档位完成候选检查、加载和运行检查"
+    assert_includes prompt, "安全更新重新应用订阅文件补丁"
+    assert_includes prompt, "按已保存档位完成客户端动作、全部验收和最终复核"
     refute_includes prompt, "动作结束后不做检查"
     assert_includes prompt, "未获授权不写入"
     refute_includes prompt, "诊断要完成取证、修复、复测"
@@ -1125,8 +1126,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "`Accept-Language: zh-CN,zh;q=0.9`"
       assert_includes document, "任一原代理组或节点选择无法恢复时拒绝更新"
     end
-    assert_includes readme, "Windows `-SafeUpdate`"
+    assert_includes readme, "Windows `-SafeUpdate -Json`"
     assert_includes installer, "--safe-update"
+    assert_includes skill, "--safe-update --json"
     assert_includes patcher, "--safe-update-all"
     assert_includes windows_installer_source, "SafeUpdate"
     subscriptions = File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb"))
@@ -1142,10 +1144,10 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_update_sources, "'-q --config -'"
     assert_includes File.read(File.join(ROOT, "AGENTS.md")),
                     "macOS 订阅下载必须使用 Foundation 原生请求"
-    refute_includes File.read(File.join(SKILL, "references/safe-update-and-recovery.md")),
-                    "Computer Use"
+    assert_includes File.read(File.join(SKILL, "references/safe-update-and-recovery.md")),
+                    "Computer Use 只用于平台更新成功后的客户端开关和浏览器验收"
     update_section = skill.split("## 更新全部订阅", 2).last.split("## 配置历史与恢复", 2).first
-    refute_includes update_section, "Computer Use"
+    assert_includes update_section, "没有 Computer Use 时"
   end
 
   def test_subscription_update_documents_cross_platform_completion
@@ -1161,13 +1163,21 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "再次确认订阅自动更新关闭"
       refute_includes document, "Windows 不追加连通性检查"
     end
-    assert_includes skill, "继续完成 `required_followups`"
-    assert_includes policy, "继续完成 `required_followups`"
+    assert_includes skill, "必须继续完成 `required_followups` 中的每一项"
+    assert_includes skill, "安全更新已经重新应用订阅文件补丁，不得再次运行安装命令"
+    assert_includes skill, "档位 2 不执行档位 1 的系统代理开启动作"
+    assert_includes policy, "按 `required_followups` 完成"
     assert_includes skill, "更新前不运行任何测试"
     assert_includes policy, "更新前不运行任何测试"
-    assert_includes policy, "与首次运行该档位相同的 Patch 动作和验收"
-    assert_includes policy, "档位 3 继承档位 1、2 的全部动作和验收"
+    assert_includes policy, "与首次运行该档位相同的平台客户端动作和验收"
+    assert_includes policy, "档位 3 继承档位 2"
     assert_includes policy, "更新后只运行一次本地区域指纹检测"
+    assert_includes policy, "安全更新已经重新应用订阅文件补丁，不得再次运行平台安装命令"
+    assert_includes policy, "档位 2 不执行档位 1 的系统代理开启动作"
+    macos = File.read(File.join(SKILL, "references/macos.md"))
+    assert_includes macos, "当前订阅由已运行客户端的原生事件加载，本地控制器只用于观察和验收"
+    assert_includes macos, "安全更新事务内部不得切换 TUN"
+    assert_includes macos, "`required_followups` 可按已保存档位通过客户端界面设置 TUN"
     refute_includes policy, "更新写入前取得同一浏览器的区域指纹基线"
     refute_includes policy, "区域指纹重扫"
 
@@ -1187,8 +1197,8 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "跨平台共同边界"
     assert_includes core, "相同的授权、隐私、客户端安全边界和用户可见完成条件"
     assert_includes core, "不得把两端不同的实现方式写成相同"
-    assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update`"
-    assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -SafeUpdate`"
+    assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update --json`"
+    assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -SafeUpdate -Json`"
     assert_includes safe_update, "macOS 通过 Foundation 原生网络请求自动下载全部远程订阅"
     assert_includes safe_update, "Windows 使用 `curl -q --config -`"
     assert_includes safe_update, "两端都按已保存用途档位"
@@ -1217,7 +1227,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "没问题"
     end
     [documents[2]].each do |document|
-      assert_includes document, "用户明确确认前不得读取订阅、建立备份或操作客户端"
+      assert_includes document, "否则确认前不得读取订阅、建立备份或操作客户端"
       refute_includes document, "先做一次正常更新，不得在更新前推测开关状态"
       refute_includes document, "只有更新确实失败且没有明确的本机故障时，才提示订阅开关"
       assert_includes document, "不得代替用户操作服务商后台"
@@ -1230,7 +1240,7 @@ class SkillContractTest < Minitest::Test
     policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
 
     assert_includes skill, "`workflow_complete: false`"
-    assert_includes skill, "继续完成 `required_followups`"
+    assert_includes skill, "必须继续完成 `required_followups` 中的每一项"
     assert_includes policy, "完整任务顺序与完成条件"
     assert_includes policy, "不代表用户要求的订阅更新任务已经完成"
     assert_includes policy, "当前档位规定的全部验收"
