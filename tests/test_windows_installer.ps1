@@ -704,6 +704,14 @@ try {
             $null -ne $completeRuntimeState.Providers -and
             @($completeRuntimeState.Providers.remote.proxies).Count -eq 1
         ) "runtime state omitted provider proxies"
+
+        $missingSelectionRejected = $false
+        try {
+            Restore-ClashRuntimeSelections ([pscustomobject]@{}) @{ "Missing Group" = "Old Node" }
+        } catch {
+            $missingSelectionRejected = $_.Exception.Message.Contains("无法保留原代理选择")
+        }
+        Assert-True $missingSelectionRejected "runtime restoration accepted a missing previous selection"
     } finally {
         Set-Item Function:Invoke-ClashControllerRequest $originalRuntimeRequest
     }

@@ -4,7 +4,7 @@
 
 ## macOS
 
-当前订阅更新按 `safe-update-and-recovery.md` 运行 `bash scripts/install_macos.sh --safe-update`；下载使用 Foundation 原生网络请求，请求身份从当前运行的 ClashX Meta 应用信息动态生成，不得使用 curl 或固定 User-Agent。下载结果不是直接覆盖：必须按已保存用途档位解析并应用现行 Patch，完成 YAML 重读、二次转换一致性检查和 Mihomo 校验后才整批写入；更新目标中的当前订阅还要通过本地控制器加载并完成该档位的运行检查，失败时按本文件事务规则恢复。成功后再次确认订阅自动更新关闭。
+当前订阅更新按 `safe-update-and-recovery.md` 运行 `bash scripts/install_macos.sh --safe-update`；下载使用 Foundation 原生网络请求，请求身份从当前运行的 ClashX Meta 应用信息动态生成，并发送 `Accept-Language: zh-CN,zh;q=0.9`；不得使用 curl 或固定 User-Agent。下载结果不是直接覆盖：必须按已保存用途档位解析并应用现行 Patch，完成 YAML 重读、二次转换一致性检查和 Mihomo 校验后才整批写入；任一原代理组或节点选择无法恢复时拒绝更新。更新目标中的当前订阅还要通过本地控制器加载并完成该档位的运行检查，失败时按本文件事务规则恢复。成功后再次确认订阅自动更新关闭。
 
 备份恢复必须先读取有效的已保存用途档位，再按该档位校验；档位缺失或损坏时零写入。
 

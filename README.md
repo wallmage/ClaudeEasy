@@ -129,8 +129,8 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 
 1. 提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。
 2. 为全部远程订阅创建更新前备份。
-3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求，Windows 使用 `curl -q --config -` 自动下载全部订阅；两端都按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。
-4. 两端都由已经运行的客户端原生热加载，保留原 TUN 与代理选择，并等待补丁、DNS 和实际连接全部恢复；macOS 使用 ClashX Meta 官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。候选与恢复各最多加载一次，失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
+3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求，Windows 使用 `curl -q --config -` 自动下载全部订阅；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`，并按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。
+4. 两端都由已经运行的客户端原生热加载，保留原 TUN 与代理选择；任一原代理组或节点选择无法恢复时拒绝更新。随后等待补丁、DNS 和实际连接全部恢复；macOS 使用 ClashX Meta 官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。候选与恢复各最多加载一次，失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
 
 macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时会拒绝覆盖，其他更新仍只执行上述候选检查、运行加载和档位检查。
 

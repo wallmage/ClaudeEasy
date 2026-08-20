@@ -1214,14 +1214,26 @@ test('Windows curl update reloads, checks, and restores the active runtime', () 
   assert.doesNotMatch(update, /User-Agent|user-agent/);
 });
 
-test('Windows subscription download retries Clash formats without a User-Agent', () => {
+test('Windows subscription download requests Chinese Clash formats without a User-Agent', () => {
   const installer = fs.readFileSync(installerPath, 'utf8');
   const safeUpdate = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
   assert.match(safeUpdate, /function Get-SubscriptionFormatUrls/);
   assert.match(safeUpdate, /flag=clashmeta/);
   assert.match(safeUpdate, /flag=clash/);
   assert.match(installer, /foreach \(\$downloadUrl in @\(Get-SubscriptionFormatUrls/);
+  assert.match(safeUpdate, /header = "Accept-Language: zh-CN,zh;q=0\.9"/);
   assert.doesNotMatch(safeUpdate, /User-Agent|user-agent/);
+});
+
+test('Windows runtime restoration rejects every missing previous selection', () => {
+  const runtimeModule = fs.readFileSync(path.join(installerModuleDir, 'runtime.ps1'), 'utf8');
+  const start = runtimeModule.indexOf('function Restore-ClashRuntimeSelections');
+  const end = runtimeModule.indexOf('\nfunction Wait-ClashVergeRuntimeRefresh', start);
+  const body = runtimeModule.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(body, /\$null -eq \$property[\s\S]*throw "Clash Verge Rev 无法保留原代理选择。"/);
+  assert.match(body, /\$property\.Value\.all[\s\S]*-cnotcontains \$selected/);
 });
 
 test('Windows hot reload waits for runtime health after the generated config changes', () => {

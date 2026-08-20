@@ -417,11 +417,12 @@ module ClaudeEasy
     false
   end
 
-  def runtime_selections_for_profile(selections, path, require_all: false)
+  def runtime_selections_for_profile(selections, path, require_all: false, preserve_all: false)
     return nil unless selections.is_a?(Hash)
 
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
     selector_names = selectable_groups(config).map { |group| group.fetch("name") }
+    return nil if preserve_all && !selections.keys.all? { |name| selector_names.include?(name) }
     return {} if selector_names.empty?
     return nil if require_all && !selector_names.all? { |name| selections.key?(name) }
 
@@ -594,14 +595,13 @@ module ClaudeEasy
     proxies = runtime_proxies(requester)
     return nil unless proxies
 
-    selections.each_with_object({}) do |(name, selected), restorable|
+    selections.each do |name, selected|
       proxy = proxies[name]
       return nil unless proxy.is_a?(Hash) &&
                         proxy["type"].to_s.casecmp("Selector").zero? &&
-                        proxy["all"].is_a?(Array)
-
-      restorable[name] = selected if proxy["all"].include?(selected)
+                        proxy["all"].is_a?(Array) && proxy["all"].include?(selected)
     end
+    selections
   rescue StandardError
     nil
   end
@@ -783,7 +783,7 @@ module ClaudeEasy
       runtime_checkpoint[:path] == File.realpath(result.fetch(:path))
 
     selections = runtime_selections_for_profile(
-      runtime_checkpoint[:selections], result.fetch(:path)
+      runtime_checkpoint[:selections], result.fetch(:path), preserve_all: true
     )
     expected_tun = runtime_checkpoint[:expected_tun]
     return result.merge(status: rollback_before_runtime_reload(result)) unless

@@ -602,9 +602,9 @@ class MutationSafetyTest < Minitest::Test
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
         "      selections: selections, expected_tun: expected_tun,\n" \
-          "      required_proxy_group: required_proxy_group,\n",
+          "      required_proxy_group: nil,\n",
         "      selections: selections, expected_tun: :ignore,\n" \
-          "      required_proxy_group: required_proxy_group,\n"
+          "      required_proxy_group: nil,\n"
       )
 
       assert_mutation_is_killed(
@@ -672,8 +672,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        "          required_proxy_group: required_proxy_group, flush_caches: false\n",
-        "          required_proxy_group: required_proxy_group, check_dns: false, flush_caches: false\n"
+        "        required_proxy_group: required_proxy_group, flush_caches: false\n",
+        "        required_proxy_group: required_proxy_group, check_dns: false, flush_caches: false\n"
       )
 
       assert_mutation_is_killed(

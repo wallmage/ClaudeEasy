@@ -1122,6 +1122,8 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "自动更新"
       assert_includes document, "Foundation"
       assert_includes document, "动态生成"
+      assert_includes document, "`Accept-Language: zh-CN,zh;q=0.9`"
+      assert_includes document, "任一原代理组或节点选择无法恢复时拒绝更新"
     end
     assert_includes readme, "Windows `-SafeUpdate`"
     assert_includes installer, "--safe-update"

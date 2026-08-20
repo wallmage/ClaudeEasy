@@ -212,8 +212,12 @@ function Restore-ClashRuntimeSelections([object]$Context, [hashtable]$Selections
     $current = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {
         $property = $current.Proxies.PSObject.Properties[[string]$name]
-        if ($null -eq $property -or [string]$property.Value.type -ne "Selector") { continue }
+        if ($null -eq $property -or [string]$property.Value.type -ne "Selector") {
+            throw "Clash Verge Rev 无法保留原代理选择。"
+        }
         $selected = [string]$Selections[$name]
+        $members = @($property.Value.all)
+        if ($members -cnotcontains $selected) { throw "Clash Verge Rev 无法保留原代理选择。" }
         if ([string]$property.Value.now -eq $selected) { continue }
         $endpoint = "/proxies/" + [Uri]::EscapeDataString([string]$name)
         $body = @{ name = $selected } | ConvertTo-Json -Compress
@@ -644,7 +648,7 @@ function Assert-ClashRuntimeHealthy(
     $state = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {
         $property = $state.Proxies.PSObject.Properties[[string]$name]
-        if ($null -ne $property -and [string]$property.Value.type -eq "Selector" -and
+        if ($null -eq $property -or [string]$property.Value.type -ne "Selector" -or
             [string]$property.Value.now -cne [string]$Selections[$name]) {
             throw "Clash Verge Rev 没有保留原代理选择。"
         }

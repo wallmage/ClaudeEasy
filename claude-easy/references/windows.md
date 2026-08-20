@@ -4,7 +4,7 @@
 
 ## Windows
 
-当前订阅更新按 `safe-update-and-recovery.md` 运行 `.\scripts\install_windows.cmd -SafeUpdate`；先备份，再用 `curl -q --config -` 自动下载，不得设置 User-Agent。下载候选必须通过严格 UTF-8、YAML、代理组和 Mihomo 检查；整批写入后通过受管的“重新激活订阅”全局快捷入口让 Clash Verge Rev 执行当前用途档位的全局脚本。每轮更新只触发一次候选重新激活；失败恢复原订阅后只再触发一次恢复重新激活，不能循环重试。运行配置文件变化只是开始信号，必须继续按条件等待 `profile.store-selected`、原 TUN 与代理选择、全部受管规则及顺序、规则提供器全部字段、直连 DNS、实际连接和真实代理路径全部恢复；缺失目标不能算通过。档位 2、3 都要求 TUN 已开启并通过 TUN 测试连接，档位 1 保持原 TUN 状态并通过本地代理端口测试。任一步失败时整批恢复原订阅并重新激活原运行配置；成功后再次确认全部远程订阅的 `allow_auto_update` 都是 `false`。`-SnapshotProfiles`、`-VerifySafeUpdate` 及相关清单只用于兼容旧流程，不得用于新的订阅更新。
+当前订阅更新按 `safe-update-and-recovery.md` 运行 `.\scripts\install_windows.cmd -SafeUpdate`；先备份，再用 `curl -q --config -` 自动下载，发送 `Accept-Language: zh-CN,zh;q=0.9`，不得设置 User-Agent。下载候选必须通过严格 UTF-8、YAML、代理组和 Mihomo 检查；整批写入后通过受管的“重新激活订阅”全局快捷入口让 Clash Verge Rev 执行当前用途档位的全局脚本。每轮更新只触发一次候选重新激活；失败恢复原订阅后只再触发一次恢复重新激活，不能循环重试。运行配置文件变化只是开始信号，必须继续按条件等待 `profile.store-selected`、原 TUN 与代理选择、全部受管规则及顺序、规则提供器全部字段、直连 DNS、实际连接和真实代理路径全部恢复；任一原代理组或节点选择无法恢复时拒绝更新，缺失目标不能算通过。档位 2、3 都要求 TUN 已开启并通过 TUN 测试连接，档位 1 保持原 TUN 状态并通过本地代理端口测试。任一步失败时整批恢复原订阅并重新激活原运行配置；成功后再次确认全部远程订阅的 `allow_auto_update` 都是 `false`。`-SnapshotProfiles`、`-VerifySafeUpdate` 及相关清单只用于兼容旧流程，不得用于新的订阅更新。
 
 `profiles.yaml` 的远程订阅项目允许 `option` 出现在列表项首字段或后续字段；两种位置都必须记录唯一字段位置和原始形态。重复 `option`、重复 `allow_auto_update` 或无法唯一归属的嵌套结构必须在候选写入前拒绝，不能追加第二份字段。
 

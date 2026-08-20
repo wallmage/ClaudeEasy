@@ -5372,6 +5372,8 @@ class MacosPatcherTest < Minitest::Test
     assert_respond_to ClaudeEasy, :fetch_remote_subscription
     refute_respond_to ClaudeEasy, :fetch_remote_subscription_via_mihomo
     refute ClaudeEasy.const_defined?(:MAX_REMOTE_SUBSCRIPTION_BYTES, false)
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
+                    'request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");'
 
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
@@ -14606,12 +14608,12 @@ class MacosPatcherTest < Minitest::Test
     assert_equal [true, true], dns_checks
   end
 
-  def test_clashx_runtime_wait_drops_only_selections_removed_by_the_update
+  def test_clashx_runtime_wait_rejects_when_any_previous_selection_is_removed
     identity = {
       pid: 12_345, started: "same",
       executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
     }
-    health_selections = nil
+    health_checked = false
     requester = lambda do |method, endpoint, _body = nil|
       raise "unexpected request: #{method} #{endpoint}" unless method == "GET" && endpoint == "/proxies"
 
@@ -14626,10 +14628,11 @@ class MacosPatcherTest < Minitest::Test
     end
 
     ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
-      health_selections = options.fetch(:selections)
+      options.fetch(:selections)
+      health_checked = true
       true
     }) do
-      assert ClaudeEasy.wait_for_clashx_safe_runtime(
+      refute ClaudeEasy.wait_for_clashx_safe_runtime(
         identity, generation_before: "before",
         selections: { "Main" => "Old Node", "AI" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
@@ -14638,7 +14641,69 @@ class MacosPatcherTest < Minitest::Test
       )
     end
 
-    assert_equal({ "AI" => "Taiwan" }, health_selections)
+    refute health_checked
+  end
+
+  def test_safe_update_rejects_candidate_that_cannot_preserve_every_previous_selection
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      candidate_config = base_config.merge(
+        "proxy-groups" => [
+          { "name" => "English Main", "type" => "select", "proxies" => ["Taiwan"] }
+        ]
+      )
+      candidate = YAML.dump(candidate_config)
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "台湾家宽 01" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: candidate, candidate: candidate }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      result = {
+        path: profile, rollback_bytes: original,
+        patched_digest: Digest::SHA256.hexdigest(candidate),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      reloads = 0
+
+      activated = ClaudeEasy.activate_safe_updated_profile(
+        result, transaction: transaction, client_identity: identity,
+        runtime_checkpoint: checkpoint,
+        native_reloader: ->(_current) { reloads += 1; true },
+        runtime_waiter: ->(*_arguments, **_options) { true },
+        generation_reader: -> { "before" }
+      )
+
+      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
+      assert_equal 0, reloads
+      assert_equal original.b, File.binread(profile)
+    end
+  end
+
+  def test_safe_update_rejects_candidate_without_any_previous_selector
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      config = base_config.merge(
+        "proxy-groups" => [
+          { "name" => "Automatic", "type" => "url-test", "proxies" => ["台湾家宽 01"] }
+        ]
+      )
+      File.write(profile, YAML.dump(config))
+
+      assert_nil ClaudeEasy.runtime_selections_for_profile(
+        { "Main" => "台湾家宽 01" }, profile, preserve_all: true
+      )
+    end
   end
 
   def test_profile_transaction_allows_each_native_reload_phase_once_per_client_process

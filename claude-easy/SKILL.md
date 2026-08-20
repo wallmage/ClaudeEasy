@@ -104,7 +104,7 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。用户确认前不得读取订阅、建立备份或操作客户端。
 
-确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份。macOS 通过 Foundation 原生网络请求下载，请求身份从当前运行的 ClashX Meta 动态生成；Windows 用 `curl -q --config -` 下载。两端都按已保存档位完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载和档位运行检查；Windows 由 Clash Verge Rev 的受管重新激活入口执行全局脚本。失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
+确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份。macOS 通过 Foundation 原生网络请求下载，请求身份从当前运行的 ClashX Meta 动态生成；Windows 用 `curl -q --config -` 下载；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`。两端都按已保存档位完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载和档位运行检查；任一原代理组或节点选择无法恢复时拒绝更新。Windows 由 Clash Verge Rev 的受管重新激活入口执行全局脚本。失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
 
 macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能按当前运行客户端动态生成原生请求身份。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝覆盖。两端也不追加 WebRTC 或区域指纹检查。
 

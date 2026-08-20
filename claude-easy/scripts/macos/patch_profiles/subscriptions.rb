@@ -55,6 +55,7 @@ module ClaudeEasy
     request.cachePolicy = $.NSURLRequestReloadIgnoringLocalCacheData;
     request.timeoutInterval = timeoutSeconds;
     request.setValueForHTTPHeaderField(userAgent, "User-Agent");
+    request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");
     request.setValueForHTTPHeaderField("br;q=1.0, gzip;q=0.9, deflate;q=0.8", "Accept-Encoding");
 
     var data = null;
@@ -762,7 +763,7 @@ module ClaudeEasy
     return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
 
     selections = runtime_selections_for_profile(
-      runtime_checkpoint[:selections], active.fetch(:path)
+      runtime_checkpoint[:selections], active.fetch(:path), preserve_all: true
     )
     expected_tun = runtime_checkpoint[:expected_tun]
     return false unless selections && %i[enabled disabled ignore].include?(expected_tun)

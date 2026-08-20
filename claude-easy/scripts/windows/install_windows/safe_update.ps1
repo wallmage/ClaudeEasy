@@ -133,6 +133,7 @@ function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
         "show-error"
         "fail"
         "location"
+        'header = "Accept-Language: zh-CN,zh;q=0.9"'
         'proto = "=https"'
         "max-time = 30"
     ) -join "`r`n"
