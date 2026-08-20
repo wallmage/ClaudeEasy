@@ -1212,6 +1212,12 @@ test('Windows curl update reloads, checks, and restores the active runtime', () 
   assert.match(update, /Invoke-VerifiedFileTransaction \$restoreTargets/);
   assert.match(update, /已恢复原订阅/);
   assert.doesNotMatch(update, /User-Agent|user-agent/);
+  assert.match(update, /Complete-InstallResult 0 "ok" "safe_update_completed"/);
+  assert.match(
+    update,
+    /\$updatedItems\s+@\(\)\s+\$false\s+"subscription_update"\s+`?\s*@\(Get-SafeUpdateRequiredFollowups \$savedUsageProfile\)/,
+    'successful Windows updates can stop without the saved profile follow-up checks'
+  );
 });
 
 test('Windows subscription download requests Chinese Clash formats without a User-Agent', () => {

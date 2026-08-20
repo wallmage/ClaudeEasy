@@ -12081,19 +12081,35 @@ class MacosPatcherTest < Minitest::Test
   def test_cli_safe_update_and_auto_update_commands_cannot_bypass_wrapper_scope
     Dir.mktmpdir do |directory|
       targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
-      ClaudeEasy.stub(:saved_usage_profile, 3) do
-        ClaudeEasy.stub(:remote_subscription_targets, targets) do
-          ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 1, profiles: ["friend"] }) do
-            output, error = capture_io do
-              assert_equal 0, ClaudeEasy.cli([
-                "--json", "--profile-dir", directory, "--safe-update-all",
-                "--usage-profile", "3"
-              ])
+      expected_followups = {
+        1 => %w[client_switch_verification site_verification final_state_audit],
+        2 => %w[
+          client_switch_verification site_verification
+          agent_connectivity_verification final_state_audit
+        ],
+        3 => %w[
+          route_verification dns_deep_test webrtc_test_1 webrtc_test_2
+          region_fingerprint_rescan final_state_audit
+        ]
+      }
+      expected_followups.each do |profile, followups|
+        ClaudeEasy.stub(:saved_usage_profile, profile) do
+          ClaudeEasy.stub(:remote_subscription_targets, targets) do
+            ClaudeEasy.stub(:safe_update_all, { status: :updated, count: 1, profiles: ["friend"] }) do
+              output, error = capture_io do
+                assert_equal 0, ClaudeEasy.cli([
+                  "--json", "--profile-dir", directory, "--safe-update-all",
+                  "--usage-profile", profile.to_s
+                ])
+              end
+              assert_empty error
+              result = JSON.parse(output)
+              assert_equal "safe_update", result.fetch("operation")
+              assert_equal "safe_update_completed", result.fetch("code")
+              assert_equal false, result.fetch("workflow_complete")
+              assert_equal "subscription_update", result.fetch("completed_scope")
+              assert_equal followups, result.fetch("required_followups")
             end
-            assert_empty error
-            result = JSON.parse(output)
-            assert_equal "safe_update", result.fetch("operation")
-            assert_equal "subscription_update_completed", result.fetch("code")
           end
         end
       end
@@ -12589,7 +12605,7 @@ class MacosPatcherTest < Minitest::Test
             assert_empty error
             parsed = JSON.parse(output)
             assert_equal "safe_update", parsed.fetch("operation")
-            assert_equal "subscription_update_completed", parsed.fetch("code")
+            assert_equal "safe_update_completed", parsed.fetch("code")
             assert_equal %w[updated updated], parsed.fetch("items").map { |item| item.fetch("status") }
           end
         end
@@ -13165,7 +13181,7 @@ class MacosPatcherTest < Minitest::Test
               ])
             end
             assert_empty error
-            assert_equal "subscription_update_completed", JSON.parse(output).fetch("code")
+            assert_equal "safe_update_completed", JSON.parse(output).fetch("code")
           end
         end
       end

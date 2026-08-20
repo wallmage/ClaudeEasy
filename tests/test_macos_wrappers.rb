@@ -2760,11 +2760,13 @@ class MacosWrapperTest < Minitest::Test
           "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
           "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
           "ok" => true, "exit_code" => 0, "profile" => 3,
-          "changes" => ["remote_subscriptions"], "checks" => [], "messages" => []
+          "changes" => ["remote_subscriptions"], "checks" => [], "messages" => [],
+          "workflow_complete" => false, "completed_scope" => "subscription_update",
+          "required_followups" => %w[route_verification final_state_audit]
         }
         puts JSON.generate(result.merge(
-          "status" => "ok", "code" => "subscription_update_completed",
-          "summary_zh" => "全部订阅已经更新。",
+          "status" => "ok", "code" => "safe_update_completed",
+          "summary_zh" => "订阅事务完成，后续验收尚未完成。",
           "items" => [{ "id" => "ce-subscription-v1-#{"a" * 64}", "label" => "订阅 A", "status" => "updated" }],
           "warnings" => []
         ))
@@ -2784,7 +2786,7 @@ class MacosWrapperTest < Minitest::Test
           assert_empty stderr
           result = assert_json_result(stdout, status, command: "install")
           assert_equal "ok", result.fetch("status")
-          assert_equal "subscription_update_completed", result.fetch("code")
+          assert_equal "safe_update_completed", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
           assert_equal ["remote_subscriptions"], result.fetch("changes")
         end
@@ -2842,7 +2844,7 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_json_subscription_update_has_no_followup_checks
+  def test_json_subscription_update_preserves_required_followups
     patcher = <<~'RUBY'
       require "json"
       if ARGV.include?("--print-core-status")
@@ -2858,10 +2860,12 @@ class MacosWrapperTest < Minitest::Test
         puts JSON.generate(
           "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
           "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
-          "ok" => true, "status" => "ok", "code" => "subscription_update_completed", "exit_code" => 0,
-          "summary_zh" => "全部订阅已经更新。", "profile" => 3,
+          "ok" => true, "status" => "ok", "code" => "safe_update_completed", "exit_code" => 0,
+          "summary_zh" => "订阅事务完成，后续验收尚未完成。", "profile" => 3,
           "changes" => ["remote_subscriptions"], "checks" => [], "items" => [],
-          "messages" => [], "warnings" => []
+          "messages" => [], "warnings" => [], "workflow_complete" => false,
+          "completed_scope" => "subscription_update",
+          "required_followups" => %w[route_verification final_state_audit]
         )
         exit 0
       end
@@ -2877,16 +2881,16 @@ class MacosWrapperTest < Minitest::Test
 
           assert status.success?, stderr
           result = assert_json_result(stdout, status, command: "install")
-          assert_equal "subscription_update_completed", result.fetch("code")
-          refute result.key?("workflow_complete")
-          refute result.key?("completed_scope")
-          refute result.key?("required_followups")
+          assert_equal "safe_update_completed", result.fetch("code")
+          assert_equal false, result.fetch("workflow_complete")
+          assert_equal "subscription_update", result.fetch("completed_scope")
+          assert_equal %w[route_verification final_state_audit], result.fetch("required_followups")
         end
       end
     end
   end
 
-  def test_json_wrapper_accepts_subscription_update_without_workflow_metadata
+  def test_json_wrapper_rejects_subscription_update_without_workflow_metadata
     patcher = <<~'RUBY'
       require "json"
       if ARGV.include?("--print-core-status")
@@ -2919,12 +2923,11 @@ class MacosWrapperTest < Minitest::Test
             installer, "--safe-update", "--json", home: home
           )
 
-          assert status.success?
+          refute status.success?
           assert_empty stderr
           result = assert_json_result(stdout, status, command: "install")
-          assert result.fetch("ok")
-          assert_equal "ok", result.fetch("status")
-          assert_equal "subscription_update_completed", result.fetch("code")
+          refute result.fetch("ok")
+          refute_equal "subscription_update_completed", result.fetch("code")
         end
       end
     end

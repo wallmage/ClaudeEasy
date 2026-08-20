@@ -324,10 +324,12 @@ if ($SafeUpdate) {
     $updatedItems = @($profiles | ForEach-Object {
         Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "updated"
     })
-    Complete-InstallResult 0 "ok" "subscription_update_completed" `
-        "已备份、更新、加载并检查全部远程订阅。" `
+    Complete-InstallResult 0 "ok" "safe_update_completed" `
+        "订阅、补丁和内部运行检查已完成；当前档位的后续验收尚未完成。" `
         @("profile_backups", "subscriptions", "runtime_config") `
-        @("global_script", "yaml", "mihomo", "runtime", "dns", "connectivity", "auto_update") $updatedItems
+        @("global_script", "yaml", "mihomo", "runtime", "dns", "connectivity", "auto_update") `
+        $updatedItems @() $false "subscription_update" `
+        @(Get-SafeUpdateRequiredFollowups $savedUsageProfile)
 }
 
 if ($BackupSubscriptions) {

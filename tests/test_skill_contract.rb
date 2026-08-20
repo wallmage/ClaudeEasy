@@ -1160,8 +1160,9 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "运行配置"
       assert_includes document, "再次确认订阅自动更新关闭"
       refute_includes document, "Windows 不追加连通性检查"
-      refute_includes document, "继续完成 `required_followups`"
     end
+    assert_includes skill, "继续完成 `required_followups`"
+    assert_includes policy, "继续完成 `required_followups`"
 
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
     assert_includes diagnostics, "候选检查、现行 Patch、运行加载、档位检查和自动更新关闭复查"
@@ -1215,6 +1216,18 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不得代替用户操作服务商后台"
       assert_includes document, "任一备份失败时停止"
     end
+  end
+
+  def test_safe_update_cannot_stop_after_the_update_receipt
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+
+    assert_includes skill, "`workflow_complete: false`"
+    assert_includes skill, "继续完成 `required_followups`"
+    assert_includes policy, "完整任务顺序与完成条件"
+    assert_includes policy, "不代表用户要求的订阅更新任务已经完成"
+    assert_includes policy, "当前档位规定的全部验收"
+    assert_includes policy, "最终状态复核"
   end
 
   def test_macos_backup_recovery_includes_the_active_runtime
