@@ -474,22 +474,50 @@ module ClaudeEasy
     value.gsub("\\") { "\\\\" }.gsub('"', '\\"')
   end
 
-  def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
-    config = <<~CURL
-      url = "#{curl_config_value(target.fetch(:url))}"
-      silent
-      show-error
-      fail
-      location
-      proto = "=https"
-      max-time = #{Integer(timeout_seconds)}
-    CURL
-    stdout, _stderr, status = Open3.capture3(
-      "/usr/bin/curl", "-q", "--config", "-", stdin_data: config, binmode: true
-    )
-    raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
+  def subscription_format_urls(url)
+    uri = URI.parse(url)
+    query = URI.decode_www_form(uri.query.to_s).reject { |key, _value| key == "flag" }
+    [url, "clashmeta", "clash"].map do |format|
+      next url if format == url
 
-    stdout
+      formatted = uri.dup
+      formatted.query = URI.encode_www_form(query + [["flag", format]])
+      formatted.to_s
+    end.uniq
+  rescue URI::InvalidURIError
+    [url]
+  end
+
+  def clash_subscription_yaml?(bytes, name)
+    text = bytes.dup.force_encoding(Encoding::UTF_8)
+    text.valid_encoding? && usable_config?(load_yaml(text, name))
+  rescue StandardError
+    false
+  end
+
+  def fetch_remote_subscription(target, timeout_seconds: VALIDATION_TIMEOUT_SECONDS)
+    last_body = nil
+    subscription_format_urls(target.fetch(:url)).each do |url|
+      config = <<~CURL
+        url = "#{curl_config_value(url)}"
+        silent
+        show-error
+        fail
+        location
+        proto = "=https"
+        max-time = #{Integer(timeout_seconds)}
+      CURL
+      stdout, _stderr, status = Open3.capture3(
+        "/usr/bin/curl", "-q", "--config", "-", stdin_data: config, binmode: true
+      )
+      next unless status.success? && !stdout.empty?
+
+      last_body = stdout
+      return stdout if clash_subscription_yaml?(stdout, target.fetch(:name))
+    end
+    raise InvalidConfigError, "远程订阅下载失败" unless last_body
+
+    last_body
   rescue KeyError, ArgumentError
     raise InvalidConfigError, "远程订阅下载失败"
   end

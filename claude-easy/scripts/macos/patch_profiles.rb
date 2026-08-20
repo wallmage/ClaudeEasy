@@ -12,6 +12,7 @@ require "rbconfig"
 require "rexml/document"
 require "tempfile"
 require "time"
+require "uri"
 
 module ClaudeEasyDarwinFilesystem
   extend Fiddle::Importer

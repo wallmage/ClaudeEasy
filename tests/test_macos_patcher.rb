@@ -5390,6 +5390,31 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_subscription_download_requests_clash_yaml_when_default_is_base64
+    status = Struct.new(:success?).new(true)
+    configs = []
+    base64 = Base64.strict_encode64("anytls://fixture@example.invalid:443#node")
+    capture = lambda do |*arguments, **options|
+      assert_equal ["/usr/bin/curl", "-q", "--config", "-"], arguments
+      config = options.fetch(:stdin_data)
+      refute_match(/user-agent|--user-agent|header\s*=.*user-agent/i, config)
+      configs << config
+      body = configs.length < 3 ? base64 : YAML.dump(base_config)
+      [body, "", status]
+    end
+
+    result = Open3.stub(:capture3, capture) do
+      ClaudeEasy.fetch_remote_subscription(
+        { name: "friend", url: "https://example.invalid/subscription" }
+      )
+    end
+
+    assert_equal YAML.dump(base_config), result
+    assert_match(%r{url = "https://example\.invalid/subscription"}, configs.fetch(0))
+    assert_match(/flag=clashmeta/, configs.fetch(1))
+    assert_match(/flag=clash/, configs.fetch(2))
+  end
+
   def test_update_candidate_rejects_encoding_transform_and_validation_failures
     Dir.mktmpdir do |directory|
       path = File.join(directory, "friend.yaml")
