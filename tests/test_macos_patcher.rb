@@ -6216,6 +6216,20 @@ class MacosPatcherTest < Minitest::Test
 
       assert_equal :aborted, result.fetch(:status)
       assert_equal :client_state_changed, result.fetch(:reason)
+
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      result = ClaudeEasy.stub(:capture_runtime_checkpoint, nil) do
+        ClaudeEasy.safe_update_all(
+          targets: [target], policy: @policy, backup_root: File.join(directory, "backups"),
+          usage_profile: 1, fetcher: ->(_item) { YAML.dump(base_config) },
+          validator: ->(_path) { true }, selected_name: "active",
+          client_identity_reader: -> { identity }
+        )
+      end
+      assert_equal :client_state_changed, result.fetch(:reason)
     end
   end
 
@@ -15063,6 +15077,11 @@ class MacosPatcherTest < Minitest::Test
       pid: 12_345, started: "same",
       executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
     }
+    status = Struct.new(:success?).new(true)
+    process_line = "  12345 Thu Aug 20 00:14:18 2026 #{identity.fetch(:executable)}\n"
+    assert_equal identity.merge(started: "Thu Aug 20 00:14:18 2026"), ClaudeEasy.clashx_running_identity(
+      runner: ->(*_arguments) { [process_line, "", status] }
+    )
     refute ClaudeEasy.request_clashx_native_reload(
       identity, sender: ->(*_arguments) { raise IOError }, process_reader: -> { identity }
     )
