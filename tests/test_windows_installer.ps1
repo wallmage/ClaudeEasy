@@ -610,6 +610,7 @@ function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$
 
 try {
     $installerSource = [System.IO.File]::ReadAllText($installer)
+    $runtimeSource = [System.IO.File]::ReadAllText((Join-Path $installerModuleRoot "runtime.ps1"))
     $safeUpdateStart = $installerSource.IndexOf('if ($SafeUpdate) {', [StringComparison]::Ordinal)
     $backupStart = $installerSource.IndexOf('Backup-Versioned', $safeUpdateStart, [StringComparison]::Ordinal)
     $downloadStart = $installerSource.IndexOf('$curlCommand = Get-Command curl.exe', $safeUpdateStart, [StringComparison]::Ordinal)

@@ -1797,8 +1797,21 @@ class MacosPatcherTest < Minitest::Test
       end
 
       begin
+        child_environment = {}
+        child_command = [RbConfig.ruby, SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH, directory]
+        if (coverage_directory = ENV[CHILD_COVERAGE_DIRECTORY_ENV])
+          coverage_output = File.join(
+            coverage_directory,
+            "#{Process.pid}-#{Thread.current.object_id}-#{rand(1 << 62)}.marshal"
+          )
+          child_environment["CLAUDE_EASY_CHILD_COVERAGE_OUTPUT"] = coverage_output
+          child_command = [
+            RbConfig.ruby, "-e", CHILD_COVERAGE_RUNNER,
+            SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH, directory
+          ]
+        end
         child_input, child_output, child_error, child_waiter = Open3.popen3(
-          RbConfig.ruby, SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH, directory
+          child_environment, *child_command
         )
         child_id = child_waiter.pid
         assert IO.select([child_output], nil, nil, 10), "child never loaded the candidate profile"
@@ -6138,6 +6151,71 @@ class MacosPatcherTest < Minitest::Test
       assert disable_called
       assert_equal :aborted, result.fetch(:status)
       assert_equal :auto_update_failed, result.fetch(:reason)
+    end
+  end
+
+  def test_safe_update_all_stops_before_download_when_a_backup_fails
+    Dir.mktmpdir do |directory|
+      targets = %w[first second].map do |name|
+        path = File.join(directory, "#{name}.yaml")
+        File.write(path, YAML.dump(base_config))
+        { name: name, path: path, url: "https://subscriptions.invalid/#{name}" }
+      end
+      backup_calls = 0
+      backup = lambda do |*_arguments, **_options|
+        backup_calls += 1
+        raise IOError, "injected" if backup_calls == 2
+      end
+
+      result = ClaudeEasy.stub(:create_versioned_backup, backup) do
+        ClaudeEasy.safe_update_all(
+          targets: targets, policy: @policy, backup_root: File.join(directory, "backups"),
+          usage_profile: 3,
+          fetcher: ->(_target) { flunk "must not download after a backup failure" },
+          validator: ->(_path) { true }, selected_name: "first"
+        )
+      end
+
+      assert_equal :aborted, result.fetch(:status)
+      assert_equal :backup_failed, result.fetch(:reason)
+    end
+  end
+
+  def test_safe_update_all_reports_an_unexpected_candidate_failure
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "present.yaml")
+      File.write(path, YAML.dump(base_config))
+      target = { name: "present", path: path, url: "https://subscriptions.invalid/present" }
+
+      result = ClaudeEasy.stub(:build_update_candidate, ->(*_arguments) { raise "injected" }) do
+        ClaudeEasy.safe_update_all(
+          targets: [target], policy: @policy, backup_root: File.join(directory, "backups"),
+          usage_profile: 3, fetcher: ->(_item) { YAML.dump(base_config) },
+          validator: ->(_path) { true }, selected_name: "present"
+        )
+      end
+
+      assert_equal [
+        { name: "present", status: :failed, reason: :validation_failed }
+      ], result.fetch(:items)
+    end
+  end
+
+  def test_safe_update_all_stops_when_the_running_client_identity_disappears
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      File.write(path, YAML.dump(base_config))
+      target = { name: "active", path: path, url: "https://subscriptions.invalid/active" }
+
+      result = ClaudeEasy.safe_update_all(
+        targets: [target], policy: @policy, backup_root: File.join(directory, "backups"),
+        usage_profile: 1, fetcher: ->(_item) { YAML.dump(base_config) },
+        validator: ->(_path) { true }, selected_name: "active",
+        client_identity_reader: -> { nil }
+      )
+
+      assert_equal :aborted, result.fetch(:status)
+      assert_equal :client_state_changed, result.fetch(:reason)
     end
   end
 
@@ -13198,23 +13276,33 @@ class MacosPatcherTest < Minitest::Test
       update = lambda do |**arguments|
         called = true
         update_arguments = arguments
+        arguments.fetch(:auto_update_disabler).call(:operation_lock)
         { status: :updated, count: 1, profiles: ["friend"] }
       end
-      ClaudeEasy.stub(:saved_usage_profile, 3) do
-        ClaudeEasy.stub(:remote_subscription_targets, targets) do
-          ClaudeEasy.stub(:safe_update_all, update) do
-            output, error = capture_io do
-              assert_equal 0, ClaudeEasy.cli([
-                "--json", "--profile-dir", directory, "--safe-update-all", "--usage-profile", "3"
-              ])
+      disabled_with = nil
+      disabler = lambda do |backup_root:, operation_lock:|
+        disabled_with = [backup_root, operation_lock]
+        { status: :already_disabled }
+      end
+      ClaudeEasy.stub(:disable_subscription_auto_update, disabler) do
+        ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:remote_subscription_targets, targets) do
+            ClaudeEasy.stub(:safe_update_all, update) do
+              output, error = capture_io do
+                assert_equal 0, ClaudeEasy.cli([
+                  "--json", "--profile-dir", directory, "--backup-dir", directory,
+                  "--safe-update-all", "--usage-profile", "3"
+                ])
+              end
+              assert_empty error
+              assert_equal "safe_update_completed", JSON.parse(output).fetch("code")
             end
-            assert_empty error
-            assert_equal "safe_update_completed", JSON.parse(output).fetch("code")
           end
         end
       end
       assert called
       assert_kind_of Proc, update_arguments.fetch(:auto_update_disabler)
+      assert_equal [directory, :operation_lock], disabled_with
     end
   end
 
@@ -14965,6 +15053,193 @@ class MacosPatcherTest < Minitest::Test
         [{ path: profile }], 1, "active", **options
       )
       assert_equal 1, reloads
+    end
+  end
+
+  def test_native_and_runtime_helpers_fail_closed_on_system_errors
+    assert_nil ClaudeEasy.clashx_running_identity(runner: ->(*_arguments) { raise IOError })
+
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    refute ClaudeEasy.request_clashx_native_reload(
+      identity, sender: ->(*_arguments) { raise IOError }, process_reader: -> { identity }
+    )
+    refute ClaudeEasy.wait_for_clashx_safe_runtime(
+      identity, generation_before: "before", selections: {}, expected_tun: :disabled,
+      requester_factory: -> { raise IOError }, generation_reader: -> { "after" },
+      process_reader: -> { identity }, attempts: 1
+    )
+    assert_nil ClaudeEasy.runtime_restorable_selections(
+      ->(*_arguments) { raise IOError }, { "Main" => "Taiwan" }
+    )
+
+    Dir.mktmpdir do |directory|
+      config = File.join(directory, "runtime.yaml")
+      File.binwrite(config, "runtime")
+      generation = ClaudeEasy.stub(:running_mihomo_config_paths, [config]) do
+        ClaudeEasy.clashx_runtime_generation
+      end
+      assert_match(/\A[0-9a-f]{64}\z/, generation)
+      assert_nil ClaudeEasy.stub(:running_mihomo_config_paths, [File.join(directory, "missing")]) {
+        ClaudeEasy.clashx_runtime_generation
+      }
+    end
+
+    ClaudeEasyAppleEvents.stub(:AECreateDesc, ->(*_arguments) { raise IOError }) do
+      ClaudeEasyAppleEvents.stub(:AEDisposeDesc, ->(*_arguments) { 0 }) do
+        refute ClaudeEasyAppleEvents.send_get_url(12_345, "clash://update-config")
+      end
+    end
+  end
+
+  def test_localized_selection_fallback_maps_a_renamed_group_in_place
+    original = {
+      "proxies" => [{ "name" => "Node", "type" => "ss", "server" => "example", "port" => 443 }],
+      "proxy-groups" => [
+        { "name" => "Main", "type" => "select", "proxies" => ["Node"] },
+        { "name" => "AI", "type" => "select", "proxies" => ["Node"], "interval" => 10 }
+      ]
+    }
+    candidate = {
+      "proxies" => [{ "name" => "节点", "type" => "ss", "server" => "example", "port" => 443 }],
+      "proxy-groups" => [
+        { "name" => "Main", "type" => "select", "proxies" => ["节点"] },
+        { "name" => "人工智能", "type" => "select", "proxies" => ["节点"], "interval" => 20 }
+      ]
+    }
+
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "candidate.yaml")
+      File.binwrite(path, YAML.dump(candidate))
+      assert_equal({ "人工智能" => "节点" }, ClaudeEasy.localized_runtime_selections(
+        { "AI" => "Node" }, YAML.dump(original), path
+      ))
+      assert_nil ClaudeEasy.localized_runtime_selections(
+        { "AI" => "Node" }, YAML.dump(original), File.join(directory, "missing.yaml")
+      )
+    end
+  end
+
+  def test_runtime_activation_covers_required_tun_and_fail_closed_paths
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      File.binwrite(path, YAML.dump(base_config))
+      requester = ->(*_arguments) { [200, "{}"] }
+      work_items = [{ path: path, active: true }]
+
+      ClaudeEasy.stub(:runtime_selections, {}) do
+        ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+          ClaudeEasy.stub(:reload_profile_runtime, true) do
+            ClaudeEasy.stub(:runtime_health_healthy?, true) do
+              assert ClaudeEasy.reload_recovered_profile_runtime(
+                work_items, require_tun: true, requester: requester
+              )
+            end
+          end
+        end
+      end
+
+      result = {
+        path: path, rollback_bytes: File.binread(path), patched_digest: "digest",
+        patched_identity: [0, 0], patched_path: File.realpath(path)
+      }
+      checkpoint = { path: File.realpath(path), expected_tun: :disabled, selections: {} }
+      transaction = { path: path }
+      ClaudeEasy.stub(:profile_result_current?, true) do
+        ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+          ClaudeEasy.stub(:rollback_before_runtime_reload, :rolled_back) do
+            rejected = ClaudeEasy.activate_safe_updated_profile(
+              result, transaction: transaction, client_identity: {},
+              runtime_checkpoint: checkpoint, precommit_condition: -> { false }
+            )
+            assert_equal :rolled_back, rejected.fetch(:status)
+
+            pending = ClaudeEasy.activate_safe_updated_profile(
+              result, transaction: transaction, client_identity: {},
+              runtime_checkpoint: checkpoint, generation_reader: -> { raise IOError }
+            )
+            assert_equal :reload_failed_restore_pending, pending.fetch(:status)
+
+            no_socket = ClaudeEasy.stub(:controller_socket, nil) do
+              ClaudeEasy.activate_updated_profile(result)
+            end
+            assert_equal :rolled_back, no_socket.fetch(:status)
+          end
+        end
+      end
+      controller_failed = ClaudeEasy.stub(:profile_result_current?, true) do
+        ClaudeEasy.stub(:controller_request, ->(*_arguments) { raise IOError }) do
+          ClaudeEasy.activate_updated_profile(result, socket: "socket")
+        end
+      end
+      assert_equal :reload_failed_rollback_conflict, controller_failed.fetch(:status)
+    end
+  end
+
+  def test_profile_transaction_rejects_malformed_runtime_journals
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+      root = ClaudeEasy.secure_backup_root!(backup_root)
+      journal = ClaudeEasy.profile_transaction_path(root)
+      File.binwrite(journal, "{\n")
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.recover_profile_transaction(root, roots: [directory])
+      end
+      File.unlink(journal)
+
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.prepare_profile_transaction(
+          [{ path: profile, original: "original", candidate: "candidate" }],
+          backup_root, roots: [directory], activation_identity: { pid: 1 }
+        )
+      end
+
+      File.binwrite(journal, "{\n")
+      stat = File.stat(journal)
+      transaction = {
+        path: journal, bytes: File.binread(journal), identity: [stat.dev, stat.ino],
+        targets: {}, runtime_checkpoint: nil, activation_state: nil
+      }
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.mark_profile_transaction_activation(transaction, :update, { pid: 1 })
+      end
+    end
+  end
+
+  def test_pending_safe_update_recovery_handles_reload_and_cleanup_errors
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "friend.yaml")
+      File.binwrite(path, YAML.dump(base_config))
+      checkpoint = { path: File.realpath(path), expected_tun: :disabled, selections: {} }
+      assert_equal false, ClaudeEasy.stub(:runtime_selections_for_profile, {}) {
+        ClaudeEasy.reload_recovered_safe_update_runtime(
+          [{ path: path }], 1, "friend", runtime_checkpoint: checkpoint,
+          transaction: {}, client_identity: {}, generation_reader: -> { raise IOError }
+        )
+      }
+
+      backup_root = File.join(directory, "backups")
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: path, original: File.binread(path), candidate: File.binread(path) }],
+        backup_root, roots: [directory], runtime_checkpoint: checkpoint,
+        activation_identity: { pid: 1, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+      )
+      result = ClaudeEasy.stub(:reload_recovered_safe_update_runtime, true) do
+        ClaudeEasy.stub(:remove_profile_transaction, ->(_record) { raise IOError }) do
+          ClaudeEasy.safe_update_all(
+            targets: [{ name: "friend", path: path }], policy: @policy,
+            backup_root: backup_root, usage_profile: 1, selected_name: "friend",
+            client_identity_reader: -> { { pid: 1 } },
+            fetcher: ->(_target) { flunk "recovery failure must stop before download" },
+            validator: ->(_candidate) { true }
+          )
+        end
+      end
+      assert_equal :runtime_restore_pending, result.fetch(:status)
     end
   end
 

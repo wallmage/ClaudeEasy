@@ -4,6 +4,19 @@ require "json"
 require "minitest/mock"
 require "yaml"
 
+def persist_child_coverage
+  output_path = ENV["CLAUDE_EASY_CHILD_COVERAGE_OUTPUT"]
+  return unless output_path
+
+  require "coverage"
+  require "digest"
+  coverage = Coverage.peek_result
+  digests = coverage.each_key.to_h do |path|
+    [path, File.file?(path) ? Digest::SHA256.file(path).hexdigest : nil]
+  end
+  File.binwrite(output_path, Marshal.dump({ coverage: coverage, digests: digests }))
+end
+
 root = File.expand_path("../..", __dir__)
 require File.join(root, "claude-easy/scripts/macos/patch_profiles.rb")
 
@@ -39,10 +52,12 @@ requester = lambda do |_socket, method, endpoint, body = nil|
 end
 
 native_reloader = lambda do |_identity|
+  ClaudeEasyAppleEvents.send_get_url(12_345, "clash://update-config")
   marker = ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
   File.write(runtime_marker, marker)
   if marker == "new-active" && !File.exist?(gate_seen)
     File.write(gate_seen, "1")
+    persist_child_coverage
     STDOUT.write(".")
     STDOUT.flush
     STDIN.read(1)
