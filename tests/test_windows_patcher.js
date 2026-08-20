@@ -1769,7 +1769,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
       'ConvertFrom-SubscriptionScalar', 'Get-RemoteSubscriptionUpdateTargets',
-      'ConvertTo-CurlConfigValue', 'Get-SubscriptionFormatUrls', 'Invoke-SubscriptionCurlDownload',
+      'ConvertTo-CurlConfigValue', 'Get-SubscriptionFormatUrls',
+      'Assert-SubscriptionProtocolPreserved', 'Invoke-SubscriptionCurlDownload',
       'Get-PublicBackupId', 'Get-BackupTarget',
       'Get-ClaudeEasyManagedScriptBlock',
       'Get-ClaudeEasyManagedScriptEnvelope',

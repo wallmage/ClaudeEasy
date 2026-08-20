@@ -118,6 +118,14 @@ function Get-SubscriptionFormatUrls([string]$Url) {
     return @($Url, "$Url${separator}flag=clashmeta", "$Url${separator}flag=clash")
 }
 
+function Assert-SubscriptionProtocolPreserved([string]$BeforeText, [string]$CandidateText) {
+    $anyTls = '(?im)\btype\s*:\s*["'']?anytls\b'
+    $shadowsocks = '(?im)\btype\s*:\s*["'']?ss\b'
+    if ($BeforeText -match $anyTls -and $CandidateText -notmatch $anyTls -and $CandidateText -match $shadowsocks) {
+        throw "远程订阅把 AnyTLS 替换为 Shadowsocks。"
+    }
+}
+
 function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
     $config = @(
         'url = "' + (ConvertTo-CurlConfigValue $Url) + '"'

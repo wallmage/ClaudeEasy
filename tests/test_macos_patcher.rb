@@ -5481,6 +5481,24 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_update_candidate_rejects_replacing_anytls_with_shadowsocks
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "friend.yaml")
+      current = base_config.merge(
+        "proxies" => base_config.fetch("proxies").map { |proxy| proxy.merge("type" => "anytls") }
+      )
+      File.write(path, YAML.dump(current))
+
+      error = assert_raises(ClaudeEasy::SafeUpdateCandidateError) do
+        ClaudeEasy.build_update_candidate(
+          { name: "friend", path: path }, YAML.dump(base_config), @policy, 3, ->(_path) { true }
+        )
+      end
+
+      assert_equal :protocol_regression, error.reason
+    end
+  end
+
   def test_remote_subscription_and_identity_helpers_fail_closed_on_bad_inputs
     assert_raises(ClaudeEasy::InvalidConfigError) do
       ClaudeEasy.remote_subscription_records("not-base64")

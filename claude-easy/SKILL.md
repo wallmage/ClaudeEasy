@@ -106,7 +106,7 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份，再用 `curl -q --config -` 自动下载。两端都按已保存档位完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载和档位运行检查；Windows 由 Clash Verge Rev 的受管重新激活入口执行全局脚本。失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
 
-macOS 和 Windows 的下载都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。两端都不追加防倒退、协议、数量、哈希或时间戳检查，也不追加 WebRTC 或区域指纹检查。
+macOS 和 Windows 的下载都固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端都不得为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝覆盖。两端也不追加 WebRTC 或区域指纹检查。
 
 ## 配置历史与恢复
 

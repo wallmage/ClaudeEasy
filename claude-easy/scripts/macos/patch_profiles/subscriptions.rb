@@ -577,6 +577,14 @@ module ClaudeEasy
         subscription_switch_possible: true
       )
     end
+    current = load_yaml(File.read(File.realpath(target.fetch(:path)), encoding: "UTF-8"), target.fetch(:name))
+    current_types = Array(current["proxies"]).map { |proxy| proxy["type"].to_s.downcase if proxy.is_a?(Hash) }.compact
+    candidate_types = Array(config["proxies"]).map { |proxy| proxy["type"].to_s.downcase if proxy.is_a?(Hash) }.compact
+    if current_types.include?("anytls") && !candidate_types.include?("anytls") && candidate_types.include?("ss")
+      raise SafeUpdateCandidateError.new(
+        "远程订阅把 AnyTLS 替换为 Shadowsocks", reason: :protocol_regression
+      )
+    end
     patched = patch(config, policy, usage_profile: usage_profile)
     unless %i[updated unchanged].include?(patched.fetch(:status))
       raise SafeUpdateCandidateError.new(

@@ -3067,6 +3067,16 @@ items:
     Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "" "101" $true) "first client update timestamp was not accepted after a null baseline"
     Assert-True (-not (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "" "101" $false)) "legacy manifest without a timestamp baseline accepted unchanged subscription bytes"
 
+    $protocolRegressionRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved `
+            "proxies: [{ name: Node, type: anytls }]" `
+            "proxies: [{ name: Node, type: ss }]"
+    } catch {
+        $protocolRegressionRejected = $true
+    }
+    Assert-True $protocolRegressionRejected "safe update accepted AnyTLS being replaced by Shadowsocks"
+
     $ownershipInput = @'
 current: R-a
 items:

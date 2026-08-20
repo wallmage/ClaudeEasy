@@ -132,7 +132,7 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 3. macOS 和 Windows 都用 `curl -q --config -` 自动下载全部订阅，并按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验；全部候选通过后才整批写入。
 4. 两端都由已经运行的客户端原生热加载，保留原 TUN 与代理选择，并等待补丁、DNS 和实际连接全部恢复；macOS 使用 ClashX Meta 官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。候选与恢复各最多加载一次，失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
 
-macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，不设置 User-Agent，也不会为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。两端都不追加防倒退检查，只执行上述候选检查、运行加载和档位检查。
+macOS 和 Windows 都固定使用 `curl -q --config -`，不读取用户 curl 配置，不设置 User-Agent，也不会为订阅更新添加、固定或伪造 User-Agent；服务商限制只通过用户开启订阅开关处理。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时会拒绝覆盖，其他更新仍只执行上述候选检查、运行加载和档位检查。
 
 ## 配置历史与恢复
 

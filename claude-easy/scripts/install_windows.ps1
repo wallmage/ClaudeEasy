@@ -251,6 +251,11 @@ if ($SafeUpdate) {
             }
         }
         if ($null -eq $downloadedBytes) { throw $downloadFailure }
+        $originalText = $strictUtf8.GetString($entry.Snapshot.Bytes)
+        if ($originalText.Length -gt 0 -and $originalText[0] -eq [char]0xFEFF) {
+            $originalText = $originalText.Substring(1)
+        }
+        Assert-SubscriptionProtocolPreserved $originalText $downloadedText
         Assert-ClaudeEasyProxyGroupCollection $downloadedText (Split-Path -Leaf $entry.Profile.Path)
         Test-MihomoCandidate $core $downloadedText $profilesDirectory
         $targets += [pscustomobject]@{
