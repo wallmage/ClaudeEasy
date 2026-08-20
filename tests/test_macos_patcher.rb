@@ -5529,15 +5529,17 @@ class MacosPatcherTest < Minitest::Test
       )
       File.binwrite(config_path, candidate)
       reloads = 0
-      result = ClaudeEasy.safe_update_all(
-        targets: [target], policy: @policy, backup_root: backup_root, usage_profile: 1,
-        fetcher: ->(_item) { raise IOError, "stop after recovery" },
-        validator: ->(_path) { true }, selected_name: "config.yaml",
-        client_identity_reader: -> { identity },
-        native_reloader: ->(_current) { reloads += 1; true },
-        runtime_waiter: ->(*_arguments, **_options) { true },
-        generation_reader: -> { "generation-#{reloads}" }
-      )
+      result = ClaudeEasy.stub(:current_runtime_requester, nil) do
+        ClaudeEasy.safe_update_all(
+          targets: [target], policy: @policy, backup_root: backup_root, usage_profile: 1,
+          fetcher: ->(_item) { raise IOError, "stop after recovery" },
+          validator: ->(_path) { true }, selected_name: "config.yaml",
+          client_identity_reader: -> { identity },
+          native_reloader: ->(_current) { reloads += 1; true },
+          runtime_waiter: ->(*_arguments, **_options) { true },
+          generation_reader: -> { "generation-#{reloads}" }
+        )
+      end
 
       assert_equal :aborted, result.fetch(:status)
       assert_equal :download_or_validation_failed, result.fetch(:reason)
@@ -5629,19 +5631,51 @@ class MacosPatcherTest < Minitest::Test
       )
       required_group = :not_observed
 
-      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
-        [{ name: "active", path: path }], 3, "active",
-        precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
-        transaction: transaction, client_identity: identity,
-        native_reloader: ->(_current) { true },
-        runtime_waiter: lambda { |_current, **options|
-          required_group = options.fetch(:required_proxy_group)
-          true
-        }, generation_reader: -> { "generation" }
-      )
+      restored = ClaudeEasy.stub(:current_runtime_requester, nil) do
+        ClaudeEasy.reload_recovered_safe_update_runtime(
+          [{ name: "active", path: path }], 3, "active",
+          precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
+          transaction: transaction, client_identity: identity,
+          native_reloader: ->(_current) { true },
+          runtime_waiter: lambda { |_current, **options|
+            required_group = options.fetch(:required_proxy_group)
+            true
+          }, generation_reader: -> { "generation" }
+        )
+      end
 
       assert restored
       assert_nil required_group
+    end
+  end
+
+  def test_recovered_safe_update_runtime_accepts_an_already_healthy_original_runtime
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      File.binwrite(path, YAML.dump(base_config))
+      identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+      checkpoint = { path: File.realpath(path), expected_tun: :enabled, selections: {} }
+      bytes = File.binread(path)
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: path, original: bytes, candidate: bytes }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+
+      restored = ClaudeEasy.stub(:current_runtime_requester, -> { :requester }) do
+        ClaudeEasy.stub(:runtime_health_healthy?, true) do
+          ClaudeEasy.reload_recovered_safe_update_runtime(
+            [{ name: "active", path: path }], 3, "active",
+            precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
+            transaction: transaction, client_identity: identity,
+            native_reloader: ->(_current) { flunk "healthy runtime must not reload" },
+            runtime_waiter: ->(*_arguments, **_options) { flunk "healthy runtime must not wait" },
+            generation_reader: -> { flunk "healthy runtime needs no generation" }
+          )
+        end
+      end
+
+      assert restored
     end
   end
 

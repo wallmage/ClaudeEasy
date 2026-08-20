@@ -706,6 +706,11 @@ module ClaudeEasy
     return false unless selections && %i[enabled disabled ignore].include?(expected_tun)
 
     return false unless runtime_precommit_allowed?(precommit_condition)
+    requester = current_runtime_requester
+    return true if requester && runtime_health_healthy?(
+      requester, selections: selections, expected_tun: expected_tun,
+      precommit_condition: precommit_condition, flush_caches: false, check_dns: false
+    )
 
     generation_reader ||= method(:clashx_runtime_generation)
     native_reloader ||= method(:request_clashx_native_reload)
