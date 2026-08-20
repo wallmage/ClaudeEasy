@@ -340,8 +340,9 @@ $safeUpdateFollowupCases = @(
     [pscustomobject]@{
         Profile = 3
         Expected = @(
+            "client_switch_verification", "site_verification", "agent_connectivity_verification",
             "route_verification", "dns_deep_test",
-            "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan", "final_state_audit"
+            "webrtc_test_1", "webrtc_test_2", "region_fingerprint_test", "final_state_audit"
         )
     }
 )
@@ -3478,13 +3479,14 @@ rules:
     Assert-True (
         (@($profileThreeSnapshotJson.required_followups) -join ",") -ceq (
             @(
-                "region_fingerprint_baseline", "subscription_refresh",
-                "safe_update_verification", "route_verification", "dns_deep_test",
-                "webrtc_test_1", "webrtc_test_2", "region_fingerprint_rescan",
+                "subscription_refresh", "safe_update_verification",
+                "client_switch_verification", "site_verification",
+                "agent_connectivity_verification", "route_verification", "dns_deep_test",
+                "webrtc_test_1", "webrtc_test_2", "region_fingerprint_test",
                 "final_state_audit"
             ) -join ","
         )
-    ) "profile 3 snapshot allowed subscription refresh before the required pre-update baseline"
+    ) "profile 3 snapshot did not defer every profile check until after subscription refresh"
 
     $safeBackups = @(Get-ChildItem -LiteralPath (Join-Path $safeUpdateCase "claude-easy-backups") -File | Where-Object { $_.Name -like "*--pre-update--*" })
     Assert-True ($safeBackups.Count -eq 2) "snapshot did not back up exactly the two remote subscriptions"

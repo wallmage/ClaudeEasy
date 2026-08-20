@@ -62,7 +62,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 1. 用 MetaCubeX ChinaMax `cn.mrs` 建立共同国内域名直连基线，让国内 DNS 和连接路由都命中 `DIRECT`。
 2. 保留安全的 `default-nameserver` 和 `proxy-server-nameserver`；缺失或含 `system`、明文 DNS、错误类型、旧危险值的节点启动解析改用 `policy.json` 中的大陆 IP DoH。这样解析节点域名时不依赖系统 DNS、明文 53 或解析器域名引导。
 
-这两项属于所有档位，不是档位 3 专属能力。服务商后续更新覆盖配置时，Windows 全局脚本会在订阅加载时重新应用；macOS 需要用户另行要求执行 Patch。
+这两项属于所有档位，不是档位 3 专属能力。服务商后续更新覆盖配置时，安全更新会在 macOS 与 Windows 上按已保存档位重新应用补丁。
 
 ## 档位 3 增强
 
@@ -128,10 +128,10 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 只有用户明确要求更新节点或订阅时执行：
 
 1. 提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。
-2. 为全部远程订阅创建更新前备份。
-3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求，Windows 使用 `curl -q --config -` 自动下载全部订阅；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`，并按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。
+2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试；只为全部远程订阅创建更新前备份。
+3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求，Windows 使用 `curl -q --config -` 自动下载全部订阅并核对受管全局脚本；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`，并按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。
 4. 两端都由已经运行的客户端原生热加载，保留原 TUN 与代理选择；任一原代理组或节点选择无法恢复时拒绝更新。随后等待补丁、DNS 和实际连接全部恢复；macOS 使用 ClashX Meta 官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。候选与恢复各最多加载一次，失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
-5. 更新命令成功只是中间状态；Skill 继续完成当前档位的全部验收和最终状态复核，全部取得本轮结果后才报告完成。
+5. 更新命令成功只是中间状态；Skill 按已保存档位重新完成首次 Patch 的动作和验收。档位 2 继承档位 1；档位 3 继承档位 1、2，再完成完整补丁、分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。最终状态复核通过后才报告完成。
 
 macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时会拒绝覆盖，其他更新仍只执行上述候选检查、运行加载和档位检查。
 

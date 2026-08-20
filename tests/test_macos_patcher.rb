@@ -2181,14 +2181,15 @@ class MacosPatcherTest < Minitest::Test
       summary_zh: "订阅事务完成，后续检查尚未完成。", profile: 3,
       workflow_complete: false, completed_scope: "subscription_update",
       required_followups: %w[
+        client_switch_verification site_verification agent_connectivity_verification
         route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-        region_fingerprint_rescan final_state_audit
+        region_fingerprint_test final_state_audit
       ]
     )
 
     assert_equal false, result.fetch("workflow_complete")
     assert_equal "subscription_update", result.fetch("completed_scope")
-    assert_equal 6, result.fetch("required_followups").length
+    assert_equal 9, result.fetch("required_followups").length
     assert ClaudeEasyResult.valid_child_json?(JSON.generate(result))
     refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("workflow_complete" => "false")))
   end
@@ -12088,8 +12089,9 @@ class MacosPatcherTest < Minitest::Test
           agent_connectivity_verification final_state_audit
         ],
         3 => %w[
+          client_switch_verification site_verification agent_connectivity_verification
           route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-          region_fingerprint_rescan final_state_audit
+          region_fingerprint_test final_state_audit
         ]
       }
       expected_followups.each do |profile, followups|

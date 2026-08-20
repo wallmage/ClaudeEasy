@@ -43,7 +43,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 持久修复必须以已经确认的问题为依据，并同时具备修改权限和明确对象。为取得证据而做的隔离实验，或用户已授权、单变量、可完整恢复的现场对照可以先执行；**诊断对照不是持久修复**，不得把实验成功写成问题已经解决。
 
-完成条件按交付类型判断：分析或复核任务不要求执行修复或复测，只要求结论状态、证据、反证和未知项完整；修复任务必须完成最小修复、原场景复测和受影响能力回归；更新任务必须完成全部远程订阅的备份和当前平台更新；监测任务必须确认采集确实运行并给出停止方法。历史问题已消失且无法重现时，只能说明证据边界，不能伪造复测。
+完成条件按交付类型判断：分析或复核任务不要求执行修复或复测，只要求结论状态、证据、反证和未知项完整；修复任务必须完成最小修复、原场景复测和受影响能力回归；更新任务不做更新前测试，必须完成全部远程订阅的备份和当前平台更新，再按已保存档位完成首次 Patch 的动作、全部验收和最终复核；监测任务必须确认采集确实运行并给出停止方法。历史问题已消失且无法重现时，只能说明证据边界，不能伪造复测。
 
 ## Diagnostics 执行顺序
 
@@ -104,9 +104,9 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。用户确认前不得读取订阅、建立备份或操作客户端。
 
-确认后严格执行：macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份。macOS 通过 Foundation 原生网络请求下载，请求身份从当前运行的 ClashX Meta 动态生成；Windows 用 `curl -q --config -` 下载；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`。两端都按已保存档位完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载和档位运行检查；任一原代理组或节点选择无法恢复时拒绝更新。Windows 由 Clash Verge Rev 的受管重新激活入口执行全局脚本。失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
+确认后严格执行：更新前不运行任何测试；macOS 运行 `bash scripts/install_macos.sh --safe-update`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate`；两端都先为全部远程订阅创建更新前备份。macOS 通过 Foundation 原生网络请求下载，请求身份从当前运行的 ClashX Meta 动态生成；Windows 用 `curl -q --config -` 下载；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`。两端都按已保存档位完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载和档位运行检查；任一原代理组或节点选择无法恢复时拒绝更新。Windows 由 Clash Verge Rev 的受管重新激活入口执行全局脚本。失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
 
-先读取已保存档位；档位 3 必须在更新写入前取得同一浏览器的区域指纹基线。`safe_update_completed` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups` 和最终状态复核，不得输出最终说明。只有当前档位规定的全部验收都取得本轮结果，才算更新任务完成。
+`safe_update_completed` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups`，按已保存档位重新完成与首次运行相同的 Patch 动作和验收，再做最终状态复核，不得提前输出最终说明。档位 2 继承档位 1；档位 3 继承档位 1、2，再完成完整补丁、分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。只有当前档位规定的全部验收都取得本轮结果，才算更新任务完成。
 
 macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能按当前运行客户端动态生成原生请求身份。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝覆盖。平台下载命令内部不追加 WebRTC 或区域指纹检查；命令返回后仍按已保存档位完成任务验收。
 

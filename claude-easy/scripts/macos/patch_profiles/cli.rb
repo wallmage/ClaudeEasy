@@ -771,8 +771,10 @@ module ClaudeEasy
                                ]
                              else
                                %w[
+                                 client_switch_verification site_verification
+                                 agent_connectivity_verification
                                  route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-                                 region_fingerprint_rescan final_state_audit
+                                 region_fingerprint_test final_state_audit
                                ]
                              end
         return emit_cli_result(

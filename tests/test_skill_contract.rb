@@ -424,7 +424,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "### 交付类型决策表"
     assert_includes policy, "| 分析或复核 | 只读 | 结论、证据、反证和未知项完整 |"
     assert_includes policy, "| 修复 | 已确认的问题、明确对象和写入授权 | 最小修复、原场景复测和受影响能力回归 |"
-    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 备份后按当前平台执行更新，动作结束后停止 |"
+    assert_includes policy, "| 更新 | 用户明确要求更新全部订阅 | 不做更新前测试；备份并更新后，按已保存档位重新完成首次 Patch 的动作、验收和最终复核 |"
     assert_includes policy, "| 监测 | 只读采集；内容采集另需授权 | 确认采集运行、记录范围并提供停止方法 |"
     assert_includes policy, "配置、用途档位变更和完整安全增强归入 Patch"
     assert_includes policy, "交付类型不能在执行中自行扩大"
@@ -1163,6 +1163,13 @@ class SkillContractTest < Minitest::Test
     end
     assert_includes skill, "继续完成 `required_followups`"
     assert_includes policy, "继续完成 `required_followups`"
+    assert_includes skill, "更新前不运行任何测试"
+    assert_includes policy, "更新前不运行任何测试"
+    assert_includes policy, "与首次运行该档位相同的 Patch 动作和验收"
+    assert_includes policy, "档位 3 继承档位 1、2 的全部动作和验收"
+    assert_includes policy, "更新后只运行一次本地区域指纹检测"
+    refute_includes policy, "更新写入前取得同一浏览器的区域指纹基线"
+    refute_includes policy, "区域指纹重扫"
 
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
     assert_includes diagnostics, "候选检查、现行 Patch、运行加载、档位检查和自动更新关闭复查"
