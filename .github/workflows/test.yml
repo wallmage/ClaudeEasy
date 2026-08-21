@@ -2,7 +2,21 @@ name: Test
 
 on:
   push:
+    paths:
+      - "claude-easy/**"
+      - "tests/**"
+      - "!tests/baseline.md"
+      - ".github/workflows/test.yml"
+      - "package.json"
+      - "package-lock.json"
   pull_request:
+    paths:
+      - "claude-easy/**"
+      - "tests/**"
+      - "!tests/baseline.md"
+      - ".github/workflows/test.yml"
+      - "package.json"
+      - "package-lock.json"
   workflow_dispatch:
 
 concurrency:

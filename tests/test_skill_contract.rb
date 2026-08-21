@@ -2930,6 +2930,13 @@ class SkillContractTest < Minitest::Test
     assert_includes workflow, "group: test-${{ github.workflow }}-${{ github.ref }}"
     assert_includes workflow, "cancel-in-progress: true"
     assert_includes workflow, "ruby tests/ci_scope.rb"
+    %w[claude-easy/** tests/** .github/workflows/test.yml package.json package-lock.json].each do |path|
+      assert_equal 2, workflow.scan(%(- "#{path}")).length, path
+    end
+    assert_equal 2, workflow.scan(%(- "!tests/baseline.md")).length
+    %w[AGENTS.md README.md LICENSE docs/**].each do |path|
+      refute_includes workflow, %(- "#{path}"), path
+    end
     {
       "macos-browser" => "macos",
       "macos-mutation" => "macos",
