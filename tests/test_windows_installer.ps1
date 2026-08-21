@@ -490,6 +490,7 @@ function Invoke-TestPowerShell(
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeRefresh = $null
     $simulatedRuntimeCandidate = $null
+    $simulatedRuntimeBootstrap = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -544,17 +545,21 @@ function Invoke-TestPowerShell(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
             )
             $bootstrap = @'
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }'
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }' -ErrorAction Stop | Out-Null
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 $arguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
 & ([string]$payload.ScriptPath) @arguments
-exit $LASTEXITCODE
+if (-not $?) { exit 1 }
+exit 0
 '@
             $bootstrap = $bootstrap.Replace('__PAYLOAD__', $payloadBase64)
-            $encodedBootstrap = [Convert]::ToBase64String(
-                [System.Text.Encoding]::Unicode.GetBytes($bootstrap)
+            $simulatedRuntimeBootstrap = Join-Path $sandbox "safe-update-runtime-bootstrap.ps1"
+            [System.IO.File]::WriteAllText(
+                $simulatedRuntimeBootstrap,
+                $bootstrap,
+                [System.Text.Encoding]::ASCII
             )
-            $output = & $PowerShellPath -NoLogo -NoProfile -EncodedCommand $encodedBootstrap 2>&1 | Out-String
+            $output = & $PowerShellPath -NoLogo -NoProfile -File $simulatedRuntimeBootstrap 2>&1 | Out-String
         } else {
             $output = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath @ScriptArguments 2>&1 | Out-String
         }
@@ -565,6 +570,9 @@ exit $LASTEXITCODE
             Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
             Remove-Job -Job $simulatedRuntimeRefresh -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $simulatedRuntimeCandidate -Force -ErrorAction SilentlyContinue
+        }
+        if ($null -ne $simulatedRuntimeBootstrap) {
+            Remove-Item -LiteralPath $simulatedRuntimeBootstrap -Force -ErrorAction SilentlyContinue
         }
         if ($null -ne $temporarySafeUpdateClient) {
             if (-not $temporarySafeUpdateClient.HasExited) {
