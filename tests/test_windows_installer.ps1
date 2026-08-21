@@ -484,6 +484,8 @@ function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
 
 function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) {
     $temporarySafeUpdateClient = $null
+    $previousSafeUpdatePath = $null
+    $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
         (Split-Path -Leaf $ScriptPath) -eq "install_windows.ps1" -and
         ($ScriptArguments -contains "-SnapshotProfiles" -or $ScriptArguments -contains "-VerifySafeUpdate")
@@ -494,7 +496,7 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
             if (Test-Path -LiteralPath $runtimeHome -PathType Container) {
                 [System.IO.File]::WriteAllText(
                     (Join-Path $runtimeHome "clash-verge.yaml"),
-                    "external-controller: 127.0.0.1:$($script:safeUpdateControllerPort)`nsecret: ''`n"
+                    $script:safeUpdateRuntimeText
                 )
             }
         }
@@ -502,6 +504,10 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
             -FilePath $script:safeUpdateClientPath `
             -ArgumentList @("-t", "127.0.0.1") `
             -PassThru
+        $previousSafeUpdatePath = $env:PATH
+        $previousImmediateCurl = $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS
+        $env:PATH = $fakeCurlDirectory + [System.IO.Path]::PathSeparator + $env:PATH
+        $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS = "1"
     }
     $previousPreference = $ErrorActionPreference
     try {
@@ -515,6 +521,10 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
                 Stop-Process -Id $temporarySafeUpdateClient.Id -Force -ErrorAction SilentlyContinue
             }
             $temporarySafeUpdateClient.Dispose()
+        }
+        if ($null -ne $previousSafeUpdatePath) {
+            $env:PATH = $previousSafeUpdatePath
+            $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS = $previousImmediateCurl
         }
         $ErrorActionPreference = $previousPreference
     }
@@ -2573,6 +2583,9 @@ public static class FakeCurl {
     }
 
     public static int Main(string[] args) {
+        if (Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS") == "1") {
+            return 0;
+        }
         string subscriptionOutput = Environment.GetEnvironmentVariable(
             "CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT"
         );
@@ -3535,11 +3548,51 @@ rules:
         $portProbe.Start()
         $script:safeUpdateControllerPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
         $portProbe.Stop()
+        $safeUpdatePolicy = Get-Content -LiteralPath (
+            Join-Path (Join-Path $root "claude-easy/references") "policy.json"
+        ) -Raw | ConvertFrom-Json
+        $safeUpdateDomainProvider = $safeUpdatePolicy.cn_domain_provider
+        $safeUpdateDirectResolvers = (@($safeUpdatePolicy.direct_resolvers) | ForEach-Object {
+            "    - $_"
+        }) -join "`n"
+        $safeUpdatePolicyResolvers = (@($safeUpdatePolicy.direct_resolvers) | ForEach-Object {
+            "      - $_"
+        }) -join "`n"
+        $script:safeUpdateRuntimeText = @"
+external-controller: 127.0.0.1:$($script:safeUpdateControllerPort)
+secret: ''
+mixed-port: $($script:safeUpdateControllerPort)
+profile:
+  store-selected: true
+dns:
+  enable: true
+  respect-rules: true
+  direct-nameserver:
+$safeUpdateDirectResolvers
+  direct-nameserver-follow-policy: false
+  nameserver-policy:
+    "rule-set:$($safeUpdateDomainProvider.name)":
+$safeUpdatePolicyResolvers
+rule-providers:
+  $($safeUpdateDomainProvider.name):
+    type: $($safeUpdateDomainProvider.type)
+    behavior: $($safeUpdateDomainProvider.behavior)
+    format: $($safeUpdateDomainProvider.format)
+    url: $($safeUpdateDomainProvider.url)
+    path: $($safeUpdateDomainProvider.path)
+    interval: $($safeUpdateDomainProvider.interval)
+    proxy: Main
+    size-limit: $($safeUpdateDomainProvider.size_limit)
+rules:
+  - RULE-SET,$($safeUpdateDomainProvider.name),DIRECT
+  - MATCH,Main
+"@
         $safeUpdateControllerJob = Start-Job -ArgumentList @(
             $script:safeUpdateControllerPort,
-            $safeUpdateControllerReady
+            $safeUpdateControllerReady,
+            [string]$safeUpdateDomainProvider.name
         ) -ScriptBlock {
-            param([int]$Port, [string]$ReadyPath)
+            param([int]$Port, [string]$ReadyPath, [string]$DomainProviderName)
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
             $listener.Start()
             [System.IO.File]::WriteAllText($ReadyPath, "ready")
@@ -3561,13 +3614,15 @@ rules:
                         $method = $parts[0]
                         $path = $parts[1]
                         if ($method -eq "GET" -and $path -eq "/configs") {
-                            $body = '{"tun":{"enable":false}}'
+                            $body = "{`"tun`":{`"enable`":false},`"mixed-port`":$Port}"
                         } elseif ($method -eq "GET" -and $path -eq "/proxies") {
                             $body = '{"proxies":{"Main":{"type":"Selector","now":"Node","all":["Node"]},"Node":{"type":"Shadowsocks"}}}'
                         } elseif ($method -eq "GET" -and $path -eq "/rules") {
-                            $body = '{"rules":[{"type":"Match","payload":"","proxy":"Main"}]}'
+                            $body = "{`"rules`":[{`"type`":`"RuleSet`",`"payload`":`"$DomainProviderName`",`"proxy`":`"DIRECT`"},{`"type`":`"Match`",`"payload`":`"`",`"proxy`":`"Main`"}]}"
                         } elseif ($method -eq "GET" -and $path -eq "/providers/proxies") {
                             $body = '{"providers":{}}'
+                        } elseif ($method -eq "GET" -and $path -like "/dns/query?*") {
+                            $body = '{"Status":0,"Answer":[{"data":"1.1.1.1"}]}'
                         } else {
                             $body = '{}'
                         }
