@@ -701,6 +701,7 @@ try {
     Assert-True (
         $runtimeSource.Contains('Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled')
     ) "safe update runtime validation did not preserve the pre-update TUN state"
+    New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $sameContentRuntime = Join-Path $sandbox "same-content-runtime.yaml"
     [System.IO.File]::WriteAllText($sameContentRuntime, "runtime")
     $sameContentSnapshot = Get-OptionalFileSnapshot $sameContentRuntime "runtime"
