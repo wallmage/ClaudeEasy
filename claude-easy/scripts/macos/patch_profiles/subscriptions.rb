@@ -1148,7 +1148,10 @@ module ClaudeEasy
         restored_runtime = reload_recovered_safe_update_runtime(
           targets, usage_profile, selected_name,
           precommit_condition: precommit_condition,
-          runtime_checkpoint: transaction.fetch(:runtime_checkpoint, runtime_checkpoint)
+          runtime_checkpoint: transaction.fetch(:runtime_checkpoint, runtime_checkpoint),
+          transaction: transaction, client_identity: client_identity,
+          native_reloader: native_reloader, runtime_waiter: runtime_waiter,
+          reload_snapshot_reader: reload_snapshot_reader
         ) && runtime_precommit_allowed?(precommit_condition)
         if restored_runtime
           begin

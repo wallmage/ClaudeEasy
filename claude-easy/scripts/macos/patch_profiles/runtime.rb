@@ -89,9 +89,10 @@ module ClaudeEasy
     return false unless before.is_a?(Hash) && current
 
     current.any? do |path, identity_and_size|
-      previous = before[path]
-      offset = if previous && previous.first(2) == identity_and_size.first(2) &&
-                  identity_and_size.fetch(2) >= previous.fetch(2)
+      previous = before.values.find do |snapshot|
+        snapshot.first(2) == identity_and_size.first(2)
+      end
+      offset = if previous && identity_and_size.fetch(2) >= previous.fetch(2)
                  previous.fetch(2)
                else
                  0

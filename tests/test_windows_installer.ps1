@@ -3093,6 +3093,24 @@ items:
         $protocolRegressionRejected = $true
     }
     Assert-True $protocolRegressionRejected "safe update accepted AnyTLS being replaced by Shadowsocks"
+    $escapedBackslashProtocolRegressionRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved `
+            'proxies: [{ name: "Trailing\\", type: anytls }]' `
+            "proxies: [{ name: Replacement, type: ss }]"
+    } catch {
+        $escapedBackslashProtocolRegressionRejected = $true
+    }
+    Assert-True $escapedBackslashProtocolRegressionRejected "an escaped trailing backslash hid an AnyTLS protocol regression"
+    $escapedProtocolKeyRegressionRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved `
+            'proxies: [{ "t\u0079pe": anytls }]' `
+            "proxies: [{ name: Replacement, type: ss }]"
+    } catch {
+        $escapedProtocolKeyRegressionRejected = $true
+    }
+    Assert-True $escapedProtocolKeyRegressionRejected "an escaped flow key hid an AnyTLS protocol regression"
     Assert-SubscriptionProtocolPreserved @'
 proxies:
   - name: Existing SS
