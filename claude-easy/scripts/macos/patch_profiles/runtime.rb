@@ -1,3 +1,5 @@
+require "socket"
+
 module ClaudeEasy
   module_function
 
@@ -111,6 +113,82 @@ module ClaudeEasy
     false
   end
 
+  def open_clashx_reload_receipt(socket_path = controller_socket, timeout: 3)
+    return nil unless socket_path
+
+    socket = UNIXSocket.new(socket_path)
+    socket.close_on_exec = true
+    socket.write(
+      "GET /logs?level=info HTTP/1.1\r\nHost: localhost\r\n" \
+      "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" \
+      "Sec-WebSocket-Key: Y2xhdWRlLWVhc3ktbG9nIQ==\r\n\r\n"
+    )
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    response = +""
+    until (header_end = response.index("\r\n\r\n"))
+      remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      raise IOError, "ClashX Meta 控制器日志流超时" if remaining <= 0
+      raise IOError, "ClashX Meta 控制器日志流关闭" unless IO.select([socket], nil, nil, remaining)
+
+      chunk = socket.read_nonblock(4096, exception: false)
+      raise IOError, "ClashX Meta 控制器日志流关闭" if chunk.nil?
+      next if chunk == :wait_readable
+
+      response << chunk
+      raise IOError, "ClashX Meta 控制器日志流响应无效" if response.bytesize > 16_384
+    end
+    header = response.byteslice(0, header_end)
+    raise IOError, "ClashX Meta 控制器日志流响应无效" unless
+      header.match?(/\AHTTP\/1\.[01] 101(?:\s|\z)/) &&
+      header.match?(/^Upgrade:\s*websocket\s*$/i)
+
+    { socket: socket, buffer: response.byteslice(header_end + 4..-1).to_s.b, completed: false }
+  rescue StandardError
+    socket&.close
+    nil
+  end
+
+  def clashx_reload_receipt_completed?(receipt)
+    return false unless receipt.is_a?(Hash)
+    return true if receipt[:completed]
+
+    socket = receipt[:socket]
+    return false unless socket.respond_to?(:read_nonblock)
+
+    buffer = receipt[:buffer].to_s.b
+    loop do
+      if buffer.include?(CLASHX_RELOAD_COMPLETION)
+        receipt[:completed] = true
+        receipt[:buffer] = +""
+        return true
+      end
+      chunk = socket.read_nonblock(4096, exception: false)
+      break if chunk.nil? || chunk == :wait_readable
+
+      buffer << chunk
+      if buffer.include?(CLASHX_RELOAD_COMPLETION)
+        receipt[:completed] = true
+        receipt[:buffer] = +""
+        return true
+      end
+      if buffer.bytesize > 65_536
+        buffer = buffer.byteslice(-(CLASHX_RELOAD_COMPLETION.bytesize - 1)..-1)
+      end
+    end
+    receipt[:buffer] = buffer
+    false
+  rescue StandardError
+    false
+  end
+
+  def close_clashx_reload_receipt(receipt)
+    socket = receipt[:socket] if receipt.is_a?(Hash)
+    socket.close if socket.respond_to?(:close) && !socket.closed?
+    true
+  rescue StandardError
+    false
+  end
+
   def current_runtime_requester
     socket = controller_socket
     return nil unless socket
@@ -118,13 +196,14 @@ module ClaudeEasy
     ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
   end
 
-  def wait_for_clashx_safe_runtime(identity, reload_snapshot: nil, selections:, expected_tun:,
+  def wait_for_clashx_safe_runtime(identity, reload_receipt: nil, selections:, expected_tun:,
                                     required_proxy_group: nil, requester_factory: nil,
                                     reload_receipt_reader: nil, process_reader: nil,
                                     connectivity_checker: nil, precommit_condition: nil,
                                     sleeper: nil, attempts: 120, expected_profile_path: nil,
                                     profile_match_reader: nil)
     requester_factory ||= method(:current_runtime_requester)
+    reload_receipt_reader ||= method(:clashx_reload_receipt_completed?)
     process_reader ||= method(:clashx_running_identity)
     sleeper ||= ->(seconds) { sleep(seconds) }
     profile_match_reader ||= if expected_profile_path
@@ -135,13 +214,8 @@ module ClaudeEasy
       return false unless same_clashx_process?(identity, process_reader.call)
 
       requester = requester_factory.call
-      matched = if profile_match_reader
-                  requester && profile_match_reader.call(requester)
-                elsif reload_receipt_reader
-                  reload_receipt_reader.call(reload_snapshot)
-                else
-                  false
-                end
+      matched = reload_receipt_reader.call(reload_receipt) &&
+                profile_match_reader && requester && profile_match_reader.call(requester)
       unless matched
         sleeper.call(0.25) if attempt + 1 < attempts
         next
@@ -1012,6 +1086,7 @@ module ClaudeEasy
     pending = -> { result.merge(status: :reload_failed_restore_pending) }
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
+    reload_receipt_opener = reload_snapshot_reader || method(:open_clashx_reload_receipt)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback_before_runtime_reload(result)) unless
       runtime_checkpoint.is_a?(Hash) &&
@@ -1035,31 +1110,49 @@ module ClaudeEasy
       return result.merge(status: rollback_before_runtime_reload(result))
     end
 
-    return pending.call unless
-      mark_profile_transaction_activation(transaction, :update, client_identity)
+    reload_receipt = reload_receipt_opener.call
+    return result.merge(status: rollback_before_runtime_reload(result)) unless reload_receipt
+    unless mark_profile_transaction_activation(transaction, :update, client_identity)
+      close_clashx_reload_receipt(reload_receipt)
+      return pending.call
+    end
 
-    update_loaded = native_reloader.call(client_identity) &&
-                    runtime_waiter.call(
-                      client_identity, selections: selections, expected_tun: expected_tun,
-                      required_proxy_group: required_proxy_group,
-                      precommit_condition: precommit_condition,
-                      expected_profile_path: result.fetch(:path)
-                    )
+    begin
+      update_loaded = native_reloader.call(client_identity) &&
+                      runtime_waiter.call(
+                        client_identity, reload_receipt: reload_receipt,
+                        selections: selections, expected_tun: expected_tun,
+                        required_proxy_group: required_proxy_group,
+                        precommit_condition: precommit_condition,
+                        expected_profile_path: result.fetch(:path)
+                      )
+    ensure
+      close_clashx_reload_receipt(reload_receipt)
+    end
     return result.merge(reloaded: true) if
       update_loaded && profile_result_current?(result) &&
       runtime_precommit_allowed?(precommit_condition)
 
     return result.merge(status: :reload_failed_rollback_conflict) unless restore_profile_bytes(result)
-    return pending.call unless
-      mark_profile_transaction_activation(transaction, :rollback, client_identity)
-    return pending.call unless native_reloader.call(client_identity)
+    rollback_reload_receipt = reload_receipt_opener.call
+    return pending.call unless rollback_reload_receipt
+    unless mark_profile_transaction_activation(transaction, :rollback, client_identity)
+      close_clashx_reload_receipt(rollback_reload_receipt)
+      return pending.call
+    end
+    begin
+      return pending.call unless native_reloader.call(client_identity)
 
-    restored = runtime_waiter.call(
-      client_identity, selections: original_selections, expected_tun: expected_tun,
-      required_proxy_group: required_proxy_group,
-      precommit_condition: precommit_condition,
-      expected_profile_path: result.fetch(:path)
-    )
+      restored = runtime_waiter.call(
+        client_identity, reload_receipt: rollback_reload_receipt,
+        selections: original_selections, expected_tun: expected_tun,
+        required_proxy_group: required_proxy_group,
+        precommit_condition: precommit_condition,
+        expected_profile_path: result.fetch(:path)
+      )
+    ensure
+      close_clashx_reload_receipt(rollback_reload_receipt)
+    end
     result.merge(status: restored ? :reload_failed_rolled_back : :reload_failed_restore_pending)
   rescue StandardError
     pending.call

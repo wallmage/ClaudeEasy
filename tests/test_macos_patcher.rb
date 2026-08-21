@@ -5738,7 +5738,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_waiter: lambda { |_current, **options|
           required_group = options.fetch(:required_proxy_group)
           true
-        }
+        }, reload_snapshot_reader: -> { {} }
       )
 
       assert restored
@@ -14984,6 +14984,7 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
         identity, selections: { "Main" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
+        reload_receipt: {}, reload_receipt_reader: ->(_receipt) { true },
         profile_match_reader: ->(_requester) { matches.shift },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
@@ -15037,11 +15038,45 @@ class MacosPatcherTest < Minitest::Test
         assert ClaudeEasy.wait_for_clashx_safe_runtime(
           identity, selections: { "Main" => "Taiwan" },
           expected_tun: :enabled, requester_factory: -> { requester },
+          reload_receipt: {}, reload_receipt_reader: ->(_receipt) { true },
           profile_match_reader: ->(_requester) { receipts.shift },
           process_reader: -> { identity }, sleeper: ->(_seconds) { sleeps += 1 }, attempts: 3
         )
       end
       assert_equal 1, sleeps
+    end
+  end
+
+  def test_clashx_reload_receipt_stream_reads_a_live_controller_event
+    Dir.mktmpdir do |directory|
+      socket_path = File.join(directory, "controller.sock")
+      server = UNIXServer.new(socket_path)
+      release = Queue.new
+      worker = Thread.new do
+        client = server.accept
+        request = +""
+        request << client.readpartial(1024) until request.include?("\r\n\r\n")
+        client.write(
+          "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n" \
+          "Connection: Upgrade\r\nSec-WebSocket-Accept: fixture\r\n\r\n"
+        )
+        release.pop
+        payload = "{\"type\":\"info\",\"payload\":\"Initial configuration complete, total time: 1ms\"}\n"
+        client.write([0x81, payload.bytesize].pack("CC") + payload)
+        request
+      ensure
+        client&.close
+      end
+
+      receipt = ClaudeEasy.open_clashx_reload_receipt(socket_path, timeout: 1)
+      assert receipt
+      release << true
+      assert IO.select([receipt.fetch(:socket)], nil, nil, 1)
+      assert ClaudeEasy.clashx_reload_receipt_completed?(receipt)
+      assert_includes worker.value, "GET /logs?level=info HTTP/1.1"
+      assert_includes worker.value, "Upgrade: websocket"
+      ClaudeEasy.close_clashx_reload_receipt(receipt)
+      server.close
     end
   end
 
@@ -15091,6 +15126,13 @@ class MacosPatcherTest < Minitest::Test
         assert ClaudeEasy.wait_for_clashx_safe_runtime(
           identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
           requester_factory: -> { loaded }, expected_profile_path: profile,
+          reload_receipt: {}, reload_receipt_reader: ->(_receipt) { true },
+          process_reader: -> { identity }, attempts: 1
+        )
+        refute ClaudeEasy.wait_for_clashx_safe_runtime(
+          identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
+          requester_factory: -> { loaded }, expected_profile_path: profile,
+          reload_receipt_reader: ->(_receipt) { false }, reload_receipt: {},
           process_reader: -> { identity }, attempts: 1
         )
         refute ClaudeEasy.wait_for_clashx_safe_runtime(
@@ -15103,9 +15145,10 @@ class MacosPatcherTest < Minitest::Test
           requester_factory: -> { loaded }, process_reader: -> { identity },
           attempts: 1
         )
-        assert ClaudeEasy.wait_for_clashx_safe_runtime(
+        refute ClaudeEasy.wait_for_clashx_safe_runtime(
           identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
-          requester_factory: -> { loaded }, reload_receipt_reader: ->(_before) { true },
+          requester_factory: -> { loaded }, reload_receipt: {},
+          reload_receipt_reader: ->(_before) { true },
           process_reader: -> { identity }, attempts: 1
         )
       end

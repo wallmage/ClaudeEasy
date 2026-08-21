@@ -116,23 +116,28 @@ function Get-FlowProxyProtocolTypes([string]$Text) {
 
 function Get-YamlBlockSequenceEnd([string[]]$Lines, [int]$KeyIndex, [int]$KeyIndent, [int]$SearchEnd) {
     $finish = $KeyIndex + 1
-    $sawItem = $false
+    $itemIndent = $null
     for ($index = $KeyIndex + 1; $index -lt $SearchEnd; $index++) {
         $line = $Lines[$index]
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $indent = Get-YamlIndent $line
         $trim = $line.TrimStart()
         if ($trim.StartsWith("#")) {
-            if ($sawItem -and $indent -le $KeyIndent) { break }
+            if ($null -ne $itemIndent -and $indent -le $KeyIndent) { break }
             continue
         }
-        if ($indent -eq $KeyIndent -and ($trim -eq "-" -or $trim.StartsWith("- "))) {
-            $sawItem = $true
+        if ($null -eq $itemIndent) {
+            if ($indent -lt $KeyIndent -or -not ($trim -eq "-" -or $trim.StartsWith("- "))) { break }
+            $itemIndent = $indent
+            $finish = $index + 1
+            continue
+        }
+        if ($indent -eq $itemIndent -and ($trim -eq "-" -or $trim.StartsWith("- "))) {
             $finish = $index + 1
             continue
         }
         if ($indent -le $KeyIndent) { break }
-        if (-not $sawItem) { break }
+        if ($indent -lt $itemIndent) { break }
         $finish = $index + 1
     }
     return $finish

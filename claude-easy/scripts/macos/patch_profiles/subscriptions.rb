@@ -799,17 +799,28 @@ module ClaudeEasy
     return false unless runtime_precommit_allowed?(precommit_condition)
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
+    reload_receipt_opener = reload_snapshot_reader || method(:open_clashx_reload_receipt)
     required_proxy_group = profile_ai_runtime_group(active.fetch(:path)) if usage_profile == 3
-    return false unless
-      mark_profile_transaction_activation(transaction, :rollback, client_identity)
-    return false unless native_reloader.call(client_identity)
+    reload_receipt = reload_receipt_opener.call
+    return false unless reload_receipt
+    unless mark_profile_transaction_activation(transaction, :rollback, client_identity)
+      close_clashx_reload_receipt(reload_receipt)
+      return false
+    end
 
-    runtime_waiter.call(
-      client_identity, selections: selections, expected_tun: expected_tun,
-      required_proxy_group: required_proxy_group,
-      precommit_condition: precommit_condition,
-      expected_profile_path: active.fetch(:path)
-    )
+    begin
+      return false unless native_reloader.call(client_identity)
+
+      runtime_waiter.call(
+        client_identity, reload_receipt: reload_receipt,
+        selections: selections, expected_tun: expected_tun,
+        required_proxy_group: required_proxy_group,
+        precommit_condition: precommit_condition,
+        expected_profile_path: active.fetch(:path)
+      )
+    ensure
+      close_clashx_reload_receipt(reload_receipt)
+    end
   rescue StandardError
     false
   end

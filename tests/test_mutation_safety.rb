@@ -601,10 +601,10 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/subscriptions.rb",
-        "      selections: selections, expected_tun: expected_tun,\n" \
-          "      required_proxy_group: nil,\n",
-        "      selections: selections, expected_tun: :ignore,\n" \
-          "      required_proxy_group: nil,\n"
+        "        selections: selections, expected_tun: expected_tun,\n" \
+          "        required_proxy_group: required_proxy_group,\n",
+        "        selections: selections, expected_tun: :ignore,\n" \
+          "        required_proxy_group: required_proxy_group,\n"
       )
 
       assert_mutation_is_killed(
@@ -679,7 +679,7 @@ class MutationSafetyTest < Minitest::Test
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_clashx_runtime_waits_for_reload_receipt_and_full_health"
+        "--name", "test_clashx_runtime_waits_for_profile_match_and_full_health"
       )
     end
   end

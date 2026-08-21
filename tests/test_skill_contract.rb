@@ -2143,9 +2143,9 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, 'if (-not $safeUpdateContentRestoreEligible) {'
     assert_includes windows_installer, '"safe_update_verification_retry_pending"'
     assert_includes windows_installer,
-                    '[pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot }'
+                    '[pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot; Label = "远程订阅清单" }'
     assert_includes windows_installer,
-                    '[pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot }'
+                    '[pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot; Label = "全局扩展脚本" }'
     version_guard_function = windows_safe_update[
       windows_safe_update.index("function Open-SafeUpdateVersionGuard")...
       windows_safe_update.index("function New-SafeUpdateSnapshotContext")
