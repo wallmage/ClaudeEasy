@@ -495,6 +495,9 @@ if ($VerifySafeUpdate) {
             }
         }
     } catch {
+        [void]$script:ClaudeEasyMessages.Add(
+            (Protect-ClaudeEasyResultText $_.Exception.Message)
+        )
         if (@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0) {
             Complete-InstallResult 1 "partial" "safe_update_legacy_recovery_pending" "旧版安全更新记录中的备份无法确认来自一致快照；已保留当前订阅和清单，请在客户端重新更新全部订阅后重试验收。" @() @("legacy_recovery")
         }

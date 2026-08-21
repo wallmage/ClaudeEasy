@@ -3931,8 +3931,13 @@ rules: ["MATCH,AI"]
 '@
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeUpdated)
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeUpdated)
-    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
-    Assert-True ($successVerify.ExitCode -eq 0) "valid safe update was rejected; $(Get-TestOutputDiagnostic $successVerify.Output)"
+    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore, "-Json")
+    $successVerifyJson = $successVerify.Output | ConvertFrom-Json
+    Assert-True ($successVerify.ExitCode -eq 0) (
+        "valid safe update was rejected; code=$($successVerifyJson.code); " +
+        "messages=$(@($successVerifyJson.messages) -join ';')"
+    )
+    Assert-JsonResult $successVerify "install" 0 | Out-Null
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeUpdated) "valid safe update incorrectly restored first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeUpdated) "valid safe update incorrectly restored second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "accepted safe update left a stale manifest"
