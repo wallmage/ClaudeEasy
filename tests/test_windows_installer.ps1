@@ -482,9 +482,14 @@ function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
     }
 }
 
-function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) {
+function Invoke-TestPowerShell(
+    [string]$ScriptPath,
+    [string[]]$ScriptArguments,
+    [switch]$SimulateRuntimeRefresh
+) {
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeRefresh = $null
+    $simulatedRuntimeCandidate = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -497,20 +502,21 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
             if (Test-Path -LiteralPath $runtimeHome -PathType Container) {
                 $runtimePath = Join-Path $runtimeHome "clash-verge.yaml"
                 [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
-                if ($ScriptArguments -contains "-VerifySafeUpdate") {
+                if ($SimulateRuntimeRefresh) {
+                    $simulatedRuntimeCandidate = "$runtimePath.test"
                     $simulatedRuntimeRefresh = Start-Job -ArgumentList @(
                         $runtimePath,
-                        $script:safeUpdateRuntimeText
+                        $script:safeUpdateRuntimeText,
+                        $simulatedRuntimeCandidate
                     ) -ScriptBlock {
-                        param([string]$RuntimePath, [string]$RuntimeText)
-                        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+                        param([string]$RuntimePath, [string]$RuntimeText, [string]$Candidate)
+                        for ($attempt = 0; $true; $attempt++) {
                             Start-Sleep -Milliseconds 100
-                            $candidate = "$RuntimePath.test-$attempt"
                             try {
-                                [System.IO.File]::WriteAllText($candidate, $RuntimeText)
-                                [System.IO.File]::Replace($candidate, $RuntimePath, $null)
+                                [System.IO.File]::WriteAllText($Candidate, $RuntimeText)
+                                [System.IO.File]::Replace($Candidate, $RuntimePath, $null)
                             } catch {
-                                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+                                Remove-Item -LiteralPath $Candidate -Force -ErrorAction SilentlyContinue
                             }
                         }
                     }
@@ -536,6 +542,7 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
         if ($null -ne $simulatedRuntimeRefresh) {
             Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
             Remove-Job -Job $simulatedRuntimeRefresh -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $simulatedRuntimeCandidate -Force -ErrorAction SilentlyContinue
         }
         if ($null -ne $temporarySafeUpdateClient) {
             if (-not $temporarySafeUpdateClient.HasExited) {
@@ -3796,8 +3803,17 @@ rules:
     ) "pending safe update uninstall changed AppHome"
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), "changed: true`n")
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), "first: true`n---`nsecond: true`n")
-    $verifyResult = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
-    Assert-True ($verifyResult.ExitCode -eq 1) "invalid safe update was accepted"
+    $verifyResult = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-RefreshConfirmed",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    ) -SimulateRuntimeRefresh
+    $verifyJson = Assert-JsonResult $verifyResult "install" 1
+    Assert-True (
+        $verifyJson.code -eq "safe_update_rolled_back"
+    ) "invalid safe update did not restore the previous runtime state"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "failed safe update did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "failed safe update did not restore second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed rollback left a reusable stale safe-update manifest"
@@ -3859,7 +3875,7 @@ rules:
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $noMainUpdated)
     $noMainUpdatedMultiline = $noMainUpdated.Replace("proxy-groups: []", "proxy-groups: [ # empty flow list`n]")
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $noMainUpdatedMultiline)
-    $noMainVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
+    $noMainVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore) -SimulateRuntimeRefresh
     Assert-True ($noMainVerify.ExitCode -eq 1) "safe update accepted subscriptions that the installed global script cannot patch"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "main-group validation failure did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "main-group validation failure did not restore second remote subscription"
@@ -3898,7 +3914,7 @@ rules: ["MATCH,AI"]
 '@
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeUpdated)
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeUpdated)
-    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
+    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore) -SimulateRuntimeRefresh
     Assert-True ($successVerify.ExitCode -eq 0) "valid safe update was rejected; $(Get-TestOutputDiagnostic $successVerify.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeUpdated) "valid safe update incorrectly restored first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeUpdated) "valid safe update incorrectly restored second remote subscription"
@@ -4061,7 +4077,7 @@ rules: ["MATCH,AI"]
         "-RefreshConfirmed",
         "-MihomoPath", $fakeCore,
         "-Json"
-    )
+    ) -SimulateRuntimeRefresh
     $noActionVerifyJson = Assert-JsonResult $noActionVerify "install" 0
     Assert-True (
         $noActionVerifyJson.code -eq "safe_update_verified"
@@ -4410,7 +4426,7 @@ rules:
             "-RefreshConfirmed",
             "-MihomoPath", $fakeCore,
             "-Json"
-        )
+        ) -SimulateRuntimeRefresh
         $utf8ManifestPath = Join-Path $utf8SafeUpdateCase "claude-easy-safe-update.json"
         Assert-True (
             $utf8Verify.ExitCode -eq 1
