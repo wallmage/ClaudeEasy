@@ -379,8 +379,10 @@ module ClaudeEasy
           fully_restored = false
           next
         end
-        raise InvalidConfigError, "配置事务目标处于无法安全判定的部分写入状态" unless
-          current == candidate
+        unless current == candidate
+          fully_restored = false
+          next
+        end
 
         restored = transactional_compare_and_write_bytes(
           write_path, current, original,

@@ -161,7 +161,7 @@ Windows Computer Use 已在 2026-07-09 发布的 Windows 桌面版 Codex 中提�
 
 满足前 3 项即可确认选路错误；第 4 项用于判断影响面，不能为了凑对照拖延修复。修复必须覆盖当前存储位置中的全部订阅，不能只改当前订阅，也不能给 Kimi、欧陆词典或其他单站添加例外。
 
-共同基线由 `policy.json` 的 `cn_domain_provider` 唯一定义：MetaCubeX ChinaMax 的 `cn.mrs`，`type: http`、`behavior: domain`、`format: mrs`、`interval: 86400`。同一提供器同时驱动 `nameserver-policy` 的 `rule-set:<受管名称>` 和路由的 `RULE-SET,<受管名称>,DIRECT`，避免 DNS 判断与连接选路使用不同名单。档位 3 的受管 AI 规则独占相同匹配键；其他显式用户域名规则仍按原顺序保留。受管国内规则位于宽泛 `GEOSITE`、`GEOIP`、`RULE-SET` 与 `MATCH` 之前。若默认名称或缓存路径已被用户占用，用 `-2`、`-3` 递增并生成对应路径；缓存路径按 Mihomo HomeDir 所在文件系统的大小写与 Unicode 等价规则比较，绝不覆盖路径别名指向的用户缓存；只更新能以名称、URL 和受管路径共同确认所有权的条目。
+共同基线由 `policy.json` 的 `cn_domain_provider` 唯一定义。同一提供器同时驱动 DNS 与连接路由，避免两者使用不同名单。档位 3 的受管 AI 规则独占相同匹配键；其他显式用户域名规则仍按原顺序保留。受管国内规则位于宽泛 `GEOSITE`、`GEOIP`、`RULE-SET` 与 `MATCH` 之前。若默认名称或缓存路径已被用户占用，用 `-2`、`-3` 递增并生成对应路径；缓存路径按 Mihomo HomeDir 所在文件系统的大小写与 Unicode 等价规则比较，绝不覆盖路径别名指向的用户缓存；只更新能以名称、URL 和受管路径共同确认所有权的条目。
 
 macOS 每次安装或订阅更新都按当前档位逐份转换当前存储位置的顶层订阅；档位 1、2 只加共同基线，档位 3 再加完整增强。Windows 三档都安装带数字档位的全局脚本，让每份订阅加载或刷新时使用相同基线。规则提供器由 Mihomo 每天更新，不实现后台订阅监听。
 

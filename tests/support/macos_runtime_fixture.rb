@@ -18,7 +18,7 @@ module MacosRuntimeFixture
           @claude_easy_auto_update_enabled = true
 
           def capture2(*arguments, **options)
-            if arguments[0] == "/bin/ps" && arguments[1] == "ax"
+            if arguments[0] == "/bin/ps" && arguments[1] == "axww"
               home = ENV.fetch("HOME")
               core = File.join(home, "Applications/ClashX Meta.app/Contents/Resources/com.metacubex.ClashX.ProxyConfigHelper.meta")
               config = File.join(home, "Library/Caches/com.MetaCubeX.ClashX.meta/cacheConfigs/active.yaml")

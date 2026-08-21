@@ -901,11 +901,17 @@ class MutationSafetyTest < Minitest::Test
         RUBY
         "        true\n"
       )
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
+        "          expected_identity: expected_identity, expected_path: write_path\n",
+        "          expected_identity: nil, expected_path: write_path\n"
+      )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_profile_transaction_keeps_the_journal_after_an_atomic_refresh"
+        "--name", "test_profile_transaction_keeps_candidate_bytes_after_an_atomic_replacement"
       )
     end
   end
@@ -932,16 +938,17 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "        raise InvalidConfigError, \"配置事务目标处于无法安全判定的部分写入状态\" unless\n" \
-          "          current == candidate\n",
-        "        raise InvalidConfigError, \"配置事务目标处于无法安全判定的部分写入状态\" unless\n" \
-          "          candidate.start_with?(current)\n"
+        "        unless current == candidate\n" \
+          "          fully_restored = false\n" \
+          "          next\n" \
+          "        end\n",
+        "        next unless current == candidate\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_profile_transaction_preserves_ambiguous_partial_writes_for_manual_retry"
+        "--name", "test_profile_transaction_recovery_continues_after_a_same_inode_partial_write"
       )
     end
   end

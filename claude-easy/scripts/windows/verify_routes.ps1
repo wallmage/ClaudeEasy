@@ -9,6 +9,10 @@
     [switch]$Json
 )
 
+$controllerUrlSpecified = $PSBoundParameters.ContainsKey("ControllerUrl")
+$secretSpecified = $PSBoundParameters.ContainsKey("Secret")
+$secretStdinSpecified = $PSBoundParameters.ContainsKey("SecretStdin")
+
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path $PSScriptRoot "result_contract.ps1"
@@ -30,7 +34,7 @@ if (Test-Path -LiteralPath $resultContractPath -PathType Leaf) {
         }
         if ($resultContractLoaded) {
             $moduleRoot = Join-Path $PSScriptRoot "install_windows"
-            foreach ($moduleName in @("transaction.ps1", "common.ps1")) {
+            foreach ($moduleName in @("transaction.ps1", "common.ps1", "yaml.ps1", "runtime.ps1")) {
                 $modulePath = Join-Path $moduleRoot $moduleName
                 if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
                     $resultContractLoaded = $false
@@ -40,7 +44,7 @@ if (Test-Path -LiteralPath $resultContractPath -PathType Leaf) {
             }
             foreach ($requiredProfileFunction in @(
                 "Resolve-ClashVergeAppHome", "ConvertTo-NormalizedWindowsPath",
-                "Get-OptionalFileSnapshot", "Get-SavedUsageProfile"
+                "Get-OptionalFileSnapshot", "Get-SavedUsageProfile", "Get-ClashControllerContext"
             )) {
                 if ($null -eq (Get-Command $requiredProfileFunction -CommandType Function -ErrorAction SilentlyContinue)) {
                     $resultContractLoaded = $false
@@ -512,16 +516,7 @@ function Test-RouteChains(
         return $chainItems -contains $ExpectedGroup
     }
     if ($ExpectedGroup -ne $AiGroup -and $chainItems -contains $AiGroup) { return $false }
-    if ($chainItems -contains $ExpectedGroup) { return $true }
-    for ($index = 0; $index -lt $chainItems.Count; $index++) {
-        $name = [string]$chainItems[$index]
-        if ($name -notmatch '(?i)google') { continue }
-        $providerName = ""
-        if ($index -lt $providerChainItems.Count) { $providerName = [string]$providerChainItems[$index] }
-        $proxy = Get-LiveChainProxy $Proxies $Providers $name $providerName
-        if ($null -ne $proxy -and (Test-SupportedRouteGroupType ([string]$proxy.type))) { return $true }
-    }
-    return $false
+    return $chainItems -contains $ExpectedGroup
 }
 
 function Observe-Route(
@@ -587,10 +582,17 @@ function Observe-Route(
 }
 
 try {
-    $script:ClaudeEasyControllerSecret =
-        Read-ControllerSecretFromStandardInput
-    $script:ClaudeEasyControllerBaseUrl =
-        Get-ValidatedControllerBaseUri $ControllerUrl
+    if (-not $controllerUrlSpecified -and -not $secretSpecified -and -not $secretStdinSpecified) {
+        if ([string]::IsNullOrWhiteSpace($AppHome)) {
+            throw "找不到 Clash Verge Rev 配置目录，无法读取本地控制器。"
+        }
+        $controllerContext = Get-ClashControllerContext (Join-Path $AppHome "clash-verge.yaml")
+        $script:ClaudeEasyControllerSecret = [string]$controllerContext.Secret
+        $script:ClaudeEasyControllerBaseUrl = Get-ValidatedControllerBaseUri ([string]$controllerContext.BaseUrl)
+    } else {
+        $script:ClaudeEasyControllerSecret = Read-ControllerSecretFromStandardInput
+        $script:ClaudeEasyControllerBaseUrl = Get-ValidatedControllerBaseUri $ControllerUrl
+    }
     $policy = Get-Policy
     $proxyResponse = Invoke-ControllerJson "/proxies"
     $proxies = $proxyResponse.proxies

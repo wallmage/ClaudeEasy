@@ -221,14 +221,7 @@ module ClashRouteVerifier
     return chains.include?(expected_group) if kind == :ai
 
     return false if expected_group != ai_group && chains.include?(ai_group)
-    return true if chains.include?(expected_group)
-
-    chains.each_with_index.any? do |name, index|
-      next false unless name.match?(/google/i)
-
-      proxy = live_chain_proxy(proxies, providers, name, provider_chains[index])
-      proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
-    end
+    chains.include?(expected_group)
   end
 
   def run(output: $stdout, details: nil, main_group: nil, ai_group: nil,

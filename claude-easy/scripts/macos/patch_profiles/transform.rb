@@ -713,9 +713,7 @@ module ClaudeEasy
     normalized = values
     return true if normalized.empty? || normalized.any? { |value| unsafe_bootstrap_value?(value) }
 
-    [
-      ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
-    ].include?(normalized)
+    normalized.sort == ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"].sort
   end
 
   def unsafe_default_bootstrap?(values)

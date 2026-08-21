@@ -164,7 +164,7 @@ if (($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -
 
 $mutationLock = $null
 try {
-    $mutationLock = Enter-AppHomeMutationLock $AppHome -SkipRecovery:$BackupSubscriptions
+    $mutationLock = Enter-AppHomeMutationLock $AppHome
 } catch {
     $lockMessage = $_.Exception.Message
     if ($lockMessage -eq "客户端保持运行；中断的客户端敏感事务等待恢复。") {

@@ -3049,6 +3049,12 @@ class MacosPatcherTest < Minitest::Test
     ]
     assert_equal expected, patched.fetch("default-nameserver")
     assert_equal expected, patched.fetch("proxy-server-nameserver")
+
+    config["dns"]["proxy-server-nameserver"] = [
+      "https://8.8.8.8/dns-query", "https://1.1.1.1/dns-query"
+    ]
+    assert_equal expected,
+                 ClaudeEasy.patch(config, @policy).fetch(:config).fetch("dns").fetch("proxy-server-nameserver")
   end
 
   def test_bootstrap_dns_outputs_match_windows_in_every_usage_profile
@@ -7546,7 +7552,9 @@ class MacosPatcherTest < Minitest::Test
     assert_includes ClaudeEasy.chinese_status(base.merge(active: false)), "已更新，选择该订阅时生效"
     assert_includes ClaudeEasy.chinese_status(base.merge(status: :reload_failed_rolled_back)), "自动刷新失败，已恢复原配置"
     assert_includes ClaudeEasy.chinese_status(base.merge(status: :unchanged)), "无需修改"
-    assert_includes ClaudeEasy.chinese_status(base.merge(status: :runtime_check_failed)), "AI 分组未通过检查"
+    %i[runtime_check_failed batch_aborted duplicate_target].each do |status|
+      assert_includes ClaudeEasy.chinese_status(base.merge(status: status)), "已跳过：处理失败"
+    end
   end
 
   def test_run_automatically_reloads_and_checks_the_active_profile
@@ -10318,18 +10326,29 @@ class MacosPatcherTest < Minitest::Test
     success = Object.new
     success.define_singleton_method(:success?) { true }
     arguments = nil
+    stdin = nil
 
-    Open3.stub(:capture2e, ->(*items) { arguments = items; ["\n204", success] }) do
+    Open3.stub(:capture2e, ->(*items) {
+      options = items.pop
+      arguments = items
+      stdin = options.fetch(:stdin_data)
+      ["\n204", success]
+    }) do
       assert_equal(
         [204, ""],
-        ClaudeEasy.controller_request(
-          "/tmp/controller.sock", "PUT", "/configs?force=true", '{"path":"profile.yaml"}'
-        )
+        ClaudeEasy.stub(:controller_secret, "controller-secret") do
+          ClaudeEasy.controller_request(
+            "/tmp/controller.sock", "PUT", "/configs?force=true", '{"path":"profile.yaml"}'
+          )
+        end
       )
     end
-    assert_includes arguments, "Content-Type: application/json"
-    assert_includes arguments, "--data"
-    assert_includes arguments, '{"path":"profile.yaml"}'
+    refute_includes arguments.join(" "), "/tmp/controller.sock"
+    refute_includes arguments.join(" "), "profile.yaml"
+    refute_includes arguments.join(" "), "controller-secret"
+    assert_includes stdin, 'unix-socket = "/tmp/controller.sock"'
+    assert_includes stdin, 'data = "{\"path\":\"profile.yaml\"}"'
+    assert_includes stdin, 'header = "Authorization: Bearer controller-secret"'
   end
 
   def test_mihomo_validation_uses_the_profile_directory_and_fails_closed
@@ -11025,6 +11044,29 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_profile_transaction_recovery_continues_after_a_same_inode_partial_write
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      partial = File.join(directory, "partial.yaml")
+      complete = File.join(directory, "complete.yaml")
+      File.binwrite(partial, "first-original")
+      File.binwrite(complete, "second-original")
+      ClaudeEasy.prepare_profile_transaction([
+        { path: partial, original: "first-original", candidate: "first-candidate" },
+        { path: complete, original: "second-original", candidate: "second-candidate" }
+      ], backup_root, roots: [directory])
+      File.binwrite(partial, "first-partial")
+      File.binwrite(complete, "second-candidate")
+
+      assert_raises(IOError) do
+        ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      end
+      assert_equal "first-partial", File.binread(partial)
+      assert_equal "second-original", File.binread(complete)
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
   def test_profile_transaction_rejects_a_symlink_target_outside_the_profile_root_before_publication
     Dir.mktmpdir do |directory|
       profile_root = File.join(directory, "profiles")
@@ -11487,9 +11529,12 @@ class MacosPatcherTest < Minitest::Test
       socket_path = File.join(home, "controller.sock")
       server = UNIXServer.new(socket_path)
       active_config = File.join(cache, "active.yaml")
-      File.write(active_config, YAML.dump("external-controller-unix" => socket_path))
+      File.write(active_config, YAML.dump(
+        "external-controller-unix" => socket_path, "secret" => "fixture-secret"
+      ))
       ClaudeEasy.stub(:running_mihomo_config_paths, [active_config]) do
         assert_equal socket_path, ClaudeEasy.controller_socket
+        assert_equal "fixture-secret", ClaudeEasy.controller_secret(socket_path)
       end
     ensure
       server&.close
@@ -11995,7 +12040,7 @@ class MacosPatcherTest < Minitest::Test
           handle.fsync
         end
 
-        assert_raises(ClaudeEasy::InvalidConfigError) do
+        assert_raises(IOError) do
           ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
         end
 
@@ -12005,7 +12050,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_profile_transaction_keeps_the_journal_after_an_atomic_refresh
+  def test_profile_transaction_keeps_candidate_bytes_after_an_atomic_replacement
     Dir.mktmpdir do |directory|
       backup_root = File.join(directory, "backups")
       profile = File.join(directory, "friend.yaml")
@@ -12017,7 +12062,7 @@ class MacosPatcherTest < Minitest::Test
         backup_root, roots: [directory]
       )
       external_path = File.join(directory, "external.yaml")
-      File.binwrite(external_path, "external-refresh")
+      File.binwrite(external_path, candidate)
       File.rename(external_path, profile)
       external_stat = File.stat(profile)
 
@@ -12026,7 +12071,7 @@ class MacosPatcherTest < Minitest::Test
       end
 
       current = File.stat(profile)
-      assert_equal "external-refresh", File.binread(profile)
+      assert_equal candidate, File.binread(profile)
       assert_equal [external_stat.dev, external_stat.ino], [current.dev, current.ino]
       assert ClaudeEasy.profile_transaction_pending?(backup_root)
     end
@@ -12046,7 +12091,7 @@ class MacosPatcherTest < Minitest::Test
       original_stat = File.stat(profile)
       File.binwrite(profile, "unrelated-concurrent-bytes")
 
-      assert_raises(ClaudeEasy::InvalidConfigError) do
+      assert_raises(IOError) do
         ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
       end
 
@@ -14143,6 +14188,37 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_cli_labels_an_uncertain_safe_update_as_safe_update
+    Dir.mktmpdir do |directory|
+      profiles = File.join(directory, "profiles")
+      backup_root = File.join(directory, "backups")
+      FileUtils.mkdir_p([profiles, backup_root])
+      uncertain = lambda do |**_arguments|
+        raise ClaudeEasy::ProfileCommitStateUncertainError, "injected uncertain commit"
+      end
+      output = StringIO.new
+      original = $stdout
+      $stdout = output
+      begin
+        exit_code = ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:remote_subscription_targets, []) do
+            ClaudeEasy.stub(:safe_update_all, uncertain) do
+              ClaudeEasy.cli([
+                "--json", "--safe-update-all", "--profile-dir", profiles,
+                "--backup-dir", backup_root, "--usage-profile", "3"
+              ])
+            end
+          end
+        end
+      ensure
+        $stdout = original
+      end
+
+      assert_equal ClaudeEasy::PROFILE_COMMIT_STATE_UNCERTAIN_EXIT, exit_code
+      assert_equal "safe_update", JSON.parse(output.string).fetch("operation")
+    end
+  end
+
   def test_cli_returns_failure_when_any_profile_was_not_applied
     results = [
       { path: "/private/current.yaml", status: :reload_failed_rolled_back },
@@ -14868,7 +14944,16 @@ class MacosPatcherTest < Minitest::Test
     )
   end
 
-  def test_route_verifier_accepts_a_user_google_proxy_group
+  def test_route_verifier_requires_the_main_group_for_google
+    refute ClashRouteVerifier.route_passes?(
+      ["Singapore", "Google"], proxies: {
+        "Main" => { "type" => "Selector", "now" => "Taiwan" },
+        "AI" => { "type" => "Selector", "now" => "Japan" },
+        "Google" => { "type" => "Selector", "now" => "Singapore" },
+        "Singapore" => { "type" => "Shadowsocks" }
+      }, kind: :main, expected_group: "Main", expected_selection: "Taiwan", ai_group: "AI"
+    )
+
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "friend.yaml")
       File.write(profile, YAML.dump(base_config))
@@ -14880,7 +14965,7 @@ class MacosPatcherTest < Minitest::Test
         "Japan" => { "type" => "Shadowsocks" }
       } }
       observations = [
-        { "chains" => ["Singapore", "Google"] },
+        { "chains" => ["Singapore", "Google", "Main"] },
         { "chains" => ["Japan", "AI"] },
         { "chains" => ["Japan", "AI"] },
         { "chains" => ["Japan", "AI"] }
@@ -15972,13 +16057,16 @@ class MacosPatcherTest < Minitest::Test
         client&.close
       end
 
-      receipt = ClaudeEasy.open_clashx_reload_receipt(socket_path, timeout: 1)
+      receipt = ClaudeEasy.stub(:controller_secret, "fixture-secret") do
+        ClaudeEasy.open_clashx_reload_receipt(socket_path, timeout: 1)
+      end
       assert receipt
       release << true
       assert IO.select([receipt.fetch(:socket)], nil, nil, 1)
       assert ClaudeEasy.clashx_reload_receipt_completed?(receipt)
       assert_includes worker.value, "GET /logs?level=info HTTP/1.1"
       assert_includes worker.value, "Upgrade: websocket"
+      assert_includes worker.value, "Authorization: Bearer fixture-secret"
       ClaudeEasy.close_clashx_reload_receipt(receipt)
       server.close
     end

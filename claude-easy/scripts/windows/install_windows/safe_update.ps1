@@ -164,8 +164,9 @@ function ConvertFrom-ProxyProtocolType([string]$Value) {
 function Get-ProxyProtocolTypes([string]$Text) {
     $lines = @(Split-YamlLines $Text)
     $node = Find-YamlMappingNode $lines "proxies" 0 0 $lines.Count
-    if ($null -eq $node) { throw "proxies 清单无法解析，无法核对协议。" }
+    if ($null -eq $node) { return @() }
     $inline = ([string]$node.Value).Trim()
+    if ($inline -eq "[]") { return @() }
     if ($inline.StartsWith("[")) {
         $flowTypes = @(Get-FlowProxyProtocolTypes (($lines[$node.Start..($node.End - 1)]) -join "`n"))
         if ($flowTypes.Count -eq 0) { throw "proxies 清单无法解析，无法核对协议。" }

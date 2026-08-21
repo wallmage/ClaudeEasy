@@ -138,8 +138,11 @@ module ClaudeEasy
 
     socket = UNIXSocket.new(socket_path)
     socket.close_on_exec = true
+    authorization = controller_secret(socket_path)
+    authorization_header = authorization.to_s.empty? ? "" : "Authorization: Bearer #{authorization}\r\n"
     socket.write(
       "GET /logs?level=info HTTP/1.1\r\nHost: localhost\r\n" \
+      "#{authorization_header}" \
       "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" \
       "Sec-WebSocket-Key: Y2xhdWRlLWVhc3ktbG9nIQ==\r\n\r\n"
     )
@@ -352,7 +355,7 @@ module ClaudeEasy
   end
 
   def running_mihomo_config_paths
-    output, status = Open3.capture2("/bin/ps", "ax", "-o", "command=")
+    output, status = Open3.capture2("/bin/ps", "axww", "-o", "command=")
     return [] unless status.success?
 
     cores = mihomo_core_paths.select { |path| File.file?(path) && File.executable?(path) }
@@ -367,7 +370,7 @@ module ClaudeEasy
     []
   end
 
-  def controller_socket
+  def controller_context
     cache_directories = [
       File.expand_path("~/Library/Caches/com.MetaCubeX.ClashX.meta/cacheConfigs"),
       File.expand_path("~/Library/Caches/com.metacubex.ClashX.meta/cacheConfigs")
@@ -382,29 +385,64 @@ module ClaudeEasy
         begin
           config = load_yaml(File.read(path, encoding: "UTF-8"), path)
           socket = config["external-controller-unix"] if config.is_a?(Hash)
-          entries << [path, socket] if socket.is_a?(String) && File.socket?(socket)
+          secret = config["secret"] if config.is_a?(Hash)
+          next unless secret.nil? || secret.is_a?(String)
+          next if secret.to_s.match?(/[\x00-\x1f\x7f]/)
+
+          entries << [path, socket, secret.to_s] if socket.is_a?(String) && File.socket?(socket)
         rescue StandardError
           next
         end
       end
     end
-    candidates_by_socket = candidates.group_by { |_path, socket| socket }
+    candidates_by_socket = candidates.group_by { |_path, socket, _secret| socket }
     return nil if candidates_by_socket.empty?
 
     active_configs = running_mihomo_config_paths
-    active_sockets = candidates_by_socket.select do |_socket, entries|
-      entries.any? { |path, _candidate_socket| active_configs.include?(File.expand_path(path)) }
-    end.keys
-    active_sockets.length == 1 ? active_sockets.first : nil
+    active_sockets = candidates_by_socket.each_with_object({}) do |(socket, entries), active|
+      matching = entries.select do |path, _candidate_socket, _secret|
+        active_configs.include?(File.expand_path(path))
+      end
+      active[socket] = matching unless matching.empty?
+    end
+    return nil unless active_sockets.length == 1
+
+    socket, entries = active_sockets.first
+    secrets = entries.map { |_path, _candidate_socket, secret| secret }.uniq
+    secrets.length == 1 ? { socket: socket, secret: secrets.first } : nil
+  end
+
+  def controller_socket
+    controller_context&.fetch(:socket)
+  end
+
+  def controller_secret(socket = controller_socket)
+    context = controller_context
+    context[:secret] if context && context[:socket] == socket
+  end
+
+  def controller_curl_config_value(value)
+    value.to_s.gsub("\\", "\\\\").gsub('"', '\\"').gsub("\r", "\\r").gsub("\n", "\\n")
   end
 
   def controller_request(socket, method, path, body = nil)
-    arguments = ["/usr/bin/curl", "-q", "-sS", "--proxy", "", "--noproxy", "*",
-                 "--max-time", "3", "-X", method, "--unix-socket", socket,
-                 "-o", "-", "-w", "\n%{http_code}"]
-    arguments.concat(["-H", "Content-Type: application/json", "--data", body]) if body
-    arguments << "http://localhost#{path}"
-    output, status = Open3.capture2e(CURL_ISOLATED_ENVIRONMENT, *arguments)
+    secret = controller_secret(socket)
+    config = [
+      'silent', 'show-error', 'proxy = ""', 'noproxy = "*"', 'max-time = 3',
+      "request = \"#{controller_curl_config_value(method)}\"",
+      "unix-socket = \"#{controller_curl_config_value(socket)}\"",
+      'output = "-"', 'write-out = "\\n%{http_code}"',
+      "url = \"#{controller_curl_config_value("http://localhost#{path}")}\""
+    ]
+    config << "header = \"Authorization: Bearer #{controller_curl_config_value(secret)}\"" unless secret.to_s.empty?
+    if body
+      config << 'header = "Content-Type: application/json"'
+      config << "data = \"#{controller_curl_config_value(body)}\""
+    end
+    output, status = Open3.capture2e(
+      CURL_ISOLATED_ENVIRONMENT, "/usr/bin/curl", "-q", "--config", "-",
+      stdin_data: config.join("\n") + "\n"
+    )
     return [0, ""] unless status.success?
 
     response_body, code = output.rpartition("\n").values_at(0, 2)

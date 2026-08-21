@@ -247,7 +247,8 @@ function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousCo
             $current = Get-OptionalFileSnapshot $RuntimePath "Clash Verge Rev 运行配置"
             if ($current.Exists -and (
                 $current.Identity -cne $PreviousContext.Snapshot.Identity -or
-                (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $PreviousContext.Snapshot.Bytes)
+                (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $PreviousContext.Snapshot.Bytes) -or
+                [System.IO.File]::GetLastWriteTimeUtc($RuntimePath).Ticks -gt $PreviousContext.LastWriteTicks
             )) {
                 return
             }

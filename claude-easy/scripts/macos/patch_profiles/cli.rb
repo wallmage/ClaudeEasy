@@ -120,7 +120,8 @@ module ClaudeEasy
     when :reload_failed_rolled_back then "#{name}：自动刷新失败，已恢复原配置"
     when :reload_failed_restore_pending then "#{name}：自动刷新失败；文件已恢复，运行内核恢复失败"
     when :reload_failed_rollback_conflict then "#{name}：自动刷新失败；订阅同时发生变化，未覆盖新内容"
-    when :runtime_check_failed then "#{name}：运行中的 AI 分组未通过检查"
+    when :runtime_check_failed, :batch_aborted, :duplicate_target
+      "#{name}：已跳过：处理失败"
     when :error then "#{name}：已跳过：处理失败"
     else "#{name}：已跳过：订阅内容无效"
     end
@@ -995,6 +996,8 @@ module ClaudeEasy
   rescue ProfileCommitStateUncertainError
     operation = if options[:restore_backup]
                   "restore_backup"
+                elsif options[:safe_update_all]
+                  "safe_update"
                 else
                   "patch_profiles"
                 end

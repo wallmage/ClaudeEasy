@@ -61,7 +61,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 
 三个档位都会处理当前存储位置中的全部订阅，并做两件事：
 
-1. 用 MetaCubeX ChinaMax `cn.mrs` 建立共同国内域名直连基线，让国内 DNS 和连接路由都命中 `DIRECT`。
+1. 用策略指定的 MetaCubeX `cn.mrs` 建立共同国内域名直连基线，让国内 DNS 和连接路由都命中 `DIRECT`。
 2. 保留安全的 `default-nameserver` 和 `proxy-server-nameserver`；缺失或含 `system`、明文 DNS、错误类型、旧危险值的节点启动解析改用 `policy.json` 中的大陆 IP DoH。这样解析节点域名时不依赖系统 DNS、明文 53 或解析器域名引导。
 
 这两项属于所有档位，不是档位 3 专属能力。服务商后续更新覆盖配置时，安全更新会在 macOS 与 Windows 上按已保存档位重新应用补丁。

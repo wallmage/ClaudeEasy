@@ -692,12 +692,24 @@ try {
         -not $installerSource.Contains('[switch]$SafeUpdate') -and
         -not $installerSource.Contains('Invoke-SubscriptionCurlDownload')
     ) "Windows still exposed the cancelled direct-download update path"
+    Assert-True (
+        -not $installerSource.Contains('-SkipRecovery:$BackupSubscriptions')
+    ) "subscription backup still skipped interrupted transaction recovery"
     Assert-True (-not (Test-ClashRuntimeRequiresTun 1)) "profile 1 unexpectedly required TUN"
     Assert-True (Test-ClashRuntimeRequiresTun 2) "profile 2 did not require TUN"
     Assert-True (Test-ClashRuntimeRequiresTun 3) "profile 3 did not require TUN"
     Assert-True (
         $runtimeSource.Contains('Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled')
     ) "safe update runtime validation did not preserve the pre-update TUN state"
+    $sameContentRuntime = Join-Path $sandbox "same-content-runtime.yaml"
+    [System.IO.File]::WriteAllText($sameContentRuntime, "runtime")
+    $sameContentSnapshot = Get-OptionalFileSnapshot $sameContentRuntime "runtime"
+    $sameContentPrevious = [pscustomobject]@{
+        Snapshot = $sameContentSnapshot
+        LastWriteTicks = [System.IO.File]::GetLastWriteTimeUtc($sameContentRuntime).Ticks
+    }
+    [System.IO.File]::SetLastWriteTimeUtc($sameContentRuntime, [DateTime]::UtcNow.AddSeconds(2))
+    Wait-ClashVergeRuntimeRefresh $sameContentRuntime $sameContentPrevious
     Assert-True (
         (Get-ClashRuntimeYamlMappingEntry "'rule-set:managed':").Key -ceq "rule-set:managed"
     ) "runtime YAML parser rejected a single-quoted policy key"
@@ -2710,15 +2722,17 @@ public static class FakeCurl {
             $env:CLAUDE_EASY_TEST_CURL_PIDS_PATH = $fakeCurlPidsPath
             $env:CLAUDE_EASY_TEST_CURL_ENV_HASH_PREFIX =
                 $fakeCurlEnvironmentHashPrefix
+            [System.IO.File]::WriteAllText(
+                (Join-Path $routeProfileThreeHome "clash-verge.yaml"),
+                "external-controller: 127.0.0.1:$routeControllerPort`nsecret: $routeSecretCanary`n",
+                (New-Object System.Text.UTF8Encoding($false))
+            )
             $routeSuccessProcess = New-TestPowerShellProcess $routeVerifier @(
                 "-AppHome", $routeProfileThreeHome,
-                "-ControllerUrl", "http://127.0.0.1:$routeControllerPort",
-                "-SecretStdin",
                 "-ObservationSeconds", "5",
                 "-Json"
             )
             Assert-True ($routeSuccessProcess.Start()) "route verifier did not start"
-            $routeSuccessProcess.StandardInput.Write($routeSecretCanary)
             $routeSuccessProcess.StandardInput.Close()
             $routeVerifierCommandLine =
                 Get-WindowsProcessCommandLine $routeSuccessProcess.Id
@@ -3252,6 +3266,16 @@ proxies:
 '@
     } catch { $inlineAnchorRejected = $true }
     Assert-True $inlineAnchorRejected "inline proxies anchor was treated as an empty type list"
+    Assert-SubscriptionProtocolPreserved @'
+proxy-providers:
+  remote:
+    type: http
+'@ @'
+proxy-providers:
+  remote:
+    type: http
+'@
+    Assert-SubscriptionProtocolPreserved "proxies: []`n" "proxies: []`n"
 
     $ownershipInput = @'
 current: R-a
@@ -3425,12 +3449,6 @@ items:
     $backupSecondBytes = [System.Text.Encoding]::UTF8.GetBytes("second subscription bytes`n")
     [System.IO.File]::WriteAllBytes((Join-Path $backupOnlyProfiles "R-first.yaml"), $backupFirstBytes)
     [System.IO.File]::WriteAllBytes((Join-Path $backupOnlyProfiles "R-second.yml"), $backupSecondBytes)
-    $backupOnlyJournalPath = Join-Path $backupOnlyCase ".claude-easy-transaction.json"
-    $backupOnlyPreparationPath = Join-Path $backupOnlyCase ".claude-easy-transaction-preparation.json"
-    $backupOnlyJournalBytes = [System.Text.Encoding]::UTF8.GetBytes("old transaction state")
-    $backupOnlyPreparationBytes = [System.Text.Encoding]::UTF8.GetBytes("old preparation state")
-    [System.IO.File]::WriteAllBytes($backupOnlyJournalPath, $backupOnlyJournalBytes)
-    [System.IO.File]::WriteAllBytes($backupOnlyPreparationPath, $backupOnlyPreparationBytes)
     $backupOnlyResult = Invoke-TestPowerShell $installer @(
         "-AppHome", $backupOnlyCase,
         "-BackupSubscriptions",
@@ -3452,10 +3470,6 @@ items:
     Assert-True (-not (
         Test-Path -LiteralPath (Join-Path $backupOnlyCase "claude-easy-safe-update.json")
     )) "subscription backup created a safe-update manifest"
-    Assert-True (
-        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($backupOnlyJournalPath)) -ceq [Convert]::ToBase64String($backupOnlyJournalBytes) -and
-        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($backupOnlyPreparationPath)) -ceq [Convert]::ToBase64String($backupOnlyPreparationBytes)
-    ) "subscription backup processed an unrelated interrupted transaction"
     $backupOnlyFiles = @(Get-ChildItem -LiteralPath (Join-Path $backupOnlyCase "claude-easy-backups") -Recurse -File)
     Assert-True ($backupOnlyFiles.Count -eq 4) "subscription backup did not create initial and pre-update backups for every remote subscription"
 
@@ -4666,7 +4680,8 @@ rules:
     Assert-True (
         Test-UsableRouteGroupSelection $routeChains.Balanced
     ) "Windows route verifier rejected a load-balance AI group without now"
-    Assert-True (Test-RouteChains $routeChains @("Singapore", "Google") "Main" "Taiwan" "AI" $true) "Windows route verifier rejected a user Google proxy group"
+    Assert-True (-not (Test-RouteChains $routeChains @("Singapore", "Google") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted Google without the main group"
+    Assert-True (Test-RouteChains $routeChains @("Singapore", "Google", "Main") "Main" "Taiwan" "AI" $true) "Windows route verifier rejected Google through the main group"
     Assert-True (-not (Test-RouteChains $routeChains @("GameNode", "Gaming") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted an unrelated selector for Google traffic"
     Assert-True (-not (Test-RouteChains $routeChains @("Japan", "AI", "Google") "Main" "Taiwan" "AI" $true)) "Windows route verifier accepted the AI group for ordinary Google traffic"
     Assert-True (Test-RouteChains $routeChains @("Japan", "AI") "AI" "Japan" "AI" $true) "Windows route verifier rejected Google traffic when the expected group was the AI group"

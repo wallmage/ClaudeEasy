@@ -1118,14 +1118,15 @@ test('PowerShell installer uses the documented global script and app settings', 
   assert.ok(preflight !== -1 && firstBackup !== -1 && preflight < firstBackup, 'all transformations must be prepared before files change');
 });
 
-test('Windows subscription update entry only creates pre-update backups', () => {
+test('Windows subscription update entry recovers interrupted transactions before backup', () => {
   const source = fs.readFileSync(installerPath, 'utf8');
   const backupStart = source.indexOf(
     'if ($BackupSubscriptions) {', source.indexOf('$needsUsageProfile')
   );
   const legacyStart = source.indexOf('if ($SnapshotProfiles -or $VerifySafeUpdate) {');
   assert.match(source, /\[switch\]\$BackupSubscriptions/);
-  assert.match(source, /Enter-AppHomeMutationLock \$AppHome -SkipRecovery:\$BackupSubscriptions/);
+  assert.match(source, /Enter-AppHomeMutationLock \$AppHome\r?\n/);
+  assert.doesNotMatch(source, /SkipRecovery:\$BackupSubscriptions/);
   assert.ok(backupStart !== -1 && legacyStart !== -1 && backupStart < legacyStart);
   const backupBranch = source.slice(backupStart, legacyStart);
   assert.match(backupBranch, /Backup-InitialOnce/);
@@ -1242,7 +1243,7 @@ test('Windows verification and restore fail closed on stale or unsafe state', ()
   assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);
   assert.match(safeUpdate, /UsageProfile -lt 3[\s\S]*tun\.enable/);
   assert.match(runtime, /FieldOffset\(0\).*MOUSEINPUT mouse[\s\S]*struct MOUSEINPUT/);
-  assert.doesNotMatch(refresh, /LastWriteTicks|GetLastWriteTimeUtc/);
+  assert.match(refresh, /GetLastWriteTimeUtc\(\$RuntimePath\)\.Ticks -gt \$PreviousContext\.LastWriteTicks/);
   assert.match(runtime, /198[\s\S]*18[\s\S]*19[\s\S]*Fake-IP/);
   assert.match(resultContract, /localhost[\s\S]*\\d\{1,5\}/);
 });
@@ -1915,7 +1916,7 @@ test('Windows public commands share the JSON v1 result contract', () => {
   assert.match(fs.readFileSync(routeVerifierPath, 'utf8'), /-Command "verify_routes"/);
 });
 
-test('Windows route verifier accepts an explicit non-AI Google proxy group', () => {
+test('Windows route verifier allows a non-AI Google group only with the main group', () => {
   const source = fs.readFileSync(routeVerifierPath, 'utf8');
 
   assert.match(source, /function Test-RouteChains/);
@@ -1923,6 +1924,7 @@ test('Windows route verifier accepts an explicit non-AI Google proxy group', () 
   assert.match(source, /Observe-Route "OpenAI"[^\r\n]+\$false/);
   assert.match(source, /\(\?\i\)\(\^\|\\\.\)google\\\.com\$/);
   assert.doesNotMatch(source, /Observe-Route "Google"[^\r\n]+"google"/);
+  assert.doesNotMatch(source, /\$name -notmatch '\(\?i\)google'/);
 });
 
 test('Windows route verifier keeps PowerShell 5 route arrays and empty selections safe', () => {
