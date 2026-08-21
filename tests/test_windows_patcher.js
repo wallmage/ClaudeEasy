@@ -1253,6 +1253,11 @@ test('Windows verification and restore fail closed on stale or unsafe state', ()
   const refreshEnd = runtime.indexOf('\nfunction Wait-ClashVergeRuntimeHealthy', refreshStart);
   const refresh = runtime.slice(refreshStart, refreshEnd);
 
+  const mutationLock = source.indexOf('$mutationLock = Enter-AppHomeMutationLock $AppHome');
+  const pendingSafeUpdate = source.indexOf('ClaudeEasyOperation -eq "install"');
+  const usageProfileRead = source.indexOf('$usageProfileSnapshot = $null');
+  assert.ok(mutationLock >= 0 && pendingSafeUpdate > mutationLock && usageProfileRead > pendingSafeUpdate,
+    'pending safe-update state must be checked while holding the AppHome lock');
   assert.match(source, /ClaudeEasyOperation -eq "install"[\s\S]*ClaudeEasyOperation -eq "restore_backup"[\s\S]*safe_update_pending/);
   assert.match(runtime, /Assert-ClashRuntimeHealthy[\s\S]*-ReadOnly/);
   assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);

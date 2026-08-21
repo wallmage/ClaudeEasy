@@ -157,11 +157,6 @@ $usageStatePath = Join-Path $AppHome "claude-easy-usage-profile.json"
 $safeUpdateStatePath = Join-Path $AppHome "claude-easy-safe-update.json"
 $targetScript = Join-Path $profilesDirectory "Script.js"
 
-if (($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -eq "restore_backup") -and
-    (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists) {
-    Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次操作未修改任何文件。"
-}
-
 $mutationLock = $null
 try {
     $mutationLock = Enter-AppHomeMutationLock $AppHome
@@ -175,6 +170,12 @@ try {
     }
     Complete-InstallResult 1 "failed" "state_recovery_failed" $lockMessage
 }
+
+if (($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -eq "restore_backup") -and
+    (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists) {
+    Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次操作未修改任何文件。"
+}
+
 $clientStoppedPreCommit = {
     return (-not (Test-ClashVergeRunning))
 }
