@@ -3102,6 +3102,61 @@ public static class FakeCurl {
     $savedProfileTwo = Get-Content -LiteralPath (Join-Path $lightCase "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
     Assert-True ([int]$savedProfileTwo.Profile -eq 2) "profile 2 was not saved"
 
+    foreach ($lightProfile in @(1, 2)) {
+        $invalidLightCase = Join-Path $sandbox "invalid-light-profile-$lightProfile"
+        New-Item -ItemType Directory -Path $invalidLightCase -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $invalidLightCase "config.yaml"),
+            "ipv6: true`ntun:`n  enable: false`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $invalidLightCase "verge.yaml"),
+            "enable_tun_mode: false`n--- # second document`nfriend: true`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $invalidLightCase "profiles.yaml"),
+            "items:`n- uid: R-light`n  type: remote`n  option:`n    allow_auto_update: true`n"
+        )
+        $invalidLightBefore = Get-TreeContentSnapshot $invalidLightCase
+        $invalidLightInstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $invalidLightCase,
+            "-UsageProfile", "$lightProfile",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        )
+        Assert-True ($invalidLightInstall.ExitCode -eq 1) "profile $lightProfile accepted multi-document verge.yaml"
+        Assert-True (
+            (Get-TreeContentSnapshot $invalidLightCase) -ceq $invalidLightBefore
+        ) "profile $lightProfile changed AppHome after rejecting multi-document verge.yaml"
+    }
+
+    $invalidSafeUpdateStateCase = Join-Path $sandbox "invalid-safe-update-state-case"
+    New-Item -ItemType Directory -Path $invalidSafeUpdateStateCase -Force | Out-Null
+    New-Item -ItemType Directory -Path (
+        Join-Path $invalidSafeUpdateStateCase "claude-easy-safe-update.json"
+    ) -Force | Out-Null
+    $invalidSafeUpdateStateBefore = Get-TreeContentSnapshot $invalidSafeUpdateStateCase
+    $invalidSafeUpdateStateResult = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $invalidSafeUpdateStateCase,
+        "-UsageProfile", "1",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )) "install" 1
+    Assert-True (
+        $invalidSafeUpdateStateResult.code -eq "safe_update_state_read_failed"
+    ) "invalid safe-update state did not return a structured read failure"
+    Assert-True (
+        (Get-TreeContentSnapshot $invalidSafeUpdateStateCase) -ceq $invalidSafeUpdateStateBefore
+    ) "invalid safe-update state changed AppHome"
+    $invalidSafeUpdateStateRetry = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $invalidSafeUpdateStateCase,
+        "-ShowUsageProfile",
+        "-Json"
+    )) "install" 0
+    Assert-True (
+        $invalidSafeUpdateStateRetry.code -eq "usage_profile_shown"
+    ) "invalid safe-update state failure retained the AppHome lock or blocked an unrelated read"
+
     $downgradeCase = Join-Path $sandbox "downgrade-without-uninstall-case"
     New-Item -ItemType Directory -Path $downgradeCase -Force | Out-Null
     $downgradeStatePath = Join-Path $downgradeCase "claude-easy-usage-profile.json"

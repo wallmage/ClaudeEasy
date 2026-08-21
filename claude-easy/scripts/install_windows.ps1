@@ -171,9 +171,18 @@ try {
     Complete-InstallResult 1 "failed" "state_recovery_failed" $lockMessage
 }
 
-if (($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -eq "restore_backup") -and
-    (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists) {
-    Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次操作未修改任何文件。"
+try {
+try {
+if ($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -eq "restore_backup") {
+    $pendingSafeUpdate = $false
+    try {
+        $pendingSafeUpdate = (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists
+    } catch {
+        Complete-InstallResult 1 "failed" "safe_update_state_read_failed" "安全更新状态无法安全读取；本次操作未修改任何文件。"
+    }
+    if ($pendingSafeUpdate) {
+        Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次操作未修改任何文件。"
+    }
 }
 
 $clientStoppedPreCommit = {
@@ -196,8 +205,6 @@ if ($needsUsageProfile) {
     }
 }
 
-try {
-try {
 if ($BackupSubscriptions) {
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
     $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
@@ -912,6 +919,7 @@ try {
     $vergeInput = if ($vergeExisted) { $strictUtf8.GetString($vergeOriginalBytes) } else { "" }
     $vergeOutput = Set-ClaudeEasyReactivationHotkey $vergeInput
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_global_hotkey" "true"
+    Test-GeneratedYaml $vergeOutput "verge.yaml" | Out-Null
     $configSnapshot = Get-OptionalFileSnapshot $configPath "config.yaml"
     $configExisted = [bool]$configSnapshot.Exists
     $configOriginalBytes = $configSnapshot.Bytes
