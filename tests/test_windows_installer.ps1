@@ -7541,7 +7541,7 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
                 -WriteSpyPath $clientStartInstallWriteSpy
             $clientStartInstallJson = Assert-JsonResult $clientStartInstallInvocation "install" 1
             Assert-True (
-                $clientStartInstallJson.status -eq "rolled_back" -and
+                $clientStartInstallJson.status -eq "failed" -and
                 $clientStartInstallJson.code -eq "install_failed"
             ) "client-start install did not return the stopped-client failure"
             Assert-True (
