@@ -60,10 +60,115 @@ function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
     return $value
 }
 
+function Get-FlowProxyProtocolTypes([string]$Text) {
+    $types = @()
+    $squareDepth = 0
+    $braceDepth = 0
+    $quote = [char]0
+    $comment = $false
+    $fieldStart = -1
+    $typeValueStart = -1
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $character = $Text[$index]
+        if ($comment) {
+            if ($character -eq "`r" -or $character -eq "`n") { $comment = $false }
+            continue
+        }
+        if ($quote -ne [char]0) {
+            if ($character -eq $quote) {
+                if ($quote -eq "'" -and $index + 1 -lt $Text.Length -and $Text[$index + 1] -eq "'") {
+                    $index += 1
+                } elseif ($quote -ne '"' -or $index -eq 0 -or $Text[$index - 1] -ne "\") {
+                    $quote = [char]0
+                }
+            }
+            continue
+        }
+        if ($character -eq "#") { $comment = $true; continue }
+        if ($character -eq "'" -or $character -eq '"') { $quote = $character; continue }
+        if ($character -eq "[") { $squareDepth += 1; continue }
+        if ($character -eq "]") { $squareDepth -= 1; continue }
+        if ($character -eq "{") {
+            $braceDepth += 1
+            if ($squareDepth -eq 1 -and $braceDepth -eq 1) { $fieldStart = $index + 1 }
+            continue
+        }
+        if ($character -eq ":" -and $squareDepth -eq 1 -and $braceDepth -eq 1 -and $fieldStart -ge 0) {
+            $key = $Text.Substring($fieldStart, $index - $fieldStart).Trim().Trim("'", '"')
+            if ($key -ieq "type") { $typeValueStart = $index + 1 }
+            continue
+        }
+        if (($character -eq "," -or $character -eq "}") -and
+            $squareDepth -eq 1 -and $braceDepth -eq 1) {
+            if ($typeValueStart -ge 0) {
+                $types += (ConvertFrom-SubscriptionScalar `
+                    $Text.Substring($typeValueStart, $index - $typeValueStart) "代理类型").ToLowerInvariant()
+            }
+            $typeValueStart = -1
+            $fieldStart = $index + 1
+            if ($character -eq "}") { $braceDepth -= 1; $fieldStart = -1 }
+            continue
+        }
+        if ($character -eq "}") { $braceDepth -= 1 }
+    }
+    return @($types)
+}
+
+function Get-ProxyProtocolTypes([string]$Text) {
+    $lines = @(Split-YamlLines $Text)
+    $node = Find-YamlMappingNode $lines "proxies" 0 0 $lines.Count
+    if ($null -eq $node) { return @() }
+    $inline = ([string]$node.Value).Trim()
+    if ($inline.StartsWith("[")) {
+        return @(Get-FlowProxyProtocolTypes (($lines[$node.Start..($node.End - 1)]) -join "`n"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($inline) -and -not $inline.StartsWith("#")) {
+        return @()
+    }
+
+    $children = @()
+    for ($index = $node.Start + 1; $index -lt $node.End; $index++) {
+        $line = $lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
+        $children += [pscustomobject]@{ Index = $index; Indent = Get-YamlIndent $line; Text = $line.TrimStart() }
+    }
+    if ($children.Count -eq 0) { return @() }
+    $itemIndent = ($children | Measure-Object -Property Indent -Minimum).Minimum
+    $itemStarts = @($children | Where-Object {
+        $_.Indent -eq $itemIndent -and ($_.Text -eq "-" -or $_.Text.StartsWith("- "))
+    })
+    $types = @()
+    for ($itemIndex = 0; $itemIndex -lt $itemStarts.Count; $itemIndex++) {
+        $item = $itemStarts[$itemIndex]
+        $finish = if ($itemIndex + 1 -lt $itemStarts.Count) { $itemStarts[$itemIndex + 1].Index } else { $node.End }
+        $entries = @()
+        $tail = $item.Text.Substring(1).TrimStart()
+        if (-not [string]::IsNullOrWhiteSpace($tail)) {
+            if ($tail.StartsWith("{")) {
+                $types += @(Get-FlowProxyProtocolTypes "[$tail]")
+                continue
+            }
+            $entries += Get-YamlMappingEntry $tail
+        }
+        $nested = @($children | Where-Object { $_.Index -gt $item.Index -and $_.Index -lt $finish })
+        if ($nested.Count -gt 0) {
+            $fieldIndent = ($nested | Measure-Object -Property Indent -Minimum).Minimum
+            $entries += @($nested | Where-Object { $_.Indent -eq $fieldIndent } | ForEach-Object {
+                Get-YamlMappingEntry $_.Text
+            })
+        }
+        foreach ($entry in @($entries | Where-Object { $null -ne $_ -and $_.Key -ieq "type" })) {
+            $types += (ConvertFrom-SubscriptionScalar ([string]$entry.Value) "代理类型").ToLowerInvariant()
+        }
+    }
+    return @($types)
+}
+
 function Assert-SubscriptionProtocolPreserved([string]$BeforeText, [string]$CandidateText) {
-    $anyTls = '(?im)\btype\s*:\s*["'']?anytls\b'
-    $shadowsocks = '(?im)\btype\s*:\s*["'']?ss\b'
-    if ($BeforeText -match $anyTls -and $CandidateText -notmatch $anyTls -and $CandidateText -match $shadowsocks) {
+    $beforeTypes = @(Get-ProxyProtocolTypes $BeforeText)
+    $candidateTypes = @(Get-ProxyProtocolTypes $CandidateText)
+    if ($beforeTypes -contains "anytls" -and $candidateTypes -notcontains "anytls" -and
+        $candidateTypes -contains "ss") {
         throw "远程订阅把 AnyTLS 替换为 Shadowsocks。"
     }
 }

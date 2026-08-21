@@ -322,6 +322,7 @@ module ClaudeEasy
                          end
 
     seen = {}
+    fully_restored = true
     state.fetch("Items").each do |item|
       expected_keys = if version == 1
                         %w[CandidateSha256 OriginalBase64 Path WritePath]
@@ -352,11 +353,18 @@ module ClaudeEasy
       original = Base64.strict_decode64(item.fetch("OriginalBase64"))
       begin
         target = File.lstat(write_path)
-        next unless target.file? && !target.symlink? && target.nlink == 1
-        next unless File.realpath(write_path) == write_path
+        unless target.file? && !target.symlink? && target.nlink == 1
+          fully_restored = false
+          next
+        end
+        unless File.realpath(write_path) == write_path
+          fully_restored = false
+          next
+        end
 
         current_snapshot = regular_file_snapshot_once(write_path, "配置事务目标")
       rescue Errno::ENOENT, Errno::ENOTDIR, Errno::ELOOP
+        fully_restored = false
         next
       end
       current = current_snapshot.fetch(:bytes)
@@ -366,8 +374,11 @@ module ClaudeEasy
           Digest::SHA256.hexdigest(candidate) == item.fetch("CandidateSha256")
 
         expected_identity = item.fetch("OriginalIdentity")
-        next unless current_snapshot.fetch(:identity) == expected_identity
         next if current == original
+        unless current_snapshot.fetch(:identity) == expected_identity
+          fully_restored = false
+          next
+        end
         raise InvalidConfigError, "配置事务目标处于无法安全判定的部分写入状态" unless
           current == candidate
 
@@ -377,7 +388,10 @@ module ClaudeEasy
         )
         unless restored
           latest = regular_file_snapshot_once(write_path, "配置事务目标")
-          next unless latest.fetch(:identity) == expected_identity
+          unless latest.fetch(:identity) == expected_identity
+            fully_restored = false
+            next
+          end
           next if latest.fetch(:bytes) == original
 
           raise IOError, "配置事务恢复失败"
@@ -393,6 +407,8 @@ module ClaudeEasy
 
       raise InvalidConfigError, "旧版配置事务缺少文件身份，不能自动恢复"
     end
+    raise IOError, "配置事务仍有未恢复目标" unless fully_restored
+
     remove_profile_transaction(snapshot) unless keep_transaction
     activation_state = parsed_activation_state(state.fetch("Activation")) if version == 5
     snapshot.merge(runtime_checkpoint: runtime_checkpoint, activation_state: activation_state)

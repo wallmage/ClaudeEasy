@@ -1,4 +1,5 @@
 ﻿param(
+    [string]$AppHome = "",
     [string]$ControllerUrl = "http://127.0.0.1:9097",
     [string]$Secret = "",
     [switch]$SecretStdin,
@@ -25,6 +26,26 @@ if (Test-Path -LiteralPath $resultContractPath -PathType Leaf) {
             if ($null -eq (Get-Command $requiredResultFunction -CommandType Function -ErrorAction SilentlyContinue)) {
                 $resultContractLoaded = $false
                 break
+            }
+        }
+        if ($resultContractLoaded) {
+            $moduleRoot = Join-Path $PSScriptRoot "install_windows"
+            foreach ($moduleName in @("transaction.ps1", "common.ps1")) {
+                $modulePath = Join-Path $moduleRoot $moduleName
+                if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+                    $resultContractLoaded = $false
+                    break
+                }
+                $null = . $modulePath
+            }
+            foreach ($requiredProfileFunction in @(
+                "Resolve-ClashVergeAppHome", "ConvertTo-NormalizedWindowsPath",
+                "Get-OptionalFileSnapshot", "Get-SavedUsageProfile"
+            )) {
+                if ($null -eq (Get-Command $requiredProfileFunction -CommandType Function -ErrorAction SilentlyContinue)) {
+                    $resultContractLoaded = $false
+                    break
+                }
             }
         }
     } catch {
@@ -79,6 +100,35 @@ if ($blankGroupOverride) {
         Write-ClaudeEasyVerificationText "[ClaudeEasy] 代理组名称不能为空。" -ErrorStream
     }
     exit 64
+}
+
+$savedUsageProfile = 0
+$usageProfileCode = ""
+$usageProfileSummary = ""
+try {
+    if ([string]::IsNullOrWhiteSpace($AppHome)) { $AppHome = Resolve-ClashVergeAppHome }
+    if (-not [string]::IsNullOrWhiteSpace($AppHome)) {
+        $AppHome = ConvertTo-NormalizedWindowsPath $AppHome
+        $savedUsageProfile = Get-SavedUsageProfile (Join-Path $AppHome "claude-easy-usage-profile.json")
+    }
+    if ($savedUsageProfile -eq 0) {
+        $usageProfileCode = "usage_profile_unset"
+        $usageProfileSummary = "尚未保存用途档位，未执行分流验证。"
+    } elseif ($savedUsageProfile -ne 3) {
+        $usageProfileCode = "usage_profile_mismatch"
+        $usageProfileSummary = "分流验证仅适用于已保存的档位 3。"
+    }
+} catch {
+    $usageProfileCode = "usage_profile_invalid"
+    $usageProfileSummary = "已保存的用途档位状态无效，未执行分流验证。"
+}
+if (-not [string]::IsNullOrEmpty($usageProfileCode)) {
+    if ($Json) {
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code $usageProfileCode -ExitCode 10 -SummaryZh $usageProfileSummary -Profile 3)
+    } else {
+        Write-ClaudeEasyVerificationText "[ClaudeEasy] $usageProfileSummary" -ErrorStream
+    }
+    exit 10
 }
 
 function Read-ControllerSecretFromStandardInput {

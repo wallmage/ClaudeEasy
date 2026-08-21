@@ -51,15 +51,24 @@ module ClaudeEasy
     false
   end
 
-  def clashx_runtime_generation
-    paths = running_mihomo_config_paths.sort
-    return nil if paths.empty?
+  def clashx_runtime_generation(identity, runner: Open3.method(:capture3))
+    return nil unless identity.is_a?(Hash) && identity[:pid].is_a?(Integer) && identity[:pid].positive?
 
-    values = paths.map do |path|
-      stat = File.stat(path)
-      [File.realpath(path), stat.mtime.to_f, stat.size, Digest::SHA256.file(path).hexdigest]
+    output, _error, status = runner.call(
+      "/usr/sbin/lsof", "-n", "-P", "-a", "-p", identity.fetch(:pid).to_s,
+      "-U", "-F", "ftn"
+    )
+    return nil unless status.success?
+
+    sockets = output.split(/(?=^f)/).each_with_object([]) do |record, found|
+      lines = record.lines.map(&:chomp)
+      next unless lines.include?("tunix")
+
+      found << lines.grep(/\A[ftn]/).join("\n")
     end
-    Digest::SHA256.hexdigest(JSON.generate(values))
+    return nil if sockets.empty?
+
+    Digest::SHA256.hexdigest(sockets.sort.join("\0"))
   rescue StandardError
     nil
   end
@@ -84,7 +93,11 @@ module ClaudeEasy
     attempts.times do |attempt|
       return false unless same_clashx_process?(identity, process_reader.call)
 
-      return false unless generation_reader.call
+      generation = generation_reader.call(identity)
+      unless generation && generation != generation_before
+        sleeper.call(0.25) if attempt + 1 < attempts
+        next
+      end
       requester = requester_factory.call
       restorable_selections = requester && runtime_restorable_selections(requester, selections)
       selections_restored = requester && restorable_selections &&
@@ -908,7 +921,7 @@ module ClaudeEasy
       return result.merge(status: rollback_before_runtime_reload(result))
     end
 
-    generation = generation_reader.call
+    generation = generation_reader.call(client_identity)
     return result.merge(status: rollback_before_runtime_reload(result)) unless generation
     return pending.call unless
       mark_profile_transaction_activation(transaction, :update, client_identity)
@@ -925,7 +938,7 @@ module ClaudeEasy
       runtime_precommit_allowed?(precommit_condition)
 
     return result.merge(status: :reload_failed_rollback_conflict) unless restore_profile_bytes(result)
-    rollback_generation = generation_reader.call
+    rollback_generation = generation_reader.call(client_identity)
     return pending.call unless rollback_generation
     return pending.call unless
       mark_profile_transaction_activation(transaction, :rollback, client_identity)

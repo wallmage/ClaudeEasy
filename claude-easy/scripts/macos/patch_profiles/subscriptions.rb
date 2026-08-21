@@ -32,13 +32,13 @@ module ClaudeEasy
     if (!isFinite(timeoutSeconds) || timeoutSeconds <= 0) fail("invalid timeout");
     if (!urlText.match(/^https:\/\//)) fail("invalid subscription URL");
 
-    var applications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.metacubex.ClashX.meta");
-    if (applications.count === 0) {
-      applications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.MetaCubeX.ClashX.meta");
-    }
-    if (applications.count === 0) fail("ClashX Meta is not running");
+    var primaryApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.metacubex.ClashX.meta");
+    var alternateApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.MetaCubeX.ClashX.meta");
+    if (primaryApplications.count + alternateApplications.count !== 1) fail("ClashX Meta process is not unique");
+    var application = primaryApplications.count === 1 ?
+      primaryApplications.objectAtIndex(0) : alternateApplications.objectAtIndex(0);
 
-    var bundle = $.NSBundle.bundleWithURL(applications.objectAtIndex(0).bundleURL);
+    var bundle = $.NSBundle.bundleWithURL(application.bundleURL);
     var executable = unwrap(bundle.objectForInfoDictionaryKey("CFBundleExecutable"));
     var version = unwrap(bundle.objectForInfoDictionaryKey("CFBundleShortVersionString"));
     var identifier = unwrap(bundle.objectForInfoDictionaryKey("CFBundleIdentifier"));
@@ -769,16 +769,10 @@ module ClaudeEasy
     return false unless selections && %i[enabled disabled ignore].include?(expected_tun)
 
     return false unless runtime_precommit_allowed?(precommit_condition)
-    requester = current_runtime_requester
-    return true if requester && runtime_health_healthy?(
-      requester, selections: selections, expected_tun: expected_tun,
-      precommit_condition: precommit_condition, flush_caches: false, check_dns: false
-    )
-
     generation_reader ||= method(:clashx_runtime_generation)
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
-    generation = generation_reader.call
+    generation = generation_reader.call(client_identity)
     return false unless generation
     return false unless
       mark_profile_transaction_activation(transaction, :rollback, client_identity)

@@ -1767,7 +1767,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
     ],
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
-      'ConvertFrom-SubscriptionScalar', 'Assert-SubscriptionProtocolPreserved',
+      'ConvertFrom-SubscriptionScalar', 'Get-FlowProxyProtocolTypes',
+      'Get-ProxyProtocolTypes', 'Assert-SubscriptionProtocolPreserved',
       'Get-PublicBackupId', 'Get-BackupTarget',
       'Get-ClaudeEasyManagedScriptBlock',
       'Get-ClaudeEasyManagedScriptEnvelope',

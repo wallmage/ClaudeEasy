@@ -83,7 +83,18 @@ function Get-RedactedYamlChangedPaths([string]$Before, [string]$After) {
         $beforeSections[$_] -ne $afterSections[$_]
     })
     if ($changes.Count -eq 0) { return @("无法安全识别的配置区域") }
-    return $changes
+    return @($changes | ForEach-Object {
+        $parts = @([string]$_ -split '\.')
+        if ($parts.Count -gt 1 -and $parts[0] -in @("proxy-providers", "rule-providers", "hosts")) {
+            $parts[1] = "[item]"
+        } elseif ($parts.Count -gt 2 -and $parts[0] -eq "dns" -and
+            $parts[1] -in @("hosts", "nameserver-policy")) {
+            $parts[2] = "[item]"
+        } elseif ($parts.Count -gt 2 -and $parts[0] -eq "script" -and $parts[1] -eq "shortcuts") {
+            $parts[2] = "[item]"
+        }
+        $parts -join "."
+    } | Sort-Object -Unique)
 }
 
 function Find-YamlMappingNode(

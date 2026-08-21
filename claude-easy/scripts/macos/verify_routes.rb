@@ -299,7 +299,7 @@ module ClashRouteVerifier
     false
   end
 
-  def cli(argv = ARGV, output: $stdout)
+  def cli(argv = ARGV, output: $stdout, profile_reader: ClaudeEasy.method(:saved_usage_profile))
     json_mode = argv.include?("--json")
     options = {
       main_group: nil, ai_group: nil, observation_seconds: 15,
@@ -342,6 +342,35 @@ module ClashRouteVerifier
         output.puts parser
       end
       return 0
+    end
+
+    profile_code = nil
+    profile_summary = nil
+    begin
+      saved_profile = profile_reader.call
+      if saved_profile.nil?
+        profile_code = "usage_profile_unset"
+        profile_summary = "尚未保存用途档位，未执行分流验证。"
+      elsif saved_profile != 3
+        profile_code = "usage_profile_mismatch"
+        profile_summary = "分流验证仅适用于已保存的档位 3。"
+      end
+    rescue ClaudeEasy::InvalidConfigError
+      profile_code = "usage_profile_invalid"
+      profile_summary = "已保存的用途档位状态无效，未执行分流验证。"
+    end
+    if profile_code
+      if options[:json]
+        ClaudeEasyResult.write(
+          output: output, command: "verify_routes", operation: "verify_routes", ok: false,
+          status: "invalid_request", code: profile_code, exit_code: 10,
+          summary_zh: profile_summary, profile: 3, changes: [], checks: [], items: [],
+          messages: [], warnings: []
+        )
+      else
+        output.puts profile_summary
+      end
+      return 10
     end
 
     details = { checks: [] }
