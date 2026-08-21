@@ -499,19 +499,17 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
                 [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
                 if ($ScriptArguments -contains "-VerifySafeUpdate") {
                     $simulatedRuntimeRefresh = Start-Job -ArgumentList @(
-                        $runtimePath,
-                        $script:safeUpdateRuntimeText
+                        $runtimePath
                     ) -ScriptBlock {
-                        param([string]$RuntimePath, [string]$RuntimeText)
+                        param([string]$RuntimePath)
                         for ($attempt = 0; $attempt -lt 6000; $attempt++) {
                             Start-Sleep -Milliseconds 100
-                            $candidate = "$RuntimePath.test-$attempt"
                             try {
-                                [System.IO.File]::WriteAllText($candidate, $RuntimeText)
-                                [System.IO.File]::Replace($candidate, $RuntimePath, $null)
-                            } catch {
-                                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
-                            }
+                                [System.IO.File]::SetLastWriteTimeUtc(
+                                    $RuntimePath,
+                                    [DateTime]::UtcNow.AddSeconds(2)
+                                )
+                            } catch { }
                         }
                     }
                 }
