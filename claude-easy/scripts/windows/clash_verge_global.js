@@ -591,9 +591,9 @@ function claudeEasyNormalizedResolverEndpoints(config, values) {
 function claudeEasyUnsafeProxyBootstrap(values) {
   const normalized = Array.isArray(values) ? values : [];
   if (normalized.length === 0 || normalized.some(claudeEasyUnsafeBootstrapValue)) return true;
-  const serialized = JSON.stringify(normalized);
+  const serialized = JSON.stringify(normalized.slice().sort());
   return [
-    JSON.stringify(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"])
+    JSON.stringify(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"].sort())
   ].indexOf(serialized) !== -1;
 }
 

@@ -622,6 +622,21 @@ test('migrates the old unsafe bootstrap signature to bootstrap-free mainland DoH
   assert.deepEqual(dns['proxy-server-nameserver'], expected);
 });
 
+test('migrates the reversed old unsafe proxy bootstrap signature', { skip: !available }, () => {
+  const config = baseConfig();
+  config.dns['proxy-server-nameserver'] = [
+    'https://8.8.8.8/dns-query',
+    'https://1.1.1.1/dns-query'
+  ];
+
+  const dns = engine.claudeEasyTransform(config, 'fixture', 1).dns;
+
+  assert.deepEqual(dns['proxy-server-nameserver'], [
+    'https://223.5.5.5/dns-query#DIRECT',
+    'https://1.12.12.12/dns-query#DIRECT'
+  ]);
+});
+
 test('main delegates to the same transform', { skip: !available }, () => {
   assert.deepEqual(engine.main(baseConfig(), 'fixture'), engine.claudeEasyTransform(baseConfig(), 'fixture'));
 });
