@@ -142,6 +142,8 @@ finish() {
   finish_summary=$4
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     emit_uninstall_result "$finish_exit" "$finish_status" "$finish_code" "$finish_summary"
+  else
+    /usr/bin/printf '%s\n' "[ClaudeEasy] $finish_summary"
   fi
   trap - EXIT HUP INT TERM
   exit "$finish_exit"
@@ -370,24 +372,42 @@ recover_pending_profile_transaction() {
   if [ -n "$CUSTOM_PROFILE_DIR" ]; then
     profile_recovery=$(/usr/bin/ruby "$PATCHER_SOURCE" \
       --profile-dir "$CUSTOM_PROFILE_DIR" --backup-dir "$BACKUP_DIR" \
-      --recover-profile-transaction 2>/dev/null)
+      --recover-profile-transaction --json 2>/dev/null)
   else
     profile_recovery=$(/usr/bin/ruby "$PATCHER_SOURCE" \
-      --backup-dir "$BACKUP_DIR" --recover-profile-transaction 2>/dev/null)
+      --backup-dir "$BACKUP_DIR" --recover-profile-transaction --json 2>/dev/null)
   fi
   profile_recovery_status=$?
   set -e
   if [ "$profile_recovery_status" -ne 0 ]; then
     finish 1 failed profile_transaction_recovery_failed "未完成的配置事务无法恢复；未继续卸载。"
   fi
-  case "$profile_recovery" in
-    recovered|none) ;;
-    *) finish 1 failed profile_transaction_recovery_failed "配置事务恢复结果异常；未继续卸载。" ;;
-  esac
+  if ! profile_recovery_code=$(
+    /usr/bin/printf '%s' "$profile_recovery" |
+      /usr/bin/ruby -rjson -e '
+        result = JSON.parse(STDIN.read)
+        valid = result["schema"] == "claude-easy.result" &&
+          result["version"] == 1 && result["command"] == "patch" &&
+          result["operation"] == "recover_profile_transaction" &&
+          result["exit_code"] == 0 &&
+          %w[profile_transaction_recovered profile_transaction_cleanup_completed no_pending_transaction].include?(result["code"])
+        exit 1 unless valid
+        STDOUT.write(result["code"])
+      ' 2>/dev/null
+  ); then
+    finish 1 failed profile_transaction_recovery_failed "配置事务恢复结果异常；未继续卸载。"
+  fi
   if [ -e "$PROFILE_TRANSACTION_PATH" ] || [ -L "$PROFILE_TRANSACTION_PATH" ]; then
     finish 1 failed profile_transaction_recovery_failed "配置事务恢复记录仍然存在；未继续卸载。"
   fi
-  say "已先恢复上次中断的配置事务和当前运行配置。"
+  case "$profile_recovery_code" in
+    profile_transaction_recovered)
+      say "已先恢复上次中断的配置事务和当前运行配置。"
+      ;;
+    profile_transaction_cleanup_completed)
+      say "已清理完成提交后遗留的配置事务标记。"
+      ;;
+  esac
 }
 
 restore_slot() {

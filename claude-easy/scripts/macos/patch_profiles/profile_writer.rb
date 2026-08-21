@@ -218,6 +218,65 @@ module ClaudeEasy
     }
   end
 
+  def parse_profile_transaction_bytes(bytes)
+    final_newline = bytes.rindex("\n")
+    raise InvalidConfigError, "配置事务记录无效" unless final_newline
+
+    complete_bytes = bytes.byteslice(0, final_newline + 1)
+    incomplete_tail = complete_bytes.bytesize != bytes.bytesize
+    text = complete_bytes.dup.force_encoding(Encoding::UTF_8)
+    raise InvalidConfigError, "配置事务记录无效" unless text.valid_encoding?
+
+    lines = text.lines
+    raise InvalidConfigError, "配置事务记录无效" if lines.empty?
+
+    state = JSON.parse(lines.shift)
+    lines.each do |line|
+      event = JSON.parse(line)
+      raise InvalidConfigError, "配置事务加载记录无效" unless
+        [4, 5].include?(state["Version"]) && event.is_a?(Hash) &&
+        event.keys.sort == %w[Activation Version] && event["Version"] == 1
+
+      parsed_activation_state(event.fetch("Activation"))
+      state["Version"] = 5
+      state["Activation"] = event.fetch("Activation")
+    end
+    [state, incomplete_tail]
+  rescue JSON::ParserError
+    raise InvalidConfigError, "配置事务记录无效"
+  end
+
+  def replace_profile_transaction_snapshot(snapshot, replacement_bytes)
+    path = snapshot.fetch(:path)
+    File.open(path, File::RDONLY) do |source|
+      lock_exclusive_with_timeout(source)
+      stat = source.stat
+      current = File.lstat(path)
+      raise IOError, "配置事务记录同时发生变化" unless
+        current.file? && !current.symlink? &&
+        [stat.dev, stat.ino] == snapshot.fetch(:identity) &&
+        [current.dev, current.ino] == snapshot.fetch(:identity) &&
+        source.read.b == snapshot.fetch(:bytes)
+
+      Tempfile.create([".claude-easy-profile-activation-", ".tmp"], File.dirname(path)) do |temporary|
+        temporary.binmode
+        temporary.write(replacement_bytes)
+        temporary.flush
+        temporary.fsync
+        temporary.chmod(0o600)
+        source.rewind
+        current = File.lstat(path)
+        raise IOError, "配置事务记录同时发生变化" unless
+          [current.dev, current.ino] == snapshot.fetch(:identity) &&
+          source.read.b == snapshot.fetch(:bytes)
+
+        File.rename(temporary.path, path)
+        fsync_parent_directory(path)
+      end
+    end
+    regular_file_snapshot_once(path, "配置事务记录")
+  end
+
   def remove_profile_transaction(snapshot, state_uncertain_on_sync_failure: false)
     path = snapshot.fetch(:path)
     flags = File::RDONLY
@@ -278,22 +337,19 @@ module ClaudeEasy
 
     snapshot = regular_file_snapshot_once(path, "配置事务记录")
     allowed_concurrent_paths = allow_concurrent_paths.map { |item| File.expand_path(item) }.to_h { |item| [item, true] }
-    text = snapshot.fetch(:bytes).dup.force_encoding(Encoding::UTF_8)
-    raise InvalidConfigError, "配置事务记录无效" unless text.valid_encoding?
-
-    lines = text.lines
-    raise InvalidConfigError, "配置事务记录无效" unless text.end_with?("\n") && !lines.empty?
-
-    state = JSON.parse(lines.shift)
-    lines.each do |line|
-      event = JSON.parse(line)
+    state, incomplete_activation_tail = parse_profile_transaction_bytes(snapshot.fetch(:bytes))
+    if incomplete_activation_tail
       raise InvalidConfigError, "配置事务加载记录无效" unless
-        [4, 5].include?(state["Version"]) && event.is_a?(Hash) &&
-        event.keys.sort == %w[Activation Version] && event["Version"] == 1
+        state.is_a?(Hash) && state["Version"] == 5 && state["Activation"]
 
-      parsed_activation_state(event.fetch("Activation"))
-      state["Version"] = 5
-      state["Activation"] = event.fetch("Activation")
+      activation = state.fetch("Activation").dup
+      parsed_activation_state(activation)
+      activation["UpdateRequested"] = true
+      activation["RollbackRequested"] = true
+      state["Activation"] = activation
+      snapshot = replace_profile_transaction_snapshot(
+        snapshot, (JSON.generate(state) + "\n").b
+      )
     end
     if state == { "Version" => 3, "Committed" => true }
       remove_profile_transaction(snapshot)
@@ -322,6 +378,7 @@ module ClaudeEasy
                          end
 
     seen = {}
+    candidate_bytes = {}
     fully_restored = true
     state.fetch("Items").each do |item|
       expected_keys = if version == 1
@@ -372,6 +429,7 @@ module ClaudeEasy
         candidate = Base64.strict_decode64(item.fetch("CandidateBase64"))
         raise InvalidConfigError, "配置事务记录无效" unless
           Digest::SHA256.hexdigest(candidate) == item.fetch("CandidateSha256")
+        candidate_bytes[write_path] = candidate
 
         expected_identity = item.fetch("OriginalIdentity")
         next if current == original
@@ -413,7 +471,10 @@ module ClaudeEasy
 
     remove_profile_transaction(snapshot) unless keep_transaction
     activation_state = parsed_activation_state(state.fetch("Activation")) if version == 5
-    snapshot.merge(runtime_checkpoint: runtime_checkpoint, activation_state: activation_state)
+    snapshot.merge(
+      runtime_checkpoint: runtime_checkpoint, activation_state: activation_state,
+      candidate_bytes: candidate_bytes
+    )
   rescue ArgumentError, JSON::ParserError
     raise InvalidConfigError, "配置事务记录无效"
   end
@@ -482,9 +543,13 @@ module ClaudeEasy
         }
       ]
     end
+    candidate_bytes = records.to_h do |record|
+      [record.fetch("WritePath"), Base64.strict_decode64(record.fetch("CandidateBase64"))]
+    end
     snapshot.merge(
       targets: targets, runtime_checkpoint: runtime_checkpoint,
-      activation_state: activation_identity && parsed_activation_state(state.fetch("Activation"))
+      activation_state: activation_identity && parsed_activation_state(state.fetch("Activation")),
+      candidate_bytes: candidate_bytes
     )
   end
 
@@ -582,20 +647,22 @@ module ClaudeEasy
     return :none unless pending
     return :recovered if transaction == :committed
     runtime_recovered = if transaction[:activation_state]
-                          usage_profile = saved_usage_profile
-                          usage_profile && reload_recovered_safe_update_runtime(
+                          usage_profile = saved_usage_profile if reload_runtime
+                          client_identity = clashx_running_identity if usage_profile
+                          usage_profile && client_identity && reload_recovered_safe_update_runtime(
                             work_items, usage_profile, nil,
                             precommit_condition: precommit_condition,
                             runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),
                             transaction: transaction,
-                            client_identity: transaction.fetch(:activation_state)
+                            client_identity: client_identity
                           )
                         else
                           reload_runtime && reload_recovered_profile_runtime(
                             work_items, require_tun: require_tun, socket: socket,
                             requester: requester, connectivity_checker: connectivity_checker,
                             precommit_condition: precommit_condition,
-                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)
+                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),
+                            transaction: transaction
                           )
                         end
     return :runtime_restore_pending unless runtime_recovered
@@ -610,7 +677,7 @@ module ClaudeEasy
                                           guard_storage: false, expected_storage: nil)
     operation_lock = profile_operation_lock(backup_root)
     transaction_state = cleanup_committed_profile_transaction(backup_root)
-    return :recovered if transaction_state == :committed
+    return :committed_cleaned if transaction_state == :committed
     return :profile_directory_missing if directories.empty?
     return :none if transaction_state == :none
 
@@ -667,7 +734,7 @@ module ClaudeEasy
       unless result[:changed]
         unless validator.nil?
           Tempfile.create(
-            [File.basename(write_path), ".tmp"], File.dirname(write_path), encoding: "UTF-8"
+            [".claude-easy-profile-validate-", ".yaml"], File.dirname(write_path), encoding: "UTF-8"
           ) do |temporary|
             temporary.write(original_text)
             temporary.flush
@@ -700,7 +767,7 @@ module ClaudeEasy
       if second_pass[:changed] || second_pass[:config] != candidate_config
         return base_result(config, :non_idempotent).merge(path: path)
       end
-      Tempfile.create([File.basename(write_path), ".tmp"], File.dirname(write_path), encoding: "UTF-8") do |temporary|
+      Tempfile.create([".claude-easy-profile-write-", ".yaml"], File.dirname(write_path), encoding: "UTF-8") do |temporary|
         temporary.write(patched_text)
         temporary.flush
         temporary.fsync
@@ -1025,7 +1092,8 @@ module ClaudeEasy
                   socket: socket, requester: requester,
                   connectivity_checker: connectivity_checker,
                   precommit_condition: precommit_condition,
-                  runtime_checkpoint: transaction.fetch(:runtime_checkpoint, runtime_checkpoint)
+                  runtime_checkpoint: transaction.fetch(:runtime_checkpoint, runtime_checkpoint),
+                  transaction: recovery
                 ) && runtime_precommit_allowed?(precommit_condition)
                 if restored_runtime
                   begin

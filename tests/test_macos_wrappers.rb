@@ -262,6 +262,17 @@ class MacosWrapperTest < Minitest::Test
           refute status.success?, "#{stdout}\n#{stderr}"
           assert_equal "operation_lock_failed", JSON.parse(stdout).fetch("code")
           refute File.exist?(state)
+
+          stdout, _stderr, status, = run_script(
+            installer, "--profile", "1", home: home,
+            extra_env: {
+              "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD" => "1",
+              "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_FD" => nil,
+              "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_IDENTITY" => nil
+            }
+          )
+          refute status.success?
+          assert_includes stdout, "无法建立 ClaudeEasy 操作锁"
         end
       end
     end
@@ -287,6 +298,22 @@ class MacosWrapperTest < Minitest::Test
 
         refute status.success?, "#{stdout}\n#{stderr}"
         assert_equal "operation_lock_failed", JSON.parse(stdout).fetch("code")
+        assert_equal "keep", File.binread(installed)
+
+        stdout, _stderr, status = Open3.capture3(
+          {
+            "HOME" => home,
+            "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
+            "CLAUDE_EASY_USAGE_PROFILE" => nil,
+            "CLAUDE_EASY_PROFILE_DIR" => nil,
+            "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD" => "1",
+            "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_FD" => nil,
+            "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_IDENTITY" => nil
+          },
+          "/bin/sh", uninstaller
+        )
+        refute status.success?
+        assert_includes stdout, "无法建立 ClaudeEasy 操作锁"
         assert_equal "keep", File.binread(installed)
       end
     end
@@ -1163,6 +1190,7 @@ class MacosWrapperTest < Minitest::Test
     require_production_probe!
     patcher = <<~'RUBY'
       require "fileutils"
+      require "json"
 
       backup_dir = ARGV[ARGV.index("--backup-dir") + 1] if ARGV.include?("--backup-dir")
       profile_dir = ARGV[ARGV.index("--profile-dir") + 1] if ARGV.include?("--profile-dir")
@@ -1190,10 +1218,15 @@ class MacosWrapperTest < Minitest::Test
         exit 0
       end
       if ARGV.include?("--recover-profile-transaction")
+        abort "missing --json" unless ARGV.include?("--json")
         File.binwrite(profile, File.binread(original))
         File.binwrite(runtime, "original")
         File.delete(transaction)
-        puts "recovered"
+        puts JSON.generate(
+          "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+          "operation" => "recover_profile_transaction", "exit_code" => 0,
+          "code" => "profile_transaction_recovered"
+        )
         exit 0
       end
       if ARGV.include?("--restore-owned-subscription-auto-update")
@@ -1289,6 +1322,33 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_uninstaller_accepts_real_patcher_committed_transaction_cleanup
+    with_real_installer_package do |installer|
+      uninstaller = File.join(File.dirname(installer), "uninstall_macos.sh")
+      [true, false].each do |json|
+        Dir.mktmpdir do |home|
+          backup_dir = File.join(home, "Library", "Application Support", "ClaudeEasy", "backups")
+          FileUtils.mkdir_p(backup_dir)
+          transaction = File.join(backup_dir, ".claude-easy-profile-transaction.json")
+          File.binwrite(transaction, JSON.generate("Version" => 3, "Committed" => true) + "\n")
+
+          arguments = json ? ["--json"] : []
+          stdout, stderr, status, = run_script(uninstaller, *arguments, home: home)
+
+          assert status.success?, "#{stdout}\n#{stderr}"
+          if json
+            result = assert_json_result(stdout, status, command: "uninstall")
+            assert_equal "uninstall_completed", result.fetch("code")
+          else
+            assert_includes stdout, "已清理完成提交后遗留的配置事务标记"
+            refute_includes stdout, "恢复上次中断的配置事务和当前运行配置"
+          end
+          refute File.exist?(transaction)
+        end
+      end
+    end
+  end
+
   def test_uninstaller_preserves_everything_when_profile_transaction_recovery_fails
     patcher = <<~'RUBY'
       if ARGV.include?("--recover-profile-transaction")
@@ -1332,6 +1392,16 @@ class MacosWrapperTest < Minitest::Test
         end
         refute File.exist?(File.join(home, "unexpected-auto-update-restore"))
         refute File.exist?(File.join(install_dir, ".claude-easy-uninstall-staging"))
+
+        stdout, _stderr, status, = run_script(
+          uninstaller, home: home,
+          extra_env: { "CLAUDE_EASY_PROFILE_DIR" => profile_dir }
+        )
+        refute status.success?
+        assert_includes stdout, "未完成的配置事务无法恢复"
+        protected_files.each do |path, bytes|
+          assert_equal bytes, File.binread(path), "human failure changed #{File.basename(path)}"
+        end
       end
     end
   end
@@ -1678,10 +1748,11 @@ class MacosWrapperTest < Minitest::Test
       assert_equal 64, status.exitstatus
       assert_includes stdout, "用途档位无效"
 
-      _stdout, _stderr, status = run_script(
+      stdout, _stderr, status = run_script(
         INSTALLER, "--show-profile", "--safe-update", home: home
       )
       assert_equal 64, status.exitstatus
+      assert_includes stdout, "一次只能执行一个操作"
 
       _stdout, _stderr, status = run_script(
         INSTALLER, "--show-profile", "--profile", "1", home: home

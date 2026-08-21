@@ -30,6 +30,9 @@ function ConvertTo-NormalizedWindowsPath([string]$Path) {
     } elseif ($candidate.StartsWith("\\?\", [StringComparison]::OrdinalIgnoreCase)) {
         $candidate = $candidate.Substring(4)
     }
+    if ($candidate.IndexOfAny([char[]](0, 34, 60, 62, 124, 63, 42)) -ge 0) {
+        throw "Windows path contains invalid characters."
+    }
     $absolute = [System.IO.Path]::GetFullPath($candidate)
     return $absolute.TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
@@ -685,6 +688,18 @@ namespace ClaudeEasy
             return information.VolumeSerialNumber.ToString("x8") + ":" +
                 information.FileIndexHigh.ToString("x8") +
                 information.FileIndexLow.ToString("x8");
+        }
+
+        public static long GetLastWriteTicks(SafeFileHandle handle)
+        {
+            ByHandleFileInformation information;
+            if (!GetFileInformationByHandle(handle, out information))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "无法读取事务目标的修改时间。");
+            }
+            long fileTime = ((long)(uint)information.LastWriteTime.dwHighDateTime << 32) |
+                (uint)information.LastWriteTime.dwLowDateTime;
+            return DateTime.FromFileTimeUtc(fileTime).Ticks;
         }
 
         public static void SetDeleteDisposition(SafeFileHandle handle, bool deleteFile)

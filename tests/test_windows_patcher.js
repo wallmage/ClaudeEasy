@@ -1255,6 +1255,16 @@ test('Windows client refresh preserves the pre-update runtime state and reloads 
     'activation records do not bind the client to the pre-dispatch runtime fingerprint'
   );
   assert.match(
+    safeUpdate,
+    /Open-SafeUpdateVersionGuard[\s\S]*Get-StreamBytes[\s\S]*RuntimeBefore/,
+    'activation records do not capture the runtime fingerprint from one locked file version'
+  );
+  assert.match(
+    verify,
+    /if \(\[bool\]\$updateAttempt\.Allowed\) \{[\s\S]*try \{[\s\S]*Invoke-ClashVergeReactivationShortcut[\s\S]*finally \{[\s\S]*Close-SafeUpdateVersionGuard \$updateAttempt\.VersionGuard/,
+    'the locked runtime fingerprint is released before the shortcut dispatch boundary'
+  );
+  assert.match(
     windowsTests,
     /\$activationIdentityA \| ConvertTo-Json -Compress \| ConvertFrom-Json[\s\S]*Test-ClashVergeProcessIdentity \$activationIdentityRoundTrip/,
     'PowerShell 5.1 and 7 do not exercise client identity JSON roundtrips'
@@ -1863,7 +1873,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionLabel', 'Get-PublicSubscriptionResult',
       'Test-SafeUpdateRuntimeFingerprint', 'Test-SafeUpdateActivationRecord',
-      'Set-SafeUpdateActivationAttempt', 'Get-FlowProxyProtocolTypes',
+      'Close-SafeUpdateVersionGuard', 'Set-SafeUpdateActivationAttempt', 'Get-FlowProxyProtocolTypes',
       'Get-YamlBlockSequenceEnd', 'ConvertFrom-ProxyProtocolType',
       'Get-ProxyProtocolTypes', 'Assert-SubscriptionProtocolPreserved',
       'Get-PublicBackupId', 'Get-BackupTarget',
@@ -1964,6 +1974,8 @@ test('Windows public commands share the JSON v1 result contract', () => {
     assert.match(source, /\[switch\]\$Json/, entry);
     assert.match(source, /result_contract\.ps1/, entry);
     assert.match(source, /Write-ClaudeEasyResult/, entry);
+    assert.match(entrypoint, /\$unboundArguments = @\(\$args\)/, entry);
+    assert.match(entrypoint, /\$unboundArguments\.Count -gt 0[\s\S]*invalid_arguments/, entry);
     assert.match(
       entrypoint,
       /\[Console\]::OutputEncoding\s*=\s*New-Object System\.Text\.UTF8Encoding\(\$false\)/,

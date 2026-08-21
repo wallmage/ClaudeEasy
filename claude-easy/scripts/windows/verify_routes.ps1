@@ -9,6 +9,7 @@
     [switch]$Json
 )
 
+$unboundArguments = @($args)
 $controllerUrlSpecified = $PSBoundParameters.ContainsKey("ControllerUrl")
 $secretSpecified = $PSBoundParameters.ContainsKey("Secret")
 $secretStdinSpecified = $PSBoundParameters.ContainsKey("SecretStdin")
@@ -75,6 +76,15 @@ function Write-ClaudeEasyVerificationText([string]$Message, [switch]$ErrorStream
     } else {
         [Console]::Out.WriteLine($safeMessage)
     }
+}
+
+if ($unboundArguments.Count -gt 0) {
+    if ($Json) {
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "参数错误；未执行任何修改。")
+    } else {
+        Write-ClaudeEasyVerificationText "[ClaudeEasy] 参数错误；未执行任何修改。" -ErrorStream
+    }
+    exit 64
 }
 
 $observationSecondsValue = 0

@@ -665,14 +665,25 @@ module ClaudeEasy
         warn "配置文件已恢复，但当前运行配置未能恢复。"
         return 1
       end
-      return emit_cli_result(
-        operation: "recover_profile_transaction", exit_code: 0,
-        status: result == :recovered ? "ok" : "no_change",
-        code: result == :recovered ? "profile_transaction_recovered" : "no_pending_transaction",
-        summary_zh: result == :recovered ? "未完成的配置事务已恢复。" : "没有未完成的配置事务。",
-        changes: result == :recovered ? ["profiles", "runtime_config"] : []
-      ) if options[:json]
-      puts result
+      if options[:json]
+        status, code, summary, changes = case result
+                                         when :recovered
+                                           ["ok", "profile_transaction_recovered", "未完成的配置事务已恢复。", ["profiles", "runtime_config"]]
+                                         when :committed_cleaned
+                                           ["no_change", "profile_transaction_cleanup_completed", "已清理完成提交后遗留的事务标记。", []]
+                                         else
+                                           ["no_change", "no_pending_transaction", "没有未完成的配置事务。", []]
+                                         end
+        return emit_cli_result(
+          operation: "recover_profile_transaction", exit_code: 0,
+          status: status, code: code, summary_zh: summary, changes: changes
+        )
+      end
+      puts case result
+           when :recovered then "未完成的配置事务已恢复。"
+           when :committed_cleaned then "已清理完成提交后遗留的事务标记。"
+           else "没有未完成的配置事务。"
+           end
       return 0
     end
 
@@ -804,7 +815,7 @@ module ClaudeEasy
                               when :reload_failed_rolled_back
                                 ["rolled_back", "restore_runtime_check_failed", "备份未能通过运行检查，已恢复回滚前版本。"]
                               when :reload_failed_restore_pending
-                                ["partial", "restore_runtime_pending", "备份未能通过运行检查；文件已恢复回滚前版本，但运行内核恢复失败。"]
+                                ["partial", "restore_runtime_pending", "备份未能通过运行检查；当前文件已恢复回滚前版本或保留外部改动，但运行内核恢复失败。"]
                               when :reload_failed_rollback_conflict
                                 ["partial", "restore_rollback_conflict", "备份未能通过运行检查，且订阅同时发生变化；未覆盖新内容。"]
                               when :runtime_state_unavailable
@@ -891,7 +902,7 @@ module ClaudeEasy
                               when :rollback_failed
                                 ["partial", "rollback_failed", "订阅更新失败，且原文件或运行状态未能完整恢复。"]
                               when :runtime_restore_pending
-                                ["partial", "safe_update_runtime_pending", "订阅文件已保留新内容，但运行内核仍待恢复或确认。"]
+                                ["partial", "safe_update_runtime_pending", "订阅文件已恢复原内容或保留外部改动；运行内核仍待恢复或确认。"]
                               when :aborted
                                 if result[:reason] == :rollback_superseded
                                   ["partial", "safe_update_rollback_superseded", "订阅在回滚前已被外部更新；已保留较新的内容，未覆盖。"]

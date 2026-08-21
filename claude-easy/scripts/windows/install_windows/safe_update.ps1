@@ -66,6 +66,14 @@ function Test-SafeUpdateActivationRecord([object]$Record) {
         (Test-SafeUpdateRuntimeFingerprint $Record.RuntimeBefore)
 }
 
+function Close-SafeUpdateVersionGuard([object]$Guard) {
+    if ($null -eq $Guard) { return }
+    $Guard.Stream.Dispose()
+    foreach ($directoryGuard in @($Guard.DirectoryGuards)) {
+        $directoryGuard.Dispose()
+    }
+}
+
 function Set-SafeUpdateActivationAttempt(
     [string]$ManifestPath,
     [object]$ManifestSnapshot,
@@ -89,40 +97,54 @@ function Set-SafeUpdateActivationAttempt(
         if (-not (Test-SafeUpdateActivationRecord $property.Value)) {
             throw "安全更新客户端激活记录无效。"
         }
-        if (Test-ClashVergeProcessIdentity $property.Value.Client $ClientIdentity) {
-            return [pscustomobject]@{
-                Allowed = $false
-                Snapshot = $ManifestSnapshot
-                Manifest = $Manifest
+        return [pscustomobject]@{
+            Allowed = $false
+            Snapshot = $ManifestSnapshot
+            Manifest = $Manifest
+            VersionGuard = $null
+        }
+    }
+    $runtimeVersionGuard = $null
+    try {
+        $runtimeVersionGuard = Open-SafeUpdateVersionGuard `
+            ([string]$RuntimeContext.Snapshot.Path) "Clash Verge Rev 运行配置"
+        $runtimeBytes = Get-StreamBytes $runtimeVersionGuard.Stream
+        $Manifest.$PropertyName = [pscustomobject][ordered]@{
+            Client = $ClientIdentity
+            RuntimeBefore = [pscustomobject][ordered]@{
+                Identity = [ClaudeEasy.VerifiedDeleteNative]::GetIdentity(
+                    $runtimeVersionGuard.Stream.SafeFileHandle
+                )
+                LastWriteTicks = [ClaudeEasy.VerifiedDeleteNative]::GetLastWriteTicks(
+                    $runtimeVersionGuard.Stream.SafeFileHandle
+                )
+                Sha256 = Get-BytesSha256 $runtimeBytes
             }
         }
-    }
-    $Manifest.$PropertyName = [pscustomobject][ordered]@{
-        Client = $ClientIdentity
-        RuntimeBefore = [pscustomobject][ordered]@{
-            Identity = [string]$RuntimeContext.Snapshot.Identity
-            LastWriteTicks = [long]$RuntimeContext.LastWriteTicks
-            Sha256 = Get-BytesSha256 $RuntimeContext.Snapshot.Bytes
+        $bytes = ConvertTo-Utf8Bytes (($Manifest | ConvertTo-Json -Depth 7) + "`r`n")
+        Invoke-VerifiedFileTransaction @(
+            [pscustomobject]@{
+                Path = $ManifestPath
+                Bytes = $bytes
+                Existed = $true
+                OriginalBytes = $ManifestSnapshot.Bytes
+                OriginalIdentity = $ManifestSnapshot.Identity
+            }
+        ) -InterruptedRecoveryPolicy "safe_update_running_client"
+        $snapshot = Get-OptionalFileSnapshot $ManifestPath "安全更新客户端激活记录"
+        if (-not $snapshot.Exists -or (Get-BytesSha256 $snapshot.Bytes) -cne (Get-BytesSha256 $bytes)) {
+            throw "安全更新客户端激活记录无法确认。"
         }
-    }
-    $bytes = ConvertTo-Utf8Bytes (($Manifest | ConvertTo-Json -Depth 7) + "`r`n")
-    Invoke-VerifiedFileTransaction @(
-        [pscustomobject]@{
-            Path = $ManifestPath
-            Bytes = $bytes
-            Existed = $true
-            OriginalBytes = $ManifestSnapshot.Bytes
-            OriginalIdentity = $ManifestSnapshot.Identity
+        $result = [pscustomobject]@{
+            Allowed = $true
+            Snapshot = $snapshot
+            Manifest = ((New-Object System.Text.UTF8Encoding($false, $true)).GetString($snapshot.Bytes) | ConvertFrom-Json)
+            VersionGuard = $runtimeVersionGuard
         }
-    ) -InterruptedRecoveryPolicy "safe_update_running_client"
-    $snapshot = Get-OptionalFileSnapshot $ManifestPath "安全更新客户端激活记录"
-    if (-not $snapshot.Exists -or (Get-BytesSha256 $snapshot.Bytes) -cne (Get-BytesSha256 $bytes)) {
-        throw "安全更新客户端激活记录无法确认。"
-    }
-    return [pscustomobject]@{
-        Allowed = $true
-        Snapshot = $snapshot
-        Manifest = ((New-Object System.Text.UTF8Encoding($false, $true)).GetString($snapshot.Bytes) | ConvertFrom-Json)
+        $runtimeVersionGuard = $null
+        return $result
+    } finally {
+        Close-SafeUpdateVersionGuard $runtimeVersionGuard
     }
 }
 

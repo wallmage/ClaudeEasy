@@ -10,6 +10,7 @@ module ClaudeEasy
     Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay
   ].freeze
   RUNTIME_PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
+  RUNTIME_IDENTITY_GROUP_TYPES = (RUNTIME_PROXY_GROUP_TYPES + %w[Relay]).freeze
   RUNTIME_INJECTED_CONFIG_KEYS = %w[
     external-controller external-controller-unix secret
   ].freeze
@@ -270,8 +271,7 @@ module ClaudeEasy
     false
   end
 
-  def profile_runtime_identity(path)
-    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+  def profile_runtime_identity_from_config(config)
     return nil unless config.is_a?(Hash)
 
     proxies = Array(config["proxies"]).each_with_object([]) do |proxy, names|
@@ -290,15 +290,24 @@ module ClaudeEasy
                   []
                 end
     { proxies: proxies, groups: groups, providers: providers }
+  end
+
+  def profile_runtime_identity(path)
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    profile_runtime_identity_from_config(config)
   rescue StandardError
     nil
   end
 
-  def profile_runtime_fingerprint(path)
-    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+  def profile_runtime_fingerprint_from_config(config)
     return nil unless config.is_a?(Hash)
 
     deep_copy(config.reject { |key, _value| RUNTIME_INJECTED_CONFIG_KEYS.include?(key) })
+  end
+
+  def profile_runtime_fingerprint(path)
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    profile_runtime_fingerprint_from_config(config)
   rescue StandardError
     nil
   end
@@ -311,28 +320,32 @@ module ClaudeEasy
       next unless proxy.is_a?(Hash)
 
       type = proxy["type"].to_s
-      next if runtime_proxy_group_type?(type) || runtime_non_proxy_name?(name)
+      next if RUNTIME_IDENTITY_GROUP_TYPES.any? { |entry| entry.casecmp(type).zero? } ||
+              runtime_non_proxy_name?(name)
 
       names << name
     end.sort
     groups = proxies.each_with_object({}) do |(name, proxy), result|
-      next unless proxy.is_a?(Hash) && runtime_proxy_group_type?(proxy["type"])
+      next unless proxy.is_a?(Hash) && RUNTIME_IDENTITY_GROUP_TYPES.any? do |entry|
+        entry.casecmp(proxy["type"].to_s).zero?
+      end
 
       result[name] = Array(proxy["all"]).map(&:to_s).sort
     end
     status, body = requester.call("GET", "/providers/proxies", nil)
-    providers = []
-    if status == 200
-      payload = JSON.parse(body)
-      providers = payload["providers"].keys.map(&:to_s).sort if payload["providers"].is_a?(Hash)
-    end
+    return nil unless status == 200
+
+    payload = JSON.parse(body)
+    return nil unless payload["providers"].is_a?(Hash)
+
+    providers = payload.fetch("providers").keys.map(&:to_s).sort
     { proxies: leaf_names, groups: groups, providers: providers }
   rescue StandardError
     nil
   end
 
-  def runtime_matches_profile?(requester, path, runtime_path_reader: nil)
-    expected = profile_runtime_identity(path)
+  def runtime_matches_profile_config?(requester, config, runtime_path_reader: nil)
+    expected = profile_runtime_identity_from_config(config)
     actual = runtime_loaded_identity(requester)
     return false unless expected && actual
 
@@ -343,7 +356,7 @@ module ClaudeEasy
       nil
     end.uniq
     return false unless loaded_paths.length == 1
-    return false unless profile_runtime_fingerprint(path) ==
+    return false unless profile_runtime_fingerprint_from_config(config) ==
                         profile_runtime_fingerprint(loaded_paths.first)
 
     return false unless expected[:proxies].all? { |name| actual[:proxies].include?(name) }
@@ -353,6 +366,85 @@ module ClaudeEasy
       return false unless members.all? { |member| loaded.include?(member) }
     end
     expected[:providers].all? { |name| actual[:providers].include?(name) }
+  end
+
+  def runtime_matches_profile?(requester, path, runtime_path_reader: nil)
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    runtime_matches_profile_config?(
+      requester, config, runtime_path_reader: runtime_path_reader
+    )
+  rescue StandardError
+    false
+  end
+
+  def runtime_identity_matches_difference?(actual, expected, alternative)
+    return false unless [actual, expected, alternative].all? { |value| value.is_a?(Hash) }
+
+    checks = 0
+    %i[proxies providers].each do |key|
+      expected_values = Array(expected[key])
+      alternative_values = Array(alternative[key])
+      actual_values = Array(actual[key])
+      (expected_values - alternative_values).each do |value|
+        checks += 1
+        return false unless actual_values.include?(value)
+      end
+      (alternative_values - expected_values).each do |value|
+        checks += 1
+        return false if actual_values.include?(value)
+      end
+    end
+
+    expected_groups = expected[:groups].is_a?(Hash) ? expected[:groups] : {}
+    alternative_groups = alternative[:groups].is_a?(Hash) ? alternative[:groups] : {}
+    actual_groups = actual[:groups].is_a?(Hash) ? actual[:groups] : {}
+    (expected_groups.keys | alternative_groups.keys).each do |name|
+      expected_members = expected_groups[name]
+      alternative_members = alternative_groups[name]
+      if expected_members.nil? || alternative_members.nil?
+        checks += 1
+        return false unless actual_groups.key?(name) == !expected_members.nil?
+        next
+      end
+
+      actual_members = Array(actual_groups[name])
+      (expected_members - alternative_members).each do |member|
+        checks += 1
+        return false unless actual_members.include?(member)
+      end
+      (alternative_members - expected_members).each do |member|
+        checks += 1
+        return false if actual_members.include?(member)
+      end
+    end
+    checks.positive?
+  end
+
+  def runtime_loaded_profile_state(requester, restored_path, candidate_bytes)
+    restored = profile_runtime_identity(restored_path)
+    candidate_text = candidate_bytes.to_s.b.dup.force_encoding(Encoding::UTF_8)
+    return :unknown unless restored && candidate_bytes && candidate_text.valid_encoding?
+
+    candidate_config = load_yaml(candidate_text, "配置事务候选")
+    candidate = profile_runtime_identity_from_config(candidate_config)
+    actual = runtime_loaded_identity(requester)
+    return :unknown unless candidate && actual
+
+    candidate_match = runtime_identity_matches_difference?(actual, candidate, restored)
+    restored_match = runtime_identity_matches_difference?(actual, restored, candidate)
+    return :candidate if candidate_match && !restored_match
+    return :restored if restored_match && !candidate_match
+
+    :unknown
+  rescue StandardError
+    :unknown
+  end
+
+  def current_runtime_loaded_profile_state(restored_path, candidate_bytes)
+    requester = current_runtime_requester
+    return :unknown unless requester
+
+    runtime_loaded_profile_state(requester, restored_path, candidate_bytes)
   end
 
   def running_mihomo_config_paths
@@ -1049,6 +1141,25 @@ module ClaudeEasy
     nil
   end
 
+  def runtime_checkpoint_current?(checkpoint, socket: nil, requester: nil)
+    return false unless checkpoint.is_a?(Hash) && checkpoint[:selections].is_a?(Hash)
+    if requester.nil?
+      socket ||= controller_socket
+      return false unless socket
+
+      requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+    end
+    current_selections = runtime_selections(requester)
+    return false unless current_selections && checkpoint[:selections].all? do |group, selection|
+      current_selections[group] == selection
+    end
+
+    expected_tun = checkpoint[:expected_tun]
+    expected_tun == :ignore || tun_state(requester: requester) == expected_tun
+  rescue StandardError
+    false
+  end
+
   def reload_profile_runtime(requester, path, expected_tun: :ignore, selections: {})
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(path))
@@ -1100,7 +1211,8 @@ module ClaudeEasy
 
   def reload_recovered_profile_runtime(work_items, require_tun:, socket: nil, requester: nil,
                                        connectivity_checker: nil, precommit_condition: nil,
-                                       runtime_checkpoint: nil)
+                                       runtime_checkpoint: nil, transaction: nil,
+                                       runtime_profile_state_reader: nil)
     active = work_items.find { |item| item.fetch(:active) }
     if active.nil? && runtime_checkpoint
       active = work_items.find do |item|
@@ -1119,6 +1231,25 @@ module ClaudeEasy
     end
     if runtime_checkpoint
       return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
+
+      unless runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
+        candidate_bytes = transaction && transaction[:candidate_bytes] &&
+                          transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
+        runtime_profile_state_reader ||= lambda do |path, candidate|
+          runtime_loaded_profile_state(requester, path, candidate)
+        end
+        case runtime_profile_state_reader.call(active.fetch(:path), candidate_bytes)
+        when :restored
+          runtime_checkpoint = capture_runtime_checkpoint(
+            active.fetch(:path), require_tun: :preserve, requester: requester
+          )
+          return false unless runtime_checkpoint
+        when :candidate
+          # The candidate load may reset selectors; restore the saved checkpoint.
+        else
+          return false
+        end
+      end
 
       selections = runtime_selections_for_profile(
         runtime_checkpoint[:selections], active.fetch(:path)
@@ -1197,10 +1328,12 @@ module ClaudeEasy
   def activate_safe_updated_profile(result, transaction:, client_identity:, runtime_checkpoint:,
                                     precommit_condition: nil, require_safe_ai: false,
                                     native_reloader: nil, runtime_waiter: nil,
-                                    reload_snapshot_reader: nil)
+                                    reload_snapshot_reader: nil,
+                                    runtime_checkpoint_checker: nil)
     pending = -> { result.merge(status: :reload_failed_restore_pending) }
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
+    runtime_checkpoint_checker ||= method(:runtime_checkpoint_current?)
     reload_receipt_opener = reload_snapshot_reader || method(:open_clashx_reload_receipt)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback_before_runtime_reload(result)) unless
@@ -1222,6 +1355,9 @@ module ClaudeEasy
     return result.merge(status: rollback_before_runtime_reload(result)) if
       require_safe_ai && !required_proxy_group
     unless runtime_precommit_allowed?(precommit_condition)
+      return result.merge(status: rollback_before_runtime_reload(result))
+    end
+    unless runtime_checkpoint_checker.call(runtime_checkpoint)
       return result.merge(status: rollback_before_runtime_reload(result))
     end
 
@@ -1316,6 +1452,9 @@ module ClaudeEasy
     return result.merge(status: rollback_before_runtime_reload(result)) unless candidate_selections
     required_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
     if require_safe_ai && !required_proxy_group
+      return result.merge(status: rollback_before_runtime_reload(result))
+    end
+    if runtime_checkpoint && !runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
       return result.merge(status: rollback_before_runtime_reload(result))
     end
     unless runtime_precommit_allowed?(precommit_condition)

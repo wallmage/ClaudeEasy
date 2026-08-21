@@ -467,7 +467,8 @@ class MutationSafetyTest < Minitest::Test
           "                            work_items, require_tun: require_tun, socket: socket,\n" \
           "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
           "                            precommit_condition: precommit_condition,\n" \
-          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n" \
+          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),\n" \
+          "                            transaction: transaction\n" \
           "                          )\n",
         "                          true\n"
       )
@@ -2919,12 +2920,14 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
+          "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
           "                            precommit_condition: precommit_condition,\n" \
-          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n",
+          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),\n" \
+          "                            transaction: transaction\n",
         "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
           "                            precommit_condition: nil,\n" \
-          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n"
+          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),\n" \
+          "                            transaction: transaction\n"
       )
 
       assert_mutation_is_killed(

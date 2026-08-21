@@ -3,6 +3,7 @@
     [switch]$Json
 )
 
+$unboundArguments = @($args)
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path (Join-Path $PSScriptRoot "windows") "result_contract.ps1"
@@ -111,6 +112,10 @@ function Complete-UninstallResult(
     exit $ExitCode
 }
 
+if ($unboundArguments.Count -gt 0) {
+    Complete-UninstallResult 64 "invalid_request" "invalid_arguments" "参数错误；未执行任何修改。"
+}
+
 function Complete-RunningClientUninstall {
     Write-Info "客户端保持运行；本次没有修改任何受保护文件或状态，已生成的安全备份继续保留。以后检测到客户端未运行时，可再次执行安全卸载。"
     Complete-UninstallResult 1 "partial" "client_running" "客户端保持运行，本次卸载未修改受保护文件或状态。" @() @("以后检测到客户端未运行时，可再次执行安全卸载。")
@@ -199,7 +204,11 @@ if ([string]::IsNullOrWhiteSpace($AppHome)) {
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($AppHome)) {
-    $AppHome = ConvertTo-NormalizedWindowsPath $AppHome
+    try {
+        $AppHome = ConvertTo-NormalizedWindowsPath $AppHome
+    } catch {
+        Complete-UninstallResult 64 "invalid_request" "invalid_app_home" "Clash Verge Rev 配置目录参数无效。"
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($AppHome)) {

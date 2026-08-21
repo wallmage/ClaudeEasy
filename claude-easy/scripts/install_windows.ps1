@@ -14,6 +14,7 @@
     [switch]$Json
 )
 
+$unboundArguments = @($args)
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $ErrorActionPreference = "Stop"
 $resultContractPath = Join-Path (Join-Path $PSScriptRoot "windows") "result_contract.ps1"
@@ -103,6 +104,10 @@ try {
     exit 6
 }
 
+if ($unboundArguments.Count -gt 0) {
+    Complete-InstallResult 64 "invalid_request" "invalid_arguments" "参数错误；未执行任何修改。"
+}
+
 $parsedUsageProfileArgument = 0
 if (-not [int]::TryParse(
         [string]$UsageProfile,
@@ -122,7 +127,11 @@ if ([string]::IsNullOrWhiteSpace($AppHome)) {
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($AppHome)) {
-    $AppHome = ConvertTo-NormalizedWindowsPath $AppHome
+    try {
+        $AppHome = ConvertTo-NormalizedWindowsPath $AppHome
+    } catch {
+        Complete-InstallResult 64 "invalid_request" "invalid_app_home" "Clash Verge Rev 配置目录参数无效。"
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $AppHome -PathType Container)) {
@@ -420,10 +429,14 @@ if ($VerifySafeUpdate) {
             $manifestSnapshot = $runtimeRecoveryAttempt.Snapshot
             $manifest = $runtimeRecoveryAttempt.Manifest
             if ([bool]$runtimeRecoveryAttempt.Allowed) {
-                if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $runtimeRecoveryIdentity)) {
-                    Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                try {
+                    if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $runtimeRecoveryIdentity)) {
+                        Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                    }
+                    Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+                } finally {
+                    Close-SafeUpdateVersionGuard $runtimeRecoveryAttempt.VersionGuard
                 }
-                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
             }
             $null = Wait-ClashVergeRuntimeHealthy `
                 $runtimeConfigPath $manifest.RestoreDispatchCommittedFor.RuntimeBefore $runtimeRecoverySelections `
@@ -591,10 +604,14 @@ if ($VerifySafeUpdate) {
             $manifestSnapshot = $updateAttempt.Snapshot
             $manifest = $updateAttempt.Manifest
             if ([bool]$updateAttempt.Allowed) {
-                if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $updateIdentity)) {
-                    Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在加载请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                try {
+                    if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $updateIdentity)) {
+                        Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在加载请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                    }
+                    Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+                } finally {
+                    Close-SafeUpdateVersionGuard $updateAttempt.VersionGuard
                 }
-                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
             }
             $runtimeContext = Wait-ClashVergeRuntimeHealthy `
                 $runtimeConfigPath $manifest.UpdateDispatchCommittedFor.RuntimeBefore `
@@ -728,10 +745,14 @@ if ($VerifySafeUpdate) {
                 $runtimeRecoverySnapshot = $rollbackAttempt.Snapshot
                 $runtimeRecoveryManifest = $rollbackAttempt.Manifest
                 if ([bool]$rollbackAttempt.Allowed) {
-                    if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $rollbackIdentity)) {
-                        Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                    try {
+                        if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $rollbackIdentity)) {
+                            Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                        }
+                        Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+                    } finally {
+                        Close-SafeUpdateVersionGuard $rollbackAttempt.VersionGuard
                     }
-                    Invoke-ClashVergeReactivationShortcut $reactivationShortcut
                 }
                 $null = Wait-ClashVergeRuntimeHealthy `
                     $runtimeConfigPath $runtimeRecoveryManifest.RestoreDispatchCommittedFor.RuntimeBefore `

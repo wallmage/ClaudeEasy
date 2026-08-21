@@ -1573,6 +1573,51 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
             ) "install_windows.cmd did not structure a non-numeric or overflowing profile"
         }
 
+        $invalidWrapperHome = 'C:\bad?name'
+        foreach ($entry in @(
+            @{ Wrapper = $installWrapper; Command = "install" },
+            @{ Wrapper = $uninstallWrapper; Command = "uninstall" }
+        )) {
+            $invalidHomeOutput = & $entry.Wrapper -AppHome $invalidWrapperHome -Json 2>&1 | Out-String
+            $invalidHomeExit = $LASTEXITCODE
+            Assert-True ($invalidHomeExit -eq 64) "$($entry.Command) wrapper accepted an invalid AppHome"
+            $invalidHomeJson = $invalidHomeOutput.Trim() | ConvertFrom-Json
+            Assert-True (
+                $invalidHomeJson.code -eq "invalid_app_home" -and
+                [int]$invalidHomeJson.exit_code -eq 64
+            ) "$($entry.Command) wrapper did not structure an invalid AppHome"
+            Assert-True ($invalidHomeOutput -notlike "*$invalidWrapperHome*") "$($entry.Command) wrapper leaked an invalid AppHome"
+        }
+
+        $wrapperDiscoveryRoot = Join-Path $sandbox "cmd-wrapper-discovery"
+        $wrapperRealHome = Join-Path $wrapperDiscoveryRoot "io.github.clash-verge-rev"
+        $wrapperTypoTarget = Join-Path $sandbox "cmd-wrapper-typo-target"
+        New-Item -ItemType Directory -Path $wrapperRealHome -Force | Out-Null
+        New-Item -ItemType Directory -Path $wrapperTypoTarget -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $wrapperRealHome "keep.txt"), "real")
+        [System.IO.File]::WriteAllText((Join-Path $wrapperTypoTarget "keep.txt"), "typo")
+        $wrapperRealBefore = Get-TreeContentSnapshot $wrapperRealHome
+        $wrapperTypoBefore = Get-TreeContentSnapshot $wrapperTypoTarget
+        $savedAppData = $env:APPDATA
+        $savedLocalAppData = $env:LOCALAPPDATA
+        try {
+            $env:APPDATA = $wrapperDiscoveryRoot
+            $env:LOCALAPPDATA = Join-Path $sandbox "cmd-wrapper-empty-local"
+            $typoInstallOutput = & $installWrapper -AppHme $wrapperTypoTarget -UsageProfile 1 -Json 2>&1 | Out-String
+            Assert-True ($LASTEXITCODE -eq 64) "install_windows.cmd did not reject a misspelled AppHome"
+            $typoInstallJson = $typoInstallOutput.Trim() | ConvertFrom-Json
+            Assert-True ($typoInstallJson.code -eq "invalid_arguments") "install_windows.cmd changed a typo into installation"
+            $typoUninstallOutput = & $uninstallWrapper -AppHme $wrapperTypoTarget -Json 2>&1 | Out-String
+            Assert-True ($LASTEXITCODE -eq 64) "uninstall_windows.cmd did not reject a misspelled AppHome"
+            $typoUninstallJson = $typoUninstallOutput.Trim() | ConvertFrom-Json
+            Assert-True ($typoUninstallJson.code -eq "invalid_arguments") "uninstall_windows.cmd changed a typo into uninstallation"
+        } finally {
+            $env:APPDATA = $savedAppData
+            $env:LOCALAPPDATA = $savedLocalAppData
+        }
+        Assert-True ((Get-TreeContentSnapshot $wrapperRealHome) -ceq $wrapperRealBefore) "wrapper typo changed the discovered AppHome"
+        Assert-True ((Get-TreeContentSnapshot $wrapperTypoTarget) -ceq $wrapperTypoBefore) "wrapper typo changed the intended sandbox"
+
         $wrapperBackup = Join-Path (Join-Path $wrapperCase "claude-easy-backups") "keep.backup"
         New-Item -ItemType Directory -Path (Split-Path -Parent $wrapperBackup) -Force | Out-Null
         [System.IO.File]::WriteAllText($wrapperBackup, "keep")
@@ -1882,6 +1927,7 @@ try {
         Snapshot = $activationRuntimeSnapshot
         LastWriteTicks = [System.IO.File]::GetLastWriteTimeUtc($activationRuntimePath).Ticks
     }
+    [System.IO.File]::WriteAllText($activationRuntimePath, "runtime-before-stage-commit")
     $activationAttemptLock = Enter-AppHomeMutationLock $activationAttemptHome
     try {
         $activationIdentityA = [pscustomobject][ordered]@{
@@ -1915,12 +1961,25 @@ try {
             $activationAttemptPath $activationAttemptSnapshot $activationAttemptManifest `
             "UpdateDispatchCommittedFor" $activationIdentityA $activationRuntimeContext
         Assert-True ([bool]$activationFirst.Allowed) "first client activation attempt was rejected"
-        Assert-True (
-            (Test-ClashVergeProcessIdentity `
-                $activationFirst.Manifest.UpdateDispatchCommittedFor.Client $activationIdentityA) -and
-            (Test-SafeUpdateRuntimeFingerprint `
-                $activationFirst.Manifest.UpdateDispatchCommittedFor.RuntimeBefore)
-        ) "activation attempt did not persist the client and pre-dispatch runtime fingerprint"
+        try {
+            Assert-True (
+                (Test-ClashVergeProcessIdentity `
+                    $activationFirst.Manifest.UpdateDispatchCommittedFor.Client $activationIdentityA) -and
+                (Test-SafeUpdateRuntimeFingerprint `
+                    $activationFirst.Manifest.UpdateDispatchCommittedFor.RuntimeBefore) -and
+                [string]$activationFirst.Manifest.UpdateDispatchCommittedFor.RuntimeBefore.Sha256 -ceq
+                    (Get-BytesSha256 (Get-StreamBytes $activationFirst.VersionGuard.Stream))
+            ) "activation attempt did not persist the client and pre-dispatch runtime fingerprint"
+            $runtimeWriteBlocked = $false
+            try {
+                [System.IO.File]::WriteAllText($activationRuntimePath, "runtime-before-send")
+            } catch {
+                $runtimeWriteBlocked = $true
+            }
+            Assert-True $runtimeWriteBlocked "runtime guard was released before the activation dispatch boundary"
+        } finally {
+            Close-SafeUpdateVersionGuard $activationFirst.VersionGuard
+        }
         $activationAfterFirst = [System.IO.File]::ReadAllBytes($activationAttemptPath)
         $activationDuplicate = Set-SafeUpdateActivationAttempt `
             $activationAttemptPath $activationFirst.Snapshot $activationFirst.Manifest `
@@ -1942,10 +2001,10 @@ try {
             $activationAttemptPath $activationDuplicate.Snapshot $activationDuplicate.Manifest `
             "UpdateDispatchCommittedFor" $activationIdentityB $replacementRuntimeContext
         Assert-True (
-            [bool]$activationReplacement.Allowed -and
+            -not [bool]$activationReplacement.Allowed -and
             (Test-ClashVergeProcessIdentity `
-                $activationReplacement.Manifest.UpdateDispatchCommittedFor.Client $activationIdentityB)
-        ) "a new client process could not take over the pending activation"
+                $activationReplacement.Manifest.UpdateDispatchCommittedFor.Client $activationIdentityA)
+        ) "a new client process received a second activation eligibility"
     } finally {
         Exit-AppHomeMutationLock $activationAttemptLock
     }
@@ -2026,6 +2085,34 @@ if ($Json) {
             "-AppHome", $jsonShowCase, "-UsageProfile", $invalidProfile, "-Json"
         )) "install" 64
         Assert-True ($invalidProfileResult.code -eq "invalid_usage_profile") "non-numeric or overflowing profile bypassed JSON v1"
+    }
+
+    $unknownInstallBefore = Get-TreeContentSnapshot $jsonShowCase
+    $unknownInstallResult = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+        "-AppHome", $jsonShowCase, "-ShowUsageProfiles", "-Json"
+    )) "install" 64
+    Assert-True ($unknownInstallResult.code -eq "invalid_arguments") "unknown install argument was not rejected"
+    Assert-True ((Get-TreeContentSnapshot $jsonShowCase) -ceq $unknownInstallBefore) "unknown install argument changed AppHome"
+    $unknownUninstallResult = Assert-JsonResult (Invoke-TestPowerShell $uninstaller @(
+        "-AppHome", $jsonShowCase, "-UnknownOperation", "-Json"
+    )) "uninstall" 64
+    Assert-True ($unknownUninstallResult.code -eq "invalid_arguments") "unknown uninstall argument was not rejected"
+    $unknownRouteResult = Assert-JsonResult (Invoke-TestPowerShell $routeVerifier @(
+        "-UnknownOperation", "-Json"
+    )) "verify_routes" 64
+    Assert-True ($unknownRouteResult.code -eq "invalid_arguments") "unknown route-verifier argument was not rejected"
+
+    $invalidAppHome = 'C:\bad|name'
+    foreach ($entry in @(
+        @{ Script = $installer; Command = "install" },
+        @{ Script = $uninstaller; Command = "uninstall" }
+    )) {
+        $invalidHomeOutput = Invoke-TestPowerShell $entry.Script @(
+            "-AppHome", $invalidAppHome, "-Json"
+        )
+        $invalidHomeResult = Assert-JsonResult $invalidHomeOutput $entry.Command 64
+        Assert-True ($invalidHomeResult.code -eq "invalid_app_home") "invalid AppHome bypassed JSON v1"
+        Assert-True ($invalidHomeOutput.Output -notlike "*$invalidAppHome*") "invalid AppHome leaked in JSON output"
     }
 
     $conflictingOperations = Invoke-TestPowerShell $installer @(
@@ -4581,8 +4668,10 @@ rules:
             $rollbackCrashRecovery = [System.IO.File]::ReadAllText($rollbackCrashRecoveryPath) | ConvertFrom-Json
             Assert-True (
                 (@($rollbackCrashRecovery.PSObject.Properties.Name | Sort-Object) -join ",") -ceq
-                    "Kind,Runtime,UsageProfile,Version" -and
-                [string]$rollbackCrashRecovery.Kind -ceq "safe_update_runtime_recovery"
+                    "Kind,RestoreDispatchCommittedFor,Runtime,UsageProfile,Version" -and
+                [string]$rollbackCrashRecovery.Kind -ceq "safe_update_runtime_recovery" -and
+                [long]$rollbackCrashRecovery.Version -eq 2 -and
+                $null -eq $rollbackCrashRecovery.RestoreDispatchCommittedFor
             ) "process death retained a reusable update manifest instead of strict runtime recovery intent"
 
             $rollbackCrashRetry = Invoke-TestPowerShell $rollbackCrashInstaller @(

@@ -13,6 +13,11 @@ module ClaudeEasy
     read write append execute delete delete_child readattr writeattr readextattr writeextattr
     readsecurity file_inherit directory_inherit
   ].join(",").freeze
+  LOG_ACL_DIRECTORY_RIGHT_GROUPS = [
+    %w[read list], %w[write add_file], %w[append add_subdirectory], %w[execute search],
+    %w[delete], %w[delete_child], %w[readattr], %w[writeattr], %w[readextattr],
+    %w[writeextattr], %w[readsecurity], %w[file_inherit], %w[directory_inherit]
+  ].freeze
   LOG_SESSION_PATTERN = /\A\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\z/.freeze
 
   def clashx_log_root
@@ -21,9 +26,23 @@ module ClaudeEasy
 
   def log_acl_present?(path, username:, runner: Open3.method(:capture3))
     output, _error, status = runner.call("/bin/ls", "-lde", path)
-    status.success? && output.lines.any? do |line|
-      line.include?("user:#{username} ") &&
-        line.include?("file_inherit,directory_inherit")
+    return false unless status.success?
+
+    identifiers = [username.downcase]
+    uuid, _uuid_error, uuid_status = runner.call("/usr/bin/dsmemberutil", "getuuid", "-U", username)
+    identifiers << uuid.to_s.strip.downcase if uuid_status.success? && !uuid.to_s.strip.empty?
+    entries = output.lines.each_with_object([]) do |line, found|
+      match = line.chomp.match(/\A\s*\d+:\s+(?:user:)?(\S+)\s+(allow|deny)\s+(.+)\z/i)
+      next unless match && identifiers.include?(match[1].downcase)
+
+      found << [match[2].downcase, match[3].split(",").map { |right| right.strip.downcase }]
+    end
+    return false if entries.any? do |kind, rights|
+      kind == "deny" && LOG_ACL_DIRECTORY_RIGHT_GROUPS.any? { |aliases| !(aliases & rights).empty? }
+    end
+
+    entries.any? do |kind, rights|
+      kind == "allow" && LOG_ACL_DIRECTORY_RIGHT_GROUPS.all? { |aliases| !(aliases & rights).empty? }
     end
   end
 

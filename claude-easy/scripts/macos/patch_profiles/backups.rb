@@ -1,7 +1,7 @@
 module ClaudeEasy
   module_function
 
-  BACKUP_FILENAME_PATTERN = /\A(?<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{9}[+-]\d{4})--[a-z][a-z0-9-]{0,31}--[0-9a-f]{16}--.+\.backup\z/
+  BACKUP_FILENAME_PATTERN = /\A(?<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{9}[+-]\d{4})--(?<reason>[a-z][a-z0-9-]{0,31})--(?<key>[0-9a-f]{16})(?:--.+)?\.backup\z/
 
   def excluded_path?(path)
     basename = File.basename(path)
@@ -101,10 +101,9 @@ module ClaudeEasy
     return [] unless File.directory?(root) && !File.symlink?(root)
 
     key = backup_key(path)
-    suffix = "--#{key}--#{File.basename(path)}.backup"
-    reason_token = reason && "--#{reason}--#{key}--"
     Dir.children(root).select do |name|
-      name.end_with?(suffix) && (!reason_token || name.include?(reason_token)) &&
+      match = BACKUP_FILENAME_PATTERN.match(name)
+      match && match[:key] == key && (!reason || match[:reason] == reason) &&
         File.file?(File.join(root, name)) && !File.symlink?(File.join(root, name))
     end.sort.map { |name| File.join(root, name) }
   end
@@ -124,7 +123,7 @@ module ClaudeEasy
       backup.fsync
       100.times do
         timestamp = Time.now.strftime("%Y-%m-%d_%H-%M-%S.%9N%z")
-        candidate = File.join(root, "#{timestamp}--#{reason}--#{key}--#{File.basename(path)}.backup")
+        candidate = File.join(root, "#{timestamp}--#{reason}--#{key}.backup")
         begin
           ClaudeEasyDarwinFilesystem.rename_exclusive(backup.path, candidate)
           destination = candidate
@@ -156,8 +155,8 @@ module ClaudeEasy
 
     Dir.children(root).select do |name|
       path = File.join(root, name)
-      name.match?(BACKUP_FILENAME_PATTERN) &&
-        !name.include?("--preference--") &&
+      match = BACKUP_FILENAME_PATTERN.match(name)
+      match && match[:reason] != "preference" &&
         File.file?(path) && !File.symlink?(path)
     end.sort.reverse
   end
@@ -226,8 +225,11 @@ module ClaudeEasy
   end
 
   def find_backup_target(backup_id, directories)
+    match = BACKUP_FILENAME_PATTERN.match(File.basename(backup_id.to_s))
+    raise InvalidConfigError, "备份编号无效" unless match
+
     matches = directories.flat_map { |directory| profile_paths(directory) }.select do |path|
-      backup_id.include?("--#{backup_key(path)}--") && backup_id.end_with?("--#{File.basename(path)}.backup")
+      backup_key(path) == match[:key]
     end
     raise InvalidConfigError, "备份无法对应到当前存储位置中的唯一配置" unless matches.length == 1
 
@@ -294,7 +296,8 @@ module ClaudeEasy
       restored_runtime = reload_recovered_profile_runtime(
         [{ path: result.fetch(:path), active: true }], require_tun: :preserve,
         precommit_condition: precommit_condition,
-        runtime_checkpoint: transaction.is_a?(Hash) ? transaction[:runtime_checkpoint] : nil
+        runtime_checkpoint: transaction.is_a?(Hash) ? transaction[:runtime_checkpoint] : nil,
+        transaction: transaction
       ) && runtime_precommit_allowed?(precommit_condition)
       if restored_runtime
         remove_profile_transaction(transaction)
@@ -380,7 +383,7 @@ module ClaudeEasy
     raise InvalidConfigError, "备份不是有效的 UTF-8" unless backup_text.valid_encoding?
 
     load_yaml(backup_text, public_id)
-    Tempfile.create([File.basename(write_path), ".restore"], File.dirname(write_path)) do |temporary|
+    Tempfile.create([".claude-easy-restore-", ".yaml"], File.dirname(write_path)) do |temporary|
       temporary.binmode
       temporary.write(backup_bytes)
       temporary.flush

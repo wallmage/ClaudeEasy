@@ -1150,7 +1150,12 @@ class SkillContractTest < Minitest::Test
     assert_includes mac_patcher, "--compare-backup"
     assert_includes mac_patcher, "--restore-backup"
     assert_includes readme, "ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups"
-    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --restore-backup"
+    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --list-backups --json"
+    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --compare-backup ID --json"
+    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH --json"
+    assert_includes skill, '.\scripts\install_windows.cmd -ListBackups -Json'
+    assert_includes skill, '.\scripts\install_windows.cmd -CompareBackup ID -Json'
+    assert_includes skill, '.\scripts\install_windows.cmd -RestoreBackup ID -ExpectedCurrentSha256 HASH -Json'
     assert_includes mac_installer, "--snapshot-initial"
     assert_includes windows_installer, "ListBackups"
     assert_includes windows_installer, "CompareBackup"
@@ -1243,6 +1248,8 @@ class SkillContractTest < Minitest::Test
       refute_includes document, "Windows 不追加连通性检查"
     end
     assert_includes skill, "必须继续完成 `required_followups` 中的每一项"
+    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --usage-profile N --json"
+    refute_includes skill, "ruby scripts/macos/patch_profiles.rb --json"
     assert_includes skill, "安全更新已经重新应用订阅文件补丁，不得再次运行安装命令"
     assert_includes skill, "档位 2 不执行档位 1 的系统代理开启动作"
     assert_includes policy, "按 `required_followups` 完成"
@@ -1257,6 +1264,8 @@ class SkillContractTest < Minitest::Test
     assert_includes macos, "当前订阅由已运行客户端的原生事件加载，本地控制器只用于观察和验收"
     assert_includes macos, "安全更新事务内部不得切换 TUN"
     assert_includes macos, "`macos_client_switch_reconciliation` 运行独立原生开关协调命令"
+    assert_includes macos, "文件已恢复原内容，或在外部替换时保留了外部改动"
+    refute_includes macos, "说明新内容已保留"
     refute_includes policy, "更新写入前取得同一浏览器的区域指纹基线"
     refute_includes policy, "区域指纹重扫"
 
@@ -2153,6 +2162,9 @@ class SkillContractTest < Minitest::Test
   def test_p1_recovery_and_refresh_guards_are_documented_and_exercised
     readme = File.read(File.join(ROOT, "README.md"))
     skill_document = File.read(File.join(SKILL, "SKILL.md"))
+    design = File.read(
+      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+    )
     patch_policy = policy_document
     mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows_installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
@@ -2189,8 +2201,13 @@ class SkillContractTest < Minitest::Test
     assert_includes readme, "运行中可以创建安全更新备份和验收清单"
     assert_includes readme, "其余受保护客户端配置写入会整批延期"
     assert_includes readme, "修改整批延期且不得报告“已更新”"
+    assert_includes design, "普通安装、卸载和单文件备份恢复只有客户端本来就未运行时"
+    assert_includes design, "客户端运行时可以创建安全更新备份和验收清单"
+    assert_includes design, "安全更新失败恢复是唯一允许修改订阅的受控例外"
     refute_includes skill_document, "两个平台都保持 Clash 运行"
-    assert_includes skill_document, "只有客户端本来就未运行时才执行"
+    assert_includes skill_document, "普通安装、卸载和单文件备份恢复只有客户端本来就未运行时"
+    assert_includes skill_document, "客户端运行时可以创建安全更新备份和验收清单"
+    assert_includes skill_document, "安全更新失败恢复是唯一允许修改订阅的受控例外"
     refute_includes patch_policy, "安装器可以更新全局脚本"
     assert_includes patch_policy, "安装器整批延期"
 

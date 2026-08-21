@@ -218,6 +218,8 @@ finish() {
       [ "$finish_exit" -ne 0 ] || finish_ok=true
       /usr/bin/printf '%s\n' "{\"schema\":\"claude-easy.result\",\"version\":1,\"command\":\"install\",\"platform\":\"macos\",\"client\":\"clashx-meta\",\"operation\":\"$finish_operation\",\"ok\":$finish_ok,\"status\":\"$finish_status\",\"code\":\"$finish_code\",\"exit_code\":$finish_exit,\"summary_zh\":\"$finish_summary\",\"profile\":null,\"changes\":[],\"checks\":[],\"items\":[],\"messages\":[],\"warnings\":[]}"
     fi
+  else
+    /usr/bin/printf '%s\n' "[ClaudeEasy] $finish_summary"
   fi
   trap - EXIT HUP INT TERM
   exit "$finish_exit"

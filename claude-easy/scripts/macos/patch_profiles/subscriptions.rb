@@ -13,6 +13,7 @@ module ClaudeEasy
 
   AUTO_UPDATE_OWNERSHIP_BASENAME = "clashx-meta-kAutoUpdateEnable.state.json".freeze
   AUTO_UPDATE_DOMAINS = %w[com.metacubex.ClashX.meta com.MetaCubeX.ClashX.meta].freeze
+  MAX_REMOTE_SUBSCRIPTION_BYTES = 16 * 1024 * 1024
   CLASHX_NATIVE_FETCH_SCRIPT = <<~'JAVASCRIPT'.freeze
     ObjC.import("Foundation");
     ObjC.import("AppKit");
@@ -28,8 +29,10 @@ module ClaudeEasy
     var input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
     var inputLines = unwrap($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding)).trim().split("\n");
     var timeoutSeconds = Number(inputLines.shift());
+    var maxBytes = Number(inputLines.shift());
     var urlText = inputLines.join("\n");
     if (!isFinite(timeoutSeconds) || timeoutSeconds <= 0) fail("invalid timeout");
+    if (!isFinite(maxBytes) || maxBytes <= 0) fail("invalid response limit");
     if (!urlText.match(/^https:\/\//)) fail("invalid subscription URL");
 
     var primaryApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.metacubex.ClashX.meta");
@@ -58,15 +61,16 @@ module ClaudeEasy
     request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");
     request.setValueForHTTPHeaderField("br;q=1.0, gzip;q=0.9, deflate;q=0.8", "Accept-Encoding");
 
-    var data = null;
+    var data = $.NSMutableData.data;
     var response = null;
     var requestError = null;
     var finished = false;
     var redirectRejected = false;
+    var responseTooLarge = false;
     ObjC.registerSubclass({
       name: "ClaudeEasyNoRedirectDelegate",
       superclass: "NSObject",
-      protocols: ["NSURLSessionTaskDelegate"],
+      protocols: ["NSURLSessionDataDelegate"],
       methods: {
         "URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:": {
           implementation: function(session, task, redirectResponse, redirectRequest, completionHandler) {
@@ -78,6 +82,34 @@ module ClaudeEasy
             }
             completionHandler(redirectRequest);
           }
+        },
+        "URLSession:dataTask:didReceiveResponse:completionHandler:": {
+          implementation: function(session, dataTask, receivedResponse, completionHandler) {
+            response = receivedResponse;
+            var expectedLength = Number(receivedResponse.expectedContentLength);
+            if (expectedLength > maxBytes) {
+              responseTooLarge = true;
+              completionHandler($.NSURLSessionResponseCancel);
+              return;
+            }
+            completionHandler($.NSURLSessionResponseAllow);
+          }
+        },
+        "URLSession:dataTask:didReceiveData:": {
+          implementation: function(session, dataTask, receivedData) {
+            if (Number(data.length) + Number(receivedData.length) > maxBytes) {
+              responseTooLarge = true;
+              dataTask.cancel;
+              return;
+            }
+            data.appendData(receivedData);
+          }
+        },
+        "URLSession:task:didCompleteWithError:": {
+          implementation: function(session, completedTask, error) {
+            requestError = error;
+            finished = true;
+          }
         }
       }
     });
@@ -87,23 +119,18 @@ module ClaudeEasy
       delegate,
       $.NSOperationQueue.mainQueue
     );
-    var task = session.dataTaskWithRequestCompletionHandler(request, function(receivedData, receivedResponse, error) {
-      data = receivedData;
-      response = receivedResponse;
-      requestError = error;
-      finished = true;
-    });
+    var task = session.dataTaskWithRequest(request);
     task.resume;
     var deadline = $.NSDate.dateWithTimeIntervalSinceNow(timeoutSeconds + 5);
     while (!finished && deadline.timeIntervalSinceNow > 0) {
       $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
     }
     session.finishTasksAndInvalidate;
-    if (redirectRejected || !finished || (requestError && !requestError.isNil()) || !data || !response) fail("subscription request failed");
+    if (redirectRejected || responseTooLarge || !finished || (requestError && !requestError.isNil()) || !response) fail("subscription request failed");
     var finalURL = unwrap(response.URL.absoluteString);
     if (!finalURL || !finalURL.match(/^https:\/\//)) fail("subscription request failed");
     var statusCode = Number(response.statusCode);
-    if (statusCode < 200 || statusCode >= 300 || data.length === 0) fail("subscription request failed");
+    if (statusCode < 200 || statusCode >= 300 || Number(data.length) === 0) fail("subscription request failed");
     $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
   JAVASCRIPT
 
@@ -255,16 +282,39 @@ module ClaudeEasy
     true
   end
 
-  def defaults_export_domain(runner: Open3.method(:capture3))
-    AUTO_UPDATE_DOMAINS.each do |domain|
-      plist, _export_error, export_status = runner.call("/usr/bin/defaults", "export", domain, "-")
-      next unless export_status.success? && !plist.empty?
+  def clashx_preference_domain(app_paths: clashx_app_paths,
+                               identity_reader: method(:clashx_running_identity),
+                               runner: Open3.method(:capture3))
+    identity = identity_reader.call
+    paths = if identity
+              executable = identity.fetch(:executable).to_s
+              suffix = "/Contents/MacOS/ClashX Meta"
+              return nil unless executable.end_with?(suffix)
 
-      return { domain: domain, plist: plist }
-    rescue StandardError
-      next
-    end
+              [executable.delete_suffix(suffix)]
+            else
+              app_paths
+            end
+    paths = Array(paths).map { |path| File.expand_path(path) }.uniq
+    identifiers = paths.map do |path|
+      plist = File.join(path, "Contents", "Info.plist")
+      next unless File.file?(plist) && !File.symlink?(plist)
+
+      identifier, _error, status = runner.call(
+        "/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist
+      )
+      identifier = identifier.to_s.strip
+      identifier if status.success? && AUTO_UPDATE_DOMAINS.include?(identifier)
+    end.compact.uniq
+    identifiers.length == 1 ? identifiers.first : nil
+  rescue KeyError, StandardError
     nil
+  end
+
+  def defaults_export_domain(runner: Open3.method(:capture3), domain: clashx_preference_domain)
+    return nil unless AUTO_UPDATE_DOMAINS.include?(domain)
+
+    defaults_export_named_domain(domain, runner: runner)
   end
 
   def defaults_export_named_domain(domain, runner: Open3.method(:capture3))
@@ -286,19 +336,24 @@ module ClaudeEasy
     ""
   end
 
-  def defaults_read(key, runner: Open3.method(:capture3))
-    exported = defaults_export_domain(runner: runner)
+  def defaults_read(key, runner: Open3.method(:capture3), preference_domain: clashx_preference_domain)
+    exported = defaults_export_domain(runner: runner, domain: preference_domain)
     return "" unless exported
 
     plist_raw_value(exported.fetch(:plist), key, runner: runner)
   end
 
-  def disable_subscription_auto_update(backup_root:, runner: Open3.method(:capture3), operation_lock: nil)
+  def disable_subscription_auto_update(backup_root:, runner: Open3.method(:capture3), operation_lock: nil,
+                                       preference_domain: clashx_preference_domain)
     owns_operation_lock = operation_lock.nil?
     operation_lock ||= profile_operation_lock(backup_root)
     ownership = auto_update_ownership_state(backup_root)
     created_backup = nil
     if ownership
+      unless AUTO_UPDATE_DOMAINS.include?(preference_domain) &&
+             ownership.fetch("Domain") == preference_domain
+        raise InvalidConfigError, "ClashX Meta 偏好设置归属已变化"
+      end
       owned_export = defaults_export_named_domain(ownership.fetch("Domain"), runner: runner)
       raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless owned_export
 
@@ -330,7 +385,7 @@ module ClaudeEasy
         )
       end
     else
-      exported = defaults_export_domain(runner: runner)
+      exported = defaults_export_domain(runner: runner, domain: preference_domain)
       raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
 
       domain = exported.fetch(:domain)
@@ -382,8 +437,10 @@ module ClaudeEasy
     operation_lock&.close if owns_operation_lock
   end
 
-  def enable_subscription_auto_update(domain: nil, runner: Open3.method(:capture3))
-    exported = domain ? defaults_export_named_domain(domain, runner: runner) : defaults_export_domain(runner: runner)
+  def enable_subscription_auto_update(domain: nil, runner: Open3.method(:capture3),
+                                      preference_domain: clashx_preference_domain)
+    exported = domain ? defaults_export_named_domain(domain, runner: runner) :
+      defaults_export_domain(runner: runner, domain: preference_domain)
     raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
 
     domain = exported.fetch(:domain)
@@ -439,8 +496,8 @@ module ClaudeEasy
     operation_lock&.close if owns_operation_lock
   end
 
-  def selected_profile_name(runner: Open3.method(:capture3))
-    exported = defaults_export_domain(runner: runner)
+  def selected_profile_name(runner: Open3.method(:capture3), preference_domain: clashx_preference_domain)
+    exported = defaults_export_domain(runner: runner, domain: preference_domain)
     return nil unless exported
 
     xml, _error, status = runner.call(
@@ -568,9 +625,10 @@ module ClaudeEasy
     timeout_seconds = Integer(timeout_seconds)
     stdout, _stderr, status = Open3.capture3(
       "/usr/bin/osascript", "-l", "JavaScript", "-e", CLASHX_NATIVE_FETCH_SCRIPT,
-      stdin_data: "#{timeout_seconds}\n#{url}\n", binmode: true
+      stdin_data: "#{timeout_seconds}\n#{MAX_REMOTE_SUBSCRIPTION_BYTES}\n#{url}\n", binmode: true
     )
     raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
+    raise InvalidConfigError, "远程订阅下载失败" if stdout.bytesize > MAX_REMOTE_SUBSCRIPTION_BYTES
 
     stdout
   rescue KeyError, ArgumentError
@@ -781,7 +839,10 @@ module ClaudeEasy
                                            precommit_condition: nil, runtime_checkpoint: nil,
                                            transaction: nil, client_identity: nil,
                                            native_reloader: nil, runtime_waiter: nil,
-                                           reload_snapshot_reader: nil)
+                                           reload_snapshot_reader: nil,
+                                           runtime_checkpoint_checker: nil,
+                                           runtime_checkpoint_reader: nil,
+                                           runtime_profile_state_reader: nil)
     runtime_checkpoint ||= transaction && transaction[:runtime_checkpoint]
     active = targets.find { |target| active_profile?(target.fetch(:path), selected_name) }
     active ||= { path: runtime_checkpoint[:path] } if runtime_checkpoint
@@ -789,6 +850,25 @@ module ClaudeEasy
 
     return false unless runtime_checkpoint && transaction && client_identity
     return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
+
+    runtime_checkpoint_checker ||= method(:runtime_checkpoint_current?)
+    unless runtime_checkpoint_checker.call(runtime_checkpoint)
+      candidate_bytes = transaction[:candidate_bytes] &&
+                        transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
+      runtime_profile_state_reader ||= method(:current_runtime_loaded_profile_state)
+      case runtime_profile_state_reader.call(active.fetch(:path), candidate_bytes)
+      when :restored
+        runtime_checkpoint_reader ||= lambda do |path|
+          capture_runtime_checkpoint(path, require_tun: :preserve)
+        end
+        runtime_checkpoint = runtime_checkpoint_reader.call(active.fetch(:path))
+        return false unless runtime_checkpoint
+      when :candidate
+        # The candidate load may reset selectors; restore the saved checkpoint.
+      else
+        return false
+      end
+    end
 
     selections = runtime_selections_for_profile(
       runtime_checkpoint[:selections], active.fetch(:path), preserve_all: true

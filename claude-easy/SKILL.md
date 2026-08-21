@@ -90,7 +90,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 bash scripts/install_macos.sh --profile N
 bash scripts/uninstall_macos.sh
 ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json
-ruby scripts/macos/patch_profiles.rb --json
+ruby scripts/macos/patch_profiles.rb --usage-profile N --json
 ```
 
 Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载不通过本地控制器。
@@ -104,7 +104,7 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 平台安装脚本只完成安全的文件事务。脚本成功不等于档位完成；macOS 随后运行原生开关协调命令，Windows 按平台策略完成客户端开关与验收。
 
-受保护写入只有客户端本来就未运行时才执行；客户端运行时整批延期，不要求用户退出、停止或重启。中断的客户端敏感事务同样遵守记录中的恢复权限。
+Windows 普通安装、卸载和单文件备份恢复只有客户端本来就未运行时才写受保护客户端配置。客户端运行时可以创建安全更新备份和验收清单；安全更新失败恢复是唯一允许修改订阅的受控例外，其余受保护客户端配置写入整批延期。不得要求用户退出、停止或重启；中断的客户端敏感事务按记录中的恢复权限处理。
 
 ## 更新全部订阅
 
@@ -120,7 +120,7 @@ macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能
 
 ## 配置历史与恢复
 
-先列出备份：运行 `ruby scripts/macos/patch_profiles.rb --list-backups`；再比较症状出现前的候选：用同一入口的 `--compare-backup ID`。配置差异只输出字段名和哈希。恢复必须携带比较时哈希：macOS 运行 `ruby scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH`，Windows 使用 `-RestoreBackup ID -ExpectedCurrentSha256 HASH`。恢复前先备份当前版本；恢复当前订阅后还要恢复运行配置并按保存档位验收。外部修改、文件身份变化、事务状态未知或运行恢复失败时保留现场和记录，不强行回滚。
+先列出备份，按平台运行：macOS 运行 `ruby scripts/macos/patch_profiles.rb --list-backups --json`，Windows 运行 `.\scripts\install_windows.cmd -ListBackups -Json`。再比较症状出现前的候选：macOS 运行 `ruby scripts/macos/patch_profiles.rb --compare-backup ID --json`，Windows 运行 `.\scripts\install_windows.cmd -CompareBackup ID -Json`。配置差异只输出字段名和哈希。恢复必须携带比较时哈希：macOS 运行 `ruby scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH --json`，Windows 运行 `.\scripts\install_windows.cmd -RestoreBackup ID -ExpectedCurrentSha256 HASH -Json`。恢复前先备份当前版本；恢复当前订阅后还要恢复运行配置并按保存档位验收。外部修改、文件身份变化、事务状态未知或运行恢复失败时保留现场和记录，不强行回滚。
 
 ## 最终说明
 
