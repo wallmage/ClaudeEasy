@@ -40,9 +40,12 @@ module ClaudeEasy
     end
     enabled = ->(key) { integer.call(key) == 1 }
     {
-      http_enabled: enabled.call("HTTPEnable"), http_port: integer.call("HTTPPort"),
-      https_enabled: enabled.call("HTTPSEnable"), https_port: integer.call("HTTPSPort"),
-      socks_enabled: enabled.call("SOCKSEnable"), socks_port: integer.call("SOCKSPort"),
+      http_enabled: enabled.call("HTTPEnable"), http_proxy: fields["HTTPProxy"],
+      http_port: integer.call("HTTPPort"),
+      https_enabled: enabled.call("HTTPSEnable"), https_proxy: fields["HTTPSProxy"],
+      https_port: integer.call("HTTPSPort"),
+      socks_enabled: enabled.call("SOCKSEnable"), socks_proxy: fields["SOCKSProxy"],
+      socks_port: integer.call("SOCKSPort"),
       pac_enabled: enabled.call("ProxyAutoConfigEnable"),
       auto_discovery_enabled: enabled.call("ProxyAutoDiscoveryEnable")
     }
@@ -82,6 +85,9 @@ module ClaudeEasy
     return :disabled unless enabled.any?
 
     strict_match = enabled.all? &&
+                   snapshot.values_at(:http_proxy, :https_proxy, :socks_proxy).all? do |proxy|
+                     proxy == "127.0.0.1"
+                   end &&
                    snapshot[:http_port] == http_port &&
                    snapshot[:https_port] == http_port &&
                    snapshot[:socks_port] == socks_port

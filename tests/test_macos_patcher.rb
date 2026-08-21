@@ -12244,6 +12244,8 @@ class MacosPatcherTest < Minitest::Test
         assert_includes result.fetch("messages").join(" "), "点击菜单栏 ClashX Meta 图标"
         assert_includes result.fetch("messages").join(" "), "TUN 模式"
         assert_includes result.fetch("messages").join(" "), "设置为系统代理"
+        assert_includes result.fetch("messages").join(" "), "只有未勾选时才点击一次"
+        assert_includes result.fetch("messages").join(" "), "只有已勾选时才点击一次"
       end
     end
   end
@@ -15434,10 +15436,13 @@ class MacosPatcherTest < Minitest::Test
     output = <<~SCUTIL
       <dictionary> {
         HTTPEnable : 1
+        HTTPProxy : 127.0.0.1
         HTTPPort : 7893
         HTTPSEnable : 1
+        HTTPSProxy : 127.0.0.1
         HTTPSPort : 7893
         SOCKSEnable : 1
+        SOCKSProxy : 127.0.0.1
         SOCKSPort : 7893
         ProxyAutoConfigEnable : 0
       }
@@ -15445,12 +15450,19 @@ class MacosPatcherTest < Minitest::Test
     snapshot = ClaudeEasy.macos_system_proxy_snapshot(
       runner: ->(*_arguments) { [output, "", status] }
     )
+    assert_equal "127.0.0.1", snapshot.fetch(:http_proxy)
     assert_equal :clash, ClaudeEasy.classify_system_proxy(snapshot, 7893, 7893)
     assert_equal :disabled, ClaudeEasy.classify_system_proxy(
       snapshot.transform_values { |value| value == true ? false : value }, 7893, 7893
     )
     assert_equal :other, ClaudeEasy.classify_system_proxy(
       snapshot.merge(pac_enabled: true), 7893, 7893
+    )
+    assert_equal :other, ClaudeEasy.classify_system_proxy(
+      snapshot.merge(
+        http_proxy: "10.0.0.2", https_proxy: "10.0.0.2", socks_proxy: "10.0.0.2"
+      ),
+      7893, 7893
     )
   end
 
@@ -15499,8 +15511,11 @@ class MacosPatcherTest < Minitest::Test
       enabled = proxy == :clash
       {
         http_enabled: enabled, http_port: enabled ? 7893 : 0,
+        http_proxy: enabled ? "127.0.0.1" : nil,
         https_enabled: enabled, https_port: enabled ? 7893 : 0,
+        https_proxy: enabled ? "127.0.0.1" : nil,
         socks_enabled: enabled, socks_port: enabled ? 7893 : 0,
+        socks_proxy: enabled ? "127.0.0.1" : nil,
         pac_enabled: false, auto_discovery_enabled: false
       }
     end

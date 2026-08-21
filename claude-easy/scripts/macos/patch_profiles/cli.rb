@@ -439,9 +439,9 @@ module ClaudeEasy
       message = if result.fetch(:reason) == :third_party_proxy_active
                   "检测到第三方 PAC、自动发现或其他代理，未改动系统代理；请先决定是否保留该代理，不要直接覆盖。"
                 elsif options[:usage_profile] == 1
-                  "请点击菜单栏 ClashX Meta 图标，点击“设置为系统代理”，确认该项出现勾选；完成后回复“已完成”。"
+                  "请点击菜单栏 ClashX Meta 图标，确认“设置为系统代理”已勾选；只有未勾选时才点击一次。完成后回复“已完成”。"
                 else
-                  "请点击菜单栏 ClashX Meta 图标，先点击“TUN 模式”并确认出现勾选，再确认“设置为系统代理”没有勾选；完成后回复“已完成”。"
+                  "请点击菜单栏 ClashX Meta 图标，确认“TUN 模式”已勾选，只有未勾选时才点击一次；再确认“设置为系统代理”未勾选，只有已勾选时才点击一次。完成后回复“已完成”。"
                 end
       return emit_cli_result(
         operation: "reconcile_client_switches", exit_code: 1, status: "failed",
