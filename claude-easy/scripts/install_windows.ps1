@@ -325,6 +325,61 @@ if ($VerifySafeUpdate) {
     if (-not $manifestSnapshot.Exists) { throw "没有找到本次安全更新的准备记录。" }
     $manifestText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($manifestSnapshot.Bytes)
     $manifest = $manifestText | ConvertFrom-Json
+    if ($null -ne $manifest.PSObject.Properties["Kind"]) {
+        $runtimeRecoveryProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
+        $runtimeRecoveryVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
+        $runtimeRecoveryProfileIsNumeric = $manifest.UsageProfile -is [int] -or $manifest.UsageProfile -is [long]
+        if (($runtimeRecoveryProperties -join ",") -cne "Kind,Runtime,UsageProfile,Version" -or
+            -not $runtimeRecoveryVersionIsNumeric -or [long]$manifest.Version -ne 1 -or
+            -not ($manifest.Kind -is [string]) -or
+            [string]$manifest.Kind -cne "safe_update_runtime_recovery" -or
+            -not $runtimeRecoveryProfileIsNumeric -or
+            [long]$manifest.UsageProfile -notin @(1, 2, 3) -or
+            [long]$manifest.UsageProfile -ne $savedUsageProfile) {
+            throw "安全更新运行状态恢复记录无效。"
+        }
+        $runtimeRecoveryRuntimeProperties = @($manifest.Runtime.PSObject.Properties.Name | Sort-Object)
+        if (($runtimeRecoveryRuntimeProperties -join ",") -cne "Selections,TunEnabled" -or
+            -not ($manifest.Runtime.TunEnabled -is [bool])) {
+            throw "安全更新运行状态恢复记录无效。"
+        }
+        $runtimeRecoverySelections = @{}
+        $runtimeRecoveryGroups = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($selection in @($manifest.Runtime.Selections)) {
+            $selectionProperties = @($selection.PSObject.Properties.Name | Sort-Object)
+            if (($selectionProperties -join ",") -cne "Group,Selection" -or
+                -not ($selection.Group -is [string]) -or
+                -not ($selection.Selection -is [string]) -or
+                [string]::IsNullOrWhiteSpace([string]$selection.Group) -or
+                [string]::IsNullOrWhiteSpace([string]$selection.Selection) -or
+                -not $runtimeRecoveryGroups.Add([string]$selection.Group)) {
+                throw "安全更新运行状态恢复记录无效。"
+            }
+            $runtimeRecoverySelections[[string]$selection.Group] = [string]$selection.Selection
+        }
+        try {
+            $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+            if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
+            $vergeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($vergeSnapshot.Bytes)
+            $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
+            $runtimeRecoveryContext = Get-ClashControllerContext $runtimeConfigPath
+            $runtimeRecoveryPolicyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+            $runtimeRecoveryPolicy = (New-Object System.Text.UTF8Encoding($false, $true)).GetString(
+                [System.IO.File]::ReadAllBytes($runtimeRecoveryPolicyPath)
+            ) | ConvertFrom-Json
+            $runtimeRecoveryCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+            Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            $null = Wait-ClashVergeRuntimeHealthy `
+                $runtimeConfigPath $runtimeRecoveryContext $runtimeRecoverySelections `
+                ([bool]$manifest.Runtime.TunEnabled) $savedUsageProfile `
+                ([string]$runtimeRecoveryCurl.Source) $runtimeRecoveryPolicy
+            Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes `
+                $manifestSnapshot.Identity "safe_update_running_client"
+            Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已恢复全部订阅文件和更新前运行状态。"
+        } catch {
+            Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() @() @("runtime_unverified")
+        }
+    }
     $manifestProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
     $createdAtIsJsonString = [regex]::Matches(
         $manifestText,
@@ -534,8 +589,28 @@ if ($VerifySafeUpdate) {
             }
             Complete-InstallResult 1 "partial" "safe_update_verification_retry_pending" "验收依赖的清单、脚本或状态在检查期间变化；已保留当前订阅和安全更新清单，请待客户端写入完成后重试。" @() @("verification_state")
         }
+        $runtimeRecoveryBytes = $null
+        if ($hasRuntimeSnapshot) {
+            $runtimeRecoveryRecord = [ordered]@{
+                Version = 1
+                Kind = "safe_update_runtime_recovery"
+                UsageProfile = [int]$savedUsageProfile
+                Runtime = [ordered]@{
+                    TunEnabled = [bool]$manifest.Runtime.TunEnabled
+                    Selections = @($manifest.Runtime.Selections | ForEach-Object {
+                        [ordered]@{
+                            Group = [string]$_.Group
+                            Selection = [string]$_.Selection
+                        }
+                    })
+                }
+            }
+            $runtimeRecoveryBytes = ConvertTo-Utf8Bytes (($runtimeRecoveryRecord | ConvertTo-Json -Depth 5) + "`r`n")
+        }
         try {
-            $restoreResult = Restore-SafeUpdateFiles $recoveryItems $observedCurrentHashes $safeUpdateStatePath $manifestSnapshot
+            $restoreResult = Restore-SafeUpdateFiles `
+                $recoveryItems $observedCurrentHashes $safeUpdateStatePath `
+                $manifestSnapshot $runtimeRecoveryBytes
         } finally {
             foreach ($controlGuard in $controlGuards) {
                 $controlGuard.Stream.Dispose()
@@ -565,6 +640,10 @@ if ($VerifySafeUpdate) {
                 $null = Wait-ClashVergeRuntimeHealthy `
                     $runtimeConfigPath $rollbackRuntime $expectedSelections $expectedTunEnabled `
                     $savedUsageProfile ([string]$rollbackCurl.Source) $rollbackPolicy
+                $runtimeRecoverySnapshot = Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新运行状态恢复记录"
+                if (-not $runtimeRecoverySnapshot.Exists) { throw "安全更新运行状态恢复记录已消失。" }
+                Remove-VerifiedOwnedFile $safeUpdateStatePath $runtimeRecoverySnapshot.Bytes `
+                    $runtimeRecoverySnapshot.Identity "safe_update_running_client"
                 Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已恢复全部订阅文件和更新前运行状态。" @() @() $rollbackItems
             } catch {
                 Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")

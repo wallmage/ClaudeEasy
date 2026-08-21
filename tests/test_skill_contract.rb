@@ -59,6 +59,7 @@ class SkillContractTest < Minitest::Test
     claude-easy/scripts/windows/install_windows/mihomo.ps1
     claude-easy/scripts/windows/install_windows/transaction.ps1
     claude-easy/scripts/windows/install_windows/script_js.ps1
+    claude-easy/scripts/windows/install_windows/runtime.ps1
     claude-easy/scripts/windows/install_windows/safe_update.ps1
     .github/workflows/test.yml
     tests/fixtures/main_group_cases.json
@@ -101,6 +102,14 @@ class SkillContractTest < Minitest::Test
   def test_all_distribution_files_exist
     missing = REQUIRED_PUBLIC_FILES.reject { |path| File.file?(File.join(ROOT, path)) }
     assert_empty missing, "missing public files: #{missing.join(', ')}"
+  end
+
+  def test_release_archive_includes_every_windows_installer_module
+    modules = Dir[File.join(SKILL, "scripts/windows/install_windows/*.ps1")].map do |path|
+      path.delete_prefix("#{ROOT}/")
+    end
+
+    assert_empty modules - REQUIRED_PUBLIC_FILES
   end
 
   def test_release_archive_is_self_contained_and_runs_from_a_unicode_space_path
@@ -1330,7 +1339,13 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "恢复回滚前版本"
     end
     assert_includes safe_update, "同一已运行 ClashX Meta 进程的官方更新事件重新加载"
-    refute_includes safe_update, "通过本地控制器重新加载"
+    assert_includes safe_update, "macOS 恢复当前订阅后通过 Mihomo 本地控制器重新加载"
+    assert_includes documents[0], "Windows 的其他受保护恢复只有客户端本来就未运行时进行"
+    refute_match(/^其他受保护恢复只有客户端本来就未运行时进行/, documents[0])
+    assert_includes documents[3], "普通 Patch 通过本地控制器加载"
+    assert_includes documents[3], "备份恢复通过本地控制器加载"
+    assert_includes documents[3], "安全更新通过同一已运行 ClashX Meta 进程的官方更新事件重新加载"
+    refute_includes documents[3], "当前订阅写入后只通过本地控制器刷新"
   end
 
   def test_diagnostics_selects_tools_by_the_observed_symptom
@@ -2288,20 +2303,26 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_windows_failed_safe_update_rollback_deletes_manifest_in_the_same_transaction
+  def test_windows_failed_safe_update_rollback_publishes_runtime_recovery_in_the_same_transaction
     installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
     safe_update = File.read(
       File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
     )
 
-    assert_includes safe_update, "Invoke-VerifiedWriteDeleteTransaction"
+    assert_includes safe_update, "Invoke-VerifiedWriteDeleteTransaction (@($targets) + @($manifestTarget)) @()"
     assert_includes safe_update, "ManifestPath"
     assert_includes safe_update, "ManifestSnapshot"
-    restore_call = installer.lines.find { |line| line.include?("$restoreResult = Restore-SafeUpdateFiles") }
+    assert_includes safe_update, "-NotePropertyValue $RuntimeRecoveryBytes"
+    assert_includes installer, 'Kind = "safe_update_runtime_recovery"'
+    restore_call = installer.index("$restoreResult = Restore-SafeUpdateFiles")
+    runtime_record = installer.index("$runtimeRecoveryBytes = ConvertTo-Utf8Bytes")
     refute_nil restore_call
-    assert_includes restore_call, "$safeUpdateStatePath"
-    assert_includes restore_call, "$manifestSnapshot"
-    assert_equal 1, installer.scan("Remove-VerifiedOwnedFile $safeUpdateStatePath").length
+    refute_nil runtime_record
+    assert_operator runtime_record, :<, restore_call
+    restore_block = installer[restore_call, 300]
+    assert_includes restore_block, "$safeUpdateStatePath"
+    assert_includes restore_block, "$manifestSnapshot $runtimeRecoveryBytes"
+    assert_operator installer.scan("Remove-VerifiedOwnedFile $safeUpdateStatePath").length, :>=, 3
   end
 
   def test_windows_safe_update_restores_a_missing_manifest_target

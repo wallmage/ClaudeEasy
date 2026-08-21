@@ -2204,6 +2204,7 @@ function Invoke-ControllerJson([string]$Endpoint) {
             proxies = [pscustomobject]@{
                 Main = [pscustomobject]@{ type = "LoadBalance"; now = "" }
                 AI = [pscustomobject]@{ type = "Selector"; now = "Fixture Node" }
+                "Custom Route" = [pscustomobject]@{ type = "Selector"; now = "Fixture Node" }
                 "Fixture Node" = [pscustomobject]@{ type = "Shadowsocks" }
             }
         }
@@ -2272,7 +2273,15 @@ $routeSnapshot = [pscustomobject]@{
     MainSelection = ""
     AiGroup = "AI"
     AiSelection = "Fixture Node"
-    AiCandidates = @("AI")
+}
+$customRouteSnapshot = [pscustomobject]@{
+    MainGroup = "Main"
+    MainSelection = ""
+    AiGroup = "Custom Route"
+    AiSelection = "Fixture Node"
+}
+if ($null -eq (Get-CurrentRouteSnapshot $customRouteSnapshot)) {
+    throw "Get-CurrentRouteSnapshot re-discovered an explicit custom AI group."
 }
 $passed = Observe-Route "Google" "https://www.google.com/" "google" "Main" "" "AI" $true $routeSnapshot "http://127.0.0.1:7890"
 if (-not $passed) { throw "Observe-Route rejected a matching routed connection." }
@@ -3976,11 +3985,32 @@ rules:
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $noMainUpdated)
     $noMainUpdatedMultiline = $noMainUpdated.Replace("proxy-groups: []", "proxy-groups: [ # empty flow list`n]")
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $noMainUpdatedMultiline)
-    $noMainVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore) -SimulateRuntimeRefresh
+    $noMainVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
     Assert-True ($noMainVerify.ExitCode -eq 1) "safe update accepted subscriptions that the installed global script cannot patch"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "main-group validation failure did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "main-group validation failure did not restore second remote subscription"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed main-group rollback left a stale safe-update manifest"
+    $runtimeRecoveryPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    Assert-True (Test-Path -LiteralPath $runtimeRecoveryPath -PathType Leaf) "failed runtime rollback lost its recovery record"
+    $runtimeRecovery = [System.IO.File]::ReadAllText($runtimeRecoveryPath) | ConvertFrom-Json
+    Assert-True (
+        (@($runtimeRecovery.PSObject.Properties.Name | Sort-Object) -join ",") -ceq
+            "Kind,Runtime,UsageProfile,Version" -and
+        [int]$runtimeRecovery.Version -eq 1 -and
+        [string]$runtimeRecovery.Kind -ceq "safe_update_runtime_recovery"
+    ) "failed runtime rollback did not publish a strict recovery record"
+    $runtimeRecoveryRetry = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-RefreshConfirmed",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    ) -SimulateRuntimeRefresh
+    $runtimeRecoveryRetryJson = Assert-JsonResult $runtimeRecoveryRetry "install" 1
+    Assert-True (
+        $runtimeRecoveryRetryJson.status -eq "rolled_back" -and
+        $runtimeRecoveryRetryJson.code -eq "safe_update_rolled_back"
+    ) "runtime-only safe-update recovery did not resume"
+    Assert-True (-not (Test-Path -LiteralPath $runtimeRecoveryPath)) "completed runtime recovery retained its record"
 
     $successSnapshot = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
@@ -4203,7 +4233,7 @@ rules: ["MATCH,AI"]
                 Join-Path $rollbackCrashPackage "scripts"
             ) "install_windows.ps1"
             $rollbackCrashInstallerText = [System.IO.File]::ReadAllText($rollbackCrashInstaller)
-            $rollbackCrashNeedle = '        $restoreResult = Restore-SafeUpdateFiles'
+            $rollbackCrashNeedle = '                $manifestSnapshot $runtimeRecoveryBytes'
             $rollbackCrashOffset = $rollbackCrashInstallerText.IndexOf($rollbackCrashNeedle)
             Assert-True (
                 $rollbackCrashOffset -ge 0 -and
@@ -4318,6 +4348,16 @@ rules:
             Assert-True (
                 (Get-Content -LiteralPath $rollbackCrashTarget -Raw) -eq $rollbackCrashOriginal
             ) "safe-update rollback crash fixture did not restore the original subscription"
+            $rollbackCrashRecoveryPath = Join-Path $rollbackCrashHome "claude-easy-safe-update.json"
+            Assert-True (
+                Test-Path -LiteralPath $rollbackCrashRecoveryPath -PathType Leaf
+            ) "completed file rollback did not retain runtime recovery intent after process death"
+            $rollbackCrashRecovery = [System.IO.File]::ReadAllText($rollbackCrashRecoveryPath) | ConvertFrom-Json
+            Assert-True (
+                (@($rollbackCrashRecovery.PSObject.Properties.Name | Sort-Object) -join ",") -ceq
+                    "Kind,Runtime,UsageProfile,Version" -and
+                [string]$rollbackCrashRecovery.Kind -ceq "safe_update_runtime_recovery"
+            ) "process death retained a reusable update manifest instead of strict runtime recovery intent"
 
             $rollbackCrashRetry = Invoke-TestPowerShell $rollbackCrashInstaller @(
                 "-AppHome", $rollbackCrashHome,
@@ -4325,16 +4365,13 @@ rules:
                 "-RefreshConfirmed",
                 "-MihomoPath", $fakeCore,
                 "-Json"
-            )
+            ) -SimulateRuntimeRefresh
             $rollbackCrashRetryJson = Assert-JsonResult $rollbackCrashRetry "install" 1
             Assert-True (
-                $rollbackCrashRetryJson.code -ne "safe_update_verified"
-            ) "a failed and rolled-back update was reported as verified after process death"
-            Assert-True (-not (
-                Test-Path -LiteralPath (
-                    Join-Path $rollbackCrashHome "claude-easy-safe-update.json"
-                )
-            )) "completed rollback retained a reusable safe-update manifest"
+                $rollbackCrashRetryJson.status -eq "rolled_back" -and
+                $rollbackCrashRetryJson.code -eq "safe_update_rolled_back"
+            ) "runtime recovery did not resume after process death"
+            Assert-True (-not (Test-Path -LiteralPath $rollbackCrashRecoveryPath)) "completed runtime recovery retained its record"
             Assert-True (
                 (Get-Content -LiteralPath $rollbackCrashTarget -Raw) -eq $rollbackCrashOriginal
             ) "retry after rollback process death changed the restored subscription"

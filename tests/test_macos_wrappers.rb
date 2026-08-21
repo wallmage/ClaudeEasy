@@ -1479,6 +1479,24 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_installer_static_json_fallback_keeps_success_semantics
+    with_real_installer_package do |installer|
+      FileUtils.rm_f(
+        File.join(File.dirname(installer), "macos", "result_contract.rb")
+      )
+      Dir.mktmpdir do |home|
+        stdout, stderr, status = run_script(installer, "--help", "--json", home: home)
+
+        assert status.success?, stderr
+        assert_empty stderr
+        result = assert_json_result(stdout, status, command: "install")
+        assert result.fetch("ok")
+        assert_equal "ok", result.fetch("status")
+        assert_equal "help", result.fetch("code")
+      end
+    end
+  end
+
   def test_installer_rejects_each_missing_release_dependency_before_creating_state
     INSTALL_PACKAGE_DEPENDENCIES.each do |relative_path|
       with_real_installer_package do |installer|

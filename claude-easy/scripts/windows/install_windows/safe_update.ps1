@@ -695,7 +695,8 @@ function Restore-SafeUpdateFiles(
     [object[]]$RecoveryItems,
     [hashtable]$ObservedHashes,
     [string]$ManifestPath,
-    [object]$ManifestSnapshot
+    [object]$ManifestSnapshot,
+    [byte[]]$RuntimeRecoveryBytes
 ) {
     $failures = @()
     $conflicts = @()
@@ -757,8 +758,14 @@ function Restore-SafeUpdateFiles(
                 OriginalBytes = $ManifestSnapshot.Bytes
                 OriginalIdentity = $ManifestSnapshot.Identity
             }
-            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget) `
-                -InterruptedRecoveryPolicy "safe_update_running_client"
+            if ($null -ne $RuntimeRecoveryBytes -and $RuntimeRecoveryBytes.Count -gt 0) {
+                $manifestTarget | Add-Member -NotePropertyName Bytes -NotePropertyValue $RuntimeRecoveryBytes
+                Invoke-VerifiedWriteDeleteTransaction (@($targets) + @($manifestTarget)) @() `
+                    -InterruptedRecoveryPolicy "safe_update_running_client"
+            } else {
+                Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget) `
+                    -InterruptedRecoveryPolicy "safe_update_running_client"
+            }
         } catch {
             $failures = @($RecoveryItems | ForEach-Object { $_.File })
         }

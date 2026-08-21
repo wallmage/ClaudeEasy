@@ -10,6 +10,9 @@ module ClaudeEasy
     Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay
   ].freeze
   RUNTIME_PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
+  RUNTIME_INJECTED_CONFIG_KEYS = %w[
+    external-controller external-controller-unix secret
+  ].freeze
   CLASHX_RELOAD_COMPLETION = "Initial configuration complete, total time:".b.freeze
   CLASHX_LOG_SESSION_PATTERN = /\A\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\z/.freeze
   CLASHX_CORE_LOG_PATTERN = /\Aclashx_core_\d{2}_\d{2}-\d{2}-\d{2}\.log(?:\.\d+)?\z/.freeze
@@ -295,9 +298,7 @@ module ClaudeEasy
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
     return nil unless config.is_a?(Hash)
 
-    %w[proxies proxy-groups proxy-providers rules rule-providers dns tun profile].to_h do |key|
-      [key, deep_copy(config[key])]
-    end
+    deep_copy(config.reject { |key, _value| RUNTIME_INJECTED_CONFIG_KEYS.include?(key) })
   rescue StandardError
     nil
   end
@@ -721,12 +722,20 @@ module ClaudeEasy
     return nil unless selections.is_a?(Hash)
 
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
-    selector_names = selectable_groups(config).map { |group| group.fetch("name") }
-    return nil if preserve_all && !selections.keys.all? { |name| selector_names.include?(name) }
-    return {} if selector_names.empty?
+    selectors = selectable_groups(config)
+    selector_names = selectors.map { |group| group.fetch("name") }
+    return nil if preserve_all && selectors.empty? && !selections.empty?
+    return {} if selectors.empty?
     return nil if require_all && !selector_names.all? { |name| selections.key?(name) }
 
-    selections.select { |name, _selected| selector_names.include?(name) }
+    valid = selections.select do |name, selected|
+      group = selectors.find { |item| item.fetch("name") == name }
+      group && (Array(group["proxies"]).map(&:to_s).include?(selected) ||
+                !Array(group["use"]).empty?)
+    end
+    return nil if preserve_all && valid.length != selections.length
+
+    valid
   rescue StandardError
     nil
   end

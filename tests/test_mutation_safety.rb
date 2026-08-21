@@ -1634,13 +1634,13 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_safe_update_rollback_manifest_transaction_mutation_is_killed
+  def test_windows_safe_update_rollback_runtime_record_transaction_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/safe_update.ps1",
-        "            Invoke-VerifiedWriteDeleteTransaction $targets @($manifestTarget) `\n" \
-        "                -InterruptedRecoveryPolicy \"safe_update_running_client\"\n",
+        "                Invoke-VerifiedWriteDeleteTransaction (@($targets) + @($manifestTarget)) @() `\n" \
+        "                    -InterruptedRecoveryPolicy \"safe_update_running_client\"\n",
         "            Invoke-VerifiedFileTransaction $targets\n"
       )
 
@@ -1648,7 +1648,7 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
         "--name",
-        "test_windows_failed_safe_update_rollback_deletes_manifest_in_the_same_transaction"
+        "test_windows_failed_safe_update_rollback_publishes_runtime_recovery_in_the_same_transaction"
       )
     end
   end

@@ -15211,7 +15211,20 @@ class MacosPatcherTest < Minitest::Test
       refute ClaudeEasy.runtime_matches_profile?(
         requester, profile, runtime_path_reader: -> { [loaded] }
       )
+      stale_hosts = Marshal.load(Marshal.dump(candidate))
+      stale_hosts["hosts"] = { "api.example" => "192.0.2.1" }
+      File.binwrite(loaded, YAML.dump(stale_hosts))
+      refute ClaudeEasy.runtime_matches_profile?(
+        requester, profile, runtime_path_reader: -> { [loaded] }
+      )
       File.binwrite(loaded, YAML.dump(candidate))
+      assert ClaudeEasy.runtime_matches_profile?(
+        requester, profile, runtime_path_reader: -> { [loaded] }
+      )
+      runtime_injected = Marshal.load(Marshal.dump(candidate)).merge(
+        "external-controller-unix" => "/tmp/clash.sock", "secret" => "runtime-only"
+      )
+      File.binwrite(loaded, YAML.dump(runtime_injected))
       assert ClaudeEasy.runtime_matches_profile?(
         requester, profile, runtime_path_reader: -> { [loaded] }
       )
@@ -16364,6 +16377,30 @@ class MacosPatcherTest < Minitest::Test
 
       assert_equal true, activated[:reloaded]
       assert_equal({ "主节点" => "台湾 1", "人工智能" => "主节点" }, restored)
+    end
+  end
+
+  def test_safe_update_localizes_a_renamed_node_inside_the_same_group
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = base_config
+      candidate = Marshal.load(Marshal.dump(original))
+      old_name = candidate.fetch("proxies").first.fetch("name")
+      new_name = "Taiwan Home"
+      candidate.fetch("proxies").first["name"] = new_name
+      candidate.fetch("proxy-groups").each do |group|
+        group["proxies"] = Array(group["proxies"]).map { |name| name == old_name ? new_name : name }
+      end
+      File.binwrite(profile, YAML.dump(candidate))
+      selections = { "Main" => old_name, "AI" => "Main" }
+
+      assert_nil ClaudeEasy.runtime_selections_for_profile(
+        selections, profile, preserve_all: true
+      )
+      assert_equal(
+        { "Main" => new_name, "AI" => "Main" },
+        ClaudeEasy.localized_runtime_selections(selections, YAML.dump(original), profile)
+      )
     end
   end
 

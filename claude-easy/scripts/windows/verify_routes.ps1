@@ -476,9 +476,7 @@ function Get-CurrentRouteSnapshot([object]$Expected) {
         return $null
     }
     $currentMain = Get-LiveMainGroup $proxies
-    $currentAi = Find-Group $proxies @($Expected.AiCandidates) "" "AI 分组"
-    if ($currentMain -cne [string]$Expected.MainGroup -or
-        $currentAi -cne [string]$Expected.AiGroup) { return $null }
+    if ($currentMain -cne [string]$Expected.MainGroup) { return $null }
     $mainProperty = $proxies.PSObject.Properties[[string]$Expected.MainGroup]
     $aiProperty = $proxies.PSObject.Properties[[string]$Expected.AiGroup]
     if ($null -eq $mainProperty -or $null -eq $aiProperty -or
@@ -620,7 +618,6 @@ try {
         MainSelection = $mainSelection
         AiGroup = $ai
         AiSelection = $aiSelection
-        AiCandidates = @($policy.ai_group_names)
     }
     $routeProxyUrl = Get-RouteLoopbackProxyUrl
 
