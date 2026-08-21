@@ -15131,6 +15131,44 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_clashx_reload_receipt_helpers_fail_closed_and_bound_the_buffer
+    closed = false
+    broken_socket = Object.new
+    broken_socket.define_singleton_method(:close_on_exec=) { |_value| }
+    broken_socket.define_singleton_method(:write) { |_request| raise IOError }
+    broken_socket.define_singleton_method(:close) { closed = true }
+    UNIXSocket.stub(:new, broken_socket) do
+      assert_nil ClaudeEasy.open_clashx_reload_receipt("socket")
+    end
+    assert closed
+
+    completed_socket = Object.new
+    completed_socket.define_singleton_method(:read_nonblock) { |_size, exception:| :wait_readable }
+    completed = { socket: completed_socket, buffer: "Initial configuration complete, total time:".b, completed: false }
+    assert ClaudeEasy.clashx_reload_receipt_completed?(completed)
+    assert completed[:completed]
+    assert_empty completed[:buffer]
+
+    reads = ["x", :wait_readable]
+    reader = Object.new
+    reader.define_singleton_method(:read_nonblock) { |_size, exception:| reads.shift }
+    bounded = { socket: reader, buffer: "x" * 65_536, completed: false }
+    refute ClaudeEasy.clashx_reload_receipt_completed?(bounded)
+    assert_operator bounded.fetch(:buffer).bytesize, :<, 65_536
+
+    raising_reader = Object.new
+    raising_reader.define_singleton_method(:read_nonblock) { |_size, exception:| raise IOError }
+    refute ClaudeEasy.clashx_reload_receipt_completed?(
+      socket: raising_reader, buffer: "", completed: false
+    )
+
+    raising_close = Object.new
+    raising_close.define_singleton_method(:closed?) { false }
+    raising_close.define_singleton_method(:close) { raise IOError }
+    refute ClaudeEasy.close_clashx_reload_receipt(socket: raising_close)
+  end
+
+
   def test_runtime_match_rejects_an_old_in_memory_config
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
@@ -15304,6 +15342,31 @@ class MacosPatcherTest < Minitest::Test
 
     refute health_checked
   end
+
+  def test_clashx_runtime_wait_retries_after_a_failed_health_check
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    health = [false, true]
+    sleeps = 0
+    requester = ->(*_arguments) { [200, "{}"] }
+
+    ClaudeEasy.stub(:runtime_restorable_selections, {}) do
+      ClaudeEasy.stub(:restore_runtime_selections, true) do
+        ClaudeEasy.stub(:runtime_health_healthy?, ->(*_arguments, **_options) { health.shift }) do
+          assert ClaudeEasy.wait_for_clashx_safe_runtime(
+            identity, reload_receipt: {}, selections: {}, expected_tun: :ignore,
+            requester_factory: -> { requester }, reload_receipt_reader: ->(_receipt) { true },
+            profile_match_reader: ->(_requester) { true }, process_reader: -> { identity },
+            sleeper: ->(_seconds) { sleeps += 1 }, attempts: 2
+          )
+        end
+      end
+    end
+    assert_equal 1, sleeps
+  end
+
 
   def test_safe_update_preserves_selections_when_only_group_and_node_names_are_localized
     Dir.mktmpdir do |directory|
@@ -15550,6 +15613,71 @@ class MacosPatcherTest < Minitest::Test
       assert_equal :reload_failed_restore_pending, repeated.fetch(:status)
     end
   end
+
+  def test_safe_update_closes_reload_receipts_when_activation_is_already_used
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      bytes = YAML.dump(base_config)
+      File.binwrite(profile, bytes)
+      stat = File.stat(profile)
+      identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+      checkpoint = { path: File.realpath(profile), expected_tun: :ignore, selections: {} }
+      result = {
+        path: profile, rollback_bytes: bytes,
+        patched_digest: Digest::SHA256.hexdigest(bytes),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      closed = []
+
+      ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+        ClaudeEasy.stub(:mark_profile_transaction_activation, false) do
+          ClaudeEasy.stub(:close_clashx_reload_receipt, ->(receipt) { closed << receipt; true }) do
+            activated = ClaudeEasy.activate_safe_updated_profile(
+              result, transaction: {}, client_identity: identity,
+              runtime_checkpoint: checkpoint, reload_snapshot_reader: -> { :update_receipt }
+            )
+            assert_equal :reload_failed_restore_pending, activated.fetch(:status)
+          end
+        end
+      end
+      assert_equal [:update_receipt], closed
+    end
+  end
+
+  def test_safe_update_closes_rollback_receipt_when_rollback_activation_is_already_used
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      candidate = YAML.dump(base_config)
+      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+      checkpoint = { path: File.realpath(profile), expected_tun: :ignore, selections: {} }
+      result = {
+        path: profile, rollback_bytes: original,
+        patched_digest: Digest::SHA256.hexdigest(candidate),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      phases = [true, false]
+      receipts = [:update_receipt, :rollback_receipt]
+      closed = []
+
+      ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+        ClaudeEasy.stub(:mark_profile_transaction_activation, ->(*_arguments) { phases.shift }) do
+          ClaudeEasy.stub(:close_clashx_reload_receipt, ->(receipt) { closed << receipt; true }) do
+            activated = ClaudeEasy.activate_safe_updated_profile(
+              result, transaction: {}, client_identity: identity,
+              runtime_checkpoint: checkpoint, native_reloader: ->(_current) { false },
+              reload_snapshot_reader: -> { receipts.shift }
+            )
+            assert_equal :reload_failed_restore_pending, activated.fetch(:status)
+          end
+        end
+      end
+      assert_equal [:update_receipt, :rollback_receipt], closed
+    end
+  end
+
 
   def test_pending_safe_update_recovery_does_not_repeat_native_reload_in_same_process
     Dir.mktmpdir do |directory|
