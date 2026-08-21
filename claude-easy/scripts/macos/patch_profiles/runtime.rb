@@ -1294,6 +1294,9 @@ module ClaudeEasy
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
+    return result.merge(status: :runtime_check_failed) unless
+      runtime_matches_profile?(requester, result.fetch(:path))
+
     selections = runtime_selections(requester)
     return result.merge(status: :runtime_check_failed) unless selections
 

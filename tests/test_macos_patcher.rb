@@ -5211,6 +5211,9 @@ class MacosPatcherTest < Minitest::Test
       assert_nil ClaudeEasy.clashx_preference_domain(
         app_paths: apps, identity_reader: -> { nil }, runner: runner
       )
+      assert_nil ClaudeEasy.clashx_preference_domain(
+        app_paths: apps, identity_reader: -> { raise IOError }, runner: runner
+      )
     end
   end
 
@@ -8609,20 +8612,35 @@ class MacosPatcherTest < Minitest::Test
       end
       expected_tun = []
 
-      ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
-        expected_tun << options.fetch(:expected_tun)
-        true
-      }) do
-        result = { path: profile, status: :unchanged }
-        assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
-          result, requester: requester, require_tun: true
-        )
-        assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
-          result, requester: requester, require_tun: :preserve
-        )
-        assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
-          result, requester: requester, require_tun: false
-        )
+      ClaudeEasy.stub(:runtime_selections, { "Main" => "台湾家宽 01" }) do
+        ClaudeEasy.stub(:runtime_selections_for_profile, { "Main" => "台湾家宽 01" }) do
+          ClaudeEasy.stub(:runtime_health_healthy?, true) do
+            ClaudeEasy.stub(:runtime_matches_profile?, false) do
+              checked = ClaudeEasy.verify_unchanged_profile_runtime(
+                { path: profile, status: :unchanged }, requester: requester
+              )
+              assert_equal :runtime_check_failed, checked.fetch(:status)
+            end
+          end
+        end
+      end
+
+      ClaudeEasy.stub(:runtime_matches_profile?, true) do
+        ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
+          expected_tun << options.fetch(:expected_tun)
+          true
+        }) do
+          result = { path: profile, status: :unchanged }
+          assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
+            result, requester: requester, require_tun: true
+          )
+          assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
+            result, requester: requester, require_tun: :preserve
+          )
+          assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
+            result, requester: requester, require_tun: false
+          )
+        end
       end
 
       assert_equal [:enabled, :disabled, :ignore], expected_tun
@@ -8949,12 +8967,14 @@ class MacosPatcherTest < Minitest::Test
         true
       end
 
-      results = ClaudeEasy.run(
-        directory: directory, policy_path: POLICY_PATH,
-        backup_root: File.join(directory, "backups"), selected_name: "friend",
-        validator: ->(_path) { true }, auto_reload: false, requester: requester,
-        connectivity_checker: connectivity_checker, usage_profile: 1
-      )
+      results = ClaudeEasy.stub(:runtime_matches_profile?, true) do
+        ClaudeEasy.run(
+          directory: directory, policy_path: POLICY_PATH,
+          backup_root: File.join(directory, "backups"), selected_name: "friend",
+          validator: ->(_path) { true }, auto_reload: false, requester: requester,
+          connectivity_checker: connectivity_checker, usage_profile: 1
+        )
+      end
 
       assert results.any? { |result| result.fetch(:status) == :updated }, results.inspect
       final_config = ClaudeEasy.load_yaml(File.binread(config_path), config_path)
@@ -12774,6 +12794,26 @@ class MacosPatcherTest < Minitest::Test
         result = JSON.parse(output)
         assert_equal "no_change", result.fetch("status")
         assert_empty result.fetch("changes")
+      end
+      ClaudeEasy.stub(:recover_pending_profile_transaction, :committed_cleaned) do
+        output, error = capture_io do
+          assert_equal 0, ClaudeEasy.cli([
+            "--profile-dir", directory, "--backup-dir", backup_root,
+            "--recover-profile-transaction"
+          ])
+        end
+        assert_empty error
+        assert_equal "已清理完成提交后遗留的事务标记。\n", output
+      end
+      ClaudeEasy.stub(:recover_pending_profile_transaction, :none) do
+        output, error = capture_io do
+          assert_equal 0, ClaudeEasy.cli([
+            "--profile-dir", directory, "--backup-dir", backup_root,
+            "--recover-profile-transaction"
+          ])
+        end
+        assert_empty error
+        assert_equal "没有未完成的配置事务。\n", output
       end
       ClaudeEasy.stub(:recover_pending_profile_transaction, :runtime_restore_pending) do
         _output, error = capture_io do
@@ -16995,10 +17035,13 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: { path: File.realpath(profile), expected_tun: :enabled, selections: {} },
         activation_identity: identity
       )
+      candidate_bytes = transaction.fetch(:candidate_bytes).dup
 
       assert ClaudeEasy.mark_profile_transaction_activation(transaction, :update, identity)
+      assert_equal candidate_bytes, transaction.fetch(:candidate_bytes)
       refute ClaudeEasy.mark_profile_transaction_activation(transaction, :update, identity)
       assert ClaudeEasy.mark_profile_transaction_activation(transaction, :rollback, identity)
+      assert_equal candidate_bytes, transaction.fetch(:candidate_bytes)
       refute ClaudeEasy.mark_profile_transaction_activation(transaction, :rollback, identity)
 
       restarted = identity.merge(pid: 54_321, started: "later")
@@ -17164,6 +17207,34 @@ class MacosPatcherTest < Minitest::Test
       assert_equal :unknown, ClaudeEasy.runtime_loaded_profile_state(
         malformed_provider, profile, YAML.dump(provider_candidate)
       )
+
+      actual = {
+        proxies: ["candidate"], providers: ["airport"],
+        groups: { "Main" => ["new"] }
+      }
+      expected = {
+        proxies: ["candidate"], providers: ["airport"],
+        groups: { "Main" => ["new"] }
+      }
+      alternative = {
+        proxies: ["original"], providers: [],
+        groups: { "Main" => ["old"] }
+      }
+      assert ClaudeEasy.runtime_identity_matches_difference?(actual, expected, alternative)
+      refute ClaudeEasy.runtime_identity_matches_difference?(actual, alternative, expected)
+
+      assert_nil ClaudeEasy.profile_runtime_identity(File.join(directory, "missing.yaml"))
+      ClaudeEasy.stub(:profile_runtime_identity, ->(_path) { raise IOError }) do
+        assert_equal :unknown, ClaudeEasy.runtime_loaded_profile_state(
+          requester_for.call(original), profile, YAML.dump(candidate)
+        )
+      end
+      ClaudeEasy.stub(:runtime_selections, ->(_requester) { raise IOError }) do
+        refute ClaudeEasy.runtime_checkpoint_current?(
+          { path: profile, selections: {}, expected_tun: :ignore },
+          requester: requester_for.call(original)
+        )
+      end
     end
   end
 
@@ -17370,19 +17441,20 @@ class MacosPatcherTest < Minitest::Test
 
       recovered_selections = nil
       current_checkpoint = checkpoint.merge(selections: { "Main" => "日本家宽 01" })
-      recovered = ClaudeEasy.reload_recovered_safe_update_runtime(
-        [{ path: profile }], 1, "active", runtime_checkpoint: checkpoint,
-        transaction: transaction, client_identity: identity,
-        runtime_checkpoint_checker: ->(_current) { false },
-        runtime_checkpoint_reader: ->(_path) { current_checkpoint },
-        runtime_profile_state_reader: ->(_path, _candidate) { :restored },
-        native_reloader: ->(_current) { native_reloads += 1; true },
-        runtime_waiter: lambda do |_current, **options|
-          recovered_selections = options.fetch(:selections)
-          true
-        end,
-        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
-      )
+      recovered = ClaudeEasy.stub(:capture_runtime_checkpoint, current_checkpoint) do
+        ClaudeEasy.reload_recovered_safe_update_runtime(
+          [{ path: profile }], 1, "active", runtime_checkpoint: checkpoint,
+          transaction: transaction, client_identity: identity,
+          runtime_checkpoint_checker: ->(_current) { false },
+          runtime_profile_state_reader: ->(_path, _candidate) { :restored },
+          native_reloader: ->(_current) { native_reloads += 1; true },
+          runtime_waiter: lambda do |_current, **options|
+            recovered_selections = options.fetch(:selections)
+            true
+          end,
+          reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+        )
+      end
       assert recovered
       assert_equal({ "Main" => "日本家宽 01" }, recovered_selections)
       assert_equal 1, native_reloads
@@ -17800,6 +17872,18 @@ class MacosPatcherTest < Minitest::Test
       assert_raises(ClaudeEasy::InvalidConfigError) do
         ClaudeEasy.mark_profile_transaction_activation(transaction, :update, { pid: 1 })
       end
+
+      File.unlink(journal)
+      valid = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      state = JSON.parse(File.binread(valid.fetch(:path)))
+      state.fetch("Items").first["CandidateBase64"] = "!"
+      File.binwrite(valid.fetch(:path), JSON.generate(state) + "\n")
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      end
     end
   end
 
@@ -17814,6 +17898,11 @@ class MacosPatcherTest < Minitest::Test
           transaction: {}, client_identity: {}, reload_snapshot_reader: -> { raise IOError }
         )
       }
+      assert_equal false, ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: path }], 1, "friend", runtime_checkpoint: checkpoint,
+        transaction: {}, client_identity: {},
+        runtime_checkpoint_checker: ->(_current) { raise IOError }
+      )
 
       backup_root = File.join(directory, "backups")
       transaction = ClaudeEasy.prepare_profile_transaction(

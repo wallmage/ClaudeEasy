@@ -611,7 +611,8 @@ module ClaudeEasy
       transaction.replace(
         updated.merge(
           targets: transaction[:targets], runtime_checkpoint: transaction[:runtime_checkpoint],
-          activation_state: parsed_activation_state(activation)
+          activation_state: parsed_activation_state(activation),
+          candidate_bytes: transaction[:candidate_bytes]
         )
       )
     end
