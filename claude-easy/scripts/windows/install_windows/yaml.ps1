@@ -24,6 +24,25 @@ function Get-YamlMappingEntry([string]$Line) {
     return [pscustomobject]@{ Key = $key; Value = $Matches[4] }
 }
 
+function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
+    if ([string]::IsNullOrWhiteSpace($Raw)) { throw "$Label 为空。" }
+    $value = ($Raw -replace '\s+#.*$', '').Trim()
+    if ($value.StartsWith("'") -and $value.EndsWith("'") -and $value.Length -ge 2) {
+        return $value.Substring(1, $value.Length - 2).Replace("''", "'")
+    }
+    if ($value.StartsWith('"') -and $value.EndsWith('"')) {
+        try {
+            $decoded = $value | ConvertFrom-Json
+        } catch {
+            throw "$Label 使用了无效的双引号字符串。"
+        }
+        if (-not ($decoded -is [string])) { throw "$Label 不是字符串。" }
+        return [string]$decoded
+    }
+    if ($value -match '[\r\n\t\[\]\{\},]') { throw "$Label 使用了不受支持的复杂标量。" }
+    return $value
+}
+
 function Get-YamlPathFingerprints([string]$Text) {
     $lines = @(Split-YamlLines $Text)
     $values = @{}

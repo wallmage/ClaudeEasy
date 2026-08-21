@@ -1761,7 +1761,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'New-InstallStateEntry'
     ],
     'yaml.ps1': [
-      'Split-YamlLines', 'Join-YamlLines', 'Get-YamlIndent', 'Get-YamlMappingEntry', 'Get-YamlPathFingerprints',
+      'Split-YamlLines', 'Join-YamlLines', 'Get-YamlIndent', 'Get-YamlMappingEntry',
+      'ConvertFrom-SubscriptionScalar', 'Get-YamlPathFingerprints',
       'Get-RedactedYamlChangedPaths', 'Find-YamlMappingNode', 'Replace-YamlRange', 'Set-YamlTopLevelScalar',
       'Get-ManagedTunLines', 'New-ManagedTunBlock', 'Set-YamlTunMapping', 'Test-GeneratedYaml',
       'Get-ClaudeEasyReactivationHotkey', 'Set-ClaudeEasyReactivationHotkey'
@@ -1803,7 +1804,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
     ],
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
-      'ConvertFrom-SubscriptionScalar', 'Get-FlowProxyProtocolTypes',
+      'Get-FlowProxyProtocolTypes',
       'Get-YamlBlockSequenceEnd', 'ConvertFrom-ProxyProtocolType',
       'Get-ProxyProtocolTypes', 'Assert-SubscriptionProtocolPreserved',
       'Get-PublicBackupId', 'Get-BackupTarget',
