@@ -2431,6 +2431,7 @@ class MacosPatcherTest < Minitest::Test
     assert_equal "verify_routes", result.fetch("command")
     assert_equal "failed", result.fetch("status")
     assert_equal 1, result.fetch("exit_code")
+    assert_equal 3, result.fetch("profile")
     refute_includes output.string, Dir.home
   end
 
@@ -2469,7 +2470,9 @@ class MacosPatcherTest < Minitest::Test
     end
 
     assert_equal ["Main Live", "AI Live", 21], received
-    assert_equal "routes_verified", JSON.parse(output.string).fetch("code")
+    result = JSON.parse(output.string)
+    assert_equal "routes_verified", result.fetch("code")
+    assert_equal 3, result.fetch("profile")
   end
 
   def test_route_verifier_cli_rejects_an_invalid_observation_window
@@ -2550,6 +2553,7 @@ class MacosPatcherTest < Minitest::Test
     result = JSON.parse(output.string)
     assert_equal "invalid_request", result.fetch("status")
     assert_equal "usage_profile_mismatch", result.fetch("code")
+    assert_equal 1, result.fetch("profile")
     assert_empty result.fetch("checks")
   end
 
@@ -2558,14 +2562,18 @@ class MacosPatcherTest < Minitest::Test
     assert_equal 10, ClashRouteVerifier.cli(
       ["--json"], output: unset_output, profile_reader: -> { nil }
     )
-    assert_equal "usage_profile_unset", JSON.parse(unset_output.string).fetch("code")
+    unset_result = JSON.parse(unset_output.string)
+    assert_equal "usage_profile_unset", unset_result.fetch("code")
+    assert_nil unset_result.fetch("profile")
 
     invalid_output = StringIO.new
     assert_equal 10, ClashRouteVerifier.cli(
       ["--json"], output: invalid_output,
       profile_reader: -> { raise ClaudeEasy::InvalidConfigError }
     )
-    assert_equal "usage_profile_invalid", JSON.parse(invalid_output.string).fetch("code")
+    invalid_result = JSON.parse(invalid_output.string)
+    assert_equal "usage_profile_invalid", invalid_result.fetch("code")
+    assert_nil invalid_result.fetch("profile")
 
     human_output = StringIO.new
     assert_equal 10, ClashRouteVerifier.cli([], output: human_output, profile_reader: -> { 2 })
@@ -16275,7 +16283,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_localized_selection_fallback_maps_a_renamed_group_in_place
+  def test_localized_selection_rejects_a_group_with_changed_identity_at_the_same_position
     original = {
       "proxies" => [{ "name" => "Node", "type" => "ss", "server" => "example", "port" => 443 }],
       "proxy-groups" => [
@@ -16294,11 +16302,38 @@ class MacosPatcherTest < Minitest::Test
     Dir.mktmpdir do |directory|
       path = File.join(directory, "candidate.yaml")
       File.binwrite(path, YAML.dump(candidate))
-      assert_equal({ "人工智能" => "节点" }, ClaudeEasy.localized_runtime_selections(
+      assert_nil ClaudeEasy.localized_runtime_selections(
         { "AI" => "Node" }, YAML.dump(original), path
-      ))
+      )
       assert_nil ClaudeEasy.localized_runtime_selections(
         { "AI" => "Node" }, YAML.dump(original), File.join(directory, "missing.yaml")
+      )
+    end
+  end
+
+  def test_localized_selection_rejects_a_changed_node_at_the_same_position
+    original = {
+      "proxies" => [
+        { "name" => "A", "type" => "ss", "server" => "a.example", "port" => 443 },
+        { "name" => "B", "type" => "ss", "server" => "b.example", "port" => 443 },
+        { "name" => "C", "type" => "ss", "server" => "c.example", "port" => 443 }
+      ],
+      "proxy-groups" => [{ "name" => "Main", "type" => "select", "proxies" => %w[A B C] }]
+    }
+    candidate = {
+      "proxies" => [
+        { "name" => "甲", "type" => "ss", "server" => "other.example", "port" => 443 },
+        { "name" => "乙", "type" => "ss", "server" => "b.example", "port" => 443 },
+        { "name" => "丙", "type" => "ss", "server" => "c.example", "port" => 443 }
+      ],
+      "proxy-groups" => [{ "name" => "主节点", "type" => "select", "proxies" => %w[甲 乙 丙] }]
+    }
+
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "candidate.yaml")
+      File.binwrite(path, YAML.dump(candidate))
+      assert_nil ClaudeEasy.localized_runtime_selections(
+        { "Main" => "A" }, YAML.dump(original), path
       )
     end
   end
@@ -16439,7 +16474,7 @@ class MacosPatcherTest < Minitest::Test
     }
     chinese = {
       "proxies" => [
-        { "name" => "台湾 1", "type" => "vless", "server" => "tw-new.example", "port" => 443 },
+        { "name" => "台湾 1", "type" => "vless", "server" => "tw.example", "port" => 443 },
         { "name" => "香港 1", "type" => "vless", "server" => "hk.example", "port" => 443 }
       ],
       "proxy-groups" => [
