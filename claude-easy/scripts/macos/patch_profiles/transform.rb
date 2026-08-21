@@ -239,10 +239,18 @@ module ClaudeEasy
     if dns.key?("default-nameserver") && unsafe_default_bootstrap?(dns["default-nameserver"])
       dns["default-nameserver"] = deep_copy(fallback_bootstrap)
     end
-    dns["nameserver"] = tagged_resolvers(policy, route_group) if Array(dns["nameserver"]).empty?
+    dns["nameserver"] = tagged_resolvers(policy, route_group) unless
+      dns["nameserver"].is_a?(Array) && !dns["nameserver"].empty?
     dns["direct-nameserver"] = deep_copy(policy["direct_resolvers"])
     dns["direct-nameserver-follow-policy"] = false
-    policies = dns["nameserver-policy"].is_a?(Hash) ? deep_copy(dns["nameserver-policy"]) : {}
+    existing_policies = dns["nameserver-policy"].is_a?(Hash) ? dns["nameserver-policy"] : {}
+    policies = {}
+    existing_policies.each do |combined, endpoints|
+      combined.to_s.split(",").map(&:strip).reject(&:empty?).each do |pattern|
+        values = endpoints.is_a?(Array) ? endpoints : []
+        policies[pattern] = values.empty? ? tagged_resolvers(policy, route_group) : deep_copy(values)
+      end
+    end
     policies["geosite:cn"] = deep_copy(policy["direct_resolvers"])
     policies["rule-set:#{provider_name}"] = deep_copy(policy["direct_resolvers"])
     dns["nameserver-policy"] = policies

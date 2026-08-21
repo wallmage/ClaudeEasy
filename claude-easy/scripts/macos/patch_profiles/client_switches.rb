@@ -219,7 +219,7 @@ module ClaudeEasy
                           state[:system_proxy_effective] == :disabled &&
                             state[:system_proxy_intent] == false
                         else
-                          %i[clash disabled].include?(state[:system_proxy_effective]) &&
+                          state[:system_proxy_effective] == :clash &&
                             state[:system_proxy_intent] == true
                         end
       return manual_client_switch_result(:state_ambiguous, changes) unless safe_transition

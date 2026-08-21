@@ -113,7 +113,7 @@ module ClaudeEasy
     raise InvalidConfigError, "备份原因无效" unless reason.match?(/\A[a-z][a-z0-9-]{0,31}\z/)
 
     root = secure_backup_root!(backup_root)
-    bytes = content.nil? ? File.binread(File.realpath(path)) : content.b
+    bytes = content.nil? ? regular_file_snapshot_once(path, "备份源").fetch(:bytes) : content.b
     key = backup_key(path)
     destination = nil
     Tempfile.create([".claude-easy-backup-", ".tmp"], root) do |backup|
@@ -268,7 +268,7 @@ module ClaudeEasy
     public_id = public_backup_id(physical_id)
     target = find_backup_target(physical_id, directories)
     backup_bytes = read_regular_file_once(backup_path, "备份")
-    current_bytes = File.binread(File.realpath(target))
+    current_bytes = regular_file_snapshot_once(target, "当前配置").fetch(:bytes)
     backup_config = load_yaml(backup_bytes.dup.force_encoding(Encoding::UTF_8), public_id)
     current_config = load_yaml(current_bytes.dup.force_encoding(Encoding::UTF_8), target)
     {

@@ -14,6 +14,7 @@ function Protect-ClaudeEasyResultText([object]$Value) {
     $text = [regex]::Replace($text, '(?i)(?<![A-Za-z0-9])Bearer\s+\S+', '[已隐藏]')
     $text = [regex]::Replace($text, '(?i)(?<![A-Za-z0-9])(password|passwd|secret|token|uuid|private[-_ ]?key|controller[-_ ]?key)\s*[:=]\s*\S+', '[已隐藏]')
     $text = [regex]::Replace($text, '(?i)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', '[已隐藏]')
+    $text = [regex]::Replace($text, '(?i)(?<![A-Za-z0-9])(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+):\d{1,5}(?!\d)', '[已隐藏地址]')
     $text = [regex]::Replace($text, '(?i)(?:[A-Z]:[\\/]|\\\\|//)[^\r\n；，。]+', '[已隐藏路径]')
     $text = [regex]::Replace($text, '(?<![A-Za-z0-9])/(?!/)[^\r\n；，。]+', '[已隐藏路径]')
     $text = $text.Trim()

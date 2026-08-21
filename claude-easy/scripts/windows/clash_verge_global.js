@@ -837,8 +837,15 @@ function claudeEasyCommonCn(config, routeGroup) {
   }
   dns["direct-nameserver"] = CLAUDE_EASY_POLICY.directResolvers.slice();
   dns["direct-nameserver-follow-policy"] = false;
-  const policies = dns["nameserver-policy"] && typeof dns["nameserver-policy"] === "object" &&
-    !Array.isArray(dns["nameserver-policy"]) ? claudeEasyClone(dns["nameserver-policy"]) : {};
+  const existingPolicies = dns["nameserver-policy"] && typeof dns["nameserver-policy"] === "object" &&
+    !Array.isArray(dns["nameserver-policy"]) ? dns["nameserver-policy"] : {};
+  const policies = {};
+  Object.keys(existingPolicies).forEach(function (combined) {
+    String(combined).split(",").map(function (item) { return item.trim(); }).filter(Boolean).forEach(function (pattern) {
+      const values = Array.isArray(existingPolicies[combined]) ? existingPolicies[combined] : [];
+      policies[pattern] = values.length > 0 ? claudeEasyClone(values) : claudeEasyTaggedResolvers(routeGroup);
+    });
+  });
   policies["geosite:cn"] = CLAUDE_EASY_POLICY.directResolvers.slice();
   policies["rule-set:" + providerName] = CLAUDE_EASY_POLICY.directResolvers.slice();
   dns["nameserver-policy"] = policies;

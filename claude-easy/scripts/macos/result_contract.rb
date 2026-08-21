@@ -28,6 +28,8 @@ module ClaudeEasyResult
     text = text.gsub(/(?<![A-Za-z0-9])(?:password|passwd|token|secret|uuid|private[-_ ]?key|controller[-_ ]?key)\s*[=:]\s*\S+/i, "[已隐藏]")
     text = text.gsub(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i, "[已隐藏]")
     text = text.gsub(%r{(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9+.-]*://\S+}, "[已隐藏]")
+    text = text.gsub(/(?<![A-Za-z0-9])(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+):\d{1,5}(?![A-Za-z0-9])/, "[已隐藏]")
+    text = text.gsub(/\\\\[^\\\s]+\\[^\s]+/, "[路径已隐藏]")
     text = text.gsub(%r{(?<![A-Za-z0-9])/(?:[^/\s]+/)+[^/\s]*}, "[路径已隐藏]")
     text = text.gsub(/(?<![A-Za-z0-9])[A-Za-z]:[\\\/](?:[^\\\/\s]+[\\\/])+[^\\\/\s]*/, "[路径已隐藏]")
     text.strip.each_char.take(240).join

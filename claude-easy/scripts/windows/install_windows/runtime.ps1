@@ -39,6 +39,17 @@ namespace ClaudeEasy {
         [StructLayout(LayoutKind.Explicit)]
         public struct InputUnion {
             [FieldOffset(0)] public KEYBDINPUT keyboard;
+            [FieldOffset(0)] public MOUSEINPUT mouse;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MOUSEINPUT {
+            public Int32 dx;
+            public Int32 dy;
+            public UInt32 mouseData;
+            public UInt32 flags;
+            public UInt32 time;
+            public UIntPtr extraInfo;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -234,9 +245,7 @@ function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousCo
     do {
         if (Test-Path -LiteralPath $RuntimePath -PathType Leaf) {
             $current = Get-OptionalFileSnapshot $RuntimePath "Clash Verge Rev 运行配置"
-            $ticks = [System.IO.File]::GetLastWriteTimeUtc($RuntimePath).Ticks
             if ($current.Exists -and (
-                $ticks -ne [long]$PreviousContext.LastWriteTicks -or
                 $current.Identity -cne $PreviousContext.Snapshot.Identity -or
                 (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $PreviousContext.Snapshot.Bytes)
             )) {
@@ -678,6 +687,16 @@ function Assert-ClashRuntimeHealthy(
     $answers = if ($null -ne $dnsPayload.Answer) { @($dnsPayload.Answer) } else { @($dnsPayload.answer) }
     $dnsStatus = if ($null -ne $dnsPayload.Status) { [int]$dnsPayload.Status } else { [int]$dnsPayload.status }
     if ($dnsStatus -ne 0 -or $answers.Count -eq 0) { throw "Clash Verge Rev DNS 检查失败。" }
+    foreach ($answer in $answers) {
+        $address = [string]$(if ($answer -is [string]) { $answer } elseif ($null -ne $answer.data) { $answer.data } else { $answer.Data })
+        $parsed = $null
+        if ([Net.IPAddress]::TryParse($address, [ref]$parsed) -and $parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+            $bytes = $parsed.GetAddressBytes()
+            if ($bytes[0] -eq 198 -and ($bytes[1] -eq 18 -or $bytes[1] -eq 19)) {
+                throw "Clash Verge Rev DNS 检查返回了 Fake-IP 地址。"
+            }
+        }
+    }
     Assert-ClashRuntimePatch ([string]$Context.RuntimeText) $state $Policy $UsageProfile
     if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled)) {
         throw "更新后的配置无法连接 Google。"

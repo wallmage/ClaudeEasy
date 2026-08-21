@@ -579,14 +579,24 @@ module ClaudeEasy
     )
     return :none unless pending
     return :recovered if transaction == :committed
-    return :runtime_restore_pending unless
-      reload_runtime &&
-      reload_recovered_profile_runtime(
-        work_items, require_tun: require_tun, socket: socket, requester: requester,
-        connectivity_checker: connectivity_checker,
-        precommit_condition: precommit_condition,
-        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)
-      )
+    runtime_recovered = if transaction[:activation_state]
+                          usage_profile = saved_usage_profile
+                          usage_profile && reload_recovered_safe_update_runtime(
+                            work_items, usage_profile, nil,
+                            precommit_condition: precommit_condition,
+                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),
+                            transaction: transaction,
+                            client_identity: transaction.fetch(:activation_state)
+                          )
+                        else
+                          reload_runtime && reload_recovered_profile_runtime(
+                            work_items, require_tun: require_tun, socket: socket,
+                            requester: requester, connectivity_checker: connectivity_checker,
+                            precommit_condition: precommit_condition,
+                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)
+                          )
+                        end
+    return :runtime_restore_pending unless runtime_recovered
     return :runtime_restore_pending unless
       runtime_precommit_allowed?(precommit_condition)
 

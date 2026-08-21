@@ -494,12 +494,18 @@ try {
         Complete-RunningClientUninstall
     }
 
-    Write-Info "全局自动补丁已移除，config.yaml 与 verge.yaml 已恢复到安装前状态。现有备份没有删除。"
     $changes = @()
     if ($null -ne $scriptPlan) { $changes += "global_script" }
     if ($autoUpdateStateExists) { $changes += "subscription_auto_update" }
-    if ($null -ne $state -and -not $clientRunning) { $changes += "application_settings" }
+    $settingsRestored = @($settingPlans | Where-Object { $_.Changed }).Count -gt 0
+    if ($settingsRestored) { $changes += "application_settings" }
     if ($usageStateExists) { $changes += "usage_profile" }
+    $settingsMessage = if ($settingsRestored) {
+        "config.yaml 与 verge.yaml 已恢复到安装前状态。"
+    } else {
+        "config.yaml 与 verge.yaml 无需恢复。"
+    }
+    Write-Info "全局自动补丁已移除，$settingsMessage 现有备份没有删除。"
     Complete-UninstallResult 0 "ok" "uninstalled" "ClaudeEasy 已安全移除。" $changes
 } catch {
     Complete-UninstallResult 1 "failed" "uninstall_failed" ("卸载失败：" + $_.Exception.Message)

@@ -153,6 +153,11 @@ $usageStatePath = Join-Path $AppHome "claude-easy-usage-profile.json"
 $safeUpdateStatePath = Join-Path $AppHome "claude-easy-safe-update.json"
 $targetScript = Join-Path $profilesDirectory "Script.js"
 
+if (($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -eq "restore_backup") -and
+    (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists) {
+    Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次操作未修改任何文件。"
+}
+
 $mutationLock = $null
 try {
     $mutationLock = Enter-AppHomeMutationLock $AppHome -SkipRecovery:$BackupSubscriptions
@@ -172,7 +177,7 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $BackupSubscriptions -and (
+$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) -or (-not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
@@ -463,6 +468,16 @@ if ($VerifySafeUpdate) {
             if ([bool]$runtimeState.TunEnabled -ne $expectedTunEnabled) {
                 throw "Clash Verge Rev 无法保留更新前的 TUN 状态。"
             }
+            $runtimePolicyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+            $runtimePolicy = (New-Object System.Text.UTF8Encoding($false, $true)).GetString(
+                [System.IO.File]::ReadAllBytes($runtimePolicyPath)
+            ) | ConvertFrom-Json
+            $runtimeCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+            $runtimeDnsFlush = Invoke-ClashControllerRequest $runtimeContext "POST" "/cache/dns/flush"
+            if ($runtimeDnsFlush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
+            Assert-ClashRuntimeHealthy `
+                $runtimeContext $expectedSelections $expectedTunEnabled $savedUsageProfile `
+                ([string]$runtimeCurl.Source) $runtimePolicy -ReadOnly
         }
         $versionGuards = @()
         try {
@@ -672,7 +687,7 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     $currentHash = Get-BytesSha256 $currentSnapshot.Bytes
     if ($currentHash -ne $ExpectedCurrentSha256.ToLowerInvariant()) { throw "当前配置已变化，拒绝覆盖。" }
     $restoreBytes = $resolved.BackupSnapshot.Bytes
-    Test-RestoreCandidate $resolved.TargetPath $restoreBytes
+    Test-RestoreCandidate $resolved.TargetPath $restoreBytes $savedUsageProfile
     $validatedCurrentSnapshot = Get-OptionalFileSnapshot $resolved.TargetPath "当前配置"
     if (-not $validatedCurrentSnapshot.Exists -or
         $validatedCurrentSnapshot.Identity -cne $currentSnapshot.Identity -or
@@ -933,7 +948,7 @@ try {
     Complete-InstallResult 0 "ok" "installed" "Windows ClaudeEasy 已安装。" @("global_script", "subscription_reactivation", "auto_update", "tun", "dns", "ipv6")
     exit 0
 } catch {
-    Complete-InstallResult 1 $(if ($_.Exception.Message -match "已撤销|恢复") { "rolled_back" } else { "failed" }) "install_failed" ("安装失败：" + $_.Exception.Message)
+    Complete-InstallResult 1 $(if ($_.Exception.Message -match "已恢复") { "rolled_back" } else { "failed" }) "install_failed" ("安装失败：" + $_.Exception.Message)
 }
 } finally {
     Exit-AppHomeMutationLock $mutationLock

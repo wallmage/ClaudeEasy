@@ -476,7 +476,7 @@ function Assert-ClaudeEasyProxyGroupCollection([string]$Text, [string]$Label) {
     }
 }
 
-function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes) {
+function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes, [int]$UsageProfile) {
     $leaf = Split-Path -Leaf $TargetPath
     if ($TargetPath -in @($targetScript, $profilesIndexPath, $vergePath)) {
         throw "受保护的客户端控制文件不能通过单文件备份恢复。"
@@ -490,6 +490,25 @@ function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes) {
 
     Test-GeneratedYaml $text $leaf | Out-Null
     if ($TargetPath -eq $profilesIndexPath -or $TargetPath -eq $vergePath) { return }
+    if ($UsageProfile -notin @(1, 2, 3)) { throw "没有可用于恢复备份的用途档位。" }
+    if ($UsageProfile -lt 3) {
+        $lines = @(Split-YamlLines $text)
+        $tun = Find-YamlMappingNode $lines "tun" 0 0 $lines.Count
+        if ($null -ne $tun) {
+            $childIndents = @()
+            if ($tun.End -gt ($tun.Start + 1)) {
+                $childIndents = @($lines[($tun.Start + 1)..($tun.End - 1)] | Where-Object {
+                    -not [string]::IsNullOrWhiteSpace($_) -and -not $_.TrimStart().StartsWith("#")
+                } | ForEach-Object { Get-YamlIndent $_ })
+            }
+            $enabled = if ($childIndents.Count -gt 0) {
+                Find-YamlMappingNode $lines "enable" (($childIndents | Measure-Object -Minimum).Minimum) ($tun.Start + 1) $tun.End
+            } else { $null }
+            if ($null -ne $enabled -and (ConvertFrom-SubscriptionScalar ([string]$enabled.Value) "tun.enable") -ceq "true") {
+                throw "备份与已保存用途档位不一致。"
+            }
+        }
+    }
     $core = Find-MihomoCore $MihomoPath
     Test-MihomoCandidate $core $text (Split-Path -Parent $TargetPath)
 }

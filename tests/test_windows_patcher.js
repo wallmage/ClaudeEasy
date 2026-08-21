@@ -1222,6 +1222,25 @@ test('Windows client refresh preserves the pre-update runtime state and reloads 
   assert.match(source, /Wait-ClashVergeRuntimeHealthy/);
 });
 
+test('Windows verification and restore fail closed on stale or unsafe state', () => {
+  const source = fs.readFileSync(installerPath, 'utf8');
+  const runtime = fs.readFileSync(path.join(installerModuleDir, 'runtime.ps1'), 'utf8');
+  const safeUpdate = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
+  const resultContract = fs.readFileSync(resultContractPath, 'utf8');
+  const refreshStart = runtime.indexOf('function Wait-ClashVergeRuntimeRefresh');
+  const refreshEnd = runtime.indexOf('\nfunction Wait-ClashVergeRuntimeHealthy', refreshStart);
+  const refresh = runtime.slice(refreshStart, refreshEnd);
+
+  assert.match(source, /ClaudeEasyOperation -eq "install"[\s\S]*ClaudeEasyOperation -eq "restore_backup"[\s\S]*safe_update_pending/);
+  assert.match(source, /Assert-ClashRuntimeHealthy[\s\S]*-ReadOnly/);
+  assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);
+  assert.match(safeUpdate, /UsageProfile -lt 3[\s\S]*tun\.enable/);
+  assert.match(runtime, /FieldOffset\(0\).*MOUSEINPUT mouse[\s\S]*struct MOUSEINPUT/);
+  assert.doesNotMatch(refresh, /LastWriteTicks|GetLastWriteTimeUtc/);
+  assert.match(runtime, /198[\s\S]*18[\s\S]*19[\s\S]*Fake-IP/);
+  assert.match(resultContract, /localhost[\s\S]*\\d\{1,5\}/);
+});
+
 test('Windows runtime restoration rejects every missing previous selection', () => {
   const runtimeModule = fs.readFileSync(path.join(installerModuleDir, 'runtime.ps1'), 'utf8');
   const start = runtimeModule.indexOf('function Restore-ClashRuntimeSelections');
@@ -1942,6 +1961,27 @@ test('PowerShell scripts never assign to read-only automatic variables', () => {
       assert.doesNotMatch(line, assignment, `${path.relative(root, file)}:${index + 1}`);
     });
   }
+});
+
+test('all Windows profiles sanitize scalar nameservers and split combined DNS policy keys', () => {
+  for (const usageProfile of [1, 2, 3]) {
+    const config = baseConfig();
+    config.dns.nameserver = 'system';
+    config.dns['nameserver-policy'] = {
+      'geosite:cn,+.example.com': ['system']
+    };
+    const patched = engine.claudeEasyTransform(config, 'fixture', usageProfile);
+    assert.ok(Array.isArray(patched.dns.nameserver), String(usageProfile));
+    assert.equal(Object.hasOwn(patched.dns['nameserver-policy'], 'geosite:cn,+.example.com'), false);
+    assert.equal(Object.hasOwn(patched.dns['nameserver-policy'], '+.example.com'), true);
+  }
+});
+
+test('profile three ignores an array-shaped DNS policy instead of turning indexes into keys', () => {
+  const config = baseConfig();
+  config.dns['nameserver-policy'] = ['geosite:cn'];
+  const patched = engine.claudeEasyTransform(config, 'fixture', 3);
+  assert.equal(Object.hasOwn(patched.dns['nameserver-policy'], '0'), false);
 });
 
 function baseConfig() {

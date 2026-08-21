@@ -230,6 +230,7 @@ module ClaudeEasy
                                ->(requester) { runtime_matches_profile?(requester, expected_profile_path) }
                              end
 
+    dns_flushed = false
     attempts.times do |attempt|
       return false unless same_clashx_process?(identity, process_reader.call)
 
@@ -239,6 +240,12 @@ module ClaudeEasy
       unless matched
         sleeper.call(0.25) if attempt + 1 < attempts
         next
+      end
+      unless dns_flushed
+        code, _body = requester.call("POST", "/cache/dns/flush", nil)
+        return false unless [200, 204].include?(code)
+
+        dns_flushed = true
       end
       restorable_selections = requester && runtime_restorable_selections(requester, selections)
       selections_restored = requester && restorable_selections &&
@@ -281,6 +288,17 @@ module ClaudeEasy
     nil
   end
 
+  def profile_runtime_fingerprint(path)
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    return nil unless config.is_a?(Hash)
+
+    %w[proxies proxy-groups proxy-providers rules rule-providers dns tun profile].to_h do |key|
+      [key, deep_copy(config[key])]
+    end
+  rescue StandardError
+    nil
+  end
+
   def runtime_loaded_identity(requester)
     proxies = runtime_proxies(requester)
     return nil unless proxies
@@ -309,10 +327,20 @@ module ClaudeEasy
     nil
   end
 
-  def runtime_matches_profile?(requester, path)
+  def runtime_matches_profile?(requester, path, runtime_path_reader: nil)
     expected = profile_runtime_identity(path)
     actual = runtime_loaded_identity(requester)
     return false unless expected && actual
+
+    runtime_path_reader ||= method(:running_mihomo_config_paths)
+    loaded_paths = Array(runtime_path_reader.call).each_with_object([]) do |loaded_path, paths|
+      paths << File.realpath(loaded_path)
+    rescue StandardError
+      nil
+    end.uniq
+    return false unless loaded_paths.length == 1
+    return false unless profile_runtime_fingerprint(path) ==
+                        profile_runtime_fingerprint(loaded_paths.first)
 
     return false unless expected[:proxies].all? { |name| actual[:proxies].include?(name) }
     expected[:groups].each do |name, members|
@@ -632,7 +660,21 @@ module ClaudeEasy
     return :timeout if validation == :timeout
     return false unless validation == true
 
-    usage_profile != 3 || (policy && !profile_ai_runtime_group(path, policy: policy).nil?)
+    return false unless policy && [1, 2, 3].include?(usage_profile)
+
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    patched = patch(config, policy, usage_profile: usage_profile)
+    return false unless %i[unchanged updated].include?(patched[:status]) &&
+                        patched[:config] == config
+
+    if usage_profile == 3
+      return false if profile_ai_runtime_group(path, policy: policy).nil?
+    else
+      tun = config["tun"]
+      return false if !profile_ai_runtime_group(path, policy: policy).nil? ||
+                      (tun.is_a?(Hash) && TUN_POLICY.all? { |key, value| tun[key] == value })
+    end
+    true
   rescue StandardError
     false
   end
@@ -727,7 +769,12 @@ module ClaudeEasy
     payload = JSON.parse(body)
     dns_status = payload["Status"] || payload["status"]
     answers = payload["Answer"] || payload["answer"]
-    dns_status.to_i.zero? && answers.is_a?(Array) && !answers.empty?
+    return false unless dns_status.to_i.zero? && answers.is_a?(Array) && !answers.empty?
+
+    answers.none? do |answer|
+      data = answer.is_a?(Hash) ? (answer["data"] || answer["Data"]) : answer
+      data.to_s.split.any? { |value| value.match?(/\A198\.(?:18|19)\.\d{1,3}\.\d{1,3}\z/) }
+    end
   rescue JSON::ParserError
     false
   end
@@ -975,7 +1022,14 @@ module ClaudeEasy
                                        connectivity_checker: nil, precommit_condition: nil,
                                        runtime_checkpoint: nil)
     active = work_items.find { |item| item.fetch(:active) }
-    return true unless active
+    if active.nil? && runtime_checkpoint
+      active = work_items.find do |item|
+        File.realpath(item.fetch(:path)) == runtime_checkpoint[:path]
+      rescue StandardError
+        false
+      end
+    end
+    return false unless active
 
     if requester.nil?
       socket ||= controller_socket
@@ -1124,10 +1178,12 @@ module ClaudeEasy
     begin
       return pending.call unless native_reloader.call(client_identity)
 
+      restored_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
+      return pending.call if require_safe_ai && !restored_proxy_group
       restored = runtime_waiter.call(
         client_identity, reload_receipt: rollback_reload_receipt,
         selections: original_selections, expected_tun: expected_tun,
-        required_proxy_group: required_proxy_group,
+        required_proxy_group: restored_proxy_group,
         precommit_condition: precommit_condition,
         expected_profile_path: result.fetch(:path)
       )

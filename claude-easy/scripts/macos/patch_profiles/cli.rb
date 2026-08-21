@@ -11,23 +11,23 @@ module ClaudeEasy
 
   def usage_profile_rejection(expected)
     saved = saved_usage_profile
-    return ["usage_profile_unset", "尚未保存用途档位，未执行任何修改。"] unless saved
+    return ["usage_profile_unset", "尚未保存用途档位，未执行任何修改。", nil] unless saved
     return nil if saved == expected
 
-    ["usage_profile_mismatch", "命令指定的用途档位与已保存档位不一致，未执行任何修改。"]
+    ["usage_profile_mismatch", "命令指定的用途档位与已保存档位不一致，未执行任何修改。", saved]
   rescue InvalidConfigError
-    ["usage_profile_invalid", "已保存的用途档位状态无效，未执行任何修改。"]
+    ["usage_profile_invalid", "已保存的用途档位状态无效，未执行任何修改。", nil]
   end
 
   def reject_unapproved_usage_profile(options, operation:, expected:)
     rejection = usage_profile_rejection(expected)
     return nil unless rejection
 
-    code, summary = rejection
+    code, summary, saved = rejection
     if options[:json]
       emit_cli_result(
         operation: operation, exit_code: 10, status: "invalid_request",
-        code: code, summary_zh: summary, profile: expected
+        code: code, summary_zh: summary, profile: saved
       )
     else
       warn summary
@@ -144,6 +144,8 @@ module ClaudeEasy
     text = text.gsub(/(?<![A-Za-z0-9])(?:password|passwd|token|secret|uuid|private[-_ ]?key|controller[-_ ]?key)\s*[=:]\s*\S+/i, "[已隐藏]")
     text = text.gsub(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i, "[已隐藏]")
     text = text.gsub(%r{(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9+.-]*://\S+}, "[已隐藏]")
+    text = text.gsub(/(?<![A-Za-z0-9])(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+):\d{1,5}(?![A-Za-z0-9])/, "[已隐藏]")
+    text = text.gsub(/\\\\[^\\\s]+\\[^\s]+/, "[路径已隐藏]")
     text = text.gsub(%r{(?<![A-Za-z0-9])/(?:[^/\s]+/)+[^/\s]*}, "[路径已隐藏]")
     text = text.gsub(/(?<![A-Za-z0-9])[A-Za-z]:[\\\/](?:[^\\\/\s]+[\\\/])+[^\\\/\s]*/, "[路径已隐藏]")
     text = text.strip
@@ -393,6 +395,17 @@ module ClaudeEasy
         warn safe_label(error.message)
         return 1
       end
+    end
+
+    if options[:restore_backup] &&
+       !options[:expected_current_sha256].to_s.match?(/\A[0-9a-f]{64}\z/i)
+      return emit_cli_result(
+        operation: "restore_backup", exit_code: 64, status: "invalid_request",
+        code: "expected_current_sha256_required",
+        summary_zh: "恢复备份必须提供比较时取得的当前配置 SHA-256。"
+      ) if options[:json]
+      warn "恢复备份必须提供比较时取得的当前配置 SHA-256。"
+      return 64
     end
 
     lock_status = enter_outer_wrapper_lock(original_arguments, options)
@@ -861,13 +874,25 @@ module ClaudeEasy
         result.fetch(:profiles).each { |name| puts "已更新：#{safe_label(name)}" }
         return 0
       end
-      status = result[:status] == :rollback_failed ? "partial" : "failed"
-      code = result[:status] == :rollback_failed ? "rollback_failed" : "safe_update_failed"
+      status, code, summary = case result[:status]
+                              when :rollback_failed
+                                ["partial", "rollback_failed", "订阅更新失败，且原文件或运行状态未能完整恢复。"]
+                              when :runtime_restore_pending
+                                ["partial", "safe_update_runtime_pending", "订阅文件已保留新内容，但运行内核仍待恢复或确认。"]
+                              when :aborted
+                                if result[:reason] == :rollback_superseded
+                                  ["partial", "safe_update_rollback_superseded", "订阅在回滚前已被外部更新；已保留较新的内容，未覆盖。"]
+                                else
+                                  ["failed", "safe_update_failed", "订阅更新失败。"]
+                                end
+                              else
+                                ["failed", "safe_update_failed", "订阅更新失败。"]
+                              end
       return emit_cli_result(
         operation: "safe_update", exit_code: 1, status: status, code: code,
-        summary_zh: "订阅更新失败。", profile: options[:usage_profile]
+        summary_zh: summary, profile: options[:usage_profile]
       ) if options[:json]
-      warn "订阅更新失败。"
+      warn summary
       return 1
     end
 

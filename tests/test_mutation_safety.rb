@@ -463,15 +463,13 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "    return :runtime_restore_pending unless\n" \
-          "      reload_runtime &&\n" \
-          "      reload_recovered_profile_runtime(\n" \
-          "        work_items, require_tun: require_tun, socket: socket, requester: requester,\n" \
-          "        connectivity_checker: connectivity_checker,\n" \
-          "        precommit_condition: precommit_condition,\n" \
-          "        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n" \
-          "      )\n",
-        "    return :runtime_restore_pending unless true\n"
+        "                          reload_runtime && reload_recovered_profile_runtime(\n" \
+          "                            work_items, require_tun: require_tun, socket: socket,\n" \
+          "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
+          "                            precommit_condition: precommit_condition,\n" \
+          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n" \
+          "                          )\n",
+        "                          true\n"
       )
 
       assert_mutation_is_killed(
@@ -2887,10 +2885,12 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "        precommit_condition: precommit_condition,\n" \
-          "        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n",
-        "        precommit_condition: nil,\n" \
-          "        runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n"
+        "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
+          "                            precommit_condition: precommit_condition,\n" \
+          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n",
+        "                            requester: requester, connectivity_checker: connectivity_checker,\n" \
+          "                            precommit_condition: nil,\n" \
+          "                            runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil)\n"
       )
 
       assert_mutation_is_killed(

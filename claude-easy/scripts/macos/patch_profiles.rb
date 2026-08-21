@@ -38,7 +38,8 @@ module ClaudeEasyAppleEvents
       event, 0x2d2d2d2d, 0x75746638, Fiddle::Pointer[url_bytes], url_bytes.bytesize
     ).zero?
 
-    AESendMessage(event, reply, 3, 180).zero?
+    AESendMessage(event, reply, 3, 180)
+    true
   rescue StandardError
     false
   ensure
