@@ -2110,15 +2110,19 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_profiles,
                     "$updatedRawValue -match '^(?:~|null|Null|NULL)$'"
     assert_includes windows_installer, 'BeforeUpdated = [string]$profile.Updated'
-    assert_includes windows_installer, "Version = 2"
+    assert_includes windows_installer, "Version = 3"
+    assert_includes windows_installer, "Runtime = $runtimeSnapshot"
+    assert_includes windows_installer,
+                    "Restore-ClashRuntimeSelections $runtimeContext $expectedSelections"
+    assert_includes windows_installer, "safe_update_rolled_back"
     assert_includes windows_installer, "Test-SafeUpdateRefreshEvidence"
     assert_includes windows_installer, '"safe_update_refresh_pending"'
     assert_includes windows_safe_update,
-                    'UseUpdatedEvidence = ($manifestVersion -eq 2)'
+                    'UseUpdatedEvidence = ($manifestVersion -ge 2)'
     assert_includes windows_safe_update,
-                    'CanAutoRestore = ($manifestVersion -eq 2)'
+                    'CanAutoRestore = ($manifestVersion -ge 2)'
     assert_includes windows_safe_update,
-                    'if ($manifestVersion -eq 2 -and ('
+                    'if ($manifestVersion -ge 2 -and ('
     assert_includes windows_installer,
                     '@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0'
     assert_includes windows_installer, '"safe_update_legacy_recovery_pending"'
@@ -2167,7 +2171,7 @@ class SkillContractTest < Minitest::Test
       '$backup = Backup-Versioned `'
     )
     snapshot_manifest = windows_installer.index(
-      '$manifest = [ordered]@{ Version = 2'
+      '$manifest = [ordered]@{'
     )
     snapshot_dispose = windows_installer.index(
       'foreach ($guard in @($snapshotContext.Guards)) { $guard.Dispose() }'

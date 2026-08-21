@@ -424,14 +424,14 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
             -not ($item.File -is [string]) -or
             -not ($item.Backup -is [string]) -or
             -not ($item.BeforeSha256 -is [string]) -or
-            ($manifestVersion -eq 2 -and -not ($item.BeforeUpdated -is [string]))) {
+            ($manifestVersion -ge 2 -and -not ($item.BeforeUpdated -is [string]))) {
             throw "安全更新准备记录包含无效订阅项。"
         }
         $uid = [string]$item.Uid
         $file = [string]$item.File
         $backup = [string]$item.Backup
         $beforeSha = ([string]$item.BeforeSha256).ToLowerInvariant()
-        $beforeUpdated = if ($manifestVersion -eq 2) { [string]$item.BeforeUpdated } else { "" }
+        $beforeUpdated = if ($manifestVersion -ge 2) { [string]$item.BeforeUpdated } else { "" }
         if ($uid -notmatch '^[A-Za-z0-9._-]+$' -or $file -notin @("$uid.yaml", "$uid.yml")) {
             throw "安全更新准备记录包含无效订阅标识。"
         }
@@ -448,7 +448,7 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
         $expectedSuffix = "--$(Get-PathKey $targetPath)--$file.backup"
         if (-not $backup.EndsWith($expectedSuffix)) { throw "安全更新准备记录中的备份与订阅不匹配。" }
         $backupPath = Join-Path $BackupDirectory $backup
-        if ($manifestVersion -eq 2 -and (
+        if ($manifestVersion -ge 2 -and (
             -not (Test-Path -LiteralPath $backupPath -PathType Leaf) -or
             (Get-FileSha256 $backupPath) -ne $beforeSha
         )) {
@@ -461,8 +461,8 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
             BackupPath = $backupPath
             BeforeSha256 = $beforeSha
             BeforeUpdated = $beforeUpdated
-            UseUpdatedEvidence = ($manifestVersion -eq 2)
-            CanAutoRestore = ($manifestVersion -eq 2)
+            UseUpdatedEvidence = ($manifestVersion -ge 2)
+            CanAutoRestore = ($manifestVersion -ge 2)
         }
     }
     if ($items.Count -eq 0 -or @($items.TargetPath | Sort-Object -Unique).Count -ne $items.Count) {

@@ -1202,6 +1202,16 @@ test('Windows subscription updates use snapshot, client refresh, and verificatio
   assert.match(source, /Assert-SubscriptionProtocolPreserved \$beforeText \$text/);
 });
 
+test('Windows client refresh preserves the pre-update runtime state and reloads rollback files', () => {
+  const source = fs.readFileSync(installerPath, 'utf8');
+  assert.match(source, /Version = 3[\s\S]*Runtime = \$runtimeSnapshot/);
+  assert.match(source, /Get-ClashRuntimeState \$runtimeContext/);
+  assert.match(source, /Restore-ClashRuntimeSelections \$runtimeContext \$expectedSelections/);
+  assert.match(source, /TunEnabled[\s\S]*无法保留更新前的 TUN 状态/);
+  assert.match(source, /Invoke-ClashVergeReactivationShortcut \$reactivationShortcut/);
+  assert.match(source, /Wait-ClashVergeRuntimeHealthy/);
+});
+
 test('Windows runtime restoration rejects every missing previous selection', () => {
   const runtimeModule = fs.readFileSync(path.join(installerModuleDir, 'runtime.ps1'), 'utf8');
   const start = runtimeModule.indexOf('function Restore-ClashRuntimeSelections');

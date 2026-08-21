@@ -44,6 +44,9 @@ $uninstallerModules = @(
 $resultItemStatuses = @((Get-Content -LiteralPath (Join-Path (Join-Path $root "claude-easy/references") "result-contract.json") -Raw | ConvertFrom-Json).item_statuses)
 $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("claude-easy-windows-test-" + [System.Guid]::NewGuid().ToString("N"))
 $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+$script:safeUpdateControllerPort = 0
+$safeUpdateControllerJob = $null
+$safeUpdateClient = $null
 $previousUsageProfile = $env:CLAUDE_EASY_USAGE_PROFILE
 $env:CLAUDE_EASY_USAGE_PROFILE = "3"
 $script:deferredProbeFailures = New-Object System.Collections.ArrayList
@@ -463,6 +466,19 @@ function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
 }
 
 function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) {
+    if ($onWindows -and $script:safeUpdateControllerPort -gt 0 -and
+        $ScriptPath -eq $installer -and $ScriptArguments -contains "-SnapshotProfiles") {
+        $appHomeIndex = [Array]::IndexOf($ScriptArguments, "-AppHome")
+        if ($appHomeIndex -ge 0 -and $appHomeIndex + 1 -lt $ScriptArguments.Count) {
+            $runtimeHome = [string]$ScriptArguments[$appHomeIndex + 1]
+            if (Test-Path -LiteralPath $runtimeHome -PathType Container) {
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $runtimeHome "clash-verge.yaml"),
+                    "external-controller: 127.0.0.1:$($script:safeUpdateControllerPort)`nsecret: ''`n"
+                )
+            }
+        }
+    }
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
@@ -3347,6 +3363,72 @@ rules:
         try { Get-RemoteSubscriptionTargets $caseAliasIndex $safeUpdateProfiles | Out-Null } catch { $caseAliasRejected = $true }
         Assert-True $caseAliasRejected "case-alias remote subscriptions were allowed to share one file"
     }
+    if ($onWindows) {
+        $safeUpdateControllerReady = Join-Path $sandbox "safe-update-controller-ready"
+        $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $portProbe.Start()
+        $script:safeUpdateControllerPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+        $portProbe.Stop()
+        $safeUpdateControllerJob = Start-Job -ArgumentList @(
+            $script:safeUpdateControllerPort,
+            $safeUpdateControllerReady
+        ) -ScriptBlock {
+            param([int]$Port, [string]$ReadyPath)
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+            $listener.Start()
+            [System.IO.File]::WriteAllText($ReadyPath, "ready")
+            try {
+                while ($true) {
+                    $client = $listener.AcceptTcpClient()
+                    try {
+                        $stream = $client.GetStream()
+                        $reader = [System.IO.StreamReader]::new(
+                            $stream,
+                            [System.Text.Encoding]::ASCII,
+                            $false,
+                            1024,
+                            $true
+                        )
+                        $requestLine = $reader.ReadLine()
+                        while (-not [string]::IsNullOrEmpty($reader.ReadLine())) { }
+                        $parts = @($requestLine.Split(" "))
+                        $method = $parts[0]
+                        $path = $parts[1]
+                        if ($method -eq "GET" -and $path -eq "/configs") {
+                            $body = '{"tun":{"enable":false}}'
+                        } elseif ($method -eq "GET" -and $path -eq "/proxies") {
+                            $body = '{"proxies":{"Main":{"type":"Selector","now":"Node","all":["Node"]},"Node":{"type":"Shadowsocks"}}}'
+                        } elseif ($method -eq "GET" -and $path -eq "/rules") {
+                            $body = '{"rules":[{"type":"Match","payload":"","proxy":"Main"}]}'
+                        } elseif ($method -eq "GET" -and $path -eq "/providers/proxies") {
+                            $body = '{"providers":{}}'
+                        } else {
+                            $body = '{}'
+                        }
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                        $headers = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bytes.Length)`r`nConnection: close`r`n`r`n"
+                        $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)
+                        $stream.Write($headerBytes, 0, $headerBytes.Length)
+                        $stream.Write($bytes, 0, $bytes.Length)
+                        $stream.Flush()
+                    } finally {
+                        $client.Dispose()
+                    }
+                }
+            } finally {
+                $listener.Stop()
+            }
+        }
+        $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $safeUpdateControllerReady) -and
+            [DateTime]::UtcNow -lt $readyDeadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        Assert-True (Test-Path -LiteralPath $safeUpdateControllerReady) "safe-update controller did not start"
+        $safeUpdateClientPath = Join-Path $sandbox "clash-verge.exe"
+        Copy-Item -LiteralPath (Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe") -Destination $safeUpdateClientPath
+        $safeUpdateClient = Start-Process -FilePath $safeUpdateClientPath -ArgumentList @("-t", "127.0.0.1") -PassThru
+    }
     $noPrecheckSnapshotCase = Join-Path $sandbox "safe-update-snapshot-with-invalid-current-content"
     $noPrecheckSnapshotProfiles = Join-Path $noPrecheckSnapshotCase "profiles"
     New-Item -ItemType Directory -Path $noPrecheckSnapshotProfiles -Force | Out-Null
@@ -3387,6 +3469,16 @@ rules:
     )
     $snapshotJson = Assert-JsonResult $snapshotResult "install" 0
     Assert-True ($snapshotJson.profile -eq 1) "safe update snapshot did not report the saved profile"
+    $snapshotManifest = Get-Content -LiteralPath (
+        Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    ) -Raw | ConvertFrom-Json
+    Assert-True (
+        [int]$snapshotManifest.Version -eq 3 -and
+        $snapshotManifest.Runtime.TunEnabled -eq $false -and
+        @($snapshotManifest.Runtime.Selections).Count -eq 1 -and
+        [string]$snapshotManifest.Runtime.Selections[0].Group -ceq "Main" -and
+        [string]$snapshotManifest.Runtime.Selections[0].Selection -ceq "Node"
+    ) "safe update snapshot omitted the pre-update TUN or proxy selection"
     Assert-True (
         $snapshotJson.workflow_complete -eq $false -and
         $snapshotJson.completed_scope -eq "subscription_snapshot" -and
@@ -3575,6 +3667,7 @@ rules: ["MATCH,AI"]
         [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
     )
     $legacyManifest.Version = 1
+    $legacyManifest.PSObject.Properties.Remove("Runtime")
     foreach ($profile in @($legacyManifest.Profiles)) {
         $profile.PSObject.Properties.Remove("BeforeUpdated")
     }
@@ -3621,6 +3714,7 @@ rules: ["MATCH,AI"]
         [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
     )
     $legacyManifest.Version = 1
+    $legacyManifest.PSObject.Properties.Remove("Runtime")
     foreach ($profile in @($legacyManifest.Profiles)) {
         $profile.PSObject.Properties.Remove("BeforeUpdated")
     }
@@ -4222,6 +4316,18 @@ rules:
     Assert-True ($badBackupRestore.Failures.Count -eq 1) "safe update rollback accepted backup bytes that changed after validation"
     Assert-True ((Get-Content -LiteralPath $badBackupTarget -Raw) -eq "still-valid: true`n") "corrupt backup overwrote a still-valid subscription before rejection"
     Assert-True (Test-Path -LiteralPath $unitRestoreManifestPath -PathType Leaf) "bad backup consumed its recovery manifest"
+
+    if ($null -ne $safeUpdateClient) {
+        if (-not $safeUpdateClient.HasExited) { Stop-Process -Id $safeUpdateClient.Id -Force }
+        $safeUpdateClient.Dispose()
+        $safeUpdateClient = $null
+    }
+    if ($null -ne $safeUpdateControllerJob) {
+        Stop-Job $safeUpdateControllerJob -ErrorAction SilentlyContinue
+        Remove-Job $safeUpdateControllerJob -Force -ErrorAction SilentlyContinue
+        $safeUpdateControllerJob = $null
+    }
+    $script:safeUpdateControllerPort = 0
 
     if ($onWindows) {
         Invoke-DeferredProbe "public restore same-byte identity replacement" {
@@ -7813,6 +7919,14 @@ function main(config) {
     Write-Host "Windows installer behavioral cases passed"
 } finally {
     $env:CLAUDE_EASY_USAGE_PROFILE = $previousUsageProfile
+    if ($null -ne $safeUpdateClient) {
+        if (-not $safeUpdateClient.HasExited) { Stop-Process -Id $safeUpdateClient.Id -Force -ErrorAction SilentlyContinue }
+        $safeUpdateClient.Dispose()
+    }
+    if ($null -ne $safeUpdateControllerJob) {
+        Stop-Job $safeUpdateControllerJob -ErrorAction SilentlyContinue
+        Remove-Job $safeUpdateControllerJob -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }
 }
 

@@ -25,10 +25,10 @@ Windows 订阅刷新、两端更新后的客户端开关和浏览器验收都优
 
 确认后执行：
 
-1. macOS 运行 `bash scripts/install_macos.sh --safe-update --json`；Windows 先运行 `.\scripts\install_windows.cmd -SnapshotProfiles -Json`。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止；备份和更新前不得运行验收测试。
+1. macOS 运行 `bash scripts/install_macos.sh --safe-update --json`；Windows 先运行 `.\scripts\install_windows.cmd -SnapshotProfiles -Json`。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止；Windows 同时只读记录更新前 TUN 与全部代理组选择。备份和更新前不得运行验收测试。
 2. macOS 通过 Foundation 原生网络请求自动下载全部远程订阅，请求身份从当前运行的 ClashX Meta 应用信息动态生成，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 不直接下载订阅：先检查当前工具列表是否提供 Computer Use；提供时用 Computer Use 操作已经运行的 Clash Verge Rev，进入“订阅”，确认自动更新关闭，点击顶部“更新所有订阅”并等待刷新完成。不得使用右键菜单中的“更新”或“通过代理更新”，以免 Clash Verge Rev 2.5.2 把自动更新重新打开。
 3. Windows 当前环境没有 Computer Use，或首次调用失败时，不重试 Computer Use，直接告诉用户：“你当前的环境不支持 Computer Use，请打开 Clash Verge Rev，进入‘订阅’，确认自动更新已关闭，点击顶部‘更新所有订阅’，等待全部更新结束；不要使用右键菜单中的‘更新’或‘通过代理更新’。完成后回复‘我已经手动更新完了’。”在收到该回复前停止，不运行验收。收到后再运行 `.\scripts\install_windows.cmd -VerifySafeUpdate -Json`。Computer Use 自动刷新成功时也运行同一命令。
-4. macOS 在写入前完成严格 UTF-8、YAML、代理组、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。Windows 刷新时由 Clash Verge Rev 运行已安装的全局脚本，按已保存用途档位重新应用补丁；验收命令逐份确认本轮刷新，核对全局脚本与已保存档位，并完成严格 UTF-8、YAML、代理组和 Mihomo 校验。失败时按更新前备份恢复；成功后再次确认订阅自动更新关闭。
+4. macOS 在写入前完成严格 UTF-8、YAML、代理组、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。Windows 刷新时由 Clash Verge Rev 运行已安装的全局脚本，按已保存用途档位重新应用补丁；验收命令逐份确认本轮刷新，核对全局脚本与已保存档位，并完成严格 UTF-8、YAML、代理组和 Mihomo 校验，同时恢复并核对更新前的代理选择和 TUN。失败时恢复更新前备份并重新加载原运行配置；成功后再次确认订阅自动更新关闭。
 5. 两端都不得切换订阅、代理组或节点；两端都保留更新前的 TUN 与代理组选择。最终状态复核必须确认这些状态没有被本轮更新改变。平台更新成功后按 `required_followups` 完成相同的已保存档位客户端动作和全部验收。没有 Computer Use 只改变动作由谁执行，不减少补丁、测试或最终复核。
 
 macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能从当前运行的 ClashX Meta 版本、构建号、标识和系统版本动态生成与客户端一致的原生请求身份。Windows 不直接构造订阅请求，只使用 Clash Verge Rev 的客户端原生刷新。两端不追加通用的防倒退、数量、哈希或时间戳检查；但当前配置含 AnyTLS，而新配置完全失去 AnyTLS 并改为 Shadowsocks 时，必须拒绝接受本轮更新。平台命令内部不追加 WebRTC 或区域指纹检查；命令返回后仍按已保存档位完成任务验收。

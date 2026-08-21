@@ -1341,7 +1341,7 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/windows/install_windows/safe_update.ps1",
-        "        if ($manifestVersion -eq 2 -and (\n",
+        "        if ($manifestVersion -ge 2 -and (\n",
         "        if ($true -and (\n"
       )
 

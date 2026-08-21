@@ -84,7 +84,7 @@ try {
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning",
         "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
         "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
-        "Get-ClashControllerContext", "Get-ClashRuntimeState", "Invoke-ClashVergeReactivationShortcut",
+        "Get-ClashControllerContext", "Get-ClashRuntimeState", "Restore-ClashRuntimeSelections", "Invoke-ClashVergeReactivationShortcut",
         "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
@@ -223,6 +223,9 @@ if ($SnapshotProfiles) {
     if ($newManifestSnapshot.Exists) {
         throw "发现尚未验收的安全更新；请先运行 -VerifySafeUpdate，不能覆盖更新前清单。"
     }
+    if (-not (Test-ClashVergeRunning)) {
+        throw "Clash Verge Rev 没有运行，无法记录更新前的 TUN 和代理选择。"
+    }
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
     $snapshotContext = $null
     try {
@@ -255,7 +258,24 @@ if ($SnapshotProfiles) {
                 Backup = (Split-Path -Leaf $backup.Path)
             }
         }
-        $manifest = [ordered]@{ Version = 2; CreatedAt = [DateTimeOffset]::Now.ToString("o"); Profiles = $manifestItems }
+        $runtimeContext = Get-ClashControllerContext $runtimeConfigPath
+        $runtimeState = Get-ClashRuntimeState $runtimeContext
+        $runtimeSelections = @($runtimeState.Selections.Keys | Sort-Object | ForEach-Object {
+            [ordered]@{
+                Group = [string]$_
+                Selection = [string]$runtimeState.Selections[$_]
+            }
+        })
+        $runtimeSnapshot = [ordered]@{
+            TunEnabled = [bool]$runtimeState.TunEnabled
+            Selections = $runtimeSelections
+        }
+        $manifest = [ordered]@{
+            Version = 3
+            CreatedAt = [DateTimeOffset]::Now.ToString("o")
+            Profiles = $manifestItems
+            Runtime = $runtimeSnapshot
+        }
         $manifestBytes = ConvertTo-Utf8Bytes (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
         Invoke-VerifiedFileTransaction @(
             [pscustomobject]@{
@@ -294,17 +314,48 @@ if ($VerifySafeUpdate) {
         $manifestText,
         '(?i)"CreatedAt"\s*:\s*"(?:[^"\\]|\\.)*"'
     ).Count -eq 1
-    if (($manifestProperties -join ",") -cne "CreatedAt,Profiles,Version" -or
-        -not ($manifest.Version -is [int] -or $manifest.Version -is [long]) -or
-        [long]$manifest.Version -notin @(1, 2) -or
+    $manifestVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
+    $manifestVersion = if ($manifestVersionIsNumeric) { [long]$manifest.Version } else { 0L }
+    $expectedManifestProperties = if ($manifestVersion -eq 3) {
+        "CreatedAt,Profiles,Runtime,Version"
+    } else {
+        "CreatedAt,Profiles,Version"
+    }
+    if (($manifestProperties -join ",") -cne $expectedManifestProperties -or
+        -not $manifestVersionIsNumeric -or
+        $manifestVersion -notin @(1, 2, 3) -or
         -not $createdAtIsJsonString -or
         @($manifest.Profiles).Count -eq 0) {
         throw "安全更新准备记录无效。"
     }
+    $expectedSelections = @{}
+    $expectedTunEnabled = $false
+    $hasRuntimeSnapshot = $manifestVersion -eq 3
+    if ($hasRuntimeSnapshot) {
+        $runtimeProperties = @($manifest.Runtime.PSObject.Properties.Name | Sort-Object)
+        if (($runtimeProperties -join ",") -cne "Selections,TunEnabled" -or
+            -not ($manifest.Runtime.TunEnabled -is [bool])) {
+            throw "安全更新准备记录中的运行状态无效。"
+        }
+        $seenRuntimeGroups = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($selection in @($manifest.Runtime.Selections)) {
+            $selectionProperties = @($selection.PSObject.Properties.Name | Sort-Object)
+            if (($selectionProperties -join ",") -cne "Group,Selection" -or
+                -not ($selection.Group -is [string]) -or
+                -not ($selection.Selection -is [string]) -or
+                [string]::IsNullOrWhiteSpace([string]$selection.Group) -or
+                [string]::IsNullOrWhiteSpace([string]$selection.Selection) -or
+                -not $seenRuntimeGroups.Add([string]$selection.Group)) {
+                throw "安全更新准备记录中的代理选择无效。"
+            }
+            $expectedSelections[[string]$selection.Group] = [string]$selection.Selection
+        }
+        $expectedTunEnabled = [bool]$manifest.Runtime.TunEnabled
+    }
     $recoveryItems = @(Get-SafeUpdateRecoveryItems $manifest $profilesDirectory $backupRoot)
     $validated = @()
     $observedCurrentHashes = @{}
-    $legacySnapshotRetirement = $false
+    $legacySnapshotRetirement = -not $hasRuntimeSnapshot
     $safeUpdateContentRestoreEligible = $false
     $indexSnapshot = $null
     $scriptSnapshot = $null
@@ -397,6 +448,28 @@ if ($VerifySafeUpdate) {
             }
         }
         Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
+        if ($hasRuntimeSnapshot) {
+            $runtimeContext = Get-ClashControllerContext $runtimeConfigPath
+            $runtimeState = Get-ClashRuntimeState $runtimeContext
+            if ([bool]$runtimeState.TunEnabled -ne $expectedTunEnabled) {
+                $safeUpdateContentRestoreEligible = $true
+                throw "Clash Verge Rev 无法保留更新前的 TUN 状态。"
+            }
+            $safeUpdateContentRestoreEligible = $true
+            Restore-ClashRuntimeSelections $runtimeContext $expectedSelections
+            $runtimeState = Get-ClashRuntimeState $runtimeContext
+            foreach ($group in @($expectedSelections.Keys)) {
+                $groupState = $runtimeState.Proxies.PSObject.Properties[[string]$group]
+                if ($null -eq $groupState -or
+                    [string]$groupState.Value.type -ne "Selector" -or
+                    [string]$groupState.Value.now -cne [string]$expectedSelections[$group]) {
+                    throw "Clash Verge Rev 无法恢复更新前的代理选择。"
+                }
+            }
+            if ([bool]$runtimeState.TunEnabled -ne $expectedTunEnabled) {
+                throw "Clash Verge Rev 无法保留更新前的 TUN 状态。"
+            }
+        }
         $versionGuards = @()
         try {
             foreach ($entry in @($validated | Sort-Object { $_.Target.Path })) {
@@ -486,6 +559,27 @@ if ($VerifySafeUpdate) {
         $rollbackItems = @($recoveryItems | ForEach-Object {
             Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "rolled_back"
         })
+        if ($hasRuntimeSnapshot) {
+            try {
+                $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+                if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
+                $vergeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($vergeSnapshot.Bytes)
+                $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
+                $rollbackRuntime = Get-ClashControllerContext $runtimeConfigPath
+                $rollbackPolicyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+                $rollbackPolicy = (New-Object System.Text.UTF8Encoding($false, $true)).GetString(
+                    [System.IO.File]::ReadAllBytes($rollbackPolicyPath)
+                ) | ConvertFrom-Json
+                $rollbackCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+                $null = Wait-ClashVergeRuntimeHealthy `
+                    $runtimeConfigPath $rollbackRuntime $expectedSelections $expectedTunEnabled `
+                    $savedUsageProfile ([string]$rollbackCurl.Source) $rollbackPolicy
+                Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已恢复全部订阅文件和更新前运行状态。" @() @() $rollbackItems
+            } catch {
+                Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")
+            }
+        }
         Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")
     }
     foreach ($entry in $validated) {
