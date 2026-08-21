@@ -2936,6 +2936,7 @@ class SkillContractTest < Minitest::Test
     assert_includes workflow, "group: test-${{ github.workflow }}-${{ github.ref }}"
     assert_includes workflow, "cancel-in-progress: true"
     assert_includes workflow, "ruby tests/ci_scope.rb"
+    assert_includes workflow, "git diff --no-renames --name-only -z"
     %w[claude-easy/** tests/** .github/workflows/test.yml package.json package-lock.json].each do |path|
       assert_equal 2, workflow.scan(%(- "#{path}")).length, path
     end

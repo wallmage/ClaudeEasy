@@ -62,7 +62,7 @@ jobs:
           paths=()
           while IFS= read -r -d '' path; do
             paths+=("$path")
-          done < <(git diff --name-only -z "$base_sha" "$GITHUB_SHA")
+          done < <(git diff --no-renames --name-only -z "$base_sha" "$GITHUB_SHA")
           ruby tests/ci_scope.rb "${paths[@]}" >> "$GITHUB_OUTPUT"
 
   macos:
