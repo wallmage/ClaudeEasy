@@ -2130,6 +2130,8 @@ class SkillContractTest < Minitest::Test
                     '@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0'
     assert_includes windows_installer, '"safe_update_legacy_recovery_pending"'
     assert_includes windows_installer, '"safe_update_legacy_snapshot_required"'
+    assert_includes windows_installer, "重新创建 v3 快照"
+    refute_includes windows_installer, "重新创建 v2 快照"
     assert_includes windows_installer, '$safeUpdateContentRestoreEligible = $false'
     assert_includes windows_installer, 'if (-not $safeUpdateContentRestoreEligible) {'
     assert_includes windows_installer, '"safe_update_verification_retry_pending"'
@@ -2208,7 +2210,7 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_tests,
                     "unchanged valid legacy snapshot with missing or corrupted backups remained permanently pending"
     assert_includes windows_tests,
-                    "legacy recovery could not complete after every subscription was refreshed"
+                    "legacy recovery without a runtime snapshot was reported as fully verified"
     assert_includes windows_tests,
                     "concurrent profiles index change triggered a safe-update rollback"
     assert_includes windows_tests, "# concurrent candidate one"

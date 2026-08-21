@@ -588,7 +588,7 @@ if ($VerifySafeUpdate) {
     }
     Write-Info "全部远程订阅已逐份通过全局脚本、代理组、YAML 与 Mihomo 检查。"
     if ($legacySnapshotRetirement) {
-        Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v2 快照后再更新。" @() @("legacy_manifest_retired")
+        Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v3 快照后再更新。" @() @("legacy_manifest_retired")
     }
     $verifiedItems = @($validated | ForEach-Object {
         $itemStatus = if ([string]$_.ValidatedSha256 -ne [string]$_.Manifest.BeforeSha256) {

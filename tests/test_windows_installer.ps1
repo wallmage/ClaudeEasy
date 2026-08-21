@@ -3771,24 +3771,14 @@ rules: ["MATCH,AI"]
         "-MihomoPath", $fakeCore,
         "-Json"
     )
-    $legacyRecoveryRetryJson = Assert-JsonResult $legacyRecoveryRetry "install" 0
+    $legacyRecoveryRetryJson = Assert-JsonResult $legacyRecoveryRetry "install" 1
     Assert-True (
-        $legacyRecoveryRetryJson.code -eq "safe_update_verified"
-    ) "legacy recovery could not complete after every subscription was refreshed"
-    Assert-True (
-        $legacyRecoveryRetryJson.workflow_complete -eq $false -and
-        $legacyRecoveryRetryJson.completed_scope -eq "subscription_update" -and
-        $legacyRecoveryRetryJson.profile -eq 1 -and
-        (@($legacyRecoveryRetryJson.required_followups) -join ",") -ceq (
-            @("client_switch_verification", "site_verification", "final_state_audit") -join ","
-        )
-    ) "safe update verification incorrectly reported the whole user workflow complete"
-    Assert-True (
-        @($legacyRecoveryRetryJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "updated" }).Count -eq 0
-    ) "changed safe-update subscriptions were not reported as updated"
+        $legacyRecoveryRetryJson.status -eq "partial" -and
+        $legacyRecoveryRetryJson.code -eq "safe_update_legacy_snapshot_required"
+    ) "legacy recovery without a runtime snapshot was reported as fully verified"
     Assert-True (-not (
         Test-Path -LiteralPath $legacyManifestPath
-    )) "successful legacy recovery retry retained its manifest"
+    )) "validated legacy recovery retry retained its manifest"
     [System.IO.File]::WriteAllText(
         (Join-Path $safeUpdateProfiles "R-second.yml"),
         $secondSafeUpdated
