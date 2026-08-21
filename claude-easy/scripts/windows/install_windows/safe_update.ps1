@@ -65,6 +65,7 @@ function Get-FlowProxyProtocolTypes([string]$Text) {
     $squareDepth = 0
     $braceDepth = 0
     $quote = [char]0
+    $escaped = $false
     $comment = $false
     $fieldStart = -1
     $typeValueStart = -1
@@ -75,10 +76,18 @@ function Get-FlowProxyProtocolTypes([string]$Text) {
             continue
         }
         if ($quote -ne [char]0) {
-            if ($character -eq $quote) {
-                if ($quote -eq "'" -and $index + 1 -lt $Text.Length -and $Text[$index + 1] -eq "'") {
+            if ($quote -eq '"') {
+                if ($escaped) {
+                    $escaped = $false
+                } elseif ($character -eq '\') {
+                    $escaped = $true
+                } elseif ($character -eq $quote) {
+                    $quote = [char]0
+                }
+            } elseif ($character -eq $quote) {
+                if ($index + 1 -lt $Text.Length -and $Text[$index + 1] -eq "'") {
                     $index += 1
-                } elseif ($quote -ne '"' -or $index -eq 0 -or $Text[$index - 1] -ne "\") {
+                } else {
                     $quote = [char]0
                 }
             }
@@ -94,7 +103,8 @@ function Get-FlowProxyProtocolTypes([string]$Text) {
             continue
         }
         if ($character -eq ":" -and $squareDepth -eq 1 -and $braceDepth -eq 1 -and $fieldStart -ge 0) {
-            $key = $Text.Substring($fieldStart, $index - $fieldStart).Trim().Trim("'", '"')
+            $key = ConvertFrom-SubscriptionScalar `
+                $Text.Substring($fieldStart, $index - $fieldStart) "代理字段"
             if ($key -ieq "type") { $typeValueStart = $index + 1 }
             continue
         }
