@@ -2899,7 +2899,52 @@ class SkillContractTest < Minitest::Test
     assert_includes workflow, "fetch-depth: 0"
     assert_includes workflow, "github.event.before"
     assert_includes workflow, "github.event.pull_request.base.sha"
-    assert_equal 6, workflow.scan(/timeout-minutes:\s*20/).length
+    jobs = workflow.split(/^jobs:\n/, 2).last.scan(
+      /^  ([a-z0-9-]+):\n(.*?)(?=^  [a-z0-9-]+:\n|\z)/m
+    )
+    refute_empty jobs
+    jobs.each do |name, body|
+      assert_match(/^    timeout-minutes:\s*\d+$/, body, "missing timeout for #{name}")
+    end
+  end
+
+  def test_ci_scope_routes_heavy_jobs_by_changed_platform
+    classifier = File.join(ROOT, "tests/ci_scope.rb")
+    workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
+    assert File.file?(classifier), "missing CI scope classifier"
+
+    {
+      ["README.md"] => { "macos" => "false", "windows" => "false" },
+      ["claude-easy/scripts/macos/patch_profiles.rb"] => { "macos" => "true", "windows" => "false" },
+      ["claude-easy/scripts/windows/install_windows.ps1"] => { "macos" => "false", "windows" => "true" },
+      ["claude-easy/references/policy.json"] => { "macos" => "true", "windows" => "true" },
+      ["unexpected-file"] => { "macos" => "true", "windows" => "true" }
+    }.each do |paths, expected|
+      output, error, status = Open3.capture3(RbConfig.ruby, classifier, *paths, chdir: ROOT)
+      assert status.success?, error
+      actual = output.lines.to_h { |line| line.strip.split("=", 2) }
+      assert_equal expected, actual, paths.join(", ")
+    end
+
+    assert_includes workflow, "group: test-${{ github.workflow }}-${{ github.ref }}"
+    assert_includes workflow, "cancel-in-progress: true"
+    assert_includes workflow, "ruby tests/ci_scope.rb"
+    {
+      "macos-browser" => "macos",
+      "macos-mutation" => "macos",
+      "macos-wrappers" => "macos",
+      "macos-production-runtime" => "macos",
+      "macos-production-probes" => "macos",
+      "mihomo" => "macos",
+      "windows-installer-powershell-5" => "windows",
+      "windows-installer-powershell-7" => "windows",
+      "windows-mihomo" => "windows"
+    }.each do |job_name, platform|
+      job = workflow[/^  #{Regexp.escape(job_name)}:\n(?:(?!^  \S).*\n)*/]
+      refute_nil job, job_name
+      assert_includes job, "needs: scope"
+      assert_includes job, "if: needs.scope.outputs.#{platform} == 'true'"
+    end
   end
 
   def test_github_actions_shell_fields_are_static

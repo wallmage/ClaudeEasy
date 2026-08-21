@@ -5,13 +5,55 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.scope.outputs.macos }}
+      windows: ${{ steps.scope.outputs.windows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - name: Select platform suites
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            ruby tests/ci_scope.rb >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base_sha="${PR_BASE_SHA:-$PUSH_BASE_SHA}"
+          if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base_sha^{commit}"; then
+            ruby tests/ci_scope.rb >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          paths=()
+          while IFS= read -r -d '' path; do
+            paths+=("$path")
+          done < <(git diff --name-only -z "$base_sha" "$GITHUB_SHA")
+          ruby tests/ci_scope.rb "${paths[@]}" >> "$GITHUB_OUTPUT"
+
   macos:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,45 +64,23 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Ruby 3.3 regression suite and production coverage
+      - name: Ruby regression suite and production coverage
         run: ruby tests/coverage_ruby.rb
-      - name: Ruby 3.3 skill contract suite
+      - name: Skill and CI contract suite
         run: ruby tests/test_skill_contract.rb
       - name: Offline region fingerprint page
         run: node --test tests/test_region_fingerprint_page.js
-      - name: Install region fingerprint browser test dependencies
-        run: |
-          npm ci
-          npx playwright install webkit
-      - name: Real Chrome and WebKit region fingerprint page
-        env:
-          CLAUDE_EASY_BROWSER_TARGETS: chrome,webkit
-        run: node tests/test_region_fingerprint_browser.js
-      - name: Safety mutation checks
-        run: ruby tests/test_mutation_safety.rb
-      - name: macOS command wrapper behavior
-        run: ruby tests/test_macos_wrappers.rb
       - name: Windows engine suite
         run: node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
       - name: Generated policy parity
         run: ruby tests/generate_windows_policy.rb --check
-      - name: Ruby 3.3 syntax checks
+      - name: Production runtime and syntax checks
         run: |
-          ruby -c claude-easy/scripts/macos/patch_profiles.rb
-          ruby -c claude-easy/scripts/macos/verify_routes.rb
-          node --check claude-easy/scripts/windows/clash_verge_global.js
-      - name: Confirm the supported system Ruby
-        run: /usr/bin/ruby -e 'abort "expected Ruby 2.6" unless RUBY_VERSION.start_with?("2.6.")'
-      - name: Ruby regressions on the production runtime
-        run: /usr/bin/ruby tests/test_macos_patcher.rb
-      - name: Contract regressions on the production runtime
-        run: /usr/bin/ruby tests/test_skill_contract.rb
-      - name: Command wrappers on the production runtime
-        run: /usr/bin/ruby tests/test_macos_wrappers.rb
-      - name: macOS syntax checks
-        run: |
+          /usr/bin/ruby -e 'abort "expected Ruby 2.6" unless RUBY_VERSION.start_with?("2.6.")'
           /usr/bin/ruby -c claude-easy/scripts/macos/patch_profiles.rb
           /usr/bin/ruby -c claude-easy/scripts/macos/verify_routes.rb
+          ruby -c tests/ci_scope.rb
+          node --check claude-easy/scripts/windows/clash_verge_global.js
           sh -n claude-easy/scripts/install_macos.sh
           sh -n claude-easy/scripts/uninstall_macos.sh
       - name: Source tree whitespace checks
@@ -76,7 +96,68 @@ jobs:
             git show --check --format= HEAD
           fi
 
+  macos-browser:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Install region fingerprint browser test dependencies
+        run: |
+          npm ci
+          npx playwright install webkit
+      - name: Real Chrome and WebKit region fingerprint page
+        env:
+          CLAUDE_EASY_BROWSER_TARGETS: chrome,webkit
+        run: node tests/test_region_fingerprint_browser.js
+
+  macos-mutation:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - name: Safety mutation checks
+        run: ruby tests/test_mutation_safety.rb
+
+  macos-wrappers:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - name: Ruby 3.3 command wrapper behavior
+        run: ruby tests/test_macos_wrappers.rb
+
+  macos-production-runtime:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Ruby regressions on the production runtime
+        run: /usr/bin/ruby tests/test_macos_patcher.rb
+      - name: Contract regressions on the production runtime
+        run: /usr/bin/ruby tests/test_skill_contract.rb
+      - name: Command wrappers on the production runtime
+        run: /usr/bin/ruby tests/test_macos_wrappers.rb
+
   macos-production-probes:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true'
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -88,6 +169,8 @@ jobs:
         run: ruby tests/run_macos_production_probes.rb
 
   mihomo:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -140,6 +223,8 @@ jobs:
         run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
 
   windows-installer-powershell-5:
+    needs: scope
+    if: needs.scope.outputs.windows == 'true'
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -170,6 +255,8 @@ jobs:
           }
 
   windows-installer-powershell-7:
+    needs: scope
+    if: needs.scope.outputs.windows == 'true'
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -194,6 +281,8 @@ jobs:
           }
 
   windows-mihomo:
+    needs: scope
+    if: needs.scope.outputs.windows == 'true'
     strategy:
       fail-fast: false
       matrix:

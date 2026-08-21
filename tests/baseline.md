@@ -60,7 +60,7 @@
 - 本地区域指纹页：Node 测试锁定单文件边界、CSP 只允许固定正常网页出口端点、无公网 IP 归属地查询、三个固定 STUN 地址与按钮前披露、MIT 署名、十项固定信号和上游 24/18/14/10/10/8/6/4/3/3 权重、上游风险分档、文字和颜色、WebRTC 只有明确暴露本地网络地址时计 10 分、公网出口一致、不同、没有公网候选、无法取得同协议族对照或探测失败都计 0 分、候选不显示且不进入对照请求、只读 `navigator.language` 且仅中国大陆简体中文计分、后备语言不参与计算、上游 Intl/浏览器/设备规则、`0.25` 命中门槛、每个非零项独立报告、其他缺失值贡献为未知且不生成可比较总分、Safari User-Agent 降级、Chrome/Edge 空设备型号保持有限信息、Canvas 不可用、重扫并发保护、失败后重试与清除旧值、十项完整渲染、每项贡献和总分边界。Playwright 在 macOS 用真实 Chrome 与 WebKit、Windows 用真实 Chrome 与 Edge 从 `file://` 运行原页面，检查按钮点击前无网络请求、扫描期间仅允许固定对照请求、页面不显示出口地址、WebRTC 比较结果，并检查控制台与页面错误、开始和重扫、键盘焦点及其对比度、禁用 JavaScript 提示、列表语义、280px 回流和异常状态文字对比度。
 - Windows 路由验证测试：从生产 `verify_routes.ps1` 的 AST 自动加载全部函数到主测试与隔离测试脚本，不维护两份容易漏项的函数清单；新增任何辅助函数后，PowerShell 5.1 与 7 的全量测试都必须能直接调用。
 - 语法与格式：Ruby、JavaScript、Shell、PowerShell、全部 PowerShell 文件的严格 UTF-8 BOM、策略同步和 `git diff --check`。
-- 测试机制：CI 的 macOS 与 Windows job 都有总超时；独立生产故障探针先记录失败并继续执行，最后统一让 job 失败，避免前一个问题遮住后续测试。GitHub Actions 的 `shell` 字段必须使用静态受支持值，契约和 mutation 必须在推送前拦截会让 workflow 零 job 失败的动态 shell。mutation smoke test 覆盖文件写入恢复、安全更新回退、路径身份、整批预检、自动更新补偿、默认 Mihomo 解析、结果档位边界、分流流量绑定、发布包依赖与公开安装实际写入、生产探针 CI 开关、Windows 故障汇总和二次转换保护。mutation 的语法错误、加载失败或超时不能冒充被测试发现。
+- 测试机制：每次提交先运行覆盖率、合同、语法、格式和 Windows 引擎等快速检查；文档改动只运行快速检查，平台改动只追加对应平台的完整测试，共同策略和手动触发追加双平台完整测试。同一分支的新提交取消旧 CI。macOS 浏览器、mutation、wrapper、生产 Ruby、故障探针和真实 Mihomo 分开并行运行。所有 job 都有总超时；独立生产故障探针先记录失败并继续执行，最后统一让 job 失败，避免前一个问题遮住后续测试。GitHub Actions 的 `shell` 字段必须使用静态受支持值，契约和 mutation 必须在推送前拦截会让 workflow 零 job 失败的动态 shell。mutation smoke test 覆盖文件写入恢复、安全更新回退、路径身份、整批预检、自动更新补偿、默认 Mihomo 解析、结果档位边界、分流流量绑定、发布包依赖与公开安装实际写入、生产探针 CI 开关、Windows 故障汇总和二次转换保护。mutation 的语法错误、加载失败或超时不能冒充被测试发现。
 - Windows 真实 Mihomo：每个 PowerShell 版本和 Mihomo 版本的矩阵任务必须生成绑定当前随机 nonce、PowerShell 运行时、内核数量及档位 1、2、3 完成记录的凭据；只看到子进程退出码不能算完成。
 
 ## 必须持续防止
