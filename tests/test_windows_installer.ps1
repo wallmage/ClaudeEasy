@@ -2747,9 +2747,19 @@ public static class FakeCurl {
                 [DateTime]::UtcNow -lt $curlStartDeadline) {
                 Start-Sleep -Milliseconds 25
             }
+            $routeStartDiagnostic = ""
+            if ($routeSuccessProcess.HasExited) {
+                $routeStartDiagnostic =
+                    "; exit=$($routeSuccessProcess.ExitCode); output=" +
+                    (Get-TestOutputDiagnostic (
+                        $routeSuccessProcess.StandardOutput.ReadToEnd() +
+                        $routeSuccessProcess.StandardError.ReadToEnd()
+                    ))
+            }
             Assert-True (
                 Test-Path -LiteralPath $fakeCurlPidsPath -PathType Leaf
-            ) "route verifier did not start the long-running curl fixture"
+            ) ("route verifier did not start the long-running curl fixture" +
+                $routeStartDiagnostic)
             $firstFakeCurlPid = [int](
                 Get-Content -LiteralPath $fakeCurlPidsPath |
                     Where-Object { $_ -match '^\d+$' } |
