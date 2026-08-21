@@ -980,8 +980,9 @@ function claudeEasyValidPolicy() {
     (cnUdpRule.match(/\{CN_IP\}/g) || []).length === 1;
 }
 
-function claudeEasyApply(config, profileName, usageProfile, originalOwnedNames) {
+function claudeEasyApply(config, profileName, usageProfile = 3, originalOwnedNames) {
   if (!claudeEasyValidPolicy()) return config;
+  if ([1, 2, 3].indexOf(usageProfile) === -1) return config;
   if (!claudeEasyUsable(config)) return config;
   const patched = claudeEasyClone(config);
   if (!Array.isArray(patched.rules)) patched.rules = [];
@@ -991,7 +992,7 @@ function claudeEasyApply(config, profileName, usageProfile, originalOwnedNames) 
   if (!detectedMainGroup) return config;
   const mainGroup = claudeEasySafeGroupReference(patched, detectedMainGroup);
   if (!mainGroup) return config;
-  const profile = [1, 2, 3].indexOf(usageProfile) !== -1 ? usageProfile : 3;
+  const profile = usageProfile;
   const cnProviderName = claudeEasyCommonCn(patched, mainGroup);
   if (profile < 3) return patched;
   const ownedNames = originalOwnedNames || claudeEasyOwnedManagedNames(patched);

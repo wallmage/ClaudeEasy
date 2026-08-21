@@ -1127,7 +1127,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "任一原代理组或节点选择无法恢复时拒绝更新"
     end
     assert_includes readme, "Windows `-SnapshotProfiles -Json`"
-    assert_includes readme, "Windows `-VerifySafeUpdate -Json`"
+    assert_includes readme, "Windows `-VerifySafeUpdate -RefreshConfirmed -Json`"
     assert_includes installer, "--safe-update"
     assert_includes skill, "--safe-update --json"
     assert_includes patcher, "--safe-update-all"
@@ -1151,12 +1151,12 @@ class SkillContractTest < Minitest::Test
     assert_includes safe_update, "用 Computer Use 操作已经运行的 Clash Verge Rev"
     assert_includes safe_update, "更新所有订阅"
     assert_includes safe_update, "我已经手动更新完了"
-    assert_includes safe_update, ".\\scripts\\install_windows.cmd -VerifySafeUpdate -Json"
+    assert_includes safe_update, ".\\scripts\\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json"
     assert_includes safe_update, "不得使用右键菜单中的“更新”或“通过代理更新”"
     update_section = skill.split("## 更新全部订阅", 2).last.split("## 配置历史与恢复", 2).first
     assert_includes update_section, "没有 Computer Use 时"
     assert_includes update_section, "我已经手动更新完了"
-    assert_includes update_section, "-VerifySafeUpdate -Json"
+    assert_includes update_section, "-VerifySafeUpdate -RefreshConfirmed -Json"
     refute_includes update_section, "Windows 用 `curl"
   end
 
@@ -1209,7 +1209,7 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "不得把两端不同的实现方式写成相同"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update --json`"
     assert_includes safe_update, "Windows 先运行 `.\\scripts\\install_windows.cmd -SnapshotProfiles -Json`"
-    assert_includes safe_update, "再运行 `.\\scripts\\install_windows.cmd -VerifySafeUpdate -Json`"
+    assert_includes safe_update, "再运行 `.\\scripts\\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json`"
     assert_includes safe_update, "macOS 通过 Foundation 原生网络请求自动下载全部远程订阅"
     assert_includes safe_update, "Windows 通过 Clash Verge Rev 的“更新所有订阅”执行客户端原生刷新"
     assert_includes safe_update, "当前环境没有 Computer Use"
@@ -1228,11 +1228,13 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_safe_update_requires_provider_switch_confirmation_before_the_first_attempt
+    openai_agent = File.read(File.join(SKILL, "agents/openai.yaml"))
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")),
+      openai_agent
     ]
 
     [documents[0], documents[1], documents[2]].each do |document|
@@ -1247,6 +1249,10 @@ class SkillContractTest < Minitest::Test
       refute_includes document, "只有更新确实失败且没有明确的本机故障时，才提示订阅开关"
       assert_includes document, "不得代替用户操作服务商后台"
       assert_includes document, "任一备份失败时停止"
+    end
+    [documents[0], documents[1], documents[4]].each do |document|
+      assert_includes document, "请自行登录服务商管理后台"
+      assert_includes document, "不得代替用户操作服务商后台"
     end
   end
 
@@ -2118,10 +2124,11 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer,
                     "Restore-ClashRuntimeSelections $runtimeContext $expectedSelections"
     assert_includes windows_installer, "safe_update_rolled_back"
-    assert_includes windows_installer, "Test-SafeUpdateRefreshEvidence"
-    assert_includes windows_installer, '"safe_update_refresh_pending"'
-    assert_includes windows_safe_update,
-                    'UseUpdatedEvidence = ($manifestVersion -ge 2)'
+    refute_includes windows_installer, "Test-SafeUpdateRefreshEvidence"
+    refute_includes windows_installer, '"safe_update_refresh_pending"'
+    refute_includes windows_safe_update, "UseUpdatedEvidence"
+    assert_includes windows_installer, '[switch]$RefreshConfirmed'
+    assert_includes windows_installer, '"missing_refresh_confirmation"'
     assert_includes windows_safe_update,
                     'CanAutoRestore = ($manifestVersion -ge 2)'
     assert_includes windows_safe_update,
@@ -2187,22 +2194,10 @@ class SkillContractTest < Minitest::Test
     assert_operator snapshot_guard, :<, snapshot_backup
     assert_operator snapshot_backup, :<, snapshot_manifest
     assert_operator snapshot_manifest, :<, snapshot_dispose
-    refresh_function = windows_safe_update[
-      windows_safe_update.index("function Test-SafeUpdateRefreshEvidence")...
-      windows_safe_update.index("function Get-SafeUpdateRecoveryItems")
-    ]
-    refute_nil refresh_function
-    assert_match(
-      /\$CurrentSha256 -cne \$BeforeSha256\) \{\s+return \$true/,
-      refresh_function
-    )
-    assert_includes refresh_function,
-                    'if (-not $UseUpdatedEvidence) { return $false }'
-    assert_includes refresh_function, 'return $currentTimestamp -gt $beforeTimestamp'
     assert_includes windows_tests,
-                    "safe update verification accepted a batch in which no subscription was refreshed"
+                    "explicit UI refresh confirmation rejected unchanged valid subscriptions"
     assert_includes windows_tests,
-                    "newer client update timestamp"
+                    "safe update verification accepted a missing UI refresh confirmation"
     assert_includes windows_tests,
                     "Windows ran subscription validation before creating the update snapshot"
     assert_includes windows_tests,

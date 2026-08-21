@@ -229,6 +229,14 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
   }
 });
 
+test('invalid Windows usage profiles leave the subscription unchanged', { skip: !available }, () => {
+  for (const usageProfile of [0, 4, null, '3']) {
+    const input = baseConfig();
+    assert.equal(engine.claudeEasyTransform(input, 'fixture', usageProfile), input);
+    assert.deepEqual(engine.claudeEasyTransform(input, 'fixture', usageProfile), input);
+  }
+});
+
 test('China IP UDP provider preserves a colliding user provider', { skip: !available }, () => {
   const config = baseConfig();
   const providerName = engine.CLAUDE_EASY_POLICY.cnIpProvider.name;
@@ -1774,7 +1782,6 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive',
       'Assert-ClaudeEasyManagedScriptCurrent',
       'Test-ClaudeEasyFlowSequenceHasItem', 'Assert-ClaudeEasyProxyGroupCollection', 'Test-RestoreCandidate',
-      'Test-SafeUpdateRefreshEvidence',
       'Open-SafeUpdateVersionGuard', 'New-SafeUpdateSnapshotContext',
       'Get-SafeUpdateRecoveryItems', 'Get-SafeUpdateVerificationTargets', 'Restore-SafeUpdateFiles'
     ]

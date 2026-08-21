@@ -1526,9 +1526,6 @@ class MacosPatcherTest < Minitest::Test
         when ["PUT", "/proxies/Main"]
           selected = JSON.parse(body).fetch("name")
           [204, ""]
-        when ["PATCH", "/configs"]
-          tun_enabled = JSON.parse(body).dig("tun", "enable")
-          [204, ""]
         when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
           [204, ""]
         else
@@ -1546,9 +1543,9 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: checkpoint
       )
 
-      assert restored
-      assert_equal "Taiwan", selected
-      assert tun_enabled
+      refute restored
+      assert_equal "Japan", selected
+      refute tun_enabled
     end
   end
 
@@ -5380,6 +5377,11 @@ class MacosPatcherTest < Minitest::Test
     refute ClaudeEasy.const_defined?(:MAX_REMOTE_SUBSCRIPTION_BYTES, false)
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");'
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
+                    'willPerformHTTPRedirection:newRequest:completionHandler:'
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "task.cancel;"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
+                    'response.URL.absoluteString'
 
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
@@ -8925,6 +8927,8 @@ class MacosPatcherTest < Minitest::Test
       requester = lambda do |method, endpoint, _body|
         if method == "GET" && endpoint == "/proxies"
           [200, JSON.generate("proxies" => { "Main" => { "type" => "Selector", "now" => "台湾家宽 01" } })]
+        elsif method == "GET" && endpoint == "/configs"
+          [200, JSON.generate("tun" => { "enable" => false })]
         elsif method == "PUT" && endpoint == "/configs?force=true"
           reloads += 1
           [reloads == 1 ? 204 : 401, ""]
@@ -9698,6 +9702,9 @@ class MacosPatcherTest < Minitest::Test
     ClaudeEasy.stub(:controller_socket, nil) do
       assert_equal :enabled, ClaudeEasy.tun_state(requester: enabled)
     end
+    [1, 2, 3].each do |usage_profile|
+      assert_equal :preserve, ClaudeEasy.runtime_tun_requirement(usage_profile)
+    end
   end
 
   def test_profile_discovery_uses_only_the_active_storage_root
@@ -9730,6 +9737,20 @@ class MacosPatcherTest < Minitest::Test
       [current, legacy].each { |path| FileUtils.mkdir_p(path) }
       File.write(File.join(current, "one.yaml"), YAML.dump(base_config))
       File.write(File.join(legacy, "two.yaml"), YAML.dump(base_config))
+
+      directories = ClaudeEasy.default_profile_directories(
+        home: home, app_paths: [], cloud_enabled: true, selected: "missing"
+      )
+
+      assert_empty directories
+    end
+  end
+
+  def test_profile_discovery_refuses_single_icloud_root_without_the_selected_profile
+    Dir.mktmpdir do |home|
+      current = File.join(home, "Library", "Mobile Documents", "iCloud~com~metacubex~ClashX", "Documents")
+      FileUtils.mkdir_p(current)
+      File.write(File.join(current, "other.yaml"), YAML.dump(base_config))
 
       directories = ClaudeEasy.default_profile_directories(
         home: home, app_paths: [], cloud_enabled: true, selected: "missing"
@@ -11324,6 +11345,13 @@ class MacosPatcherTest < Minitest::Test
     refute ClaudeEasy.restore_runtime_tun_state(
       ->(*_args) { raise IOError }, :enabled
     )
+    requests = []
+    requester = lambda do |method, endpoint, body = nil|
+      requests << [method, endpoint, body]
+      [200, JSON.generate("tun" => { "enable" => false })]
+    end
+    refute ClaudeEasy.restore_runtime_tun_state(requester, :enabled)
+    assert_equal [["GET", "/configs", nil]], requests
     ClaudeEasy.stub(:restore_profile_bytes, true) do
       ClaudeEasy.stub(:reload_profile_runtime, true) do
         ClaudeEasy.stub(:runtime_health_healthy?, false) do
@@ -11348,7 +11376,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_runtime_rollback_restores_tun_when_the_original_subscription_omits_it
+  def test_runtime_rollback_does_not_patch_tun_when_the_original_subscription_omits_it
     Dir.mktmpdir do |directory|
       path = File.join(directory, "active.yaml")
       original = YAML.dump(base_config.reject { |key, _value| key == "tun" })
@@ -11362,10 +11390,12 @@ class MacosPatcherTest < Minitest::Test
       }
       tun_enabled = true
       reloads = 0
+      config_reads = 0
       patches = []
       requester = lambda do |method, endpoint, body|
         case [method, endpoint]
         when ["GET", "/configs"]
+          config_reads += 1
           [200, JSON.generate("tun" => { "enable" => tun_enabled })]
         when ["PUT", "/configs?force=true"]
           reloads += 1
@@ -11395,11 +11425,12 @@ class MacosPatcherTest < Minitest::Test
         end
       end
 
-      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
+      assert_equal :reload_failed_restore_pending, activated.fetch(:status)
       assert_equal original.b, File.binread(path)
-      assert tun_enabled
+      refute tun_enabled
       assert_equal 2, reloads
-      assert_equal [{ "tun" => { "enable" => true } }], patches
+      assert_equal 2, config_reads
+      assert_empty patches
     end
   end
 
@@ -14729,13 +14760,13 @@ class MacosPatcherTest < Minitest::Test
 
   def test_clashx_runtime_waits_for_reload_generation_and_full_health
     identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
-    health = [false, true]
+    generations = ["before", "after"]
     dns_checks = []
     sleeps = 0
 
     ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
       dns_checks << options.fetch(:check_dns, true)
-      health.shift
+      true
     }) do
       requester = ->(*_arguments) {
         [200, JSON.generate("proxies" => {
@@ -14745,14 +14776,14 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
         identity, generation_before: "before", selections: { "Main" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        generation_reader: -> { "before" },
+        generation_reader: -> { generations.shift },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
       )
     end
 
     assert_equal 1, sleeps
-    assert_equal [true, true], dns_checks
+    assert_equal [true], dns_checks
   end
 
   def test_clashx_runtime_wait_rejects_when_any_previous_selection_is_removed

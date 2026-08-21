@@ -84,7 +84,12 @@ module ClaudeEasy
     attempts.times do |attempt|
       return false unless same_clashx_process?(identity, process_reader.call)
 
-      return false unless generation_reader.call
+      generation = generation_reader.call
+      return false unless generation
+      if generation == generation_before
+        sleeper.call(0.25) if attempt + 1 < attempts
+        next
+      end
       requester = requester_factory.call
       restorable_selections = requester && runtime_restorable_selections(requester, selections)
       selections_restored = requester && restorable_selections &&
@@ -650,13 +655,7 @@ module ClaudeEasy
 
   def restore_runtime_tun_state(requester, expected_tun)
     return false if expected_tun == :unknown
-    return true if expected_tun == :ignore || tun_state(requester: requester) == expected_tun
-
-    enabled = expected_tun == :enabled
-    code, _body = requester.call(
-      "PATCH", "/configs", JSON.generate("tun" => { "enable" => enabled })
-    )
-    code == 204 && tun_state(requester: requester) == expected_tun
+    expected_tun == :ignore || tun_state(requester: requester) == expected_tun
   rescue StandardError
     false
   end
@@ -714,8 +713,8 @@ module ClaudeEasy
     nil
   end
 
-  def runtime_tun_requirement(usage_profile)
-    usage_profile >= 2 ? true : :preserve
+  def runtime_tun_requirement(_usage_profile)
+    :preserve
   end
 
   def capture_runtime_checkpoint(path, require_tun:, socket: nil, requester: nil)
@@ -863,10 +862,18 @@ module ClaudeEasy
     return result.merge(status: :runtime_check_failed) unless selections
     group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
     return result.merge(status: :runtime_check_failed) if require_safe_ai && !group
+    expected_tun = if require_tun == :preserve
+                     tun_state(requester: requester)
+                   elsif require_tun
+                     :enabled
+                   else
+                     :ignore
+                   end
+    return result.merge(status: :runtime_check_failed) if expected_tun == :unknown
     healthy = runtime_precommit_allowed?(precommit_condition) &&
               runtime_health_healthy?(
                 requester, selections: selections,
-                expected_tun: require_tun ? :enabled : :ignore,
+                expected_tun: expected_tun,
                 connectivity_checker: connectivity_checker,
                 precommit_condition: precommit_condition,
                 required_proxy_group: group, flush_caches: false

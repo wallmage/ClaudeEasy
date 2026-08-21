@@ -578,7 +578,7 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_runtime_reload_tun_restore_mutation_is_killed
+  def test_runtime_reload_tun_verification_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
         root,
@@ -591,7 +591,7 @@ class MutationSafetyTest < Minitest::Test
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_runtime_rollback_restores_tun_when_the_original_subscription_omits_it"
+        "--name", "test_runtime_rollback_does_not_patch_tun_when_the_original_subscription_omits_it"
       )
     end
   end
@@ -1283,30 +1283,6 @@ class MutationSafetyTest < Minitest::Test
         "claude-easy/scripts/install_windows.ps1",
         "    if ($clientRunning) {\n",
         "    if ($false) {\n"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name",
-        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
-      )
-    end
-  end
-
-  def test_windows_safe_update_refresh_evidence_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
-        "        $CurrentSha256 -cne $BeforeSha256) {\n" \
-          "        return $true\n" \
-          "    }\n" \
-          "    if (-not $UseUpdatedEvidence) { return $false }\n",
-        "        $CurrentSha256 -cne $BeforeSha256) {\n" \
-          "        return $false\n" \
-          "    }\n" \
-          "    if (-not $UseUpdatedEvidence) { return $false }\n"
       )
 
       assert_mutation_is_killed(

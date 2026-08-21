@@ -6,6 +6,7 @@
     [switch]$BackupSubscriptions,
     [switch]$SnapshotProfiles,
     [switch]$VerifySafeUpdate,
+    [switch]$RefreshConfirmed,
     [switch]$ListBackups,
     [string]$CompareBackup = "",
     [string]$RestoreBackup = "",
@@ -87,7 +88,7 @@ try {
         "Get-ClashControllerContext", "Get-ClashRuntimeState", "Restore-ClashRuntimeSelections", "Invoke-ClashVergeReactivationShortcut",
         "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
-        "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
+        "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles"
     )) {
         if ($null -eq (Get-Command $requiredInstallerFunction -CommandType Function -ErrorAction SilentlyContinue)) {
             throw "安装包不完整：安装模块缺少必要接口。"
@@ -131,6 +132,12 @@ if ($requestedOperations.Count -gt 1) {
 }
 if (-not [string]::IsNullOrWhiteSpace($ExpectedCurrentSha256) -and [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     Complete-InstallResult 64 "invalid_request" "unexpected_hash" "只有恢复备份时才能提供预期 SHA-256。"
+}
+if ($RefreshConfirmed -and -not $VerifySafeUpdate) {
+    Complete-InstallResult 64 "invalid_request" "unexpected_refresh_confirmation" "只有验收安全更新时才能确认客户端刷新。"
+}
+if ($VerifySafeUpdate -and -not $RefreshConfirmed) {
+    Complete-InstallResult 64 "invalid_request" "missing_refresh_confirmation" "请先在客户端完成更新所有订阅，再明确确认本轮刷新。"
 }
 
 # Clash Verge Rev 的全局扩展脚本位置：profiles/Script.js。
@@ -221,7 +228,7 @@ if ($SnapshotProfiles -or $VerifySafeUpdate) {
 if ($SnapshotProfiles) {
     $newManifestSnapshot = Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录"
     if ($newManifestSnapshot.Exists) {
-        throw "发现尚未验收的安全更新；请先运行 -VerifySafeUpdate，不能覆盖更新前清单。"
+        throw "发现尚未验收的安全更新；请在客户端刷新完成后运行 -VerifySafeUpdate -RefreshConfirmed，不能覆盖更新前清单。"
     }
     if (-not (Test-ClashVergeRunning)) {
         throw "Clash Verge Rev 没有运行，无法记录更新前的 TUN 和代理选择。"
@@ -380,32 +387,6 @@ if ($VerifySafeUpdate) {
         if ($missingTarget) {
             $safeUpdateContentRestoreEligible = $true
             throw "更新后的订阅文件缺失。"
-        }
-        $refreshPending = @()
-        foreach ($recovery in $recoveryItems) {
-            $target = @($currentTargets | Where-Object {
-                [string]::Equals(
-                    [string]$_.Uid,
-                    [string]$recovery.Uid,
-                    [StringComparison]::Ordinal
-                )
-            })
-            if ($target.Count -ne 1 -or
-                -not (Test-SafeUpdateRefreshEvidence `
-                    ([string]$recovery.BeforeSha256) `
-                    ([string]$observedCurrentHashes[$recovery.TargetPath]) `
-                    ([string]$recovery.BeforeUpdated) `
-                    ([string]$target[0].Updated) `
-                    ([bool]$recovery.UseUpdatedEvidence))) {
-                $refreshPending += $recovery.Uid
-            }
-        }
-        if ($refreshPending.Count -gt 0) {
-            if (@($recoveryItems | Where-Object { $_.CanAutoRestore }).Count -eq 0) {
-                $legacySnapshotRetirement = $true
-            } else {
-                Complete-InstallResult 1 "partial" "safe_update_refresh_pending" "仍有远程订阅缺少本轮刷新凭据；安全更新清单和订阅文件保持不变，请在客户端完成全部更新后重试验收。" @() @("refresh_evidence")
-            }
         }
         $savedProfile = $savedUsageProfile
         if ($savedProfile -notin @(1, 2, 3)) { throw "没有可用于安全更新验收的用途档位。" }
