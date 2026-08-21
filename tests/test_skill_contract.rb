@@ -2915,6 +2915,7 @@ class SkillContractTest < Minitest::Test
 
     {
       ["README.md"] => { "macos" => "false", "windows" => "false" },
+      ["AGENTS.md"] => { "macos" => "false", "windows" => "false" },
       ["claude-easy/scripts/macos/patch_profiles.rb"] => { "macos" => "true", "windows" => "false" },
       ["claude-easy/scripts/windows/install_windows.ps1"] => { "macos" => "false", "windows" => "true" },
       ["claude-easy/references/policy.json"] => { "macos" => "true", "windows" => "true" },

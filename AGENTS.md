@@ -3,7 +3,7 @@
 ## 执行
 
 - 用户本人使用 macOS，但所有功能和改动默认要求 macOS 与 Windows 双端同步，并尽最大努力实现功能对等（feature parity）。
-- 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。如果 `~/.agents/skills/claude-easy/` 存在，也要同步安装 Agents 副本。新副本必须逐文件校验一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动处理。
+- 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。只维护这一份 Codex 副本，不创建或同步 `~/.agents/skills/claude-easy/`。新副本必须逐文件校验一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动处理。
 - `README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 规定触发后必须立即可见的安全边界、代理入口、执行顺序和策略读取路由；设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
 - 策略按职责拆分：`policy-core.md` 保存所有任务共同边界；`diagnostics.md` 保存诊断与证据规则；`profiles-and-patch.md` 保存用途档位与 Patch；`routing-and-security.md` 保存 DNS、TUN、代理组、AI 与 WebRTC；`safe-update-and-recovery.md` 保存安全更新、备份与恢复；`macos.md` 和 `windows.md` 分别保存平台事务。`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同。
 - 运行 Skill 时始终先读 `policy-core.md`，再按 `SKILL.md` 的任务表读取对应模块和当前平台文件；只有跨模块维护、权威归属审查或整体一致性检查才读取全部策略。维护规则时先修改所属策略、代码和测试，再同步入口与架构说明。

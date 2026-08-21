@@ -5,7 +5,7 @@ windows = false
 
 ARGV.each do |path|
   case path
-  when %r{\A(?:README\.md|LICENSE|docs/|tests/baseline\.md)}
+  when %r{\A(?:AGENTS\.md|README\.md|LICENSE|docs/|tests/baseline\.md)}
     next
   when %r{\Aclaude-easy/scripts/(?:install_macos\.sh|uninstall_macos\.sh|macos/)},
        %r{\Atests/(?:coverage_ruby\.rb|run_macos|test_macos|fixtures/macos|support/macos)}
