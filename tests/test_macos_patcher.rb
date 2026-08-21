@@ -16383,7 +16383,8 @@ class MacosPatcherTest < Minitest::Test
   def test_safe_update_localizes_a_renamed_node_inside_the_same_group
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
-      original = base_config
+      original = Marshal.load(Marshal.dump(base_config))
+      original.fetch("proxy-groups").first["use"] = ["airport"]
       candidate = Marshal.load(Marshal.dump(original))
       old_name = candidate.fetch("proxies").first.fetch("name")
       new_name = "Taiwan Home"
@@ -16394,12 +16395,67 @@ class MacosPatcherTest < Minitest::Test
       File.binwrite(profile, YAML.dump(candidate))
       selections = { "Main" => old_name, "AI" => "Main" }
 
-      assert_nil ClaudeEasy.runtime_selections_for_profile(
-        selections, profile, preserve_all: true
+      assert_equal(
+        selections,
+        ClaudeEasy.runtime_selections_for_profile(selections, profile, preserve_all: true)
       )
       assert_equal(
         { "Main" => new_name, "AI" => "Main" },
         ClaudeEasy.localized_runtime_selections(selections, YAML.dump(original), profile)
+      )
+
+      candidate_bytes = YAML.dump(candidate)
+      stat = File.stat(profile)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled, selections: selections
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: candidate_bytes, candidate: candidate_bytes }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      result = {
+        path: profile, rollback_bytes: YAML.dump(original),
+        patched_digest: Digest::SHA256.hexdigest(candidate_bytes),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      restored = nil
+      activated = ClaudeEasy.activate_safe_updated_profile(
+        result, transaction: transaction, client_identity: identity,
+        runtime_checkpoint: checkpoint,
+        native_reloader: ->(_current) { true },
+        runtime_waiter: lambda { |_identity, **options|
+          restored = options.fetch(:selections)
+          true
+        },
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+      )
+
+      assert_equal true, activated.fetch(:reloaded)
+      assert_equal({ "Main" => new_name, "AI" => "Main" }, restored)
+    end
+  end
+
+  def test_safe_update_keeps_a_provider_selection_when_it_cannot_be_localized
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      config = {
+        "proxy-groups" => [
+          { "name" => "Main", "type" => "select", "use" => ["airport"] }
+        ]
+      }
+      File.binwrite(profile, YAML.dump(config))
+      selections = { "Main" => "Provider Node" }
+
+      assert_nil ClaudeEasy.localized_runtime_selections(
+        selections, YAML.dump(config), profile
+      )
+      assert_equal selections, ClaudeEasy.runtime_selections_for_profile(
+        selections, profile, preserve_all: true
       )
     end
   end

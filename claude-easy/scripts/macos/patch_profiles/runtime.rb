@@ -1176,11 +1176,11 @@ module ClaudeEasy
       runtime_checkpoint[:path] == File.realpath(result.fetch(:path))
 
     original_selections = runtime_checkpoint[:selections]
-    selections = runtime_selections_for_profile(
-      runtime_checkpoint[:selections], result.fetch(:path), preserve_all: true
-    )
-    selections ||= localized_runtime_selections(
+    selections = localized_runtime_selections(
       original_selections, result.fetch(:rollback_bytes), result.fetch(:path)
+    )
+    selections ||= runtime_selections_for_profile(
+      original_selections, result.fetch(:path), preserve_all: true
     )
     expected_tun = runtime_checkpoint[:expected_tun]
     return result.merge(status: rollback_before_runtime_reload(result)) unless

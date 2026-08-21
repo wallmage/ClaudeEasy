@@ -716,6 +716,33 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
+  def test_safe_update_prefers_localized_selection_mutation_is_killed
+    with_repo_copy do |root|
+      replace_once(
+        root,
+        "claude-easy/scripts/macos/patch_profiles/runtime.rb",
+        "    selections = localized_runtime_selections(\n" \
+          "      original_selections, result.fetch(:rollback_bytes), result.fetch(:path)\n" \
+          "    )\n" \
+          "    selections ||= runtime_selections_for_profile(\n" \
+          "      original_selections, result.fetch(:path), preserve_all: true\n" \
+          "    )\n",
+        "    selections = runtime_selections_for_profile(\n" \
+          "      original_selections, result.fetch(:path), preserve_all: true\n" \
+          "    )\n" \
+          "    selections ||= localized_runtime_selections(\n" \
+          "      original_selections, result.fetch(:rollback_bytes), result.fetch(:path)\n" \
+          "    )\n"
+      )
+
+      assert_mutation_is_killed(
+        root,
+        RbConfig.ruby, "tests/test_macos_patcher.rb",
+        "--name", "test_safe_update_localizes_a_renamed_node_inside_the_same_group"
+      )
+    end
+  end
+
   def test_restore_backup_transaction_creation_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
