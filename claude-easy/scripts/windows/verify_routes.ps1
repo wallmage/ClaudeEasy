@@ -277,6 +277,7 @@ function Invoke-ControllerJson([string]$Endpoint) {
             $true
         )
         $content = $reader.ReadToEnd()
+        Assert-NoCaseInsensitiveJsonKeyCollisions $content
         return ($content | ConvertFrom-Json)
     } catch {
         $errorResponse = $_.Exception.Response
@@ -309,12 +310,12 @@ function Get-Policy {
 
 function Find-Group([object]$Proxies, [object[]]$Candidates, [string]$Requested, [string]$Label) {
     if (-not [string]::IsNullOrWhiteSpace($Requested)) {
-        if ($null -eq $Proxies.PSObject.Properties[$Requested]) { throw "找不到$Label。" }
+        if ($null -eq (Get-ExactJsonProperty $Proxies $Requested)) { throw "找不到$Label。" }
         return $Requested
     }
     foreach ($candidate in $Candidates) {
         $name = [string]$candidate
-        $property = $Proxies.PSObject.Properties[$name]
+        $property = Get-ExactJsonProperty $Proxies $name
         if ($null -ne $property -and
             (Test-SupportedRouteGroupType ([string]$property.Value.type))) {
             return $name
@@ -345,10 +346,10 @@ function Test-UsableRouteGroupSelection([object]$Group) {
     if ([string]::IsNullOrWhiteSpace($selection)) {
         return [string]$Group.type -eq "LoadBalance"
     }
-    return $selection -notin @(
+    return (@(
         "DIRECT", "DNS", "REJECT", "REJECT-DROP",
         "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "RELAY"
-    )
+    ) -cnotcontains $selection)
 }
 
 function Get-LiveChainProxy(
@@ -359,14 +360,14 @@ function Get-LiveChainProxy(
 ) {
     if (-not [string]::IsNullOrWhiteSpace($ProviderName)) {
         if ($null -eq $Providers) { return $null }
-        $providerProperty = $Providers.PSObject.Properties[$ProviderName]
+        $providerProperty = Get-ExactJsonProperty $Providers $ProviderName
         if ($null -eq $providerProperty) { return $null }
         foreach ($proxy in @($providerProperty.Value.proxies)) {
-            if ($null -ne $proxy -and [string]$proxy.name -eq $Name) { return $proxy }
+            if ($null -ne $proxy -and [string]$proxy.name -ceq $Name) { return $proxy }
         }
         return $null
     }
-    $property = $Proxies.PSObject.Properties[$Name]
+    $property = Get-ExactJsonProperty $Proxies $Name
     if ($null -eq $property) { return $null }
     return $property.Value
 }
@@ -384,13 +385,13 @@ function Test-SafeLiveChain(
     $nonProxyTypes = @("Direct", "Dns", "Reject", "RejectDrop", "Pass", "PassRule", "Compatible", "Rematch", "Relay")
     for ($index = 0; $index -lt $chainItems.Count; $index++) {
         $name = [string]$chainItems[$index]
-        if ([string]::IsNullOrWhiteSpace($name) -or $name -in $nonProxyNames) { return $false }
+        if ([string]::IsNullOrWhiteSpace($name) -or $nonProxyNames -ccontains $name) { return $false }
         $providerName = ""
         if ($index -lt $providerChainItems.Count) { $providerName = [string]$providerChainItems[$index] }
         $proxy = Get-LiveChainProxy $Proxies $Providers $name $providerName
         if ($null -eq $proxy) { return $false }
         $type = [string]$proxy.type
-        if ([string]::IsNullOrWhiteSpace($type) -or $type -in $nonProxyTypes) { return $false }
+        if ([string]::IsNullOrWhiteSpace($type) -or $nonProxyTypes -ccontains $type) { return $false }
         if ($index -eq 0 -and (Test-SupportedRouteGroupType $type)) { return $false }
     }
     return $true
@@ -403,7 +404,7 @@ function Get-LiveMainGroup([object]$Proxies) {
         if ($null -eq $rule -or [string]$rule.type -notmatch '^(?i:match)$') { continue }
         $name = [string]$rule.proxy
         if ([string]::IsNullOrWhiteSpace($name)) { throw "当前 MATCH 规则没有代理目标。" }
-        $property = $Proxies.PSObject.Properties[$name]
+        $property = Get-ExactJsonProperty $Proxies $name
         if ($null -eq $property -or -not (Test-SupportedRouteGroupType ([string]$property.Value.type))) {
             throw "当前 MATCH 规则没有指向受支持的主代理组。"
         }
@@ -414,13 +415,13 @@ function Get-LiveMainGroup([object]$Proxies) {
 
 function Get-ConnectionIds {
     $connections = @((Invoke-ControllerJson "/connections").connections)
-    $ids = @{}
+    $ids = New-Object 'System.Collections.Generic.Dictionary[string,bool]' ([System.StringComparer]::Ordinal)
     foreach ($connection in $connections) {
         if ($null -ne $connection -and -not [string]::IsNullOrWhiteSpace([string]$connection.id)) {
             $ids[[string]$connection.id] = $true
         }
     }
-    return $ids
+    return ,$ids
 }
 
 function Get-AvailableSourcePort {
@@ -477,8 +478,8 @@ function Get-CurrentRouteSnapshot([object]$Expected) {
     }
     $currentMain = Get-LiveMainGroup $proxies
     if ($currentMain -cne [string]$Expected.MainGroup) { return $null }
-    $mainProperty = $proxies.PSObject.Properties[[string]$Expected.MainGroup]
-    $aiProperty = $proxies.PSObject.Properties[[string]$Expected.AiGroup]
+    $mainProperty = Get-ExactJsonProperty $proxies ([string]$Expected.MainGroup)
+    $aiProperty = Get-ExactJsonProperty $proxies ([string]$Expected.AiGroup)
     if ($null -eq $mainProperty -or $null -eq $aiProperty -or
         -not (Test-SupportedRouteGroupType ([string]$mainProperty.Value.type)) -or
         -not (Test-SupportedRouteGroupType ([string]$aiProperty.Value.type)) -or
@@ -502,7 +503,7 @@ function Test-RouteChains(
     $chainItems = @($Chains)
     $providerChainItems = @($ProviderChains)
     if (-not (Test-SafeLiveChain $Proxies $Providers $chainItems $providerChainItems)) { return $false }
-    $expectedProperty = $Proxies.PSObject.Properties[$ExpectedGroup]
+    $expectedProperty = Get-ExactJsonProperty $Proxies $ExpectedGroup
     if ($null -eq $expectedProperty) { return $false }
     $expectedType = [string]$expectedProperty.Value.type
     if (-not (Test-SupportedRouteGroupType $expectedType) -or
@@ -511,10 +512,10 @@ function Test-RouteChains(
         return $false
     }
     if (-not $AllowExplicitProxyGroup) {
-        return $chainItems -contains $ExpectedGroup
+        return $chainItems -ccontains $ExpectedGroup
     }
-    if ($ExpectedGroup -ne $AiGroup -and $chainItems -contains $AiGroup) { return $false }
-    return $chainItems -contains $ExpectedGroup
+    if ($ExpectedGroup -cne $AiGroup -and $chainItems -ccontains $AiGroup) { return $false }
+    return $chainItems -ccontains $ExpectedGroup
 }
 
 function Observe-Route(
@@ -551,8 +552,7 @@ function Observe-Route(
                         ForEach-Object { [string]$_ }
                 )
                 $providerChains = @()
-                $providerChainsProperty =
-                    $connection.PSObject.Properties["providerChains"]
+                $providerChainsProperty = Get-ExactJsonProperty $connection "providerChains"
                 if ($null -ne $providerChainsProperty) {
                     $providerChains = @(
                         @($providerChainsProperty.Value) |
@@ -605,12 +605,14 @@ try {
         $main = Find-Group $proxies @() $MainGroup "主代理组"
     }
     $ai = Find-Group $proxies @($policy.ai_group_names) $AiGroup "AI 分组"
-    $mainSelection = [string]$proxies.PSObject.Properties[$main].Value.now
-    $aiSelection = [string]$proxies.PSObject.Properties[$ai].Value.now
-    if (-not (Test-UsableRouteGroupSelection $proxies.PSObject.Properties[$main].Value)) {
+    $mainProperty = Get-ExactJsonProperty $proxies $main
+    $aiProperty = Get-ExactJsonProperty $proxies $ai
+    $mainSelection = [string]$mainProperty.Value.now
+    $aiSelection = [string]$aiProperty.Value.now
+    if (-not (Test-UsableRouteGroupSelection $mainProperty.Value)) {
         throw "主代理组当前没有选择有效代理节点。"
     }
-    if (-not (Test-UsableRouteGroupSelection $proxies.PSObject.Properties[$ai].Value)) {
+    if (-not (Test-UsableRouteGroupSelection $aiProperty.Value)) {
         throw "AI 分组当前没有选择有效代理节点。"
     }
     $routeSnapshot = [pscustomobject]@{

@@ -1261,6 +1261,11 @@ test('Windows verification and restore fail closed on stale or unsafe state', ()
     'pending safe-update state must be checked while holding the AppHome lock and protected by its cleanup scope');
   assert.match(source, /ClaudeEasyOperation -eq "install"[\s\S]*ClaudeEasyOperation -eq "restore_backup"[\s\S]*safe_update_pending/);
   assert.match(runtime, /Assert-ClashRuntimeHealthy[\s\S]*-ReadOnly/);
+  assert.match(runtime, /Assert-NoCaseInsensitiveJsonKeyCollisions \(\[string\]\$response\.Content\)[\s\S]*ConvertFrom-Json/);
+  assert.match(runtime, /\$selections = New-OrdinalStringDictionary/);
+  assert.match(source, /\$runtimeRecoverySelections = New-OrdinalStringDictionary/);
+  assert.match(source, /\$expectedSelections = New-OrdinalStringDictionary/);
+  assert.match(fs.readFileSync(routeVerifierPath, 'utf8'), /Assert-NoCaseInsensitiveJsonKeyCollisions \$content[\s\S]*ConvertFrom-Json/);
   assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);
   assert.match(safeUpdate, /UsageProfile -lt 3[\s\S]*tun\.enable/);
   assert.match(runtime, /FieldOffset\(0\).*MOUSEINPUT mouse[\s\S]*struct MOUSEINPUT/);
@@ -1820,6 +1825,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Get-ClaudeEasyTopLevelScalar', 'Get-ClashVergeReactivationShortcut',
       'Initialize-ClaudeEasySendInput', 'Invoke-ClashVergeReactivationShortcut',
       'Get-ClashControllerContext', 'Invoke-ClashControllerRequest',
+      'Initialize-ClaudeEasyStrictJsonKeys', 'Assert-NoCaseInsensitiveJsonKeyCollisions',
+      'Get-ExactJsonProperty', 'New-OrdinalStringDictionary',
       'Get-ClashRuntimeState', 'Restore-ClashRuntimeSelections',
       'Wait-ClashVergeRuntimeRefresh', 'Wait-ClashVergeRuntimeHealthy',
       'ConvertFrom-ClashRuntimeYamlScalar',
@@ -1961,7 +1968,7 @@ test('Windows route verifier keeps PowerShell 5 route arrays and empty selection
   assert.match(source, /\[Uri\]\$parsed = \$null/);
   assert.match(source, /\$chainItems = @\(\$Chains\)/);
   assert.match(source, /\$providerChainItems = @\(\$ProviderChains\)/);
-  assert.match(source, /\$connection\.PSObject\.Properties\["providerChains"\]/);
+  assert.match(source, /Get-ExactJsonProperty \$connection "providerChains"/);
   assert.match(
     source,
     /\[string\]::IsNullOrWhiteSpace\(\$ExpectedSelection\)[\s\S]*?\$expectedType -ne "LoadBalance"/

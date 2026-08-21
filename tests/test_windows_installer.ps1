@@ -842,6 +842,14 @@ try {
     Assert-True $inconsistentRuntimeAiRejected "runtime checks accepted inconsistent managed AI targets"
     $runtimeAiRules[1].proxy = "Actual Group"
     $runtimeAiRules[0].proxy = "Actual Group"
+    $ordinalSelections = New-OrdinalStringDictionary
+    $ordinalSelections["AI"] = "Upper"
+    $ordinalSelections["ai"] = "Lower"
+    Assert-True (
+        $ordinalSelections.Count -eq 2 -and
+        [string]$ordinalSelections["AI"] -ceq "Upper" -and
+        [string]$ordinalSelections["ai"] -ceq "Lower"
+    ) "runtime selection map collapsed case-only group names"
     $exactRuntimeProxies = [pscustomobject][ordered]@{
         "Decoy AI" = [pscustomobject]@{ type = "Selector"; now = "Safe Node" }
         "Actual Group" = [pscustomobject]@{ type = "Selector"; now = "Missing Node" }
@@ -854,6 +862,7 @@ try {
     Assert-True $wrongRuntimeAiRejected "runtime checks accepted a healthy decoy AI group"
     $exactRuntimeProxies."Actual Group".now = "Provider Node"
     Assert-ClashRuntimeAiGroup $exactRuntimeProxies $runtimeAiRules $runtimeProviders $runtimeAiPolicy
+    $script:runtimeProxyContent = '{"proxies":{"Main":{"type":"Selector","now":"Node"},"Node":{"type":"Shadowsocks"}}}'
     $originalRuntimeRequest = (Get-Item Function:Invoke-ClashControllerRequest).ScriptBlock
     function Invoke-ClashControllerRequest(
         [object]$Context,
@@ -863,7 +872,7 @@ try {
     ) {
         $content = switch ($Endpoint) {
             "/configs" { '{"tun":{"enable":true}}' }
-            "/proxies" { '{"proxies":{"Main":{"type":"Selector","now":"Node"},"Node":{"type":"Shadowsocks"}}}' }
+            "/proxies" { $script:runtimeProxyContent }
             "/rules" { '{"rules":[{"type":"Match","payload":"","proxy":"Main"}]}' }
             "/providers/proxies" { '{"providers":{"remote":{"proxies":[{"name":"Provider Node","type":"Shadowsocks"}]}}}' }
             default { throw "unexpected runtime endpoint" }
@@ -879,6 +888,14 @@ try {
             $null -ne $completeRuntimeState.Providers -and
             @($completeRuntimeState.Providers.remote.proxies).Count -eq 1
         ) "runtime state omitted provider proxies"
+
+        $script:runtimeProxyContent = '{"proxies":{"A\u0049":{"type":"Selector","now":"Node"},"ai":{"type":"Selector","now":"Node"}}}'
+        $caseCollisionRejected = $false
+        try { Get-ClashRuntimeState ([pscustomobject]@{}) | Out-Null } catch {
+            $caseCollisionRejected = $_.Exception.Message.Contains("大小写冲突")
+        }
+        Assert-True $caseCollisionRejected "runtime state collapsed case-only controller groups"
+        $script:runtimeProxyContent = '{"proxies":{"Main":{"type":"Selector","now":"Node"},"Node":{"type":"Shadowsocks"}}}'
 
         $missingSelectionRejected = $false
         try {
@@ -2157,6 +2174,12 @@ $ErrorActionPreference = "Stop"
 $ObservationSeconds = 1
 $Json = $true
 $script:ClaudeEasyChecks = New-Object System.Collections.ArrayList
+function Get-ExactJsonProperty([object]$Object, [string]$Name) {
+    foreach ($property in @($Object.PSObject.Properties)) {
+        if ([string]$property.Name -ceq $Name) { return $property }
+    }
+    return $null
+}
 foreach ($acceptedControllerUrl in @(
     "http://127.0.0.1:9097",
     "https://127.255.1.2/",
@@ -2249,6 +2272,20 @@ $liveAiGroups = [pscustomobject]@{
 }
 if ((Find-Group $liveAiGroups @() "" "AI 分组") -ne "AI Balanced") {
     throw "live LoadBalance AI group was not detected"
+}
+$wrongCaseGroupRejected = $false
+try { [void](Find-Group $liveAiGroups @() "ai balanced" "AI 分组") } catch {
+    $wrongCaseGroupRejected = $true
+}
+if (-not $wrongCaseGroupRejected) {
+    throw "explicit AI group accepted a different case"
+}
+$caseExactRouteGroups = [pscustomobject]@{
+    AI = [pscustomobject]@{ type = "Selector"; now = "Node" }
+    Node = [pscustomobject]@{ type = "Shadowsocks" }
+}
+if (Test-RouteChains $caseExactRouteGroups @("Node", "ai") "AI" "Node" "AI" $false) {
+    throw "route chain accepted a different group case"
 }
 $liveAiCandidates = [pscustomobject]@{
     AI = [pscustomobject]@{ type = "Vmess" }

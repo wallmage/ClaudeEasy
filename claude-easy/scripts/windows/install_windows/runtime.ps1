@@ -191,6 +191,135 @@ function Invoke-ClashControllerRequest(
     }
 }
 
+function Initialize-ClaudeEasyStrictJsonKeys {
+    if ($null -ne ("ClaudeEasy.StrictJsonKeys" -as [type])) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+
+namespace ClaudeEasy {
+    public static class StrictJsonKeys {
+        public static void Validate(string text) {
+            if (text == null) throw new FormatException();
+            int index = 0;
+            ReadValue(text, ref index);
+            SkipSpace(text, ref index);
+            if (index != text.Length) throw new FormatException();
+        }
+
+        private static void ReadValue(string text, ref int index) {
+            SkipSpace(text, ref index);
+            if (index >= text.Length) throw new FormatException();
+            char current = text[index];
+            if (current == '{') ReadObject(text, ref index);
+            else if (current == '[') ReadArray(text, ref index);
+            else if (current == '"') ReadString(text, ref index);
+            else ReadPrimitive(text, ref index);
+        }
+
+        private static void ReadObject(string text, ref int index) {
+            index++;
+            SkipSpace(text, ref index);
+            if (index < text.Length && text[index] == '}') { index++; return; }
+            HashSet<string> keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (true) {
+                SkipSpace(text, ref index);
+                string key = ReadString(text, ref index);
+                if (!keys.Add(key)) throw new FormatException();
+                SkipSpace(text, ref index);
+                if (index >= text.Length || text[index++] != ':') throw new FormatException();
+                ReadValue(text, ref index);
+                SkipSpace(text, ref index);
+                if (index >= text.Length) throw new FormatException();
+                char delimiter = text[index++];
+                if (delimiter == '}') return;
+                if (delimiter != ',') throw new FormatException();
+            }
+        }
+
+        private static void ReadArray(string text, ref int index) {
+            index++;
+            SkipSpace(text, ref index);
+            if (index < text.Length && text[index] == ']') { index++; return; }
+            while (true) {
+                ReadValue(text, ref index);
+                SkipSpace(text, ref index);
+                if (index >= text.Length) throw new FormatException();
+                char delimiter = text[index++];
+                if (delimiter == ']') return;
+                if (delimiter != ',') throw new FormatException();
+            }
+        }
+
+        private static string ReadString(string text, ref int index) {
+            if (index >= text.Length || text[index++] != '"') throw new FormatException();
+            StringBuilder value = new StringBuilder();
+            while (index < text.Length) {
+                char current = text[index++];
+                if (current == '"') return value.ToString();
+                if (current < 0x20) throw new FormatException();
+                if (current != '\\') { value.Append(current); continue; }
+                if (index >= text.Length) throw new FormatException();
+                char escaped = text[index++];
+                switch (escaped) {
+                    case '"': case '\\': case '/': value.Append(escaped); break;
+                    case 'b': value.Append('\b'); break;
+                    case 'f': value.Append('\f'); break;
+                    case 'n': value.Append('\n'); break;
+                    case 'r': value.Append('\r'); break;
+                    case 't': value.Append('\t'); break;
+                    case 'u':
+                        if (index + 4 > text.Length) throw new FormatException();
+                        value.Append((char)int.Parse(text.Substring(index, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                        index += 4;
+                        break;
+                    default: throw new FormatException();
+                }
+            }
+            throw new FormatException();
+        }
+
+        private static void ReadPrimitive(string text, ref int index) {
+            int start = index;
+            while (index < text.Length) {
+                char current = text[index];
+                if (current == ',' || current == ']' || current == '}' || Char.IsWhiteSpace(current)) break;
+                index++;
+            }
+            if (index == start) throw new FormatException();
+        }
+
+        private static void SkipSpace(string text, ref int index) {
+            while (index < text.Length && Char.IsWhiteSpace(text[index])) index++;
+        }
+    }
+}
+'@
+}
+
+function Assert-NoCaseInsensitiveJsonKeyCollisions([string]$Json) {
+    try {
+        Initialize-ClaudeEasyStrictJsonKeys
+        [ClaudeEasy.StrictJsonKeys]::Validate($Json)
+    } catch {
+        throw "本地控制器返回了大小写冲突或无效的 JSON 字段。"
+    }
+}
+
+function Get-ExactJsonProperty([object]$Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    foreach ($property in @($Object.PSObject.Properties)) {
+        if ([string]$property.Name -ceq $Name) { return $property }
+    }
+    return $null
+}
+
+function New-OrdinalStringDictionary {
+    return ,(New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal))
+}
+
 function Get-ClashRuntimeState([object]$Context) {
     $configResponse = Invoke-ClashControllerRequest $Context "GET" "/configs"
     $proxyResponse = Invoke-ClashControllerRequest $Context "GET" "/proxies"
@@ -200,12 +329,15 @@ function Get-ClashRuntimeState([object]$Context) {
         $ruleResponse.Status -ne 200 -or $providerResponse.Status -ne 200) {
         throw "Clash Verge Rev 没有返回当前运行状态。"
     }
+    foreach ($response in @($configResponse, $proxyResponse, $ruleResponse, $providerResponse)) {
+        Assert-NoCaseInsensitiveJsonKeyCollisions ([string]$response.Content)
+    }
     $config = $configResponse.Content | ConvertFrom-Json
     $proxies = ($proxyResponse.Content | ConvertFrom-Json).proxies
     $rules = @((($ruleResponse.Content | ConvertFrom-Json).rules))
     $providers = ($providerResponse.Content | ConvertFrom-Json).providers
     if ($null -eq $proxies -or $null -eq $providers) { throw "Clash Verge Rev 没有返回代理组。" }
-    $selections = @{}
+    $selections = New-OrdinalStringDictionary
     foreach ($property in @($proxies.PSObject.Properties)) {
         if ([string]$property.Value.type -eq "Selector" -and
             -not [string]::IsNullOrWhiteSpace([string]$property.Value.now)) {
@@ -222,17 +354,17 @@ function Get-ClashRuntimeState([object]$Context) {
     }
 }
 
-function Restore-ClashRuntimeSelections([object]$Context, [hashtable]$Selections) {
+function Restore-ClashRuntimeSelections([object]$Context, [object]$Selections) {
     $current = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {
-        $property = $current.Proxies.PSObject.Properties[[string]$name]
+        $property = Get-ExactJsonProperty $current.Proxies ([string]$name)
         if ($null -eq $property -or [string]$property.Value.type -ne "Selector") {
             throw "Clash Verge Rev 无法保留原代理选择。"
         }
         $selected = [string]$Selections[$name]
         $members = @($property.Value.all)
         if ($members -cnotcontains $selected) { throw "Clash Verge Rev 无法保留原代理选择。" }
-        if ([string]$property.Value.now -eq $selected) { continue }
+        if ([string]$property.Value.now -ceq $selected) { continue }
         $endpoint = "/proxies/" + [Uri]::EscapeDataString([string]$name)
         $body = @{ name = $selected } | ConvertTo-Json -Compress
         $response = Invoke-ClashControllerRequest $Context "PUT" $endpoint $body
@@ -261,7 +393,7 @@ function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousCo
 function Wait-ClashVergeRuntimeHealthy(
     [string]$RuntimePath,
     [object]$PreviousContext,
-    [hashtable]$Selections,
+    [object]$Selections,
     [bool]$TunEnabled,
     [int]$Profile,
     [string]$CurlPath,
@@ -469,7 +601,7 @@ function Assert-ClashRuntimePatch(
     $domainProviderInfo = Get-ClashRuntimeManagedProvider $RuntimeText $Policy.cn_domain_provider
     $domainProvider = [string]$domainProviderInfo.Name
     $mainGroup = [string]$domainProviderInfo.Proxy
-    $mainProperty = $State.Proxies.PSObject.Properties[$mainGroup]
+    $mainProperty = Get-ExactJsonProperty $State.Proxies $mainGroup
     if ($null -eq $mainProperty -or
         [string]$mainProperty.Value.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) {
         throw "Clash Verge Rev 运行配置中的受管规则提供器没有指向主代理组。"
@@ -478,7 +610,7 @@ function Assert-ClashRuntimePatch(
     for ($index = $rules.Count - 1; $index -ge 0; $index--) {
         if (([string]$rules[$index].type).Replace("-", "") -ieq "Match") {
             $candidate = [string]$rules[$index].proxy
-            $candidateProperty = $State.Proxies.PSObject.Properties[$candidate]
+            $candidateProperty = Get-ExactJsonProperty $State.Proxies $candidate
             if ($null -ne $candidateProperty -and
                 [string]$candidateProperty.Value.type -in @("Selector", "URLTest", "Fallback", "LoadBalance")) {
                 $liveMainGroup = $candidate
@@ -574,17 +706,17 @@ function Test-ClashRuntimeConnectivity([object]$Context, [object]$State, [string
 function Test-ClashRuntimeProxyPath(
     [object]$Proxies,
     [string]$Name,
-    [hashtable]$Seen = $null,
+    [object]$Seen = $null,
     [object]$Providers = $null
 ) {
     if ([string]::IsNullOrWhiteSpace($Name) -or
-        $Name -in @("DIRECT", "DNS", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "RELAY")) {
+        @("DIRECT", "DNS", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "COMPATIBLE", "REMATCH", "RELAY") -ccontains $Name) {
         return $false
     }
-    if ($null -eq $Seen) { $Seen = @{} }
+    if ($null -eq $Seen) { $Seen = New-Object 'System.Collections.Generic.Dictionary[string,bool]' ([System.StringComparer]::Ordinal) }
     if ($Seen.ContainsKey($Name)) { return $false }
     $candidates = @()
-    $property = $Proxies.PSObject.Properties[$Name]
+    $property = Get-ExactJsonProperty $Proxies $Name
     if ($null -ne $property) { $candidates += $property.Value }
     if ($null -ne $Providers) {
         foreach ($provider in @($Providers.PSObject.Properties)) {
@@ -599,7 +731,7 @@ function Test-ClashRuntimeProxyPath(
             return $false
         }
         if ([string]$proxy.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance")) { continue }
-        $visited = @{}
+        $visited = New-Object 'System.Collections.Generic.Dictionary[string,bool]' ([System.StringComparer]::Ordinal)
         foreach ($key in $Seen.Keys) { $visited[$key] = $true }
         $visited[$Name] = $true
         if ([string]$proxy.type -eq "LoadBalance") {
@@ -630,7 +762,7 @@ function Get-ClashRuntimeAiGroupName([object[]]$Rules, [object]$Policy) {
             throw "档位 3 的受管 AI 规则不完整。"
         }
         $target = [string]$actual.proxy
-        if ([string]::IsNullOrWhiteSpace($target) -or $target -in @("DIRECT", "REJECT")) {
+        if ([string]::IsNullOrWhiteSpace($target) -or @("DIRECT", "REJECT") -ccontains $target) {
             throw "档位 3 的受管 AI 规则目标无效。"
         }
         if ([string]::IsNullOrWhiteSpace($aiGroup)) { $aiGroup = $target }
@@ -646,7 +778,7 @@ function Assert-ClashRuntimeAiGroup(
     [object]$Policy
 ) {
     $name = Get-ClashRuntimeAiGroupName $Rules $Policy
-    $property = $Proxies.PSObject.Properties[$name]
+    $property = Get-ExactJsonProperty $Proxies $name
     if ($null -eq $property -or
         [string]$property.Value.type -notin @("Selector", "URLTest", "Fallback", "LoadBalance") -or
         -not (Test-ClashRuntimeProxyPath $Proxies $name $null $Providers)) {
@@ -656,7 +788,7 @@ function Assert-ClashRuntimeAiGroup(
 
 function Assert-ClashRuntimeHealthy(
     [object]$Context,
-    [hashtable]$Selections,
+    [object]$Selections,
     [bool]$ExpectedTunEnabled,
     [int]$UsageProfile,
     [string]$CurlPath,
@@ -668,7 +800,7 @@ function Assert-ClashRuntimeHealthy(
     }
     $state = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {
-        $property = $state.Proxies.PSObject.Properties[[string]$name]
+        $property = Get-ExactJsonProperty $state.Proxies ([string]$name)
         if ($null -eq $property -or [string]$property.Value.type -ne "Selector" -or
             [string]$property.Value.now -cne [string]$Selections[$name]) {
             throw "Clash Verge Rev 没有保留原代理选择。"
@@ -684,6 +816,7 @@ function Assert-ClashRuntimeHealthy(
     }
     $dns = Invoke-ClashControllerRequest $Context "GET" "/dns/query?name=www.baidu.com&type=A"
     if ($dns.Status -ne 200) { throw "Clash Verge Rev DNS 检查失败。" }
+    Assert-NoCaseInsensitiveJsonKeyCollisions ([string]$dns.Content)
     $dnsPayload = $dns.Content | ConvertFrom-Json
     $answers = if ($null -ne $dnsPayload.Answer) { @($dnsPayload.Answer) } else { @($dnsPayload.answer) }
     $dnsStatus = if ($null -ne $dnsPayload.Status) { [int]$dnsPayload.Status } else { [int]$dnsPayload.status }

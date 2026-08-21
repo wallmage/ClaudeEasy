@@ -351,7 +351,7 @@ if ($VerifySafeUpdate) {
             -not ($manifest.Runtime.TunEnabled -is [bool])) {
             throw "安全更新运行状态恢复记录无效。"
         }
-        $runtimeRecoverySelections = @{}
+        $runtimeRecoverySelections = New-OrdinalStringDictionary
         $runtimeRecoveryGroups = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
         foreach ($selection in @($manifest.Runtime.Selections)) {
             $selectionProperties = @($selection.PSObject.Properties.Name | Sort-Object)
@@ -407,7 +407,7 @@ if ($VerifySafeUpdate) {
         @($manifest.Profiles).Count -eq 0) {
         throw "安全更新准备记录无效。"
     }
-    $expectedSelections = @{}
+    $expectedSelections = New-OrdinalStringDictionary
     $expectedTunEnabled = $false
     $hasRuntimeSnapshot = $manifestVersion -eq 3
     if ($hasRuntimeSnapshot) {
