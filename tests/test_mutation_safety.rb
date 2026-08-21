@@ -679,7 +679,7 @@ class MutationSafetyTest < Minitest::Test
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_clashx_runtime_waits_for_reload_generation_and_full_health"
+        "--name", "test_clashx_runtime_waits_for_reload_receipt_and_full_health"
       )
     end
   end

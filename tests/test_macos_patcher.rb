@@ -1835,7 +1835,7 @@ class MacosPatcherTest < Minitest::Test
                 client_identity_reader: -> { identity },
                 native_reloader: native_reloader,
                 runtime_waiter: ->(*_arguments, **_options) { true },
-                generation_reader: ->(_identity) { "generation" }
+                reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
               )
             end
           end
@@ -5416,6 +5416,7 @@ class MacosPatcherTest < Minitest::Test
                     'response.URL.absoluteString'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     "primaryApplications.count + alternateApplications.count !== 1"
+    refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "Alamofire/"
 
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
@@ -5599,7 +5600,7 @@ class MacosPatcherTest < Minitest::Test
           client_identity_reader: -> { identity },
           native_reloader: ->(_current) { reloads += 1; true },
           runtime_waiter: ->(*_arguments, **_options) { true },
-          generation_reader: ->(_identity) { "generation-#{reloads}" }
+          reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
         )
       end
 
@@ -5671,7 +5672,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_waiter: lambda { |_current, **options|
           observed_tun = options.fetch(:expected_tun)
           true
-        }, generation_reader: ->(_identity) { "generation" }
+        }, reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
       )
 
       assert restored
@@ -5702,7 +5703,7 @@ class MacosPatcherTest < Minitest::Test
           runtime_waiter: lambda { |_current, **options|
             required_group = options.fetch(:required_proxy_group)
             true
-          }, generation_reader: ->(_identity) { "generation" }
+          }, reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
         )
       end
 
@@ -5732,7 +5733,7 @@ class MacosPatcherTest < Minitest::Test
         transaction: transaction, client_identity: identity,
         native_reloader: ->(_current) { reloads += 1; true },
         runtime_waiter: ->(*_arguments, **_options) { waits += 1; true },
-        generation_reader: ->(_current) { "generation" }
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
       )
 
       assert restored
@@ -6474,7 +6475,7 @@ class MacosPatcherTest < Minitest::Test
                   validator: ->(_path) { true }, client_identity_reader: -> { identity },
                   native_reloader: ->(_current) { reloads += 1; true },
                   runtime_waiter: ->(*_arguments, **_options) { connectivity.call },
-                  generation_reader: ->(_identity) { "generation-#{reloads}" }
+                  reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
                 )
               end
             end
@@ -14926,9 +14927,9 @@ class MacosPatcherTest < Minitest::Test
     )
   end
 
-  def test_clashx_runtime_waits_for_reload_generation_and_full_health
+  def test_clashx_runtime_waits_for_reload_receipt_and_full_health
     identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
-    generations = %w[before before after]
+    receipts = [false, false, true]
     dns_checks = []
     sleeps = 0
 
@@ -14942,9 +14943,9 @@ class MacosPatcherTest < Minitest::Test
         })]
       }
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
-        identity, generation_before: "before", selections: { "Main" => "Taiwan" },
+        identity, reload_snapshot: {}, selections: { "Main" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        generation_reader: ->(_current) { generations.shift },
+        reload_receipt_reader: ->(_before) { receipts.shift },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
       )
@@ -14952,6 +14953,57 @@ class MacosPatcherTest < Minitest::Test
 
     assert_equal 2, sleeps
     assert_equal [true], dns_checks
+  end
+
+  def test_clashx_runtime_waits_for_a_new_core_reload_completion_record
+    assert_respond_to ClaudeEasy, :clashx_reload_snapshot
+    assert_respond_to ClaudeEasy, :clashx_reload_completed_since?
+
+    Dir.mktmpdir do |directory|
+      session = File.join(directory, "2026-08-21_17-00-00")
+      FileUtils.mkdir_p(session)
+      log = File.join(session, "clashx_core_21_17-00-01.log")
+      File.binwrite(log, "Initial configuration complete, total time: 10ms\n")
+      snapshot = ClaudeEasy.clashx_reload_snapshot(log_root: directory)
+      refute_nil snapshot
+
+      File.open(log, "ab") { |handle| handle.write("unrelated runtime log\n") }
+      refute ClaudeEasy.clashx_reload_completed_since?(snapshot, log_root: directory)
+      File.open(log, "ab") do |handle|
+        handle.write("Initial configuration complete, total time: 12ms\n")
+      end
+      assert ClaudeEasy.clashx_reload_completed_since?(snapshot, log_root: directory)
+
+      rotated_snapshot = ClaudeEasy.clashx_reload_snapshot(log_root: directory)
+      rotated_log = File.join(session, "clashx_core_21_17-01-00.log")
+      File.binwrite(rotated_log, "Initial configuration complete, total time: 9ms\n")
+      assert ClaudeEasy.clashx_reload_completed_since?(rotated_snapshot, log_root: directory)
+
+      ClaudeEasy.stub(:clashx_reload_snapshot, ->(**_options) { raise IOError }) do
+        refute ClaudeEasy.clashx_reload_completed_since?(rotated_snapshot, log_root: directory)
+      end
+
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      receipts = [false, true]
+      sleeps = 0
+      requester = ->(*_arguments) {
+        [200, JSON.generate("proxies" => {
+          "Main" => { "type" => "Selector", "now" => "Taiwan", "all" => ["Taiwan"] }
+        })]
+      }
+      ClaudeEasy.stub(:runtime_health_healthy?, true) do
+        assert ClaudeEasy.wait_for_clashx_safe_runtime(
+          identity, reload_snapshot: snapshot, selections: { "Main" => "Taiwan" },
+          expected_tun: :enabled, requester_factory: -> { requester },
+          reload_receipt_reader: ->(_before) { receipts.shift },
+          process_reader: -> { identity }, sleeper: ->(_seconds) { sleeps += 1 }, attempts: 3
+        )
+      end
+      assert_equal 1, sleeps
+    end
   end
 
   def test_clashx_runtime_wait_rejects_when_any_previous_selection_is_removed
@@ -14979,10 +15031,10 @@ class MacosPatcherTest < Minitest::Test
       true
     }) do
       refute ClaudeEasy.wait_for_clashx_safe_runtime(
-        identity, generation_before: "before",
+        identity, reload_snapshot: {},
         selections: { "Main" => "Old Node", "AI" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        generation_reader: ->(_current) { "after" }, process_reader: -> { identity },
+        reload_receipt_reader: ->(_before) { true }, process_reader: -> { identity },
         sleeper: ->(_seconds) {}, attempts: 1
       )
     end
@@ -15026,7 +15078,7 @@ class MacosPatcherTest < Minitest::Test
           restored = options.fetch(:selections)
           true
         },
-        generation_reader: ->(_identity) { "before" }
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
       )
 
       assert_equal true, activated[:reloaded]
@@ -15071,7 +15123,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: checkpoint,
         native_reloader: ->(_current) { reloads += 1; true },
         runtime_waiter: ->(*_arguments, **_options) { true },
-        generation_reader: ->(_identity) { "before" }
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
       )
 
       assert_equal :reload_failed_rolled_back, activated.fetch(:status)
@@ -15146,7 +15198,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: checkpoint,
         native_reloader: ->(current) { reloads << current; true },
         runtime_waiter: ->(*_arguments, **_options) { true },
-        generation_reader: ->(_identity) { "before" }
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
       )
 
       assert_equal true, activated.fetch(:reloaded)
@@ -15181,7 +15233,7 @@ class MacosPatcherTest < Minitest::Test
           validator: ->(_candidate) { true }, client_identity_reader: -> { identity },
           native_reloader: ->(_current) { reloads += 1; true },
           runtime_waiter: ->(*_arguments, **_options) { true },
-          generation_reader: ->(_identity) { "generation-#{reloads}" }
+          reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
         )
       end
 
@@ -15219,7 +15271,7 @@ class MacosPatcherTest < Minitest::Test
       activated = ClaudeEasy.activate_safe_updated_profile(
         result, transaction: transaction, client_identity: identity,
         runtime_checkpoint: checkpoint, native_reloader: native,
-        runtime_waiter: waiter, generation_reader: ->(_identity) { "generation-#{reloads}" }
+        runtime_waiter: waiter, reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
       )
 
       assert_equal :reload_failed_rolled_back, activated.fetch(:status)
@@ -15230,7 +15282,7 @@ class MacosPatcherTest < Minitest::Test
         result, transaction: transaction, client_identity: identity,
         runtime_checkpoint: checkpoint,
         native_reloader: ->(_current) { flunk "same process must not reload again" },
-        runtime_waiter: waiter, generation_reader: ->(_identity) { "same" }
+        runtime_waiter: waiter, reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
       )
       assert_equal :reload_failed_restore_pending, repeated.fetch(:status)
     end
@@ -15256,7 +15308,7 @@ class MacosPatcherTest < Minitest::Test
         transaction: transaction, client_identity: identity,
         native_reloader: ->(_current) { reloads += 1; true },
         runtime_waiter: ->(*_arguments, **_keywords) { true },
-        generation_reader: ->(_identity) { "generation-#{reloads}" }
+        reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
       }
 
       assert ClaudeEasy.reload_recovered_safe_update_runtime(
@@ -15285,16 +15337,12 @@ class MacosPatcherTest < Minitest::Test
       identity, sender: ->(*_arguments) { raise IOError }, process_reader: -> { identity }
     )
     refute ClaudeEasy.wait_for_clashx_safe_runtime(
-      identity, generation_before: "before", selections: {}, expected_tun: :disabled,
-      requester_factory: -> { raise IOError }, generation_reader: ->(_identity) { "after" },
+      identity, reload_snapshot: {}, selections: {}, expected_tun: :disabled,
+      requester_factory: -> { raise IOError }, reload_receipt_reader: ->(_before) { true },
       process_reader: -> { identity }, attempts: 1
     )
     assert_nil ClaudeEasy.runtime_restorable_selections(
       ->(*_arguments) { raise IOError }, { "Main" => "Taiwan" }
-    )
-    assert_nil ClaudeEasy.clashx_runtime_generation({}, runner: ->(*_arguments) { flunk })
-    assert_nil ClaudeEasy.clashx_runtime_generation(
-      identity, runner: ->(*_arguments) { raise IOError }
     )
     assert_nil ClaudeEasy.stub(:controller_socket, nil) { ClaudeEasy.current_runtime_requester }
     response = ClaudeEasy.stub(:controller_socket, "socket") do
@@ -15304,22 +15352,10 @@ class MacosPatcherTest < Minitest::Test
     end
     assert_equal ["socket", "GET", "/configs", nil], response
 
-    status = Struct.new(:success?).new(true)
-    lsof = lambda do |*_arguments|
-      ["p12345\nf10u\ntunix\nn0x111->0x222\nf11u\ntREG\nnignored\n", "", status]
+    Dir.mktmpdir do |directory|
+      assert_nil ClaudeEasy.clashx_reload_snapshot(log_root: File.join(directory, "missing"))
+      refute ClaudeEasy.clashx_reload_completed_since?({}, log_root: directory)
     end
-    generation = ClaudeEasy.clashx_runtime_generation(identity, runner: lsof)
-    assert_match(/\A[0-9a-f]{64}\z/, generation)
-    changed = ClaudeEasy.clashx_runtime_generation(
-      identity,
-      runner: ->(*_arguments) {
-        ["p12345\nf10u\ntunix\nn0x333->0x444\nf11u\ntREG\nnignored\n", "", status]
-      }
-    )
-    refute_equal generation, changed
-    assert_nil ClaudeEasy.clashx_runtime_generation(
-      identity, runner: ->(*_arguments) { ["p12345\nf11u\ntREG\nnignored\n", "", status] }
-    )
 
     ClaudeEasyAppleEvents.stub(:AECreateDesc, ->(*_arguments) { raise IOError }) do
       ClaudeEasyAppleEvents.stub(:AEDisposeDesc, ->(*_arguments) { 0 }) do
@@ -15392,7 +15428,7 @@ class MacosPatcherTest < Minitest::Test
 
             pending = ClaudeEasy.activate_safe_updated_profile(
               result, transaction: transaction, client_identity: {},
-              runtime_checkpoint: checkpoint, generation_reader: ->(_identity) { raise IOError }
+              runtime_checkpoint: checkpoint, reload_snapshot_reader: -> { raise IOError }
             )
             assert_equal :reload_failed_restore_pending, pending.fetch(:status)
 
@@ -15452,7 +15488,7 @@ class MacosPatcherTest < Minitest::Test
       assert_equal false, ClaudeEasy.stub(:runtime_selections_for_profile, {}) {
         ClaudeEasy.reload_recovered_safe_update_runtime(
           [{ path: path }], 1, "friend", runtime_checkpoint: checkpoint,
-          transaction: {}, client_identity: {}, generation_reader: ->(_identity) { raise IOError }
+          transaction: {}, client_identity: {}, reload_snapshot_reader: -> { raise IOError }
         )
       }
 
