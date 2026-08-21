@@ -45,8 +45,8 @@ $resultItemStatuses = @((Get-Content -LiteralPath (Join-Path (Join-Path $root "c
 $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("claude-easy-windows-test-" + [System.Guid]::NewGuid().ToString("N"))
 $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 $script:safeUpdateControllerPort = 0
+$script:safeUpdateClientPath = ""
 $safeUpdateControllerJob = $null
-$safeUpdateClient = $null
 $previousUsageProfile = $env:CLAUDE_EASY_USAGE_PROFILE
 $env:CLAUDE_EASY_USAGE_PROFILE = "3"
 $script:deferredProbeFailures = New-Object System.Collections.ArrayList
@@ -466,8 +466,11 @@ function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
 }
 
 function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) {
-    if ($onWindows -and $script:safeUpdateControllerPort -gt 0 -and
-        $ScriptPath -eq $installer -and $ScriptArguments -contains "-SnapshotProfiles") {
+    $temporarySafeUpdateClient = $null
+    $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
+        (Split-Path -Leaf $ScriptPath) -eq "install_windows.ps1" -and
+        ($ScriptArguments -contains "-SnapshotProfiles" -or $ScriptArguments -contains "-VerifySafeUpdate")
+    if ($usesSafeUpdateRuntime) {
         $appHomeIndex = [Array]::IndexOf($ScriptArguments, "-AppHome")
         if ($appHomeIndex -ge 0 -and $appHomeIndex + 1 -lt $ScriptArguments.Count) {
             $runtimeHome = [string]$ScriptArguments[$appHomeIndex + 1]
@@ -478,6 +481,10 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
                 )
             }
         }
+        $temporarySafeUpdateClient = Start-Process `
+            -FilePath $script:safeUpdateClientPath `
+            -ArgumentList @("-t", "127.0.0.1") `
+            -PassThru
     }
     $previousPreference = $ErrorActionPreference
     try {
@@ -486,6 +493,12 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
         $exitCode = $LASTEXITCODE
         return [pscustomobject]@{ Output = $output; ExitCode = $exitCode }
     } finally {
+        if ($null -ne $temporarySafeUpdateClient) {
+            if (-not $temporarySafeUpdateClient.HasExited) {
+                Stop-Process -Id $temporarySafeUpdateClient.Id -Force -ErrorAction SilentlyContinue
+            }
+            $temporarySafeUpdateClient.Dispose()
+        }
         $ErrorActionPreference = $previousPreference
     }
 }
@@ -3425,9 +3438,8 @@ rules:
             Start-Sleep -Milliseconds 100
         }
         Assert-True (Test-Path -LiteralPath $safeUpdateControllerReady) "safe-update controller did not start"
-        $safeUpdateClientPath = Join-Path $sandbox "clash-verge.exe"
-        Copy-Item -LiteralPath (Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe") -Destination $safeUpdateClientPath
-        $safeUpdateClient = Start-Process -FilePath $safeUpdateClientPath -ArgumentList @("-t", "127.0.0.1") -PassThru
+        $script:safeUpdateClientPath = Join-Path $sandbox "clash-verge.exe"
+        Copy-Item -LiteralPath (Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe") -Destination $script:safeUpdateClientPath
     }
     $noPrecheckSnapshotCase = Join-Path $sandbox "safe-update-snapshot-with-invalid-current-content"
     $noPrecheckSnapshotProfiles = Join-Path $noPrecheckSnapshotCase "profiles"
@@ -3934,6 +3946,10 @@ rules:
 
             $rollbackCrashReady = Join-Path $sandbox "safe-update-rollback-crash.ready"
             $env:CLAUDE_EASY_TEST_SAFE_UPDATE_ROLLBACK_CRASH_READY = $rollbackCrashReady
+            $rollbackCrashClient = Start-Process `
+                -FilePath $script:safeUpdateClientPath `
+                -ArgumentList @("-t", "127.0.0.1") `
+                -PassThru
             $rollbackCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
                 "-NoLogo", "-NoProfile", "-File", $rollbackCrashInstaller,
                 "-AppHome", $rollbackCrashHome,
@@ -3957,6 +3973,10 @@ rules:
                 if (-not $rollbackCrashChild.HasExited) {
                     Stop-Process -Id $rollbackCrashChild.Id -Force
                 }
+                if (-not $rollbackCrashClient.HasExited) {
+                    Stop-Process -Id $rollbackCrashClient.Id -Force
+                }
+                $rollbackCrashClient.Dispose()
             }
             Assert-True (
                 (Get-Content -LiteralPath $rollbackCrashTarget -Raw) -eq $rollbackCrashOriginal
@@ -4307,17 +4327,13 @@ rules:
     Assert-True ((Get-Content -LiteralPath $badBackupTarget -Raw) -eq "still-valid: true`n") "corrupt backup overwrote a still-valid subscription before rejection"
     Assert-True (Test-Path -LiteralPath $unitRestoreManifestPath -PathType Leaf) "bad backup consumed its recovery manifest"
 
-    if ($null -ne $safeUpdateClient) {
-        if (-not $safeUpdateClient.HasExited) { Stop-Process -Id $safeUpdateClient.Id -Force }
-        $safeUpdateClient.Dispose()
-        $safeUpdateClient = $null
-    }
     if ($null -ne $safeUpdateControllerJob) {
         Stop-Job $safeUpdateControllerJob -ErrorAction SilentlyContinue
         Remove-Job $safeUpdateControllerJob -Force -ErrorAction SilentlyContinue
         $safeUpdateControllerJob = $null
     }
     $script:safeUpdateControllerPort = 0
+    $script:safeUpdateClientPath = ""
 
     if ($onWindows) {
         Invoke-DeferredProbe "public restore same-byte identity replacement" {
@@ -7909,10 +7925,6 @@ function main(config) {
     Write-Host "Windows installer behavioral cases passed"
 } finally {
     $env:CLAUDE_EASY_USAGE_PROFILE = $previousUsageProfile
-    if ($null -ne $safeUpdateClient) {
-        if (-not $safeUpdateClient.HasExited) { Stop-Process -Id $safeUpdateClient.Id -Force -ErrorAction SilentlyContinue }
-        $safeUpdateClient.Dispose()
-    }
     if ($null -ne $safeUpdateControllerJob) {
         Stop-Job $safeUpdateControllerJob -ErrorAction SilentlyContinue
         Remove-Job $safeUpdateControllerJob -Force -ErrorAction SilentlyContinue
