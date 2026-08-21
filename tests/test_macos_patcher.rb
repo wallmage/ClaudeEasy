@@ -6021,16 +6021,21 @@ class MacosPatcherTest < Minitest::Test
       )
       File.binwrite(config_path, candidate)
       reloads = 0
+      checkpoint_checks = [false, true]
       result = ClaudeEasy.stub(:current_runtime_loaded_profile_state, :candidate) do
-        ClaudeEasy.safe_update_all(
-          targets: [target], policy: @policy, backup_root: backup_root, usage_profile: 1,
-          fetcher: ->(_item) { raise IOError, "stop after recovery" },
-          validator: ->(_path) { true }, selected_name: "config.yaml",
-          client_identity_reader: -> { identity },
-          native_reloader: ->(_current) { reloads += 1; true },
-          runtime_waiter: ->(*_arguments, **_options) { true },
-          reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
-        )
+        ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+          ClaudeEasy.stub(:runtime_checkpoint_current?, ->(*_arguments, **_options) { checkpoint_checks.shift }) do
+            ClaudeEasy.safe_update_all(
+              targets: [target], policy: @policy, backup_root: backup_root, usage_profile: 1,
+              fetcher: ->(_item) { raise IOError, "stop after recovery" },
+              validator: ->(_path) { true }, selected_name: "config.yaml",
+              client_identity_reader: -> { identity },
+              native_reloader: ->(_current) { reloads += 1; true },
+              runtime_waiter: ->(*_arguments, **_options) { true },
+              reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
+            )
+          end
+        end
       end
 
       assert_equal :aborted, result.fetch(:status)
@@ -18054,6 +18059,7 @@ class MacosPatcherTest < Minitest::Test
       )
       File.binwrite(path, candidate)
       reloads = []
+      checkpoint_checks = [false, true]
 
       ClaudeEasy.stub(:saved_usage_profile, 1) do
         ClaudeEasy.stub(:clashx_running_identity, current_identity) do
@@ -18063,10 +18069,14 @@ class MacosPatcherTest < Minitest::Test
                 ClaudeEasy.stub(:request_clashx_native_reload, ->(current) { reloads << current; true }) do
                   ClaudeEasy.stub(:wait_for_clashx_safe_runtime, true) do
                     ClaudeEasy.stub(:current_runtime_loaded_profile_state, :candidate) do
-                      assert_equal :recovered, ClaudeEasy.resume_profile_transaction(
-                        backup_root, roots: [directory], work_items: [{ path: path, active: true }],
-                        reload_runtime: true, require_tun: :preserve
-                      )
+                      ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+                        ClaudeEasy.stub(:runtime_checkpoint_current?, ->(*_arguments, **_options) { checkpoint_checks.shift }) do
+                          assert_equal :recovered, ClaudeEasy.resume_profile_transaction(
+                            backup_root, roots: [directory], work_items: [{ path: path, active: true }],
+                            reload_runtime: true, require_tun: :preserve
+                          )
+                        end
+                      end
                     end
                   end
                 end
