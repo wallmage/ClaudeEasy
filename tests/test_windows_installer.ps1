@@ -1795,6 +1795,7 @@ if ($Json) {
     $publicBackupText = "mode: rule`nipv6: false`nproxies: []`nproxy-groups:`n  - name: Main`n    type: select`n    proxies:`n      - DIRECT`nrules: []`n"
     $publicCurrentText = $publicBackupText.Replace("mode: rule", "mode: global")
     New-Item -ItemType Directory -Path $publicBackupProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $publicBackupCase "claude-easy-usage-profile.json"), '{"Version":1,"Profile":1}')
     [System.IO.File]::WriteAllText($publicBackupTarget, $publicBackupText)
     $publicBackupLock = Enter-AppHomeMutationLock $publicBackupCase
     try {
@@ -4478,6 +4479,7 @@ rules:
             New-Item -ItemType Directory -Path $identityRestoreCase -Force | Out-Null
             $identityRestoreBackupText = "mode: rule`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
             $identityRestoreCurrentText = "mode: global`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
+            [System.IO.File]::WriteAllText((Join-Path $identityRestoreCase "claude-easy-usage-profile.json"), '{"Version":1,"Profile":3}')
             [System.IO.File]::WriteAllText($identityRestoreTarget, $identityRestoreBackupText)
             $identityRestoreBackup = Backup-Versioned $identityRestoreTarget $identityRestoreBackupRoot "prewrite"
             [System.IO.File]::WriteAllText($identityRestoreTarget, $identityRestoreCurrentText)
@@ -5829,6 +5831,7 @@ try {
                 $publicRestoreBackupBytes.Length -lt $publicRestoreCurrentBytes.Length
             ) "public restore crash fixture must replace a longer file with shorter bytes"
             New-Item -ItemType Directory -Path $publicRestoreProfiles -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $publicRestoreHome "claude-easy-usage-profile.json"), '{"Version":1,"Profile":3}')
             [System.IO.File]::WriteAllBytes($publicRestoreTarget, $publicRestoreBackupBytes)
             $publicRestoreLock = Enter-AppHomeMutationLock $publicRestoreHome
             try {
@@ -7525,6 +7528,7 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
             New-Item -ItemType Directory -Path $clientStartRestoreHome -Force | Out-Null
             $clientStartRestoreBackupText = "mode: rule`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
             $clientStartRestoreCurrentText = "mode: global`nipv6: false`ntun:`n  enable: true`n  stack: system`n  dns-hijack:`n    - any:53`n  auto-route: true`n  auto-detect-interface: true`n  strict-route: true`nproxies: []`nproxy-groups: []`nrules: []`n"
+            [System.IO.File]::WriteAllText((Join-Path $clientStartRestoreHome "claude-easy-usage-profile.json"), '{"Version":1,"Profile":3}')
             [System.IO.File]::WriteAllText(
                 $clientStartRestoreTarget,
                 $clientStartRestoreBackupText
