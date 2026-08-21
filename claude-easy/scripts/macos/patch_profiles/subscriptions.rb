@@ -47,7 +47,7 @@ module ClaudeEasy
     if (!executable || !version || !identifier || !build || !systemVersion) fail("incomplete ClashX Meta identity");
 
     var userAgent = executable + "/" + version + " (" + identifier + "; build:" + build +
-      "; macOS " + systemVersion[0] + ") Alamofire/5.5.0";
+      "; macOS " + systemVersion[0] + ")";
     var url = $.NSURL.URLWithString(urlText);
     if (!url) fail("invalid subscription URL");
     var request = $.NSMutableURLRequest.requestWithURL(url);
@@ -753,7 +753,7 @@ module ClaudeEasy
                                      precommit_condition: nil, runtime_checkpoint: nil,
                                      transaction: nil, client_identity: nil,
                                      native_reloader: nil, runtime_waiter: nil,
-                                     generation_reader: nil)
+                                     reload_snapshot_reader: nil)
     active = items.find { |item| active_profile?(item.fetch(:path), selected_name) }
     return runtime_precommit_allowed?(precommit_condition) unless active
 
@@ -768,7 +768,7 @@ module ClaudeEasy
       require_safe_ai: usage_profile == 3,
       runtime_checkpoint: runtime_checkpoint,
       native_reloader: native_reloader, runtime_waiter: runtime_waiter,
-      generation_reader: generation_reader
+      reload_snapshot_reader: reload_snapshot_reader
     )
   end
 
@@ -776,7 +776,7 @@ module ClaudeEasy
                                            precommit_condition: nil, runtime_checkpoint: nil,
                                            transaction: nil, client_identity: nil,
                                            native_reloader: nil, runtime_waiter: nil,
-                                           generation_reader: nil)
+                                           reload_snapshot_reader: nil)
     runtime_checkpoint ||= transaction && transaction[:runtime_checkpoint]
     active = targets.find { |target| active_profile?(target.fetch(:path), selected_name) }
     active ||= { path: runtime_checkpoint[:path] } if runtime_checkpoint
@@ -792,17 +792,17 @@ module ClaudeEasy
     return false unless selections && %i[enabled disabled ignore].include?(expected_tun)
 
     return false unless runtime_precommit_allowed?(precommit_condition)
-    generation_reader ||= method(:clashx_runtime_generation)
+    reload_snapshot_reader ||= method(:clashx_reload_snapshot)
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
-    generation = generation_reader.call(client_identity)
-    return false unless generation
+    reload_snapshot = reload_snapshot_reader.call
+    return false unless reload_snapshot
     return false unless
       mark_profile_transaction_activation(transaction, :rollback, client_identity)
     return false unless native_reloader.call(client_identity)
 
     runtime_waiter.call(
-      client_identity, generation_before: generation,
+      client_identity, reload_snapshot: reload_snapshot,
       selections: selections, expected_tun: expected_tun,
       required_proxy_group: nil,
       precommit_condition: precommit_condition
@@ -816,7 +816,7 @@ module ClaudeEasy
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil,
                       client_identity_reader: method(:clashx_running_identity),
-                      native_reloader: nil, runtime_waiter: nil, generation_reader: nil,
+                      native_reloader: nil, runtime_waiter: nil, reload_snapshot_reader: nil,
                       auto_update_disabler: nil)
     operation_lock = nil
     default_activation = activation.nil?
@@ -858,7 +858,7 @@ module ClaudeEasy
                        runtime_checkpoint: transaction[:runtime_checkpoint],
                        transaction: transaction, client_identity: client_identity,
                        native_reloader: native_reloader, runtime_waiter: runtime_waiter,
-                       generation_reader: generation_reader
+                       reload_snapshot_reader: reload_snapshot_reader
                      ) && runtime_precommit_allowed?(precommit_condition)
           if restored
             begin
@@ -1077,7 +1077,7 @@ module ClaudeEasy
         precommit_condition: precommit_condition,
         runtime_checkpoint: runtime_checkpoint, transaction: transaction,
         client_identity: client_identity, native_reloader: native_reloader,
-        runtime_waiter: runtime_waiter, generation_reader: generation_reader
+        runtime_waiter: runtime_waiter, reload_snapshot_reader: reload_snapshot_reader
       )
     end
     activation_result = begin

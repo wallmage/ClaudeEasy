@@ -8,6 +8,9 @@ module ClaudeEasy
     Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay
   ].freeze
   RUNTIME_PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
+  CLASHX_RELOAD_COMPLETION = "Initial configuration complete, total time:".b.freeze
+  CLASHX_LOG_SESSION_PATTERN = /\A\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\z/.freeze
+  CLASHX_CORE_LOG_PATTERN = /\Aclashx_core_\d{2}_\d{2}-\d{2}-\d{2}\.log(?:\.\d+)?\z/.freeze
 
   CURL_ISOLATED_ENVIRONMENT = {
     "http_proxy" => nil, "https_proxy" => nil, "all_proxy" => nil,
@@ -51,26 +54,61 @@ module ClaudeEasy
     false
   end
 
-  def clashx_runtime_generation(identity, runner: Open3.method(:capture3))
-    return nil unless identity.is_a?(Hash) && identity[:pid].is_a?(Integer) && identity[:pid].positive?
+  def clashx_reload_snapshot(log_root: File.expand_path("~/.config/clash.meta/logs"))
+    root_stat = File.lstat(log_root)
+    return nil unless root_stat.directory? && !root_stat.symlink? && root_stat.uid == Process.uid
 
-    output, _error, status = runner.call(
-      "/usr/sbin/lsof", "-n", "-P", "-a", "-p", identity.fetch(:pid).to_s,
-      "-U", "-F", "ftn"
-    )
-    return nil unless status.success?
+    session_name = Dir.children(log_root).select do |name|
+      name.match?(CLASHX_LOG_SESSION_PATTERN)
+    end.max
+    return nil unless session_name
 
-    sockets = output.split(/(?=^f)/).each_with_object([]) do |record, found|
-      lines = record.lines.map(&:chomp)
-      next unless lines.include?("tunix")
+    session = File.join(log_root, session_name)
+    session_stat = File.lstat(session)
+    return nil unless session_stat.directory? && !session_stat.symlink? &&
+                      session_stat.uid == Process.uid
 
-      found << lines.grep(/\A[ftn]/).join("\n")
+    snapshots = Dir.children(session).each_with_object({}) do |name, result|
+      next unless name.match?(CLASHX_CORE_LOG_PATTERN)
+
+      path = File.join(session, name)
+      stat = File.lstat(path)
+      next unless stat.file? && !stat.symlink? && stat.uid == Process.uid
+
+      result[path] = [stat.dev, stat.ino, stat.size]
     end
-    return nil if sockets.empty?
-
-    Digest::SHA256.hexdigest(sockets.sort.join("\0"))
+    snapshots.empty? ? nil : snapshots
   rescue StandardError
     nil
+  end
+
+  def clashx_reload_completed_since?(before, log_root: File.expand_path("~/.config/clash.meta/logs"))
+    current = clashx_reload_snapshot(log_root: log_root)
+    return false unless before.is_a?(Hash) && current
+
+    current.any? do |path, identity_and_size|
+      previous = before[path]
+      offset = if previous && previous.first(2) == identity_and_size.first(2) &&
+                  identity_and_size.fetch(2) >= previous.fetch(2)
+                 previous.fetch(2)
+               else
+                 0
+               end
+      next false unless identity_and_size.fetch(2) > offset
+
+      flags = File::RDONLY
+      flags |= File::NOFOLLOW if File.const_defined?(:NOFOLLOW)
+      File.open(path, flags) do |handle|
+        stat = handle.stat
+        next false unless stat.file? && stat.uid == Process.uid &&
+                          [stat.dev, stat.ino] == identity_and_size.first(2)
+
+        handle.seek(offset)
+        handle.read.include?(CLASHX_RELOAD_COMPLETION)
+      end
+    end
+  rescue StandardError
+    false
   end
 
   def current_runtime_requester
@@ -80,21 +118,20 @@ module ClaudeEasy
     ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
   end
 
-  def wait_for_clashx_safe_runtime(identity, generation_before:, selections:, expected_tun:,
+  def wait_for_clashx_safe_runtime(identity, reload_snapshot:, selections:, expected_tun:,
                                     required_proxy_group: nil, requester_factory: nil,
-                                    generation_reader: nil, process_reader: nil,
+                                    reload_receipt_reader: nil, process_reader: nil,
                                     connectivity_checker: nil, precommit_condition: nil,
                                     sleeper: nil, attempts: 120)
     requester_factory ||= method(:current_runtime_requester)
-    generation_reader ||= method(:clashx_runtime_generation)
+    reload_receipt_reader ||= method(:clashx_reload_completed_since?)
     process_reader ||= method(:clashx_running_identity)
     sleeper ||= ->(seconds) { sleep(seconds) }
 
     attempts.times do |attempt|
       return false unless same_clashx_process?(identity, process_reader.call)
 
-      generation = generation_reader.call(identity)
-      unless generation && generation != generation_before
+      unless reload_receipt_reader.call(reload_snapshot)
         sleeper.call(0.25) if attempt + 1 < attempts
         next
       end
@@ -895,11 +932,11 @@ module ClaudeEasy
   def activate_safe_updated_profile(result, transaction:, client_identity:, runtime_checkpoint:,
                                     precommit_condition: nil, require_safe_ai: false,
                                     native_reloader: nil, runtime_waiter: nil,
-                                    generation_reader: nil)
+                                    reload_snapshot_reader: nil)
     pending = -> { result.merge(status: :reload_failed_restore_pending) }
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
-    generation_reader ||= method(:clashx_runtime_generation)
+    reload_snapshot_reader ||= method(:clashx_reload_snapshot)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback_before_runtime_reload(result)) unless
       runtime_checkpoint.is_a?(Hash) &&
@@ -923,14 +960,14 @@ module ClaudeEasy
       return result.merge(status: rollback_before_runtime_reload(result))
     end
 
-    generation = generation_reader.call(client_identity)
-    return result.merge(status: rollback_before_runtime_reload(result)) unless generation
+    reload_snapshot = reload_snapshot_reader.call
+    return result.merge(status: rollback_before_runtime_reload(result)) unless reload_snapshot
     return pending.call unless
       mark_profile_transaction_activation(transaction, :update, client_identity)
 
     update_loaded = native_reloader.call(client_identity) &&
                     runtime_waiter.call(
-                      client_identity, generation_before: generation,
+                      client_identity, reload_snapshot: reload_snapshot,
                       selections: selections, expected_tun: expected_tun,
                       required_proxy_group: required_proxy_group,
                       precommit_condition: precommit_condition
@@ -940,14 +977,14 @@ module ClaudeEasy
       runtime_precommit_allowed?(precommit_condition)
 
     return result.merge(status: :reload_failed_rollback_conflict) unless restore_profile_bytes(result)
-    rollback_generation = generation_reader.call(client_identity)
-    return pending.call unless rollback_generation
+    rollback_reload_snapshot = reload_snapshot_reader.call
+    return pending.call unless rollback_reload_snapshot
     return pending.call unless
       mark_profile_transaction_activation(transaction, :rollback, client_identity)
     return pending.call unless native_reloader.call(client_identity)
 
     restored = runtime_waiter.call(
-      client_identity, generation_before: rollback_generation,
+      client_identity, reload_snapshot: rollback_reload_snapshot,
       selections: original_selections, expected_tun: expected_tun,
       precommit_condition: precommit_condition
     )
