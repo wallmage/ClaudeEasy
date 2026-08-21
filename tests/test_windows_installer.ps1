@@ -488,8 +488,6 @@ function Invoke-TestPowerShell(
     [switch]$SimulateRuntimeRefresh
 ) {
     $temporarySafeUpdateClient = $null
-    $simulatedRuntimeRefresh = $null
-    $simulatedRuntimeSignal = $null
     $simulatedRuntimeBootstrap = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
@@ -503,24 +501,6 @@ function Invoke-TestPowerShell(
             if (Test-Path -LiteralPath $runtimeHome -PathType Container) {
                 $runtimePath = Join-Path $runtimeHome "clash-verge.yaml"
                 [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
-                if ($SimulateRuntimeRefresh) {
-                    $simulatedRuntimeSignal = "$runtimePath.refresh"
-                    Remove-Item -LiteralPath $simulatedRuntimeSignal -Force -ErrorAction SilentlyContinue
-                    $simulatedRuntimeRefresh = Start-Job -ArgumentList @(
-                        $runtimePath,
-                        $simulatedRuntimeSignal
-                    ) -ScriptBlock {
-                        param([string]$RuntimePath, [string]$Signal)
-                        while ($true) {
-                            Start-Sleep -Milliseconds 100
-                            if (-not (Test-Path -LiteralPath $Signal -PathType Leaf)) { continue }
-                            try {
-                                [System.IO.File]::AppendAllText($RuntimePath, "`n# simulated refresh`n")
-                                break
-                            } catch { }
-                        }
-                    }
-                }
             }
         }
         $temporarySafeUpdateClient = Start-Process `
@@ -542,15 +522,15 @@ function Invoke-TestPowerShell(
                 AppHome = [string]$ScriptArguments[$appHomeIndex + 1]
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 Json = $ScriptArguments -contains "-Json"
-                RuntimeRefreshSignalPath = $simulatedRuntimeSignal
+                RuntimePath = $runtimePath
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string MarkerPath; public static bool Send(System.UInt16[] keys) { System.IO.File.WriteAllText(MarkerPath, "sent"); return true; } } }' -ErrorAction Stop | Out-Null
-[ClaudeEasy.SendInputNative]::MarkerPath = [string]$payload.RuntimeRefreshSignalPath
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static bool Send(System.UInt16[] keys) { System.IO.File.AppendAllText(RuntimePath, "\n# simulated refresh\n"); return true; } } }' -ErrorAction Stop | Out-Null
+[ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
 $arguments = @{
     AppHome = [string]$payload.AppHome
     MihomoPath = [string]$payload.MihomoPath
@@ -579,11 +559,6 @@ exit $LASTEXITCODE
             ExitCode = $exitCode
         }
     } finally {
-        if ($null -ne $simulatedRuntimeRefresh) {
-            Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
-            Remove-Job -Job $simulatedRuntimeRefresh -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $simulatedRuntimeSignal -Force -ErrorAction SilentlyContinue
-        }
         if ($null -ne $simulatedRuntimeBootstrap) {
             Remove-Item -LiteralPath $simulatedRuntimeBootstrap -Force -ErrorAction SilentlyContinue
         }
