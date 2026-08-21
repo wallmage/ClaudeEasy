@@ -15366,6 +15366,60 @@ class MacosPatcherTest < Minitest::Test
     assert_equal [:tun_mode], events
   end
 
+  def test_client_switch_reconciliation_refreshes_state_after_connectivity_check
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    state = {
+      tun_effective: :enabled, tun_intent: true,
+      system_proxy_effective: :clash, system_proxy_intent: true
+    }
+    events = []
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 2, identity_reader: -> { identity },
+      command_support_reader: ->(_current) { true }, state_reader: -> { state },
+      command_sender: ->(_current, command) { events << command; true },
+      connectivity_checker: lambda {
+        state = state.merge(system_proxy_effective: :other, system_proxy_intent: false)
+        true
+      },
+      sleeper: ->(_seconds) {}
+    )
+
+    assert_equal :manual_required, result.fetch(:status)
+    assert_equal :third_party_proxy_active, result.fetch(:reason)
+    assert_empty events
+  end
+
+  def test_client_switch_reconciliation_refreshes_final_state_after_connectivity_check
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    state = {
+      tun_effective: :disabled, tun_intent: false,
+      system_proxy_effective: :disabled, system_proxy_intent: false
+    }
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 1, identity_reader: -> { identity },
+      command_support_reader: ->(_current) { true }, state_reader: -> { state },
+      command_sender: lambda { |_current, command|
+        assert_equal :system_proxy, command
+        state = state.merge(system_proxy_effective: :clash, system_proxy_intent: true)
+        true
+      },
+      connectivity_checker: lambda {
+        state = state.merge(system_proxy_effective: :disabled, system_proxy_intent: false)
+        true
+      },
+      sleeper: ->(_seconds) {}
+    )
+
+    assert_equal :manual_required, result.fetch(:status)
+    assert_equal :state_ambiguous, result.fetch(:reason)
+  end
+
   def test_client_switch_state_combines_preferences_runtime_and_system_proxy
     requester = lambda do |_method, endpoint, _body|
       assert_equal "/configs", endpoint

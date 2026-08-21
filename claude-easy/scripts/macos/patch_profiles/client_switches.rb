@@ -191,9 +191,22 @@ module ClaudeEasy
       end
       return manual_client_switch_result(:connectivity_unverified, changes) unless
         connectivity_checker.call
+      return manual_client_switch_result(:client_changed, changes) unless
+        same_clashx_process?(identity, identity_reader.call)
+
+      state = state_reader.call
+      return manual_client_switch_result(:state_unavailable, changes) unless
+        client_switch_state_complete?(state)
+      return manual_client_switch_result(:client_changed, changes) unless
+        same_clashx_process?(identity, identity_reader.call)
+      return manual_client_switch_result(:state_ambiguous, changes) unless
+        state[:tun_effective] == :enabled && state[:tun_intent] == true
     end
 
     target_proxy = usage_profile == 1 ? :enabled : :disabled
+    if state[:system_proxy_effective] == :other
+      return manual_client_switch_result(:third_party_proxy_active, changes)
+    end
     proxy_matches = if target_proxy == :enabled
                       state[:system_proxy_effective] == :clash &&
                         state[:system_proxy_intent] == true
@@ -202,9 +215,6 @@ module ClaudeEasy
                         state[:system_proxy_intent] == false
                     end
     unless proxy_matches
-      if state[:system_proxy_effective] == :other
-        return manual_client_switch_result(:third_party_proxy_active, changes)
-      end
       safe_transition = if target_proxy == :enabled
                           state[:system_proxy_effective] == :disabled &&
                             state[:system_proxy_intent] == false
@@ -237,6 +247,26 @@ module ClaudeEasy
     end
     return manual_client_switch_result(:client_changed, changes) unless
       same_clashx_process?(identity, identity_reader.call)
+
+    state = state_reader.call
+    return manual_client_switch_result(:state_unavailable, changes) unless
+      client_switch_state_complete?(state)
+    return manual_client_switch_result(:client_changed, changes) unless
+      same_clashx_process?(identity, identity_reader.call)
+    tun_matches = usage_profile == 1 ||
+                  (state[:tun_effective] == :enabled && state[:tun_intent] == true)
+    proxy_matches = if usage_profile == 1
+                      state[:system_proxy_effective] == :clash &&
+                        state[:system_proxy_intent] == true
+                    else
+                      state[:system_proxy_effective] != :clash &&
+                        state[:system_proxy_intent] == false
+                    end
+    return manual_client_switch_result(:third_party_proxy_active, changes) if
+      state[:system_proxy_effective] == :other
+    unless tun_matches && proxy_matches
+      return manual_client_switch_result(:state_ambiguous, changes)
+    end
 
     {
       status: changes.empty? ? :unchanged : :reconciled,
