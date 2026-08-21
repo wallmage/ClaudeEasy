@@ -11777,6 +11777,57 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_safe_update_restores_runtime_after_a_post_activation_replacement
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      targets = %w[active other].map do |name|
+        path = File.join(directory, "#{name}.yaml")
+        File.binwrite(path, YAML.dump(base_config.merge("subscription-marker" => "old-#{name}")))
+        { name: name, path: path, url: "https://subscriptions.invalid/#{name}" }
+      end
+      originals = targets.to_h { |target| [target.fetch(:name), File.binread(target.fetch(:path))] }
+      external = YAML.dump(base_config.merge("subscription-marker" => "external-other")).b
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(targets.fetch(0).fetch(:path)),
+        expected_tun: :ignore, selections: {}
+      }
+      reloads = 0
+      native_reloader = lambda do |_current|
+        reloads += 1
+        if reloads == 1
+          replacement = File.join(directory, "external.yaml")
+          File.binwrite(replacement, external)
+          File.rename(replacement, targets.fetch(1).fetch(:path))
+        end
+        true
+      end
+
+      result = ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+        ClaudeEasy.safe_update_all(
+          targets: targets, policy: @policy, backup_root: backup_root, usage_profile: 1,
+          fetcher: lambda { |target|
+            YAML.dump(base_config.merge("subscription-marker" => "new-#{target.fetch(:name)}"))
+          },
+          validator: ->(_path) { true }, selected_name: "active",
+          client_identity_reader: -> { identity }, native_reloader: native_reloader,
+          runtime_waiter: ->(*_arguments, **_options) { true },
+          reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
+        )
+      end
+
+      assert_equal :aborted, result.fetch(:status)
+      assert_equal :rollback_superseded, result.fetch(:reason)
+      assert_equal 2, reloads
+      assert_equal originals.fetch("active"), File.binread(targets.fetch(0).fetch(:path))
+      assert_equal external, File.binread(targets.fetch(1).fetch(:path))
+      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
   def test_safe_update_finalization_covers_runtime_and_rollback_outcomes
     precommit = run_with_stubbed_safe_update_finalization(
       activation: { status: :updated, reloaded: true },
@@ -15003,6 +15054,25 @@ class MacosPatcherTest < Minitest::Test
         )
       end
       assert_equal 1, sleeps
+    end
+  end
+
+  def test_clashx_reload_receipt_ignores_an_old_completion_moved_by_log_rotation
+    Dir.mktmpdir do |directory|
+      session = File.join(directory, "2026-08-21_17-00-00")
+      FileUtils.mkdir_p(session)
+      log = File.join(session, "clashx_core_21_17-00-01.log")
+      File.binwrite(log, "Initial configuration complete, total time: 10ms\n")
+      snapshot = ClaudeEasy.clashx_reload_snapshot(log_root: directory)
+
+      File.rename(log, "#{log}.1")
+      File.binwrite(log, "reload started\n")
+
+      refute ClaudeEasy.clashx_reload_completed_since?(snapshot, log_root: directory)
+      File.open(log, "ab") do |handle|
+        handle.write("Initial configuration complete, total time: 12ms\n")
+      end
+      assert ClaudeEasy.clashx_reload_completed_since?(snapshot, log_root: directory)
     end
   end
 
