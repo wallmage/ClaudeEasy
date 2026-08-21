@@ -558,9 +558,12 @@ function Invoke-TestPowerShell(
         if ($SimulateRuntimeRefresh) {
             $simulatedRuntimeBootstrapStatus = Join-Path $sandbox "safe-update-runtime-bootstrap.status"
             $simulatedRuntimeBootstrapError = Join-Path $sandbox "safe-update-runtime-bootstrap.stderr"
+            $mihomoPathIndex = [Array]::IndexOf($ScriptArguments, "-MihomoPath")
             $payload = [pscustomobject]@{
                 ScriptPath = $ScriptPath
-                ScriptArguments = @($ScriptArguments)
+                AppHome = [string]$ScriptArguments[$appHomeIndex + 1]
+                MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
+                Json = $ScriptArguments -contains "-Json"
                 BootstrapStatusPath = $simulatedRuntimeBootstrapStatus
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
@@ -571,7 +574,13 @@ $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOA
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'payload-decoded')
 Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }' -ErrorAction Stop | Out-Null
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'add-type-ok')
-$arguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
+$arguments = @{
+    AppHome = [string]$payload.AppHome
+    MihomoPath = [string]$payload.MihomoPath
+    VerifySafeUpdate = $true
+    RefreshConfirmed = $true
+    Json = [bool]$payload.Json
+}
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'before-target')
 & ([string]$payload.ScriptPath) @arguments
 exit $LASTEXITCODE
