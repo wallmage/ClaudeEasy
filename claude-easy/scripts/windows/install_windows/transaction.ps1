@@ -2063,6 +2063,10 @@ function Assert-InstallState([object]$State) {
 function Assert-StateSnapshotUnchanged([object]$Entry, [object]$Snapshot, [string]$Label) {
     if ($null -eq $Entry) { return }
     $expected = [string]$Entry.InstalledSha256
+    if (-not [bool]$Snapshot.Exists -and -not [bool]$Entry.Existed -and
+        $expected -eq (Get-BytesSha256 ([byte[]]@()))) {
+        return
+    }
     $actual = if ([bool]$Snapshot.Exists) { Get-BytesSha256 $Snapshot.Bytes } else { "" }
     if ($actual -ne $expected) {
         throw "$Label 在上次安装后被其他程序修改。为避免覆盖这些改动，请先卸载补丁或备份并手动处理该文件。"

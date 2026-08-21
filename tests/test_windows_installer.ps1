@@ -3310,6 +3310,29 @@ public static class FakeCurl {
     Assert-True ($corruptModuleInstall.code -eq "incomplete_package" -and $corruptModuleUninstall.code -eq "incomplete_package") "corrupt Windows module did not report incomplete_package"
     Assert-True ((Get-TreeContentSnapshot $corruptModuleHome) -ceq $corruptModuleHomeBefore) "corrupt Windows module changed AppHome"
 
+    $missingLightConfigCase = Join-Path $sandbox "missing-light-config-case"
+    New-Item -ItemType Directory -Path $missingLightConfigCase -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $missingLightConfigCase "profiles.yaml"),
+        "items:`n- uid: R-light-missing`n  type: remote`n  option:`n    allow_auto_update: true`n"
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $missingLightConfigCase "verge.yaml"), "enable_tun_mode: false`n"
+    )
+    foreach ($lightProfile in @(1, 2)) {
+        $lightInstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $missingLightConfigCase, "-UsageProfile", "$lightProfile",
+            "-MihomoPath", $fakeCore
+        )
+        Assert-True ($lightInstall.ExitCode -eq 0) "profile $lightProfile rejected an unchanged missing config.yaml; $(Get-TestOutputDiagnostic $lightInstall.Output)"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $missingLightConfigCase "config.yaml"))) "profile $lightProfile created config.yaml"
+    }
+    $fullInstall = Invoke-TestPowerShell $installer @(
+        "-AppHome", $missingLightConfigCase, "-UsageProfile", "3", "-MihomoPath", $fakeCore
+    )
+    Assert-True ($fullInstall.ExitCode -eq 0) "profile 3 could not upgrade an unchanged missing config.yaml; $(Get-TestOutputDiagnostic $fullInstall.Output)"
+    Assert-True (Test-Path -LiteralPath (Join-Path $missingLightConfigCase "config.yaml") -PathType Leaf) "profile 3 upgrade did not create config.yaml"
+
     $lightCase = Join-Path $sandbox "light-profile-case"
     New-Item -ItemType Directory -Path $lightCase -Force | Out-Null
     $lightConfig = "ipv6: true`ntun:`n  enable: false`n"
@@ -5557,6 +5580,17 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
         $stateBindingRejected = $true
     }
     Assert-True $stateBindingRejected "reinstall accepted a snapshot that did not match the saved installed version"
+    $missingInstalledEntry = [pscustomobject]@{
+        Existed = $false
+        OriginalBase64 = ""
+        InstalledSha256 = Get-BytesSha256 ([byte[]]@())
+    }
+    $missingInstalledSnapshot = [pscustomobject]@{ Exists = $false; Bytes = $null }
+    $missingInstalledAccepted = $true
+    try { Assert-StateSnapshotUnchanged $missingInstalledEntry $missingInstalledSnapshot "missing installed file" } catch {
+        $missingInstalledAccepted = $false
+    }
+    Assert-True $missingInstalledAccepted "reinstall rejected a file that remained absent after a lightweight install"
     $stateSnapshotWritePath = Join-Path $transactionDir "state-snapshot-write.txt"
     $stateSnapshotWriteOriginal = [System.Text.Encoding]::UTF8.GetBytes("state-write-original")
     [System.IO.File]::WriteAllBytes($stateSnapshotWritePath, $stateSnapshotWriteOriginal)

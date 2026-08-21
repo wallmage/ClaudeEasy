@@ -1232,6 +1232,7 @@ module ClaudeEasy
     if runtime_checkpoint
       return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
 
+      dispatch_checkpoint = runtime_checkpoint
       unless runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
         candidate_bytes = transaction && transaction[:candidate_bytes] &&
                           transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
@@ -1244,8 +1245,13 @@ module ClaudeEasy
             active.fetch(:path), require_tun: :preserve, requester: requester
           )
           return false unless runtime_checkpoint
+          dispatch_checkpoint = runtime_checkpoint
         when :candidate
           # The candidate load may reset selectors; restore the saved checkpoint.
+          dispatch_checkpoint = capture_runtime_checkpoint(
+            active.fetch(:path), require_tun: :preserve, requester: requester
+          )
+          return false unless dispatch_checkpoint
         else
           return false
         end
@@ -1270,6 +1276,8 @@ module ClaudeEasy
     return false unless selections
     return false if expected_tun == :unknown
     return false unless runtime_precommit_allowed?(precommit_condition)
+    return false if dispatch_checkpoint &&
+                    !runtime_checkpoint_current?(dispatch_checkpoint, requester: requester)
 
     return false unless reload_profile_runtime(
       requester, active.fetch(:path), expected_tun: expected_tun, selections: selections
@@ -1372,6 +1380,9 @@ module ClaudeEasy
     end
 
     begin
+      unless runtime_checkpoint_checker.call(runtime_checkpoint)
+        return result.merge(status: rollback_before_runtime_reload(result))
+      end
       update_loaded = native_reloader.call(client_identity) &&
                       runtime_waiter.call(
                         client_identity, reload_receipt: reload_receipt,
@@ -1395,6 +1406,7 @@ module ClaudeEasy
       return pending.call
     end
     begin
+      return pending.call unless runtime_checkpoint_checker.call(runtime_checkpoint)
       return pending.call unless native_reloader.call(client_identity)
 
       restored_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
@@ -1442,12 +1454,16 @@ module ClaudeEasy
                        :enabled
                      else
                        :ignore
-                     end
+      end
     end
+    rollback_checkpoint = runtime_checkpoint || {
+      path: File.realpath(result.fetch(:path)), selections: before, expected_tun: expected_tun
+    }
     rollback = lambda do
       rollback_after_reload_failure(
         result, requester, result[:path], selections: before, expected_tun: expected_tun,
-        connectivity_checker: connectivity_checker, precommit_condition: precommit_condition
+        connectivity_checker: connectivity_checker, precommit_condition: precommit_condition,
+        runtime_checkpoint: rollback_checkpoint
       )
     end
     return result.merge(status: rollback_before_runtime_reload(result)) if expected_tun == :unknown
@@ -1465,6 +1481,9 @@ module ClaudeEasy
       return result.merge(status: status)
     end
     return pending.call unless profile_result_current?(result)
+    if runtime_checkpoint && !runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
+      return result.merge(status: rollback_before_runtime_reload(result))
+    end
 
     reload_attempted = true
     code, _body = requester.call(
@@ -1496,7 +1515,8 @@ module ClaudeEasy
                rollback_after_reload_failure(
                  result, requester, result[:path], selections: before,
                  expected_tun: expected_tun, connectivity_checker: connectivity_checker,
-                 precommit_condition: precommit_condition
+                 precommit_condition: precommit_condition,
+                 runtime_checkpoint: rollback_checkpoint
                )
              else
                rollback_before_runtime_reload(result)
@@ -1511,10 +1531,15 @@ module ClaudeEasy
   end
 
   def rollback_after_reload_failure(result, requester, path, selections: nil, expected_tun: nil,
-                                    connectivity_checker: nil, precommit_condition: nil)
+                                    connectivity_checker: nil, precommit_condition: nil,
+                                    runtime_checkpoint: nil)
     return :reload_failed_rollback_conflict unless restore_profile_bytes(result)
     return :reload_failed_restore_pending unless requester && path && selections && expected_tun
     return :reload_failed_restore_pending unless runtime_precommit_allowed?(precommit_condition)
+    return :reload_failed_restore_pending if runtime_checkpoint &&
+                                             !runtime_checkpoint_current?(
+                                               runtime_checkpoint, requester: requester
+                                             )
 
     return :reload_failed_restore_pending unless reload_profile_runtime(
       requester, path, expected_tun: expected_tun, selections: selections

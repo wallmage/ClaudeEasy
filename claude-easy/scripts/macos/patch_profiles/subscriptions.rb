@@ -852,19 +852,23 @@ module ClaudeEasy
     return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
 
     runtime_checkpoint_checker ||= method(:runtime_checkpoint_current?)
+    runtime_checkpoint_reader ||= lambda do |path|
+      capture_runtime_checkpoint(path, require_tun: :preserve)
+    end
+    dispatch_checkpoint = runtime_checkpoint
     unless runtime_checkpoint_checker.call(runtime_checkpoint)
       candidate_bytes = transaction[:candidate_bytes] &&
                         transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
       runtime_profile_state_reader ||= method(:current_runtime_loaded_profile_state)
       case runtime_profile_state_reader.call(active.fetch(:path), candidate_bytes)
       when :restored
-        runtime_checkpoint_reader ||= lambda do |path|
-          capture_runtime_checkpoint(path, require_tun: :preserve)
-        end
         runtime_checkpoint = runtime_checkpoint_reader.call(active.fetch(:path))
         return false unless runtime_checkpoint
+        dispatch_checkpoint = runtime_checkpoint
       when :candidate
         # The candidate load may reset selectors; restore the saved checkpoint.
+        dispatch_checkpoint = runtime_checkpoint_reader.call(active.fetch(:path))
+        return false unless dispatch_checkpoint
       else
         return false
       end
@@ -889,6 +893,7 @@ module ClaudeEasy
     end
 
     begin
+      return false unless runtime_checkpoint_checker.call(dispatch_checkpoint)
       return false unless native_reloader.call(client_identity)
 
       runtime_waiter.call(

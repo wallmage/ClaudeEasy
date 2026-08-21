@@ -12129,7 +12129,7 @@ class MacosPatcherTest < Minitest::Test
       assert_equal original.b, File.binread(path)
       refute tun_enabled
       assert_equal 2, reloads
-      assert_equal 2, config_reads
+      assert_equal 3, config_reads
       assert_empty patches
     end
   end
@@ -15710,11 +15710,16 @@ class MacosPatcherTest < Minitest::Test
       checkpoint = { path: File.realpath(path), selections: {}, expected_tun: :disabled }
       ClaudeEasy.stub(:reload_profile_runtime, true) do
         ClaudeEasy.stub(:runtime_health_healthy?, true) do
-          assert ClaudeEasy.reload_recovered_profile_runtime(
-            [{ path: path, active: false }], require_tun: :preserve,
-            runtime_checkpoint: checkpoint, requester: ->(*_arguments) { [200, "{}"] },
-            runtime_profile_state_reader: ->(_path, _candidate) { :candidate }
-          )
+          checkpoint_checks = [false, true]
+          ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+            ClaudeEasy.stub(:runtime_checkpoint_current?, ->(*_arguments, **_options) { checkpoint_checks.shift }) do
+              assert ClaudeEasy.reload_recovered_profile_runtime(
+                [{ path: path, active: false }], require_tun: :preserve,
+                runtime_checkpoint: checkpoint, requester: ->(*_arguments) { [200, "{}"] },
+                runtime_profile_state_reader: ->(_path, _candidate) { :candidate }
+              )
+            end
+          end
         end
       end
       refute ClaudeEasy.reload_recovered_profile_runtime(
@@ -17365,12 +17370,15 @@ class MacosPatcherTest < Minitest::Test
         candidate_bytes: { File.realpath(profile) => YAML.dump(base_config.merge("marker" => "candidate")) }
       }
       waited_selections = nil
+      checkpoint_checks = [false, true]
+      dispatch_checkpoint = checkpoint.merge(selections: { "Main" => "日本家宽 01" })
 
       recovered = ClaudeEasy.stub(:mark_profile_transaction_activation, true) do
         ClaudeEasy.reload_recovered_safe_update_runtime(
           [{ path: profile }], 1, "active", runtime_checkpoint: checkpoint,
           transaction: transaction, client_identity: identity,
-          runtime_checkpoint_checker: ->(_current) { false },
+          runtime_checkpoint_checker: ->(_current) { checkpoint_checks.shift },
+          runtime_checkpoint_reader: ->(_path) { dispatch_checkpoint },
           runtime_profile_state_reader: ->(_path, _candidate) { :candidate },
           native_reloader: ->(_current) { true },
           runtime_waiter: lambda do |_current, **options|
@@ -17441,11 +17449,12 @@ class MacosPatcherTest < Minitest::Test
 
       recovered_selections = nil
       current_checkpoint = checkpoint.merge(selections: { "Main" => "日本家宽 01" })
+      recovery_checks = [false, true]
       recovered = ClaudeEasy.stub(:capture_runtime_checkpoint, current_checkpoint) do
         ClaudeEasy.reload_recovered_safe_update_runtime(
           [{ path: profile }], 1, "active", runtime_checkpoint: checkpoint,
           transaction: transaction, client_identity: identity,
-          runtime_checkpoint_checker: ->(_current) { false },
+          runtime_checkpoint_checker: ->(_current) { recovery_checks.shift },
           runtime_profile_state_reader: ->(_path, _candidate) { :restored },
           native_reloader: ->(_current) { native_reloads += 1; true },
           runtime_waiter: lambda do |_current, **options|
@@ -17458,6 +17467,106 @@ class MacosPatcherTest < Minitest::Test
       assert recovered
       assert_equal({ "Main" => "日本家宽 01" }, recovered_selections)
       assert_equal 1, native_reloads
+    end
+  end
+
+  def test_runtime_dispatches_recheck_checkpoint_at_the_send_boundary
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "new"))
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :disabled,
+        selections: { "Main" => "台湾家宽 01" }
+      }
+      result = {
+        path: profile, rollback_bytes: original,
+        patched_digest: Digest::SHA256.hexdigest(candidate),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+
+      controller_checks = [true, false]
+      controller_requests = 0
+      ordinary = ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+        ClaudeEasy.stub(:runtime_checkpoint_current?, ->(_checkpoint, **_options) { controller_checks.shift }) do
+          ClaudeEasy.activate_updated_profile(
+            result, requester: ->(*) { controller_requests += 1; [204, ""] },
+            runtime_checkpoint: checkpoint
+          )
+        end
+      end
+      assert_equal :reload_failed_rolled_back, ordinary.fetch(:status)
+      assert_equal 0, controller_requests
+
+      recovery_checks = [true, false]
+      controller_recovery = ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+        ClaudeEasy.stub(:runtime_checkpoint_current?, ->(_checkpoint, **_options) { recovery_checks.shift }) do
+          ClaudeEasy.reload_recovered_profile_runtime(
+            [{ path: profile, active: true }], require_tun: :preserve,
+            requester: ->(*) { controller_requests += 1; [204, ""] },
+            runtime_checkpoint: checkpoint
+          )
+        end
+      end
+      refute controller_recovery
+      assert_equal 0, controller_requests
+
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      result = result.merge(patched_identity: [stat.dev, stat.ino])
+      rollback_requests = 0
+      rollback_status = ClaudeEasy.stub(:runtime_checkpoint_current?, false) do
+        ClaudeEasy.rollback_after_reload_failure(
+          result, ->(*) { rollback_requests += 1; [204, ""] }, profile,
+          selections: checkpoint.fetch(:selections),
+          expected_tun: checkpoint.fetch(:expected_tun), runtime_checkpoint: checkpoint
+        )
+      end
+      assert_equal :reload_failed_restore_pending, rollback_status
+      assert_equal 0, rollback_requests
+
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      result = result.merge(patched_identity: [stat.dev, stat.ino])
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: candidate, candidate: candidate }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      update_checks = [true, false]
+      native_reloads = 0
+      updated = ClaudeEasy.activate_safe_updated_profile(
+        result, transaction: transaction, client_identity: identity,
+        runtime_checkpoint: checkpoint,
+        runtime_checkpoint_checker: ->(_current) { update_checks.shift },
+        native_reloader: ->(_current) { native_reloads += 1; true },
+        runtime_waiter: ->(*_arguments, **_options) { true },
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+      )
+      assert_equal :reload_failed_rolled_back, updated.fetch(:status)
+      assert_equal 0, native_reloads
+
+      recovery_checks = [true, false]
+      recovered = ClaudeEasy.stub(:runtime_selections_for_profile, {}) do
+        ClaudeEasy.stub(:mark_profile_transaction_activation, true) do
+          ClaudeEasy.reload_recovered_safe_update_runtime(
+            [{ path: profile }], 1, "active", runtime_checkpoint: checkpoint,
+            transaction: transaction, client_identity: identity,
+            runtime_checkpoint_checker: ->(_current) { recovery_checks.shift },
+            native_reloader: ->(_current) { native_reloads += 1; true },
+            runtime_waiter: ->(*_arguments, **_options) { true },
+            reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+          )
+        end
+      end
+      refute recovered
+      assert_equal 0, native_reloads
     end
   end
 
