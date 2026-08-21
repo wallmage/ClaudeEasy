@@ -441,7 +441,21 @@ function Get-WindowsShortPath([string]$Path) {
 function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode) {
     $text = $Invocation.Output.Trim()
     $diagnostic = Get-TestOutputDiagnostic $text
-    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic"
+    $streamDiagnostic = ""
+    if (-not [string]::IsNullOrEmpty([string]$Invocation.BootstrapPhase)) {
+        $standardOutput = [string]$Invocation.StandardOutput
+        $standardError = [string]$Invocation.StandardError
+        $trimmedStandardOutput = $standardOutput.Trim()
+        $standardOutputIsObject = $trimmedStandardOutput.StartsWith("{") -and
+            $trimmedStandardOutput.EndsWith("}")
+        $streamDiagnostic = (
+            "; stdout_$(Get-TestOutputDiagnostic $standardOutput)" +
+            " stderr_$(Get-TestOutputDiagnostic $standardError)" +
+            " bootstrap_phase=$($Invocation.BootstrapPhase)" +
+            " stdout_object=$standardOutputIsObject"
+        )
+    }
+    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic$streamDiagnostic"
     try {
         if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
             $result = $text | ConvertFrom-Json -DateKind String
@@ -491,6 +505,11 @@ function Invoke-TestPowerShell(
     $simulatedRuntimeRefresh = $null
     $simulatedRuntimeCandidate = $null
     $simulatedRuntimeBootstrap = $null
+    $simulatedRuntimeBootstrapStatus = $null
+    $simulatedRuntimeBootstrapError = $null
+    $simulatedRuntimeBootstrapPhase = $null
+    $standardOutput = $null
+    $standardError = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -537,17 +556,23 @@ function Invoke-TestPowerShell(
     try {
         $ErrorActionPreference = "Continue"
         if ($SimulateRuntimeRefresh) {
+            $simulatedRuntimeBootstrapStatus = Join-Path $sandbox "safe-update-runtime-bootstrap.status"
+            $simulatedRuntimeBootstrapError = Join-Path $sandbox "safe-update-runtime-bootstrap.stderr"
             $payload = [pscustomobject]@{
                 ScriptPath = $ScriptPath
                 ScriptArguments = @($ScriptArguments)
+                BootstrapStatusPath = $simulatedRuntimeBootstrapStatus
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
             )
             $bootstrap = @'
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }' -ErrorAction Stop | Out-Null
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+[System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'payload-decoded')
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }' -ErrorAction Stop | Out-Null
+[System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'add-type-ok')
 $arguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
+[System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'before-target')
 & ([string]$payload.ScriptPath) @arguments
 exit $LASTEXITCODE
 '@
@@ -558,12 +583,26 @@ exit $LASTEXITCODE
                 $bootstrap,
                 [System.Text.Encoding]::ASCII
             )
-            $output = & $PowerShellPath -NoLogo -NoProfile -File $simulatedRuntimeBootstrap 2>&1 | Out-String
+            $standardOutput = & $PowerShellPath -NoLogo -NoProfile -File $simulatedRuntimeBootstrap 2> $simulatedRuntimeBootstrapError | Out-String
+            $exitCode = $LASTEXITCODE
+            $standardError = if (Test-Path -LiteralPath $simulatedRuntimeBootstrapError -PathType Leaf) {
+                [System.IO.File]::ReadAllText($simulatedRuntimeBootstrapError)
+            } else { "" }
+            $simulatedRuntimeBootstrapPhase = if (Test-Path -LiteralPath $simulatedRuntimeBootstrapStatus -PathType Leaf) {
+                [System.IO.File]::ReadAllText($simulatedRuntimeBootstrapStatus)
+            } else { "not-started" }
+            $output = $standardOutput + $standardError
         } else {
             $output = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath @ScriptArguments 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
         }
-        $exitCode = $LASTEXITCODE
-        return [pscustomobject]@{ Output = $output; ExitCode = $exitCode }
+        return [pscustomobject]@{
+            Output = $output
+            ExitCode = $exitCode
+            StandardOutput = $standardOutput
+            StandardError = $standardError
+            BootstrapPhase = $simulatedRuntimeBootstrapPhase
+        }
     } finally {
         if ($null -ne $simulatedRuntimeRefresh) {
             Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
@@ -572,6 +611,11 @@ exit $LASTEXITCODE
         }
         if ($null -ne $simulatedRuntimeBootstrap) {
             Remove-Item -LiteralPath $simulatedRuntimeBootstrap -Force -ErrorAction SilentlyContinue
+        }
+        foreach ($diagnosticPath in @($simulatedRuntimeBootstrapStatus, $simulatedRuntimeBootstrapError)) {
+            if ($null -ne $diagnosticPath) {
+                Remove-Item -LiteralPath $diagnosticPath -Force -ErrorAction SilentlyContinue
+            }
         }
         if ($null -ne $temporarySafeUpdateClient) {
             if (-not $temporarySafeUpdateClient.HasExited) {
