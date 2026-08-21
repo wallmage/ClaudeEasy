@@ -2898,7 +2898,6 @@ class SkillContractTest < Minitest::Test
     assert_match(/^  windows-installer-powershell-7:$/, workflow)
     assert_includes workflow, "git diff --check"
     assert_includes workflow, "fetch-depth: 0"
-    assert_includes workflow, "github.event.before"
     assert_includes workflow, "github.event.pull_request.base.sha"
     jobs = workflow.split(/^jobs:\n/, 2).last.scan(
       /^  ([a-z0-9-]+):\n(.*?)(?=^  [a-z0-9-]+:\n|\z)/m
@@ -2934,8 +2933,18 @@ class SkillContractTest < Minitest::Test
     end
 
     assert_includes workflow,
-                    "group: test-${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.ref }}"
-    assert_includes workflow, "cancel-in-progress: ${{ github.event_name != 'push' }}"
+                    "group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
+    assert_includes workflow, "cancel-in-progress: true"
+    assert_includes workflow, "actions: read"
+    assert_includes workflow, "actions/workflows/test.yml/runs"
+    assert_includes workflow, '-f status=success'
+    assert_includes workflow, 'git merge-base --is-ancestor "$base_sha" "$GITHUB_SHA"'
+    assert_match(/push:\n\s+branches:\n\s+- main\n/, workflow)
+    assert_includes workflow, 'PUSH_BASE_SHA: ${{ github.event.before }}'
+    assert_includes workflow, 'echo "base=$PUSH_BASE_SHA" >> "$GITHUB_OUTPUT"'
+    assert_includes workflow, 'base: ${{ steps.scope.outputs.base }}'
+    assert_includes workflow, 'CI_BASE_SHA: ${{ needs.scope.outputs.base }}'
+    refute_includes workflow, "github.run_id"
     assert_includes workflow, "ruby tests/ci_scope.rb"
     assert_includes workflow, "git diff --no-renames --name-only -z"
     %w[claude-easy/** tests/** .github/workflows/test.yml package.json package-lock.json].each do |path|

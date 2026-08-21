@@ -2,6 +2,8 @@ name: Test
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "claude-easy/**"
       - "tests/**"
@@ -20,10 +22,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -31,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      base: ${{ steps.scope.outputs.base }}
       macos: ${{ steps.scope.outputs.macos }}
       windows: ${{ steps.scope.outputs.windows }}
     steps:
@@ -45,20 +49,42 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PUSH_BASE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             ruby tests/ci_scope.rb >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          base_sha="${PR_BASE_SHA:-$PUSH_BASE_SHA}"
-          if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base_sha^{commit}"; then
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base_sha="$PR_BASE_SHA"
+          else
+            base_sha="$(
+              gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs" \
+                -f branch="$GITHUB_REF_NAME" \
+                -f event=push \
+                -f status=success \
+                -f per_page=1 \
+                --jq '.workflow_runs[0].head_sha // empty' 2>/dev/null || true
+            )"
+          fi
+          if [ -z "$base_sha" ] ||
+             ! git cat-file -e "$base_sha^{commit}" ||
+             ! git merge-base --is-ancestor "$base_sha" "$GITHUB_SHA"; then
+            if [ "$EVENT_NAME" = "push" ] &&
+               [ -n "$PUSH_BASE_SHA" ] &&
+               [ "$PUSH_BASE_SHA" != "0000000000000000000000000000000000000000" ] &&
+               git cat-file -e "$PUSH_BASE_SHA^{commit}" &&
+               git merge-base --is-ancestor "$PUSH_BASE_SHA" "$GITHUB_SHA"; then
+              echo "base=$PUSH_BASE_SHA" >> "$GITHUB_OUTPUT"
+            fi
             ruby tests/ci_scope.rb >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "base=$base_sha" >> "$GITHUB_OUTPUT"
           paths=()
           while IFS= read -r -d '' path; do
             paths+=("$path")
@@ -66,6 +92,7 @@ jobs:
           ruby tests/ci_scope.rb "${paths[@]}" >> "$GITHUB_OUTPUT"
 
   macos:
+    needs: scope
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -99,13 +126,11 @@ jobs:
           sh -n claude-easy/scripts/uninstall_macos.sh
       - name: Source tree whitespace checks
         env:
-          PUSH_BASE_SHA: ${{ github.event.before }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_BASE_SHA: ${{ needs.scope.outputs.base }}
         run: |
           git diff --check
-          base_sha="${PR_BASE_SHA:-$PUSH_BASE_SHA}"
-          if [ -n "$base_sha" ] && [ "$base_sha" != "0000000000000000000000000000000000000000" ]; then
-            git diff --check "$base_sha" HEAD
+          if [ -n "$CI_BASE_SHA" ]; then
+            git diff --check "$CI_BASE_SHA" HEAD
           else
             git show --check --format= HEAD
           fi

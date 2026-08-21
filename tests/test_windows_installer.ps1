@@ -332,6 +332,14 @@ function Assert-True([bool]$Condition, [string]$Message) {
 }
 
 if ($onWindows) {
+    Initialize-ClaudeEasySendInput | Out-Null
+    $productionSendInputType = "ClaudeEasy.SendInputNative" -as [type]
+    Assert-True ($null -ne $productionSendInputType) "production SendInput type did not compile"
+    Assert-True (
+        @($productionSendInputType.GetMethods() | Where-Object {
+            $_.Name -eq "Send" -and $_.IsStatic -and $_.ReturnType -eq [bool]
+        }).Count -eq 1
+    ) "production SendInput method was unavailable"
     $originalRunningCheck = (Get-Command Test-ClashVergeRunning -CommandType Function).ScriptBlock
     $originalSendInputInitializer = (Get-Command Initialize-ClaudeEasySendInput -CommandType Function).ScriptBlock
     try {
@@ -529,7 +537,7 @@ function Invoke-TestPowerShell(
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static bool Send(System.UInt16[] keys) { System.IO.File.AppendAllText(RuntimePath, "\n# simulated refresh\n"); return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } System.IO.File.AppendAllText(RuntimePath, "\n# simulated refresh\n"); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
 $arguments = @{
     AppHome = [string]$payload.AppHome
@@ -734,8 +742,50 @@ try {
         Snapshot = $sameContentSnapshot
         LastWriteTicks = [System.IO.File]::GetLastWriteTimeUtc($sameContentRuntime).Ticks
     }
-    [System.IO.File]::SetLastWriteTimeUtc($sameContentRuntime, [DateTime]::UtcNow.AddSeconds(2))
-    Wait-ClashVergeRuntimeRefresh $sameContentRuntime $sameContentPrevious
+    $delayedRefreshSignal = Join-Path $sandbox "delayed-refresh-signal"
+    $delayedRefreshJob = Start-Job -ArgumentList @(
+        $sameContentRuntime,
+        [DateTime]::UtcNow.AddSeconds(2).ToFileTimeUtc(),
+        $delayedRefreshSignal
+    ) -ScriptBlock {
+        param([string]$RuntimePath, [long]$FutureFileTime, [string]$SignalPath)
+        while (-not (Test-Path -LiteralPath $SignalPath -PathType Leaf)) {
+            Start-Sleep -Milliseconds 20
+        }
+        Start-Sleep -Milliseconds 700
+        [System.IO.File]::SetLastWriteTimeUtc($RuntimePath, [DateTime]::FromFileTimeUtc($FutureFileTime))
+    }
+    $refreshWait = [System.Diagnostics.Stopwatch]::StartNew()
+    [System.IO.File]::WriteAllText($delayedRefreshSignal, "go")
+    try {
+        Wait-ClashVergeRuntimeRefresh $sameContentRuntime $sameContentPrevious
+    } finally {
+        $refreshWait.Stop()
+        Stop-Job $delayedRefreshJob -ErrorAction SilentlyContinue
+        Remove-Job $delayedRefreshJob -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $delayedRefreshSignal -Force -ErrorAction SilentlyContinue
+    }
+    Assert-True ($refreshWait.ElapsedMilliseconds -ge 400) "runtime refresh wait returned before the file changed"
+
+    $hashOnlyRuntime = Join-Path $sandbox "hash-only-runtime.yaml"
+    [System.IO.File]::WriteAllText($hashOnlyRuntime, "runtime-a")
+    $hashOnlySnapshot = Get-OptionalFileSnapshot $hashOnlyRuntime "runtime"
+    $hashOnlyTimestamp = [System.IO.File]::GetLastWriteTimeUtc($hashOnlyRuntime)
+    $hashOnlyPrevious = [pscustomobject]@{
+        Snapshot = $hashOnlySnapshot
+        LastWriteTicks = $hashOnlyTimestamp.Ticks
+    }
+    [System.IO.File]::WriteAllText($hashOnlyRuntime, "runtime-b")
+    [System.IO.File]::SetLastWriteTimeUtc($hashOnlyRuntime, $hashOnlyTimestamp)
+    $hashOnlyCurrent = Get-OptionalFileSnapshot $hashOnlyRuntime "runtime"
+    Assert-True ($hashOnlyCurrent.Identity -ceq $hashOnlySnapshot.Identity) "hash-only refresh changed file identity"
+    Assert-True (
+        [System.IO.File]::GetLastWriteTimeUtc($hashOnlyRuntime).Ticks -le $hashOnlyPrevious.LastWriteTicks
+    ) "hash-only refresh advanced the timestamp"
+    Assert-True (
+        (Get-BytesSha256 $hashOnlyCurrent.Bytes) -cne (Get-BytesSha256 $hashOnlySnapshot.Bytes)
+    ) "hash-only refresh did not change content"
+    Wait-ClashVergeRuntimeRefresh $hashOnlyRuntime $hashOnlyPrevious
     Assert-True (
         (Get-ClashRuntimeYamlMappingEntry "'rule-set:managed':").Key -ceq "rule-set:managed"
     ) "runtime YAML parser rejected a single-quoted policy key"
