@@ -45,6 +45,7 @@ class SkillContractTest < Minitest::Test
     claude-easy/scripts/macos/patch_profiles/profile_writer.rb
     claude-easy/scripts/macos/patch_profiles/subscriptions.rb
     claude-easy/scripts/macos/patch_profiles/runtime.rb
+    claude-easy/scripts/macos/patch_profiles/client_switches.rb
     claude-easy/scripts/macos/patch_profiles/log_repair.rb
     claude-easy/scripts/macos/patch_profiles/cli.rb
     claude-easy/scripts/macos/result_contract.rb
@@ -823,6 +824,43 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "2026-07-09"
   end
 
+  def test_clash_computer_use_rules_distinguish_windows_from_macos
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    core = File.read(File.join(SKILL, "references/policy-core.md"))
+    macos = File.read(File.join(SKILL, "references/macos.md"))
+    windows = File.read(File.join(SKILL, "references/windows.md"))
+    profiles = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
+    update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+    diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
+
+    [skill, core].each do |document|
+      assert_includes document, "Clash Verge Rev 有正常主窗口"
+      assert_includes document, "ClashX Meta 是纯菜单栏应用"
+      assert_includes document, "不得用 Computer Use 操作、读取或验证 ClashX Meta"
+    end
+    assert_includes windows, "有 Computer Use 时可以操作已经运行的 Clash Verge Rev"
+    assert_includes windows, "没有该工具或首次调用失败"
+    assert_includes macos, "不得为 ClashX Meta 尝试一次 Computer Use"
+    assert_includes macos, "--reconcile-client-switches --usage-profile N --json"
+    assert_includes macos, "向同一 PID 最多发送一次"
+    assert_includes macos, "点击菜单栏 ClashX Meta 图标"
+    assert_includes profiles, "macOS 原生开关协调命令"
+    assert_includes update, "macos_client_switch_reconciliation"
+    assert_includes diagnostics, "Computer Use 仍可用于浏览器"
+    assert_includes diagnostics, "AdGuard"
+    refute_includes diagnostics, "macOS 与 Windows 只要当前工具可用，就执行同一类 Clash 客户端开关"
+  end
+
+  def test_user_summaries_describe_native_macos_switches
+    readme = File.read(File.join(ROOT, "README.md"))
+    baseline = File.read(File.join(ROOT, "tests/baseline.md"))
+    [readme, baseline].each do |document|
+      assert_includes document, "macOS 不用 Computer Use 操作 ClashX Meta"
+      assert_includes document, "--reconcile-client-switches"
+      assert_includes document, "每个开关最多一次"
+    end
+  end
+
   def test_patch_runtime_route_verifiers_exist_on_both_platforms
     mac_verifier = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
     windows_verifier = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
@@ -1187,7 +1225,7 @@ class SkillContractTest < Minitest::Test
     macos = File.read(File.join(SKILL, "references/macos.md"))
     assert_includes macos, "当前订阅由已运行客户端的原生事件加载，本地控制器只用于观察和验收"
     assert_includes macos, "安全更新事务内部不得切换 TUN"
-    assert_includes macos, "`required_followups` 可按已保存档位通过客户端界面设置 TUN"
+    assert_includes macos, "`macos_client_switch_reconciliation` 运行独立原生开关协调命令"
     refute_includes policy, "更新写入前取得同一浏览器的区域指纹基线"
     refute_includes policy, "区域指纹重扫"
 

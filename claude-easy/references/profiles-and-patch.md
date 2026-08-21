@@ -34,8 +34,8 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 
 | 档位 | 用途 | 必须做 | 明确不做 | 验收 |
 | --- | --- | --- | --- | --- |
-| **档位 1｜普通浏览** | 国内网站、Twitter、Facebook、YouTube 等 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；用 Computer Use 确认 Clash 客户端的“设置为系统代理”已开启 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 国内站、Google、Twitter 和一个用户常用站点能稳定打开，速度无明显异常 |
-| **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，直接用 Computer Use 开启 TUN，并关闭 Clash 客户端自己的系统代理开关 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 国内站、Google、Twitter、一个用户常用站点、ChatGPT、Gemini 能稳定打开，速度无明显异常；命令行或 Agent 应用能联网 |
+| **档位 1｜普通浏览** | 国内网站、Twitter、Facebook、YouTube 等 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；macOS 原生开关协调命令确认 Clash 系统代理开启，Windows 按平台界面规则确认 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 国内站、Google、Twitter 和一个用户常用站点能稳定打开，速度无明显异常 |
+| **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，macOS 原生开关协调命令或 Windows 平台界面先开启 TUN，再关闭 Clash 自己的系统代理 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 国内站、Google、Twitter、一个用户常用站点、ChatGPT、Gemini 能稳定打开，速度无明显异常；命令行或 Agent 应用能联网 |
 | **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、Claude、分流、DNS 深度测试和两项 WebRTC 测试 |
 
 档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；除下述 AdGuard for Mac 已知兼容路径外，不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
@@ -44,7 +44,7 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 
 macOS 与 Windows 的三个档位都把 `profile.store-selected` 设为 `true`，并保留 `profile` 下的其他设置，使 Mihomo 重新加载订阅后继续使用原代理组选择。
 
-macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 完成后结束，不增加 TUN、IPv6、WebRTC 或 AI 分组设置。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置由安装程序直接修改，不依赖 Computer Use：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读。任一平台无法安全识别、备份、写入或确认时，停止且不继续打补丁。
+macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 不增加 TUN、IPv6、WebRTC 或 AI 分组补丁。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置由安装程序直接修改，不依赖 Computer Use：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读。任一平台无法安全识别、备份、写入或确认时，停止且不继续打补丁。
 
 ### 档位 3 的 Claude 区域指纹检测
 

@@ -109,7 +109,7 @@
 
 ### Computer Use 与 Sub Agent
 
-Windows Computer Use 已在 2026-07-09 发布的 Windows 桌面版 Codex 中提供；它与 macOS 一样可以看界面、点击和输入，但 Windows 只能操作当前会话的前台桌面，设备必须保持解锁，不能操作 UAC、管理员认证或系统安全授权窗口。开始前必须确认当前会话确实提供并启用了 Computer Use；产品支持不等于当前账号、地区或管理员策略一定开放。macOS 与 Windows 只要当前工具可用，就执行同一类 Clash 客户端开关、浏览器复现和泄漏测试；每次操作后重新读取界面确认。没有工具时如实写明并提供最短的手动步骤，不能伪造验收结果。能通过文件、脚本或结构化接口可靠完成的事情仍优先使用脚本，不为展示自动化而调用界面。参考：[OpenAI 2026-07-09 桌面版发布说明](https://openai.com/index/chatgpt-for-your-most-ambitious-work/)和[当前 Computer Use 文档](https://learn.chatgpt.com/docs/computer-use)。
+Windows Computer Use 已在 2026-07-09 发布的 Windows 桌面版 Codex 中提供；Windows 的 Clash Verge Rev 有正常主窗口，当前会话确实提供并启用 Computer Use 时可以操作已经运行的客户端，但只能操作前台桌面，设备必须保持解锁，不能操作 UAC、管理员认证或系统安全授权窗口。产品支持不等于当前账号、地区或管理员策略一定开放；没有工具或首次调用失败时不重试，按 Windows 平台文件使用其他自动化或最短手动步骤。macOS 的 ClashX Meta 是纯菜单栏应用，Computer Use 不得操作、读取或验证它；客户端开关只运行原生协调命令。Computer Use 仍可用于浏览器复现、泄漏测试和有正常窗口的 AdGuard，每次操作后重新读取界面确认。能通过文件、脚本或结构化接口可靠完成的事情始终优先使用脚本。参考：[OpenAI 2026-07-09 桌面版发布说明](https://openai.com/index/chatgpt-for-your-most-ambitious-work/)和[当前 Computer Use 文档](https://learn.chatgpt.com/docs/computer-use)。
 
 预计超过 10 分钟、步骤很多，并且至少有两路彼此独立的只读证据时，可以启用多个 Sub Agent。主代理先读取用途档位、定义问题范围和统一时间窗，再按应用界面、Mihomo 连接、系统网络或日志来源拆分任务。Sub Agent 只返回带时间戳的脱敏事实、反证和未知项，不读取或输出订阅地址、密钥与完整节点地址，不运行安装、卸载、订阅更新、配置恢复或任何写入命令。整个任务同时只有一个界面操作者和只有一个主动流量生成者，避免抢鼠标或让并发测试污染计时和连接记录。所有写入、更新、恢复和最终判断都由主代理串行完成。短任务、同一界面操作、同一文件事务或互相依赖的步骤不得为了形式而拆分。
 
@@ -192,7 +192,7 @@ ClashX Meta 统一日志出现 `DDFileLogManagerDefault` 的 Cocoa 257/513 或 P
 
 应用偶发服务器身份验证失败时，不套用国内分流修复。若统一日志显示 CFNetwork 路径 `uses proxy`、连接到本机 AdGuard 监听端口并出现 TLS 信任错误（如 `-9802` 或 `CERTIFICATE_VERIFY_FAILED`），而当前同一主机的证书链与主机名校验正常，随后同一路径重试成功，先按系统代理所有权冲突、PAC 查询中断或 Fake-IP 重用调查。单独看到 AdGuard、Fake-IP、某个订阅节点或 Clash `ProxyConfigHelper` 活动都不是结论；必须把 PAC 查询、端口所有者、代理配置变更、AdGuard 连接目标和 TLS 失败放进同一时间线。
 
-先读取系统 PAC 地址并确认回环端口由哪个进程监听，再读取 Clash 客户端自己的系统代理状态。档位 2、3 的基础组合是“Clash TUN 开、Clash 系统代理关、AdGuard 自动代理开”。若故障窗口显示 Clash 的 `ProxyConfigHelper` 正在改动或争用系统代理，且 Clash 自己的系统代理确实开启，只通过 Clash 客户端界面关闭它自己的系统代理；保留 Clash TUN、AdGuard 自动代理和 HTTPS 过滤。
+先读取系统 PAC 地址并确认回环端口由哪个进程监听，再读取 Clash 客户端自己的系统代理状态。档位 2、3 的基础组合是“Clash TUN 开、Clash 系统代理关、AdGuard 自动代理开”。若故障窗口显示 Clash 的 `ProxyConfigHelper` 正在改动或争用系统代理，且 Clash 自己的系统代理确实开启，macOS 运行原生开关协调命令关闭 Clash 系统代理，Windows 按平台界面规则处理；保留 Clash TUN、AdGuard 自动代理和 HTTPS 过滤。
 
 Mihomo 使用 Fake-IP 时，再从 AdGuard 日志读取故障连接的应用、目标域名和 `198.18.0.0/15` 目标地址，只输出脱敏后的时间、域名和假地址；同时从 Mihomo 持久 Fake-IP 数据库的只读快照读取该地址当前的反向映射。只有两项同时成立才确认 **Fake-IP 被重新分配**：AdGuard 在失败时把目标域名连接到某个 Fake-IP；同一个 Fake-IP 现在映射到另一个域名。错误域名与证书域名一致是第二项独立证据。不能只凭地址落在 Fake-IP 网段、当前证书已经恢复或刷新成功下结论。
 

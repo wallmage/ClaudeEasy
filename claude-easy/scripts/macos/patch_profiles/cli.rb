@@ -264,6 +264,7 @@ module ClaudeEasy
       restore_backup: nil,
       expected_current_sha256: nil,
       safe_update_all: false,
+      reconcile_client_switches: false,
       recover_profile_transaction: false,
       repair_clashx_logs: false,
       usage_profile: nil,
@@ -293,6 +294,9 @@ module ClaudeEasy
       opts.on("--restore-backup ID", "恢复指定备份") { |value| options[:restore_backup] = value }
       opts.on("--expected-current-sha256 SHA256", "恢复前要求当前配置哈希匹配") { |value| options[:expected_current_sha256] = value }
       opts.on("--safe-update-all", "更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
+      opts.on("--reconcile-client-switches", "按已保存档位协调 ClashX Meta 客户端开关") do
+        options[:reconcile_client_switches] = true
+      end
       opts.on("--recover-profile-transaction", "恢复未完成的配置事务及当前运行配置") { options[:recover_profile_transaction] = true }
       opts.on("--repair-clashx-logs", "修复 ClashX Meta 文件日志目录权限") { options[:repair_clashx_logs] = true }
       opts.on("--usage-profile N", Integer, "补丁采用的用途档位") { |value| options[:usage_profile] = value }
@@ -323,7 +327,8 @@ module ClaudeEasy
       options[:disable_subscription_auto_update], options[:enable_subscription_auto_update],
       options[:restore_owned_subscription_auto_update], options[:snapshot_initial],
       options[:list_backups], options[:compare_backup], options[:restore_backup],
-      options[:safe_update_all], options[:recover_profile_transaction], options[:repair_clashx_logs]
+      options[:safe_update_all], options[:reconcile_client_switches],
+      options[:recover_profile_transaction], options[:repair_clashx_logs]
     ].compact.reject { |value| value == false }
     incompatible_options = explicit_operations.length > 1 ||
                            (!explicit_operations.empty? &&
@@ -392,6 +397,61 @@ module ClaudeEasy
 
     lock_status = enter_outer_wrapper_lock(original_arguments, options)
     return lock_status if lock_status
+
+    if options[:reconcile_client_switches]
+      unless [1, 2, 3].include?(options[:usage_profile])
+        return emit_cli_result(
+          operation: "reconcile_client_switches", exit_code: 64,
+          status: "invalid_request", code: "usage_profile_required",
+          summary_zh: "协调客户端开关必须指定用途档位 1、2 或 3。"
+        ) if options[:json]
+        warn "协调客户端开关必须指定用途档位 1、2 或 3。"
+        return 64
+      end
+      if (rejected = reject_unapproved_usage_profile(
+        options, operation: "reconcile_client_switches", expected: options[:usage_profile]
+      ))
+        return rejected
+      end
+
+      result = reconcile_clashx_client_switches(usage_profile: options[:usage_profile])
+      if result.fetch(:status) == :reconciled
+        return emit_cli_result(
+          operation: "reconcile_client_switches", exit_code: 0, status: "ok",
+          code: "client_switches_reconciled", summary_zh: "ClashX Meta 客户端开关已经自动协调并验收。",
+          profile: options[:usage_profile], changes: result.fetch(:changes),
+          checks: result.fetch(:checks)
+        ) if options[:json]
+        puts "ClashX Meta 客户端开关已经自动协调并验收。"
+        return 0
+      end
+      if result.fetch(:status) == :unchanged
+        return emit_cli_result(
+          operation: "reconcile_client_switches", exit_code: 0, status: "no_change",
+          code: "client_switches_already_correct", summary_zh: "ClashX Meta 客户端开关已经符合当前档位。",
+          profile: options[:usage_profile], checks: result.fetch(:checks)
+        ) if options[:json]
+        puts "ClashX Meta 客户端开关已经符合当前档位。"
+        return 0
+      end
+
+      reason = result.fetch(:reason).to_s
+      message = if result.fetch(:reason) == :third_party_proxy_active
+                  "检测到第三方 PAC、自动发现或其他代理，未改动系统代理；请先决定是否保留该代理，不要直接覆盖。"
+                elsif options[:usage_profile] == 1
+                  "请点击菜单栏 ClashX Meta 图标，点击“设置为系统代理”，确认该项出现勾选；完成后回复“已完成”。"
+                else
+                  "请点击菜单栏 ClashX Meta 图标，先点击“TUN 模式”并确认出现勾选，再确认“设置为系统代理”没有勾选；完成后回复“已完成”。"
+                end
+      return emit_cli_result(
+        operation: "reconcile_client_switches", exit_code: 1, status: "failed",
+        code: "client_switch_manual_required", summary_zh: "无法安全自动完成 ClashX Meta 客户端开关。",
+        profile: options[:usage_profile], changes: result.fetch(:changes),
+        checks: result.fetch(:checks), messages: [message], warnings: [reason]
+      ) if options[:json]
+      warn message
+      return 1
+    end
 
     if options[:repair_clashx_logs]
       begin
@@ -768,15 +828,15 @@ module ClaudeEasy
         mark_wrapper_commit_receipt(options)
         required_followups = case options[:usage_profile]
                              when 1
-                               %w[client_switch_verification site_verification final_state_audit]
+                               %w[macos_client_switch_reconciliation site_verification final_state_audit]
                              when 2
                                %w[
-                                 client_switch_verification site_verification
+                                 macos_client_switch_reconciliation site_verification
                                  agent_connectivity_verification final_state_audit
                                ]
                              else
                                %w[
-                                 client_switch_verification site_verification
+                                 macos_client_switch_reconciliation site_verification
                                  agent_connectivity_verification
                                  route_verification dns_deep_test webrtc_test_1 webrtc_test_2
                                  region_fingerprint_test final_state_audit

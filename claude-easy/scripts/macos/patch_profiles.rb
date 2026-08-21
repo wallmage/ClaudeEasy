@@ -46,6 +46,26 @@ module ClaudeEasyAppleEvents
     AEDisposeDesc(event) if event
     AEDisposeDesc(target) if target
   end
+
+  def self.send_command(pid, event_class, event_id)
+    target = Fiddle::Pointer.malloc(AEDesc.size)
+    event = Fiddle::Pointer.malloc(AEDesc.size)
+    reply = Fiddle::Pointer.malloc(AEDesc.size)
+    [target, event, reply].each { |descriptor| descriptor[0, AEDesc.size] = "\0" * AEDesc.size }
+    pid_bytes = [Integer(pid)].pack("i")
+    return false unless AECreateDesc(0x6b706964, Fiddle::Pointer[pid_bytes], pid_bytes.bytesize, target).zero?
+    return false unless AECreateAppleEvent(
+      Integer(event_class), Integer(event_id), target, -1, 0, event
+    ).zero?
+
+    AESendMessage(event, reply, 3, 180).zero?
+  rescue StandardError
+    false
+  ensure
+    AEDisposeDesc(reply) if reply
+    AEDisposeDesc(event) if event
+    AEDisposeDesc(target) if target
+  end
 end
 
 module ClaudeEasyDarwinFilesystem
@@ -73,7 +93,7 @@ module ClaudeEasyBootstrap
   DEPENDENCIES = %w[
     result_contract operation_lock patch_profiles/transform patch_profiles/backups usage_profile_state patch_profiles/mihomo
     patch_profiles/profile_writer patch_profiles/subscriptions patch_profiles/runtime
-    patch_profiles/log_repair patch_profiles/cli
+    patch_profiles/client_switches patch_profiles/log_repair patch_profiles/cli
   ].freeze
   REQUIRED_APIS = {
     "ClaudeEasyResult" => %i[build valid_child_json?],
@@ -81,7 +101,7 @@ module ClaudeEasyBootstrap
     "ClaudeEasy" => %i[
       patch profile_paths validate_with_mihomo transactional_compare_and_write_bytes
       safe_update_all fetch_remote_subscription backup_remote_subscriptions controller_socket controller_request running_mihomo_config_paths
-      mihomo_core_paths repair_clashx_logs cli saved_usage_profile
+      mihomo_core_paths repair_clashx_logs reconcile_clashx_client_switches cli saved_usage_profile
     ]
   }.freeze
 

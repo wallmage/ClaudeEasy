@@ -12197,7 +12197,114 @@ class MacosPatcherTest < Minitest::Test
 
     assert_includes output, "--safe-update-all"
     assert_includes output, "--recover-profile-transaction"
+    assert_includes output, "--reconcile-client-switches"
     assert_empty error
+  end
+
+  def test_cli_reconciles_macos_client_switches_and_returns_manual_steps
+    success = {
+      status: :reconciled, reason: nil, changes: %i[tun system_proxy],
+      checks: [{ "name" => "connectivity", "ok" => true }]
+    }
+    ClaudeEasy.stub(:saved_usage_profile, 2) do
+      ClaudeEasy.stub(:reconcile_clashx_client_switches, success) do
+        output, error = capture_io do
+          assert_equal 0, ClaudeEasy.cli([
+            "--json", "--reconcile-client-switches", "--usage-profile", "2"
+          ])
+        end
+        assert_empty error
+        result = JSON.parse(output)
+        assert_equal "client_switches_reconciled", result.fetch("code")
+        assert_equal %w[tun system_proxy], result.fetch("changes")
+      end
+    end
+
+    manual = {
+      status: :manual_required, reason: :state_ambiguous, changes: [], checks: []
+    }
+    ClaudeEasy.stub(:saved_usage_profile, 3) do
+      ClaudeEasy.stub(:reconcile_clashx_client_switches, manual) do
+        output, error = capture_io do
+          assert_equal 1, ClaudeEasy.cli([
+            "--json", "--reconcile-client-switches", "--usage-profile", "3"
+          ])
+        end
+        assert_empty error
+        result = JSON.parse(output)
+        assert_equal "client_switch_manual_required", result.fetch("code")
+        assert_includes result.fetch("messages").join(" "), "点击菜单栏 ClashX Meta 图标"
+        assert_includes result.fetch("messages").join(" "), "TUN 模式"
+        assert_includes result.fetch("messages").join(" "), "设置为系统代理"
+      end
+    end
+  end
+
+  def test_cli_client_switch_reconciliation_requires_the_saved_profile
+    ClaudeEasy.stub(:saved_usage_profile, 1) do
+      output, error = capture_io do
+        assert_equal 10, ClaudeEasy.cli([
+          "--json", "--reconcile-client-switches", "--usage-profile", "2"
+        ])
+      end
+      assert_empty error
+      assert_equal "usage_profile_mismatch", JSON.parse(output).fetch("code")
+    end
+  end
+
+  def test_cli_client_switch_human_outputs_cover_every_result
+    output, error = capture_io do
+      assert_equal 64, ClaudeEasy.cli(["--reconcile-client-switches"])
+    end
+    assert_empty output
+    assert_includes error, "必须指定用途档位"
+
+    cases = [
+      [
+        2, { status: :reconciled, reason: nil, changes: [:tun], checks: [] },
+        0, "已经自动协调"
+      ],
+      [
+        2, { status: :unchanged, reason: nil, changes: [], checks: [] },
+        0, "已经符合当前档位"
+      ],
+      [
+        1, { status: :manual_required, reason: :state_ambiguous, changes: [], checks: [] },
+        1, "设置为系统代理"
+      ],
+      [
+        2, { status: :manual_required, reason: :third_party_proxy_active, changes: [], checks: [] },
+        1, "第三方 PAC"
+      ]
+    ]
+    cases.each do |profile, result, exit_code, expected|
+      ClaudeEasy.stub(:saved_usage_profile, profile) do
+        ClaudeEasy.stub(:reconcile_clashx_client_switches, result) do
+          output, error = capture_io do
+            assert_equal exit_code, ClaudeEasy.cli([
+              "--reconcile-client-switches", "--usage-profile", profile.to_s
+            ])
+          end
+          assert_includes "#{output}#{error}", expected
+        end
+      end
+    end
+
+    third_party = {
+      status: :manual_required, reason: :third_party_proxy_active,
+      changes: [], checks: []
+    }
+    ClaudeEasy.stub(:saved_usage_profile, 1) do
+      ClaudeEasy.stub(:reconcile_clashx_client_switches, third_party) do
+        output, error = capture_io do
+          assert_equal 1, ClaudeEasy.cli([
+            "--json", "--reconcile-client-switches", "--usage-profile", "1"
+          ])
+        end
+        assert_empty error
+        assert_includes JSON.parse(output).fetch("messages").join(" "), "第三方 PAC"
+      end
+    end
   end
 
   def test_cli_recovers_a_pending_profile_transaction_for_uninstall
@@ -12552,13 +12659,13 @@ class MacosPatcherTest < Minitest::Test
     Dir.mktmpdir do |directory|
       targets = [{ name: "friend", path: File.join(directory, "friend.yaml") }]
       expected_followups = {
-        1 => %w[client_switch_verification site_verification final_state_audit],
+        1 => %w[macos_client_switch_reconciliation site_verification final_state_audit],
         2 => %w[
-          client_switch_verification site_verification
+          macos_client_switch_reconciliation site_verification
           agent_connectivity_verification final_state_audit
         ],
         3 => %w[
-          client_switch_verification site_verification agent_connectivity_verification
+          macos_client_switch_reconciliation site_verification agent_connectivity_verification
           route_verification dns_deep_test webrtc_test_1 webrtc_test_2
           region_fingerprint_test final_state_audit
         ]
@@ -15078,6 +15185,355 @@ class MacosPatcherTest < Minitest::Test
       identity, sender: ->(*_arguments) { flunk "stale PID must not receive an event" },
       process_reader: -> { identity.merge(pid: 54_321) }
     )
+  end
+
+  def test_clashx_script_commands_target_only_the_existing_process
+    identity = {
+      pid: 12_345, started: "Thu Aug 20 00:14:18 2026",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    calls = []
+    sender = lambda do |pid, event_class, event_id|
+      calls << [pid, event_class, event_id]
+      true
+    end
+
+    assert ClaudeEasy.request_clashx_script_command(
+      identity, :tun_mode, sender: sender, process_reader: -> { identity }
+    )
+    assert ClaudeEasy.request_clashx_script_command(
+      identity, :system_proxy, sender: sender, process_reader: -> { identity }
+    )
+    assert_equal [
+      [12_345, 0x636c6173, 0x6874756e],
+      [12_345, 0x636c6173, 0x68746f67]
+    ], calls
+    refute ClaudeEasy.request_clashx_script_command(
+      identity, :unknown, sender: ->(*_arguments) { flunk }, process_reader: -> { identity }
+    )
+    refute ClaudeEasy.request_clashx_script_command(
+      identity, :tun_mode, sender: ->(*_arguments) { flunk },
+      process_reader: -> { identity.merge(pid: 54_321) }
+    )
+    refute ClaudeEasy.request_clashx_script_command(
+      identity, :tun_mode, sender: ->(*_arguments) { raise IOError },
+      process_reader: -> { identity }
+    )
+  end
+
+  def test_low_level_client_switch_event_sender_covers_success_and_failures
+    disposer = ->(*_arguments) { 0 }
+    ClaudeEasyAppleEvents.stub(:AEDisposeDesc, disposer) do
+      ClaudeEasyAppleEvents.stub(:AECreateDesc, ->(*_arguments) { 0 }) do
+        ClaudeEasyAppleEvents.stub(:AECreateAppleEvent, ->(*_arguments) { 0 }) do
+          ClaudeEasyAppleEvents.stub(:AESendMessage, ->(*_arguments) { 0 }) do
+            assert ClaudeEasyAppleEvents.send_command(12_345, 0x636c6173, 0x6874756e)
+          end
+          ClaudeEasyAppleEvents.stub(:AESendMessage, ->(*_arguments) { raise IOError }) do
+            refute ClaudeEasyAppleEvents.send_command(12_345, 0x636c6173, 0x6874756e)
+          end
+        end
+        ClaudeEasyAppleEvents.stub(:AECreateAppleEvent, ->(*_arguments) { 1 }) do
+          refute ClaudeEasyAppleEvents.send_command(12_345, 0x636c6173, 0x6874756e)
+        end
+      end
+      ClaudeEasyAppleEvents.stub(:AECreateDesc, ->(*_arguments) { 1 }) do
+        refute ClaudeEasyAppleEvents.send_command(12_345, 0x636c6173, 0x6874756e)
+      end
+    end
+  end
+
+  def test_client_switch_reconciliation_is_a_noop_when_profile_two_matches
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    state = {
+      tun_effective: :enabled, tun_intent: true,
+      system_proxy_effective: :disabled, system_proxy_intent: false
+    }
+    events = []
+    checks = 0
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 2, identity_reader: -> { identity },
+      command_support_reader: ->(_current) { true }, state_reader: -> { state },
+      command_sender: ->(_current, command) { events << command; true },
+      connectivity_checker: -> { checks += 1; true }, sleeper: ->(_seconds) {}
+    )
+
+    assert_equal :unchanged, result.fetch(:status)
+    assert_empty events
+    assert_equal 1, checks
+  end
+
+  def test_profile_two_reconciliation_orders_one_event_per_switch
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    state = {
+      tun_effective: :disabled, tun_intent: false,
+      system_proxy_effective: :clash, system_proxy_intent: true
+    }
+    order = []
+    sender = lambda do |_current, command|
+      order << command
+      if command == :tun_mode
+        state = state.merge(tun_effective: :enabled, tun_intent: true)
+      else
+        state = state.merge(system_proxy_effective: :disabled, system_proxy_intent: false)
+      end
+      true
+    end
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 2, identity_reader: -> { identity },
+      command_support_reader: ->(_current) { true }, state_reader: -> { state },
+      command_sender: sender,
+      connectivity_checker: -> { order << :connectivity; true }, sleeper: ->(_seconds) {}
+    )
+
+    assert_equal :reconciled, result.fetch(:status)
+    assert_equal %i[tun_mode connectivity system_proxy connectivity], order
+    assert_equal %i[tun system_proxy], result.fetch(:changes)
+  end
+
+  def test_client_switch_reconciliation_refuses_ambiguous_or_third_party_state
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    events = []
+    common = {
+      identity_reader: -> { identity }, command_support_reader: ->(_current) { true },
+      command_sender: ->(_current, command) { events << command; true },
+      connectivity_checker: -> { true }, sleeper: ->(_seconds) {}
+    }
+    ambiguous = ClaudeEasy.reconcile_clashx_client_switches(
+      **common, usage_profile: 2,
+      state_reader: -> {
+        {
+          tun_effective: :enabled, tun_intent: false,
+          system_proxy_effective: :disabled, system_proxy_intent: false
+        }
+      }
+    )
+    third_party = ClaudeEasy.reconcile_clashx_client_switches(
+      **common, usage_profile: 1,
+      state_reader: -> {
+        {
+          tun_effective: :disabled, tun_intent: false,
+          system_proxy_effective: :other, system_proxy_intent: false
+        }
+      }
+    )
+
+    assert_equal :manual_required, ambiguous.fetch(:status)
+    assert_equal :state_ambiguous, ambiguous.fetch(:reason)
+    assert_equal :manual_required, third_party.fetch(:status)
+    assert_equal :third_party_proxy_active, third_party.fetch(:reason)
+    assert_empty events
+  end
+
+  def test_client_switch_reconciliation_never_retries_a_toggle
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    state = {
+      tun_effective: :disabled, tun_intent: false,
+      system_proxy_effective: :disabled, system_proxy_intent: false
+    }
+    events = []
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 2, identity_reader: -> { identity },
+      command_support_reader: ->(_current) { true }, state_reader: -> { state },
+      command_sender: ->(_current, command) { events << command; true },
+      connectivity_checker: -> { true }, sleeper: ->(_seconds) {}, attempts: 2
+    )
+
+    assert_equal :manual_required, result.fetch(:status)
+    assert_equal :native_command_unverified, result.fetch(:reason)
+    assert_equal [:tun_mode], events
+  end
+
+  def test_client_switch_state_combines_preferences_runtime_and_system_proxy
+    requester = lambda do |_method, endpoint, _body|
+      assert_equal "/configs", endpoint
+      [200, JSON.generate(
+        "tun" => { "enable" => true }, "mixed-port" => 7893,
+        "port" => 0, "socks-port" => 0
+      )]
+    end
+    preferences = {
+      "restoreTunProxy" => "true", "proxyPortAutoSet" => "false"
+    }
+    state = ClaudeEasy.clashx_client_switch_state(
+      requester: requester, preference_reader: ->(key) { preferences.fetch(key) },
+      proxy_reader: -> {
+        {
+          http_enabled: false, http_port: 0,
+          https_enabled: false, https_port: 0,
+          socks_enabled: false, socks_port: 0,
+          pac_enabled: false, auto_discovery_enabled: false
+        }
+      }
+    )
+
+    assert_equal :enabled, state.fetch(:tun_effective)
+    assert_equal true, state.fetch(:tun_intent)
+    assert_equal :disabled, state.fetch(:system_proxy_effective)
+    assert_equal false, state.fetch(:system_proxy_intent)
+  end
+
+  def test_clashx_script_dictionary_supports_a_unicode_application_path
+    Dir.mktmpdir("客户端应用") do |directory|
+      bundle = File.join(directory, "ClashX Meta.app")
+      executable = File.join(bundle, "Contents/MacOS/ClashX Meta")
+      dictionary = File.join(bundle, "Contents/Resources/ProxySetting.sdef")
+      FileUtils.mkdir_p(File.dirname(executable))
+      FileUtils.mkdir_p(File.dirname(dictionary))
+      File.binwrite(executable, "")
+      File.binwrite(dictionary, '<command code="clashtun"/><command code="clashtog"/>')
+      identity = { pid: 12_345, started: "same", executable: executable }
+
+      assert ClaudeEasy.clashx_script_commands_supported?(identity)
+    end
+  end
+
+  def test_client_switch_reconciliation_rechecks_the_process_before_success
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    identities = [identity, identity, identity.merge(pid: 54_321)]
+    state = {
+      tun_effective: :enabled, tun_intent: true,
+      system_proxy_effective: :disabled, system_proxy_intent: false
+    }
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 2, identity_reader: -> { identities.shift || identities.last },
+      command_support_reader: ->(_current) { true }, state_reader: -> { state },
+      command_sender: ->(*_arguments) { flunk }, connectivity_checker: -> { true },
+      sleeper: ->(_seconds) {}
+    )
+
+    assert_equal :manual_required, result.fetch(:status)
+    assert_equal :client_changed, result.fetch(:reason)
+  end
+
+  def test_system_proxy_snapshot_classifies_clash_disabled_and_third_party
+    status = Struct.new(:success?).new(true)
+    output = <<~SCUTIL
+      <dictionary> {
+        HTTPEnable : 1
+        HTTPPort : 7893
+        HTTPSEnable : 1
+        HTTPSPort : 7893
+        SOCKSEnable : 1
+        SOCKSPort : 7893
+        ProxyAutoConfigEnable : 0
+      }
+    SCUTIL
+    snapshot = ClaudeEasy.macos_system_proxy_snapshot(
+      runner: ->(*_arguments) { [output, "", status] }
+    )
+    assert_equal :clash, ClaudeEasy.classify_system_proxy(snapshot, 7893, 7893)
+    assert_equal :disabled, ClaudeEasy.classify_system_proxy(
+      snapshot.transform_values { |value| value == true ? false : value }, 7893, 7893
+    )
+    assert_equal :other, ClaudeEasy.classify_system_proxy(
+      snapshot.merge(pac_enabled: true), 7893, 7893
+    )
+  end
+
+  def test_client_switch_readers_fail_closed_on_bad_sources
+    refute ClaudeEasy.clashx_script_commands_supported?({})
+    assert_nil ClaudeEasy.macos_system_proxy_snapshot(
+      runner: ->(*_arguments) { raise IOError }
+    )
+    assert_nil ClaudeEasy.runtime_client_switch_values(
+      ->(*_arguments) { [200, "not json"] }
+    )
+    requester = ->(*_arguments) {
+      [200, JSON.generate(
+        "tun" => { "enable" => false }, "mixed-port" => 7893
+      )]
+    }
+    assert_nil ClaudeEasy.clashx_client_switch_state(
+      requester: requester, preference_reader: ->(_key) { raise IOError },
+      proxy_reader: -> { {} }
+    )
+    assert_nil ClaudeEasy.wait_for_client_switch(
+      { pid: 1 }, -> { { pid: 1 } }, -> { raise IOError }, 1, ->(_seconds) {}
+    ) { true }
+  end
+
+  def test_profile_one_uses_default_native_helpers
+    identity = {
+      pid: 12_345, started: "same",
+      executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+    }
+    proxy = :disabled
+    pending_proxy = false
+    delayed_read = false
+    preferences = { "restoreTunProxy" => "false", "proxyPortAutoSet" => "false" }
+    requester = lambda do |_method, _endpoint, _body|
+      [200, JSON.generate(
+        "tun" => { "enable" => false }, "mixed-port" => 7893
+      )]
+    end
+    proxy_snapshot = lambda do
+      if pending_proxy && !delayed_read
+        delayed_read = true
+      elsif pending_proxy
+        proxy = :clash
+      end
+      enabled = proxy == :clash
+      {
+        http_enabled: enabled, http_port: enabled ? 7893 : 0,
+        https_enabled: enabled, https_port: enabled ? 7893 : 0,
+        socks_enabled: enabled, socks_port: enabled ? 7893 : 0,
+        pac_enabled: false, auto_discovery_enabled: false
+      }
+    end
+    modes = []
+    ClaudeEasy.stub(:clashx_running_identity, identity) do
+      ClaudeEasy.stub(:clashx_script_commands_supported?, true) do
+        ClaudeEasy.stub(:current_runtime_requester, -> { requester }) do
+          ClaudeEasy.stub(:defaults_read, ->(key) { preferences.fetch(key) }) do
+            ClaudeEasy.stub(:macos_system_proxy_snapshot, proxy_snapshot) do
+              ClaudeEasy.stub(:request_clashx_script_command, lambda { |_current, command, *_options|
+                assert_equal :system_proxy, command
+                pending_proxy = true
+                preferences["proxyPortAutoSet"] = "true"
+                true
+              }) do
+                ClaudeEasy.stub(:default_connectivity_healthy?, lambda { |options|
+                  modes << options.fetch(:tun_mode)
+                  true
+                }) do
+                  result = ClaudeEasy.reconcile_clashx_client_switches(usage_profile: 1)
+                  assert_equal :reconciled, result.fetch(:status), result.inspect
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    assert_equal [:disabled], modes
+  end
+
+  def test_client_switch_reconciliation_converts_unexpected_errors_to_manual_result
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 9, identity_reader: -> { raise IOError }
+    )
+    assert_equal :invalid_profile, result.fetch(:reason)
+
+    result = ClaudeEasy.reconcile_clashx_client_switches(
+      usage_profile: 1, identity_reader: -> { raise IOError }
+    )
+    assert_equal :unexpected_error, result.fetch(:reason)
   end
 
   def test_clashx_runtime_waits_for_profile_match_and_full_health

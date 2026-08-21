@@ -27,6 +27,8 @@
 
 同一用户请求和同一用途档位在 macOS 与 Windows 上遵守相同的授权、隐私、客户端安全边界和用户可见完成条件。平台文件分别定义各自的实现方式与失败处理；跨平台摘要不得把两端不同的实现方式写成相同。新增或改变共同边界时，只有两个平台都实现并通过对应测试后才能报告完成。
 
+Clash Verge Rev 有正常主窗口，Windows 当前环境提供 Computer Use 时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用 Computer Use 操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；Computer Use 仍可用于有正常窗口的浏览器和 AdGuard。没有 Computer Use 时只改变 Windows 客户端或浏览器动作由谁执行，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
+
 绝对不要退出、停止或重启 Clash 客户端。不得执行、建议或要求用户执行这类操作。中国用户通常依赖客户端越过 GFW；关闭客户端会让 AI 助手断线，并可能让修复停在一半。
 
 任何 Patch、Diagnostics、代码审查、测试或环境探测都不得运行 ClashX Meta 主程序，包括直接执行应用包中的 `ClashX Meta`、传入 `--version` 或其他参数、使用 `open` 或 LaunchServices 打开应用，以及通过 Computer Use 启动未运行的客户端。这些动作可能创建第二个客户端并中断现有 Mihomo。客户端版本只从应用的 `Info.plist` 读取；进程、日志、偏好和本地控制器用于读取运行状态；内核版本只检查 Mihomo。客户端未运行时保持未运行，无法取得实时状态就写成未验证，不能为检查而启动。

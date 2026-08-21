@@ -19,11 +19,16 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 配置常量只读取 [references/policy.json](references/policy.json)；生成或判断机器输出时读取 [references/result-contract.json](references/result-contract.json)。全部状态以 `policy-core.md` 的“输出格式”和 `result-contract.json` 为准。本文件保留代理入口、模块选择、执行顺序和不可突破的安全边界；各策略文件按上表分别成为其模块的唯一权威来源。
 
+## 平台界面能力
+
+- **Windows：** Clash Verge Rev 有正常主窗口。当前环境有 Computer Use 时可以操作已经运行的客户端；没有该工具或首次调用失败时，先使用平台已有的安全自动化，否则立即给用户准确的手动步骤。
+- **macOS：** ClashX Meta 是纯菜单栏应用，没有主窗口。不得用 Computer Use 操作、读取或验证 ClashX Meta，也不得为它尝试附加一次。TUN 和 Clash 系统代理优先使用 macOS 原生开关协调命令；Computer Use 仍可用于 Safari、Chrome、AdGuard 等有正常窗口的应用。
+
 ## 不可突破的边界
 
 1. **绝对不要退出、停止或重启 Clash 客户端。** 不得执行、建议或要求用户这样做。
 2. **不得运行 ClashX Meta 主程序做检查。** 不用 `open`、LaunchServices、Computer Use 或 `--version` 启动它；客户端版本读取 `Info.plist`，运行状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo。客户端未运行时保持未运行。
-3. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。只有对应任务策略明确允许时，才通过客户端界面切换 TUN、Clash 自己的系统代理或 AdGuard for Mac 的兼容设置。
+3. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按平台策略操作 Clash Verge Rev；AdGuard for Mac 的兼容设置只通过它自己的正常窗口。
 4. 安全更新必须保留热加载，但只能走已经运行的客户端原生入口。候选加载与失败恢复各最多一次；运行配置变化后继续等待 TUN、代理选择、DNS 和实际连接全部恢复，禁止直接重载 Mihomo、直接改 TUN 或循环重试。
 5. 只处理 Clash 当前存储位置中的订阅；无法确认本地或 iCloud 状态时停止，不猜。
 6. 写入候选必须通过 YAML 重读、二次转换一致性检查和 Mihomo 1.19.27 以上版本的 30 秒校验；失败时保持原文件。
@@ -84,6 +89,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 ```bash
 bash scripts/install_macos.sh --profile N
 bash scripts/uninstall_macos.sh
+ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json
 ruby scripts/macos/patch_profiles.rb --json
 ```
 
@@ -96,7 +102,7 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 .\scripts\uninstall_windows.cmd
 ```
 
-平台脚本只完成安全的文件事务。脚本成功不等于档位完成；必须继续按策略通过客户端界面完成当前档位的客户端开关与验收。
+平台安装脚本只完成安全的文件事务。脚本成功不等于档位完成；macOS 随后运行原生开关协调命令，Windows 按平台策略完成客户端开关与验收。
 
 受保护写入只有客户端本来就未运行时才执行；客户端运行时整批延期，不要求用户退出、停止或重启。中断的客户端敏感事务同样遵守记录中的恢复权限。
 
@@ -108,7 +114,7 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 Windows 先检查当前工具列表是否提供 Computer Use；没有该工具，或首次调用失败时，不重试，立即把上述界面步骤交给用户，并要求操作完成后回复“我已经手动更新完了”。收到该回复后运行 `.\scripts\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json`；只在 UI 刷新完成或用户明确确认后提供的 `-RefreshConfirmed` 就是本轮刷新凭据，订阅字节和时间戳未变化也可以是有效结果。客户端刷新会通过已安装的全局脚本按已保存档位重新应用补丁，验收命令逐份检查 YAML、代理组、Mihomo 校验、全局脚本、运行配置和自动更新关闭状态，并恢复和核对更新前 TUN 与代理选择。失败时恢复备份并重新加载原运行配置。Windows 使用 Computer Use 自动刷新成功时也必须运行同一验收命令，不能直接结束。
 
-`safe_update_completed`、`safe_update_verified` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups` 中的每一项，再做最终状态复核，不得提前输出最终说明。两端更新后都必须继续首次 Patch 中的平台客户端动作和全部验收；安全更新已经重新应用订阅文件补丁，不得再次运行安装命令。档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接开启 TUN 并关闭 Clash 自己的系统代理；档位 3 继承档位 2，再完成完整分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。没有 Computer Use 时不能省略这些步骤：把必须由界面或浏览器完成的动作逐项交给用户并读取结果；未验证项目不得宣称完成。最终状态复核必须再次确认订阅自动更新关闭；任一原代理组或节点选择无法恢复时拒绝更新。只有当前档位规定的全部验收都取得本轮通过结果，才算更新任务完成。
+`safe_update_completed`、`safe_update_verified` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups` 中的每一项，再做最终状态复核，不得提前输出最终说明。两端更新后都必须继续首次 Patch 中的平台客户端动作和全部验收；安全更新已经重新应用订阅文件补丁，不得再次运行安装命令。macOS 的 `macos_client_switch_reconciliation` 必须运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 继续按平台策略使用 Computer Use 或手动步骤。档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接开启 TUN 并关闭 Clash 自己的系统代理；档位 3 继承档位 2，再完成完整分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。没有 Computer Use 时，只影响 Windows 客户端和浏览器动作由谁执行，不得减少验收；macOS 不得因此尝试用 Computer Use 操作 ClashX Meta。未验证项目不得宣称完成。最终状态复核必须再次确认订阅自动更新关闭；任一原代理组或节点选择无法恢复时拒绝更新。只有当前档位规定的全部验收都取得本轮通过结果，才算更新任务完成。
 
 macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能按当前运行客户端动态生成原生请求身份。Windows 不直接下载订阅，只调用 Clash Verge Rev 的客户端原生刷新。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝接受本轮更新。平台命令内部不追加 WebRTC 或区域指纹检查；命令返回后仍按已保存档位完成任务验收。
 

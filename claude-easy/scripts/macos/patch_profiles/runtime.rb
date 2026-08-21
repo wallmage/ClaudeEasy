@@ -13,6 +13,10 @@ module ClaudeEasy
   CLASHX_RELOAD_COMPLETION = "Initial configuration complete, total time:".b.freeze
   CLASHX_LOG_SESSION_PATTERN = /\A\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\z/.freeze
   CLASHX_CORE_LOG_PATTERN = /\Aclashx_core_\d{2}_\d{2}-\d{2}-\d{2}\.log(?:\.\d+)?\z/.freeze
+  CLASHX_SCRIPT_COMMANDS = {
+    tun_mode: [0x636c6173, 0x6874756e],
+    system_proxy: [0x636c6173, 0x68746f67]
+  }.freeze
 
   CURL_ISOLATED_ENVIRONMENT = {
     "http_proxy" => nil, "https_proxy" => nil, "all_proxy" => nil,
@@ -51,6 +55,21 @@ module ClaudeEasy
     return false unless same_clashx_process?(identity, process_reader.call)
 
     sender.call(identity.fetch(:pid), "clash://update-config") &&
+      same_clashx_process?(identity, process_reader.call)
+  rescue StandardError
+    false
+  end
+
+  def request_clashx_script_command(identity, command,
+                                    sender: ClaudeEasyAppleEvents.method(:send_command),
+                                    process_reader: nil)
+    codes = CLASHX_SCRIPT_COMMANDS[command]
+    return false unless codes
+
+    process_reader ||= method(:clashx_running_identity)
+    return false unless same_clashx_process?(identity, process_reader.call)
+
+    sender.call(identity.fetch(:pid), *codes) &&
       same_clashx_process?(identity, process_reader.call)
   rescue StandardError
     false
