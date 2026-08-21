@@ -1196,7 +1196,7 @@ test('PowerShell safe update checks installed script and proxy-group prerequisit
     'Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript'
   );
   const profileCheck = installer.indexOf(
-    'Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)'
+    'Assert-ClaudeEasyProxyGroupCollection $text $publicSubscriptionLabel'
   );
   const mihomoCheck = installer.indexOf('Test-MihomoCandidate $core $text $profilesDirectory');
   const manifestRemoval = installer.indexOf(
@@ -1230,15 +1230,35 @@ test('Windows subscription updates use snapshot, client refresh, and verificatio
 
 test('Windows client refresh preserves the pre-update runtime state and reloads rollback files', () => {
   const source = fs.readFileSync(installerPath, 'utf8');
+  const safeUpdate = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
+  const windowsTests = fs.readFileSync(windowsInstallerTestPath, 'utf8');
   const verifyStart = source.indexOf('if ($VerifySafeUpdate) {\n    $manifestSnapshot');
   const verifyEnd = source.indexOf('\nif ($ListBackups) {', verifyStart);
   const verify = source.slice(verifyStart, verifyEnd);
-  const successReload = verify.indexOf('Invoke-ClashVergeReactivationShortcut');
+  const updateAttempt = verify.indexOf('$updateAttempt = Set-SafeUpdateActivationAttempt');
+  const successReload = verify.indexOf('Invoke-ClashVergeReactivationShortcut', updateAttempt);
   const successHealth = verify.indexOf('Wait-ClashVergeRuntimeHealthy', successReload);
-  const manifestRemoval = verify.indexOf('Remove-VerifiedOwnedFile $safeUpdateStatePath');
-  assert.match(source, /Version = 3[\s\S]*Runtime = \$runtimeSnapshot/);
+  const manifestRemoval = verify.indexOf('Remove-VerifiedOwnedFile $safeUpdateStatePath', successHealth);
+  assert.match(source, /Version = 4[\s\S]*Runtime = \$runtimeSnapshot[\s\S]*UpdateDispatchCommittedFor = \$null/);
   assert.match(source, /Get-ClashRuntimeState \$runtimeContext/);
   assert.match(source, /Invoke-ClashVergeReactivationShortcut \$reactivationShortcut/);
+  assert.ok(updateAttempt >= 0 && updateAttempt < successReload,
+    'safe-update reload eligibility is not persisted before the shortcut');
+  assert.match(
+    verify,
+    /if \(\[bool\]\$updateAttempt\.Allowed\) \{[\s\S]*Invoke-ClashVergeReactivationShortcut[\s\S]*Wait-ClashVergeRuntimeHealthy[\s\S]*UpdateDispatchCommittedFor\.RuntimeBefore/,
+    'same-client retries cannot resume with the persisted pre-dispatch runtime fingerprint'
+  );
+  assert.match(
+    safeUpdate,
+    /Client = \$ClientIdentity[\s\S]*RuntimeBefore = \[pscustomobject\]\[ordered\]@[\s\S]*Sha256 = Get-BytesSha256/,
+    'activation records do not bind the client to the pre-dispatch runtime fingerprint'
+  );
+  assert.match(
+    windowsTests,
+    /\$activationIdentityA \| ConvertTo-Json -Compress \| ConvertFrom-Json[\s\S]*Test-ClashVergeProcessIdentity \$activationIdentityRoundTrip/,
+    'PowerShell 5.1 and 7 do not exercise client identity JSON roundtrips'
+  );
   assert.match(source, /Wait-ClashVergeRuntimeHealthy/);
   assert.ok(successReload >= 0 && successHealth > successReload && manifestRemoval > successHealth,
     'successful verification must reload the current subscription before deleting the manifest');
@@ -1265,11 +1285,14 @@ test('Windows verification and restore fail closed on stale or unsafe state', ()
   assert.match(runtime, /\$selections = New-OrdinalStringDictionary/);
   assert.match(source, /\$runtimeRecoverySelections = New-OrdinalStringDictionary/);
   assert.match(source, /\$expectedSelections = New-OrdinalStringDictionary/);
+  assert.doesNotMatch(source, /IsNullOrWhiteSpace\(\$profile\.Name\)\) \{ \$profile\.Uid \}/);
+  assert.doesNotMatch(source, /IsNullOrWhiteSpace\(\$entry\.Target\.Name\)\) \{ \$entry\.Target\.Uid \}/);
+  assert.doesNotMatch(safeUpdate, /\$conflicts \+= \$recovery\.File|\$failures \+= \$recovery\.File/);
   assert.match(fs.readFileSync(routeVerifierPath, 'utf8'), /Assert-NoCaseInsensitiveJsonKeyCollisions \$content[\s\S]*ConvertFrom-Json/);
   assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);
   assert.match(safeUpdate, /UsageProfile -lt 3[\s\S]*tun\.enable/);
   assert.match(runtime, /FieldOffset\(0\).*MOUSEINPUT mouse[\s\S]*struct MOUSEINPUT/);
-  assert.match(refresh, /GetLastWriteTimeUtc\(\$RuntimePath\)\.Ticks -gt \$PreviousContext\.LastWriteTicks/);
+  assert.match(refresh, /GetLastWriteTimeUtc\(\$RuntimePath\)\.Ticks -gt \$previousLastWriteTicks/);
   assert.match(runtime, /198[\s\S]*18[\s\S]*19[\s\S]*Fake-IP/);
   assert.match(resultContract, /localhost[\s\S]*\\d\{1,5\}/);
 });
@@ -1809,7 +1832,8 @@ test('Windows installer is split into side-effect-free modules with stable funct
     ],
     'mihomo.ps1': [
       'ConvertTo-NativeArgument', 'Assert-WindowsCommandScriptArgument', 'Invoke-Mihomo',
-      'Test-ClashVergeRunning', 'Test-MihomoVersionText',
+      'Test-ClashVergeRunning', 'Get-ClashVergeProcessIdentity',
+      'Test-ClashVergeProcessIdentity', 'Test-MihomoVersionText',
       'Test-MihomoVersion', 'Find-MihomoCore', 'Start-MihomoCandidateCleanupWatcher',
       'Test-MihomoCandidate'
     ],
@@ -1837,8 +1861,9 @@ test('Windows installer is split into side-effect-free modules with stable funct
       'Get-ClashRuntimeAiGroupName', 'Assert-ClashRuntimeAiGroup', 'Assert-ClashRuntimeHealthy'
     ],
     'safe_update.ps1': [
-      'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
-      'Get-FlowProxyProtocolTypes',
+      'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionLabel', 'Get-PublicSubscriptionResult',
+      'Test-SafeUpdateRuntimeFingerprint', 'Test-SafeUpdateActivationRecord',
+      'Set-SafeUpdateActivationAttempt', 'Get-FlowProxyProtocolTypes',
       'Get-YamlBlockSequenceEnd', 'ConvertFrom-ProxyProtocolType',
       'Get-ProxyProtocolTypes', 'Assert-SubscriptionProtocolPreserved',
       'Get-PublicBackupId', 'Get-BackupTarget',

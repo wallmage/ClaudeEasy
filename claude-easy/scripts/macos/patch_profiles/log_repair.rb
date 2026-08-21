@@ -5,6 +5,7 @@ require "securerandom"
 module ClaudeEasy
   class UnsafeLogPathError < StandardError; end
   class LogRepairError < StandardError; end
+  class LogRepairPartialError < LogRepairError; end
 
   module_function
 
@@ -31,7 +32,7 @@ module ClaudeEasy
       "/bin/chmod", "+a", "#{username} allow #{LOG_ACL_RIGHTS}", path
     )
     raise LogRepairError, "无法设置日志目录权限" unless status.success?
-    raise LogRepairError, "日志目录权限回读失败" unless
+    raise LogRepairPartialError, "日志目录权限回读失败" unless
       log_acl_present?(path, username: username, runner: runner)
 
     true
@@ -139,15 +140,38 @@ module ClaudeEasy
   end
 
   def create_log_tree(path, session_name:, username:, runner:)
+    created = []
     Dir.mkdir(path, 0o700)
+    stat = File.lstat(path)
+    created << [path, [stat.dev, stat.ino]]
     File.chmod(0o700, path)
     add_log_acl(path, username: username, runner: runner)
     if session_name
       session = File.join(path, session_name)
       Dir.mkdir(session, 0o700)
+      stat = File.lstat(session)
+      created << [session, [stat.dev, stat.ino]]
       File.chmod(0o700, session)
     end
-    true
+    created
+  rescue StandardError => error
+    rolled_back = remove_created_log_tree(created)
+    if rolled_back
+      raise
+    end
+    raise LogRepairPartialError, "日志目录修复只完成了一部分"
+  end
+
+  def remove_created_log_tree(created)
+    created.reverse_each.all? do |entry, identity|
+      stat = File.lstat(entry)
+      next false unless stat.directory? && !stat.symlink? && [stat.dev, stat.ino] == identity
+
+      Dir.rmdir(entry)
+      true
+    rescue SystemCallError
+      false
+    end
   end
 
   def chmod_log_directory(path, mode, identity)
@@ -191,42 +215,55 @@ module ClaudeEasy
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     staging = File.join(config_root, ".logs.permission-repair-#{timestamp}-#{nonce}")
     backup = File.join(config_root, "logs.permission-backup-#{timestamp}-#{nonce}")
-    create_log_tree(staging, session_name: session_name, username: username, runner: runner)
+    staging_entries = create_log_tree(
+      staging, session_name: session_name, username: username, runner: runner
+    )
     original_mode = current.mode & 0o7777
     original_identity = [current.dev, current.ino]
     relaxed_owner_mode = current.uid == Process.uid && (original_mode & 0o300) != 0o300
-    chmod_log_directory(log_root, original_mode | 0o700, original_identity) if relaxed_owner_mode
-    begin
-      ClaudeEasyOperationLock.rename_exclusive(log_root, backup)
-    rescue StandardError
-      chmod_log_directory(log_root, original_mode, original_identity) if
-        relaxed_owner_mode && File.exist?(log_root)
-      raise
+    owner_mode_changed = false
+    tree_changed = false
+    published = false
+    if relaxed_owner_mode
+      chmod_log_directory(log_root, original_mode | 0o700, original_identity)
+      owner_mode_changed = true
     end
     begin
+      ClaudeEasyOperationLock.rename_exclusive(log_root, backup)
+      tree_changed = true
       ClaudeEasyOperationLock.rename_exclusive(staging, log_root)
+      published = true
     rescue StandardError
-      restored_path = backup
+      restored_path = tree_changed ? backup : log_root
       begin
-        unless File.exist?(log_root)
+        if tree_changed && !File.exist?(log_root)
           ClaudeEasyOperationLock.rename_exclusive(backup, log_root)
           restored_path = log_root
         end
       ensure
         chmod_log_directory(restored_path, original_mode, original_identity) if
-          relaxed_owner_mode && File.exist?(restored_path)
+          owner_mode_changed && File.exist?(restored_path)
+        owner_mode_changed = false
+        tree_changed = false if restored_path == log_root
       end
       raise
     end
     chmod_log_directory(backup, original_mode, original_identity) if relaxed_owner_mode
-    raise LogRepairError, "日志目录仍不可写" unless
+    owner_mode_changed = false
+    raise LogRepairPartialError, "日志目录仍不可写" unless
       File.writable?(log_root) && File.executable?(log_root) &&
       log_acl_present?(log_root, username: username, runner: runner)
 
     { status: :repaired, backup_preserved: true, session_recreated: !session_name.nil? }
-  rescue UnsafeLogPathError, LogRepairError
+  rescue StandardError => error
+    staging_clean = !defined?(staging_entries) || staging_entries.nil? ||
+                    !File.exist?(staging) || remove_created_log_tree(staging_entries)
+    raise LogRepairPartialError, "日志目录修复只完成了一部分" if
+      !staging_clean || published || tree_changed || owner_mode_changed
+
+    raise error if error.is_a?(UnsafeLogPathError) || error.is_a?(LogRepairError)
+    raise LogRepairError, error.message if error.is_a?(SystemCallError) || error.is_a?(IOError)
+
     raise
-  rescue SystemCallError, IOError => error
-    raise LogRepairError, error.message
   end
 end

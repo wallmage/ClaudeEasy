@@ -31,13 +31,98 @@
     }
 }
 
-function Get-PublicSubscriptionResult([string]$Uid, [string]$Name, [string]$Status) {
+function Get-PublicSubscriptionLabel([string]$Uid, [string]$Name) {
     $digest = Get-BytesSha256 ([System.Text.Encoding]::UTF8.GetBytes($Uid))
     $label = if ([string]::IsNullOrWhiteSpace($Name)) { "订阅 " + $digest.Substring(0, 8) } else { $Name }
+    return Protect-ClaudeEasyResultText $label
+}
+
+function Get-PublicSubscriptionResult([string]$Uid, [string]$Name, [string]$Status) {
+    $digest = Get-BytesSha256 ([System.Text.Encoding]::UTF8.GetBytes($Uid))
     return [pscustomobject][ordered]@{
         id = "ce-subscription-v1-$digest"
-        label = (Protect-ClaudeEasyResultText $label)
+        label = (Get-PublicSubscriptionLabel $Uid $Name)
         status = $Status
+    }
+}
+
+function Test-SafeUpdateRuntimeFingerprint([object]$Fingerprint) {
+    if ($null -eq $Fingerprint) { return $false }
+    $properties = @($Fingerprint.PSObject.Properties.Name | Sort-Object)
+    return ($properties -join ",") -ceq "Identity,LastWriteTicks,Sha256" -and
+        $Fingerprint.Identity -is [string] -and
+        -not [string]::IsNullOrWhiteSpace([string]$Fingerprint.Identity) -and
+        $Fingerprint.LastWriteTicks -is [long] -and
+        [long]$Fingerprint.LastWriteTicks -gt 0 -and
+        $Fingerprint.Sha256 -is [string] -and
+        [string]$Fingerprint.Sha256 -cmatch '^[0-9a-f]{64}$'
+}
+
+function Test-SafeUpdateActivationRecord([object]$Record) {
+    if ($null -eq $Record) { return $false }
+    $properties = @($Record.PSObject.Properties.Name | Sort-Object)
+    return ($properties -join ",") -ceq "Client,RuntimeBefore" -and
+        (Test-ClashVergeProcessIdentity $Record.Client) -and
+        (Test-SafeUpdateRuntimeFingerprint $Record.RuntimeBefore)
+}
+
+function Set-SafeUpdateActivationAttempt(
+    [string]$ManifestPath,
+    [object]$ManifestSnapshot,
+    [object]$Manifest,
+    [string]$PropertyName,
+    [object]$ClientIdentity,
+    [object]$RuntimeContext
+) {
+    if (-not (Test-ClashVergeProcessIdentity $ClientIdentity) -or
+        $PropertyName -notin @("UpdateDispatchCommittedFor", "RestoreDispatchCommittedFor") -or
+        $null -eq $RuntimeContext -or $null -eq $RuntimeContext.Snapshot -or
+        -not [bool]$RuntimeContext.Snapshot.Exists -or
+        -not ($RuntimeContext.LastWriteTicks -is [long]) -or
+        [long]$RuntimeContext.LastWriteTicks -lt 1) {
+        throw "安全更新客户端激活记录无效。"
+    }
+    $property = $Manifest.PSObject.Properties[$PropertyName]
+    if ($null -eq $property) {
+        $Manifest | Add-Member -NotePropertyName $PropertyName -NotePropertyValue $null
+    } elseif ($null -ne $property.Value) {
+        if (-not (Test-SafeUpdateActivationRecord $property.Value)) {
+            throw "安全更新客户端激活记录无效。"
+        }
+        if (Test-ClashVergeProcessIdentity $property.Value.Client $ClientIdentity) {
+            return [pscustomobject]@{
+                Allowed = $false
+                Snapshot = $ManifestSnapshot
+                Manifest = $Manifest
+            }
+        }
+    }
+    $Manifest.$PropertyName = [pscustomobject][ordered]@{
+        Client = $ClientIdentity
+        RuntimeBefore = [pscustomobject][ordered]@{
+            Identity = [string]$RuntimeContext.Snapshot.Identity
+            LastWriteTicks = [long]$RuntimeContext.LastWriteTicks
+            Sha256 = Get-BytesSha256 $RuntimeContext.Snapshot.Bytes
+        }
+    }
+    $bytes = ConvertTo-Utf8Bytes (($Manifest | ConvertTo-Json -Depth 7) + "`r`n")
+    Invoke-VerifiedFileTransaction @(
+        [pscustomobject]@{
+            Path = $ManifestPath
+            Bytes = $bytes
+            Existed = $true
+            OriginalBytes = $ManifestSnapshot.Bytes
+            OriginalIdentity = $ManifestSnapshot.Identity
+        }
+    ) -InterruptedRecoveryPolicy "safe_update_running_client"
+    $snapshot = Get-OptionalFileSnapshot $ManifestPath "安全更新客户端激活记录"
+    if (-not $snapshot.Exists -or (Get-BytesSha256 $snapshot.Bytes) -cne (Get-BytesSha256 $bytes)) {
+        throw "安全更新客户端激活记录无法确认。"
+    }
+    return [pscustomobject]@{
+        Allowed = $true
+        Snapshot = $snapshot
+        Manifest = ((New-Object System.Text.UTF8Encoding($false, $true)).GetString($snapshot.Bytes) | ConvertFrom-Json)
     }
 }
 
@@ -704,7 +789,7 @@ function Restore-SafeUpdateFiles(
     foreach ($recovery in $RecoveryItems) {
         try {
             if (-not $ObservedHashes.ContainsKey($recovery.TargetPath)) {
-                $conflicts += $recovery.File
+                $conflicts += (Get-PublicSubscriptionLabel ([string]$recovery.Uid) "")
                 continue
             }
             $backupSnapshot = Get-OptionalFileSnapshot $recovery.BackupPath "安全更新备份"
@@ -716,7 +801,7 @@ function Restore-SafeUpdateFiles(
             $targetSnapshot = Get-OptionalFileSnapshot $recovery.TargetPath "更新后的订阅"
             if ([string]::IsNullOrWhiteSpace($observedHash)) {
                 if ($targetSnapshot.Exists) {
-                    $conflicts += $recovery.File
+                    $conflicts += (Get-PublicSubscriptionLabel ([string]$recovery.Uid) "")
                     continue
                 }
                 $targets += [pscustomobject]@{
@@ -730,7 +815,7 @@ function Restore-SafeUpdateFiles(
                 if ($observedHash -notmatch '^[0-9a-f]{64}$' -or
                     -not $targetSnapshot.Exists -or
                     (Get-BytesSha256 $targetSnapshot.Bytes) -ne $observedHash) {
-                    $conflicts += $recovery.File
+                    $conflicts += (Get-PublicSubscriptionLabel ([string]$recovery.Uid) "")
                     continue
                 }
                 $targets += [pscustomobject]@{
@@ -742,7 +827,7 @@ function Restore-SafeUpdateFiles(
                 }
             }
         } catch {
-            $failures += $recovery.File
+            $failures += (Get-PublicSubscriptionLabel ([string]$recovery.Uid) "")
         }
     }
     if ($failures.Count -eq 0 -and $conflicts.Count -eq 0) {
@@ -767,7 +852,9 @@ function Restore-SafeUpdateFiles(
                     -InterruptedRecoveryPolicy "safe_update_running_client"
             }
         } catch {
-            $failures = @($RecoveryItems | ForEach-Object { $_.File })
+            $failures = @($RecoveryItems | ForEach-Object {
+                Get-PublicSubscriptionLabel ([string]$_.Uid) ""
+            })
         }
     }
     return [pscustomobject]@{ Failures = @($failures); Conflicts = @($conflicts) }

@@ -68,7 +68,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘要按 `process == "kernel"` 过滤，再在 `eventMessage` 中匹配实际 Mihomo PID。`SYN in/out: 0/1` 且 `RST in/out: 1/0` 只能定位到本机之外，不能仅凭客户端证据区分外部哪一层拒绝。Windows 文件或应用日志缺失时改查控制器记录，以及有明确时间和目标范围的 `pktmon` 或系统连接证据。一种采集方法失败不能宣布没有历史证据。
 
-普通域名经 Mihomo 查询得到 `198.18.*` 是 Fake-IP 模式的正常应答，不能证明缓存污染。只有节点连接日志出现“节点域名 → Fake-IP 地址 → 超时”，且同一域名经直连 IP 加密解析器得到真实地址时，才支持该订阅的节点启动解析进入本机 DNS/Fake-IP 链。文件日志权限异常时按策略运行 `--repair-clashx-logs`，保留旧日志且不停止或重启 Clash。
+普通域名经 Mihomo 查询得到 `198.18.*` 是 Fake-IP 模式的正常应答，不能证明缓存污染。只有节点连接日志出现“节点域名 → Fake-IP 地址 → 超时”，且同一域名经直连 IP 加密解析器得到真实地址时，才支持该订阅的节点启动解析进入本机 DNS/Fake-IP 链。文件日志权限异常时按策略运行 `ruby scripts/macos/patch_profiles.rb --repair-clashx-logs`，保留旧日志且不停止或重启 Clash。
 
 ## Patch 与用途档位
 
@@ -120,7 +120,7 @@ macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能
 
 ## 配置历史与恢复
 
-先列出备份，再比较症状出现前的候选；配置差异只输出字段名和哈希。恢复必须携带比较时哈希：macOS `--expected-current-sha256`，Windows `-ExpectedCurrentSha256`。恢复前先备份当前版本；恢复当前订阅后还要恢复运行配置并按保存档位验收。外部修改、文件身份变化、事务状态未知或运行恢复失败时保留现场和记录，不强行回滚。
+先列出备份：运行 `ruby scripts/macos/patch_profiles.rb --list-backups`；再比较症状出现前的候选：用同一入口的 `--compare-backup ID`。配置差异只输出字段名和哈希。恢复必须携带比较时哈希：macOS 运行 `ruby scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH`，Windows 使用 `-RestoreBackup ID -ExpectedCurrentSha256 HASH`。恢复前先备份当前版本；恢复当前订阅后还要恢复运行配置并按保存档位验收。外部修改、文件身份变化、事务状态未知或运行恢复失败时保留现场和记录，不强行回滚。
 
 ## 最终说明
 

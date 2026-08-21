@@ -771,9 +771,10 @@ try {
     [System.IO.File]::WriteAllText($hashOnlyRuntime, "runtime-a")
     $hashOnlySnapshot = Get-OptionalFileSnapshot $hashOnlyRuntime "runtime"
     $hashOnlyTimestamp = [System.IO.File]::GetLastWriteTimeUtc($hashOnlyRuntime)
-    $hashOnlyPrevious = [pscustomobject]@{
-        Snapshot = $hashOnlySnapshot
+    $hashOnlyPrevious = [pscustomobject][ordered]@{
+        Identity = [string]$hashOnlySnapshot.Identity
         LastWriteTicks = $hashOnlyTimestamp.Ticks
+        Sha256 = Get-BytesSha256 $hashOnlySnapshot.Bytes
     }
     [System.IO.File]::WriteAllText($hashOnlyRuntime, "runtime-b")
     [System.IO.File]::SetLastWriteTimeUtc($hashOnlyRuntime, $hashOnlyTimestamp)
@@ -1561,6 +1562,16 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         Assert-True ($invalidWrapperExit -eq 64) "install_windows.cmd swallowed an installer failure; $(Get-TestOutputDiagnostic $invalidWrapperOutput)"
         $invalidWrapperJson = $invalidWrapperOutput.Trim() | ConvertFrom-Json
         Assert-True ([int]$invalidWrapperJson.exit_code -eq $invalidWrapperExit) "install_windows.cmd changed the JSON failure exit code"
+        foreach ($invalidProfile in @("abc", "999999999999999999999")) {
+            $invalidProfileOutput = & $installWrapper -UsageProfile $invalidProfile -AppHome $wrapperCase -Json 2>&1 | Out-String
+            $invalidProfileExit = $LASTEXITCODE
+            Assert-True ($invalidProfileExit -eq 64) "install_windows.cmd let PowerShell binding bypass an invalid profile result"
+            $invalidProfileJson = $invalidProfileOutput.Trim() | ConvertFrom-Json
+            Assert-True (
+                $invalidProfileJson.code -eq "invalid_usage_profile" -and
+                [int]$invalidProfileJson.exit_code -eq 64
+            ) "install_windows.cmd did not structure a non-numeric or overflowing profile"
+        }
 
         $wrapperBackup = Join-Path (Join-Path $wrapperCase "claude-easy-backups") "keep.backup"
         New-Item -ItemType Directory -Path (Split-Path -Parent $wrapperBackup) -Force | Out-Null
@@ -1838,6 +1849,119 @@ try {
         $invalidItemStatusRejected = $true
     }
     Assert-True $invalidItemStatusRejected "result contract accepted an unknown item status"
+    $privateSubscriptionUid = "account_private_42"
+    $privateSubscriptionLabel = Get-PublicSubscriptionLabel $privateSubscriptionUid ""
+    Assert-True (
+        -not $privateSubscriptionLabel.Contains($privateSubscriptionUid) -and
+        $privateSubscriptionLabel -match '^订阅 [0-9a-f]{8}$'
+    ) "unnamed subscription label exposed a non-UUID uid"
+    $privateSubscriptionResult = Get-PublicSubscriptionResult $privateSubscriptionUid "" "pending"
+    Assert-True (
+        -not ([string]$privateSubscriptionResult.id).Contains($privateSubscriptionUid) -and
+        -not ([string]$privateSubscriptionResult.label).Contains($privateSubscriptionUid)
+    ) "public subscription result exposed a non-UUID uid"
+
+    $activationAttemptHome = Join-Path $sandbox "safe-update-activation-attempt"
+    New-Item -ItemType Directory -Path $activationAttemptHome -Force | Out-Null
+    $activationAttemptPath = Join-Path $activationAttemptHome "claude-easy-safe-update.json"
+    $activationAttemptManifest = [pscustomobject][ordered]@{
+        Version = 4
+        CreatedAt = "2026-08-22T00:00:00+00:00"
+        Profiles = @()
+        Runtime = [pscustomobject][ordered]@{ TunEnabled = $false; Selections = @() }
+        UpdateDispatchCommittedFor = $null
+    }
+    [System.IO.File]::WriteAllText(
+        $activationAttemptPath,
+        (($activationAttemptManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
+    $activationRuntimePath = Join-Path $activationAttemptHome "clash-verge.yaml"
+    [System.IO.File]::WriteAllText($activationRuntimePath, "runtime-before")
+    $activationRuntimeSnapshot = Get-OptionalFileSnapshot $activationRuntimePath "runtime"
+    $activationRuntimeContext = [pscustomobject]@{
+        Snapshot = $activationRuntimeSnapshot
+        LastWriteTicks = [System.IO.File]::GetLastWriteTimeUtc($activationRuntimePath).Ticks
+    }
+    $activationAttemptLock = Enter-AppHomeMutationLock $activationAttemptHome
+    try {
+        $activationIdentityA = [pscustomobject][ordered]@{
+            Pid = [int]101
+            StartedUtcTicks = [long]638914176000000000
+            SessionId = [int]1
+        }
+        $activationIdentityB = [pscustomobject][ordered]@{
+            Pid = [int]102
+            StartedUtcTicks = [long]638914176010000000
+            SessionId = [int]1
+        }
+        $activationIdentityRoundTrip = (
+            $activationIdentityA | ConvertTo-Json -Compress | ConvertFrom-Json
+        )
+        Assert-True (
+            Test-ClashVergeProcessIdentity $activationIdentityRoundTrip $activationIdentityA
+        ) "JSON roundtrip changed a valid client identity"
+        Assert-True (-not (Test-ClashVergeProcessIdentity ([pscustomobject][ordered]@{
+            Pid = [long][int]::MaxValue + 1L
+            StartedUtcTicks = [long]638914176000000000
+            SessionId = [long]1
+        }))) "client identity accepted a PID outside the Int32 process range"
+        Assert-True (-not (Test-ClashVergeProcessIdentity ([pscustomobject][ordered]@{
+            Pid = [long]101
+            StartedUtcTicks = [long]638914176000000000
+            SessionId = [long][int]::MaxValue + 1L
+        }))) "client identity accepted a session outside the Int32 range"
+        $activationAttemptSnapshot = Get-OptionalFileSnapshot $activationAttemptPath "activation attempt"
+        $activationFirst = Set-SafeUpdateActivationAttempt `
+            $activationAttemptPath $activationAttemptSnapshot $activationAttemptManifest `
+            "UpdateDispatchCommittedFor" $activationIdentityA $activationRuntimeContext
+        Assert-True ([bool]$activationFirst.Allowed) "first client activation attempt was rejected"
+        Assert-True (
+            (Test-ClashVergeProcessIdentity `
+                $activationFirst.Manifest.UpdateDispatchCommittedFor.Client $activationIdentityA) -and
+            (Test-SafeUpdateRuntimeFingerprint `
+                $activationFirst.Manifest.UpdateDispatchCommittedFor.RuntimeBefore)
+        ) "activation attempt did not persist the client and pre-dispatch runtime fingerprint"
+        $activationAfterFirst = [System.IO.File]::ReadAllBytes($activationAttemptPath)
+        $activationDuplicate = Set-SafeUpdateActivationAttempt `
+            $activationAttemptPath $activationFirst.Snapshot $activationFirst.Manifest `
+            "UpdateDispatchCommittedFor" $activationIdentityA $activationRuntimeContext
+        Assert-True (-not [bool]$activationDuplicate.Allowed) "same client received a second activation eligibility"
+        Assert-True (
+            [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($activationAttemptPath)) -ceq
+            [Convert]::ToBase64String($activationAfterFirst)
+        ) "duplicate client activation changed the persisted attempt"
+        [System.IO.File]::WriteAllText($activationRuntimePath, "runtime-after-refresh")
+        Wait-ClashVergeRuntimeRefresh `
+            $activationRuntimePath $activationDuplicate.Manifest.UpdateDispatchCommittedFor.RuntimeBefore
+        $replacementRuntimeSnapshot = Get-OptionalFileSnapshot $activationRuntimePath "runtime"
+        $replacementRuntimeContext = [pscustomobject]@{
+            Snapshot = $replacementRuntimeSnapshot
+            LastWriteTicks = [System.IO.File]::GetLastWriteTimeUtc($activationRuntimePath).Ticks
+        }
+        $activationReplacement = Set-SafeUpdateActivationAttempt `
+            $activationAttemptPath $activationDuplicate.Snapshot $activationDuplicate.Manifest `
+            "UpdateDispatchCommittedFor" $activationIdentityB $replacementRuntimeContext
+        Assert-True (
+            [bool]$activationReplacement.Allowed -and
+            (Test-ClashVergeProcessIdentity `
+                $activationReplacement.Manifest.UpdateDispatchCommittedFor.Client $activationIdentityB)
+        ) "a new client process could not take over the pending activation"
+    } finally {
+        Exit-AppHomeMutationLock $activationAttemptLock
+    }
+
+    $privateMappingDirectory = Join-Path $sandbox "private-subscription-mapping"
+    New-Item -ItemType Directory -Path $privateMappingDirectory -Force | Out-Null
+    $privateMappingMessage = ""
+    try {
+        Get-RemoteSubscriptionTargets `
+            "items:`n- uid: $privateSubscriptionUid`n  type: remote`n" `
+            $privateMappingDirectory | Out-Null
+    } catch { $privateMappingMessage = $_.Exception.Message }
+    Assert-True (
+        -not [string]::IsNullOrWhiteSpace($privateMappingMessage) -and
+        -not $privateMappingMessage.Contains($privateSubscriptionUid)
+    ) "subscription mapping failure exposed a non-UUID uid"
 
     $progressProbePath = Join-Path $sandbox "result-progress-probe.ps1"
     $progressProbeSource = @'
@@ -1897,6 +2021,12 @@ if ($Json) {
     $jsonInvalidResult = Assert-JsonResult $jsonInvalid "install" 64
     Assert-True (-not [bool]$jsonInvalidResult.ok) "invalid request was reported as successful"
     Assert-True ($jsonInvalidResult.status -eq "invalid_request") "invalid request status mismatch"
+    foreach ($invalidProfile in @("abc", "999999999999999999999")) {
+        $invalidProfileResult = Assert-JsonResult (Invoke-TestPowerShell $installer @(
+            "-AppHome", $jsonShowCase, "-UsageProfile", $invalidProfile, "-Json"
+        )) "install" 64
+        Assert-True ($invalidProfileResult.code -eq "invalid_usage_profile") "non-numeric or overflowing profile bypassed JSON v1"
+    }
 
     $conflictingOperations = Invoke-TestPowerShell $installer @(
         "-AppHome", $jsonShowCase, "-ShowUsageProfile", "-ListBackups", "-Json"
@@ -3930,7 +4060,8 @@ rules:
         Join-Path $safeUpdateCase "claude-easy-safe-update.json"
     ) -Raw | ConvertFrom-Json
     Assert-True (
-        [int]$snapshotManifest.Version -eq 3 -and
+        [int]$snapshotManifest.Version -eq 4 -and
+        $null -eq $snapshotManifest.UpdateDispatchCommittedFor -and
         $snapshotManifest.Runtime.TunEnabled -eq $false -and
         @($snapshotManifest.Runtime.Selections).Count -eq 1 -and
         [string]$snapshotManifest.Runtime.Selections[0].Group -ceq "Main" -and
@@ -4086,8 +4217,9 @@ rules:
     $runtimeRecovery = [System.IO.File]::ReadAllText($runtimeRecoveryPath) | ConvertFrom-Json
     Assert-True (
         (@($runtimeRecovery.PSObject.Properties.Name | Sort-Object) -join ",") -ceq
-            "Kind,Runtime,UsageProfile,Version" -and
-        [int]$runtimeRecovery.Version -eq 1 -and
+            "Kind,RestoreDispatchCommittedFor,Runtime,UsageProfile,Version" -and
+        [int]$runtimeRecovery.Version -eq 2 -and
+        $null -ne $runtimeRecovery.RestoreDispatchCommittedFor -and
         [string]$runtimeRecovery.Kind -ceq "safe_update_runtime_recovery"
     ) "failed runtime rollback did not publish a strict recovery record"
     $runtimeRecoveryRetry = Invoke-TestPowerShell $installer @(
@@ -4161,6 +4293,7 @@ rules: ["MATCH,AI"]
     )
     $legacyManifest.Version = 1
     $legacyManifest.PSObject.Properties.Remove("Runtime")
+    $legacyManifest.PSObject.Properties.Remove("UpdateDispatchCommittedFor")
     foreach ($profile in @($legacyManifest.Profiles)) {
         $profile.PSObject.Properties.Remove("BeforeUpdated")
     }
@@ -4209,6 +4342,7 @@ rules: ["MATCH,AI"]
     )
     $legacyManifest.Version = 1
     $legacyManifest.PSObject.Properties.Remove("Runtime")
+    $legacyManifest.PSObject.Properties.Remove("UpdateDispatchCommittedFor")
     foreach ($profile in @($legacyManifest.Profiles)) {
         $profile.PSObject.Properties.Remove("BeforeUpdated")
     }
@@ -4717,6 +4851,7 @@ rules:
     $observedHashes = @{ $concurrentTarget = (Get-FileSha256 $concurrentTarget) }
     [System.IO.File]::WriteAllText($concurrentTarget, "newer: true`n")
     $concurrentRecovery = [pscustomobject]@{
+        Uid = "account_private_42"
         File = "concurrent.yaml"
         TargetPath = $concurrentTarget
         BackupPath = $concurrentBackup
@@ -4725,6 +4860,10 @@ rules:
     $concurrentRestore = Restore-SafeUpdateFiles `
         @($concurrentRecovery) $observedHashes $unitRestoreManifestPath $unitRestoreManifestSnapshot
     Assert-True ($concurrentRestore.Conflicts.Count -eq 1) "safe update rollback did not detect a concurrent subscription change"
+    Assert-True (
+        -not ((@($concurrentRestore.Conflicts) -join "").Contains("account_private_42")) -and
+        -not ((@($concurrentRestore.Conflicts) -join "").Contains("concurrent.yaml"))
+    ) "safe update rollback conflict exposed a uid or subscription filename"
     Assert-True ((Get-Content -LiteralPath $concurrentTarget -Raw) -eq "newer: true`n") "safe update rollback overwrote a concurrent subscription change"
     Assert-True (Test-Path -LiteralPath $unitRestoreManifestPath -PathType Leaf) "safe update conflict consumed its recovery manifest"
 

@@ -91,6 +91,46 @@ function Test-ClashVergeRunning {
     return $false
 }
 
+function Get-ClashVergeProcessIdentity {
+    $processes = @()
+    foreach ($name in @("clash-verge", "clash-verge-rev", "Clash Verge", "Clash Verge Rev")) {
+        $processes += @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+    }
+    $processes = @($processes | Sort-Object Id -Unique)
+    if ($processes.Count -ne 1) { throw "无法唯一确认 Clash Verge Rev 客户端进程。" }
+    try {
+        return [pscustomobject][ordered]@{
+            Pid = [int]$processes[0].Id
+            StartedUtcTicks = [long]$processes[0].StartTime.ToUniversalTime().Ticks
+            SessionId = [int]$processes[0].SessionId
+        }
+    } catch {
+        throw "无法确认 Clash Verge Rev 客户端进程身份。"
+    } finally {
+        foreach ($process in $processes) { try { $process.Dispose() } catch { } }
+    }
+}
+
+function Test-ClashVergeProcessIdentity([object]$Identity, [object]$Expected = $null) {
+    if ($null -eq $Identity) { return $false }
+    $properties = @($Identity.PSObject.Properties.Name | Sort-Object)
+    if (($properties -join ",") -cne "Pid,SessionId,StartedUtcTicks" -or
+        ($Identity.Pid -isnot [int] -and $Identity.Pid -isnot [long]) -or
+        -not ($Identity.StartedUtcTicks -is [long]) -or
+        ($Identity.SessionId -isnot [int] -and $Identity.SessionId -isnot [long]) -or
+        [long]$Identity.Pid -lt 1 -or [long]$Identity.Pid -gt [int]::MaxValue -or
+        [long]$Identity.StartedUtcTicks -lt 1 -or
+        [long]$Identity.SessionId -lt 0 -or [long]$Identity.SessionId -gt [int]::MaxValue) {
+        return $false
+    }
+    return $null -eq $Expected -or (
+        (Test-ClashVergeProcessIdentity $Expected) -and
+        [long]$Identity.Pid -eq [long]$Expected.Pid -and
+        [long]$Identity.StartedUtcTicks -eq [long]$Expected.StartedUtcTicks -and
+        [long]$Identity.SessionId -eq [long]$Expected.SessionId
+    )
+}
+
 function Test-MihomoVersionText([string]$Text) {
     $match = [regex]::Match($Text, '(?i)\bv?(\d+)\.(\d+)\.(\d+)\b')
     if (-not $match.Success) { return $false }

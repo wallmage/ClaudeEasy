@@ -373,14 +373,36 @@ function Restore-ClashRuntimeSelections([object]$Context, [object]$Selections) {
 }
 
 function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousContext) {
+    $previousIdentity = ""
+    $previousSha256 = ""
+    $previousLastWriteTicks = 0L
+    if ($null -ne $PreviousContext.Snapshot) {
+        $previousIdentity = [string]$PreviousContext.Snapshot.Identity
+        $previousSha256 = Get-BytesSha256 $PreviousContext.Snapshot.Bytes
+        $previousLastWriteTicks = [long]$PreviousContext.LastWriteTicks
+    } else {
+        $properties = @($PreviousContext.PSObject.Properties.Name | Sort-Object)
+        if (($properties -join ",") -cne "Identity,LastWriteTicks,Sha256" -or
+            -not ($PreviousContext.Identity -is [string]) -or
+            [string]::IsNullOrWhiteSpace([string]$PreviousContext.Identity) -or
+            -not ($PreviousContext.LastWriteTicks -is [long]) -or
+            [long]$PreviousContext.LastWriteTicks -lt 1 -or
+            -not ($PreviousContext.Sha256 -is [string]) -or
+            [string]$PreviousContext.Sha256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Clash Verge Rev 运行配置刷新凭据无效。"
+        }
+        $previousIdentity = [string]$PreviousContext.Identity
+        $previousSha256 = [string]$PreviousContext.Sha256
+        $previousLastWriteTicks = [long]$PreviousContext.LastWriteTicks
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
         if (Test-Path -LiteralPath $RuntimePath -PathType Leaf) {
             $current = Get-OptionalFileSnapshot $RuntimePath "Clash Verge Rev 运行配置"
             if ($current.Exists -and (
-                $current.Identity -cne $PreviousContext.Snapshot.Identity -or
-                (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $PreviousContext.Snapshot.Bytes) -or
-                [System.IO.File]::GetLastWriteTimeUtc($RuntimePath).Ticks -gt $PreviousContext.LastWriteTicks
+                $current.Identity -cne $previousIdentity -or
+                (Get-BytesSha256 $current.Bytes) -cne $previousSha256 -or
+                [System.IO.File]::GetLastWriteTimeUtc($RuntimePath).Ticks -gt $previousLastWriteTicks
             )) {
                 return
             }

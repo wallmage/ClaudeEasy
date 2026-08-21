@@ -810,6 +810,38 @@ module ClaudeEasy
     nil
   end
 
+  def provider_runtime_selections(selections, original_bytes, candidate_path)
+    return nil unless selections.is_a?(Hash)
+
+    original = load_yaml(original_bytes.dup.force_encoding(Encoding::UTF_8), "previous subscription")
+    original_groups = selectable_groups(original).each_with_object({}) do |group, mapping|
+      mapping[group.fetch("name")] = group
+    end
+    selections.each_with_object({}) do |(name, selected), preserved|
+      localized = localized_runtime_selections(
+        { name => selected }, original_bytes, candidate_path
+      )
+      candidate = localized
+      unless candidate
+        group = original_groups[name]
+        return nil unless group && !Array(group["use"]).empty? &&
+                          !Array(group["proxies"]).map(&:to_s).include?(selected)
+
+        candidate = runtime_selections_for_profile(
+          { name => selected }, candidate_path, preserve_all: true
+        )
+      end
+      return nil unless candidate && candidate.length == 1
+
+      candidate_name, candidate_selection = candidate.first
+      return nil if preserved.key?(candidate_name)
+
+      preserved[candidate_name] = candidate_selection
+    end
+  rescue StandardError
+    nil
+  end
+
   def dns_runtime_healthy?(requester, name)
     status, body = requester.call("GET", "/dns/query?name=#{name}&type=A", nil)
     return false unless status == 200
@@ -1179,8 +1211,8 @@ module ClaudeEasy
     selections = localized_runtime_selections(
       original_selections, result.fetch(:rollback_bytes), result.fetch(:path)
     )
-    selections ||= runtime_selections_for_profile(
-      original_selections, result.fetch(:path), preserve_all: true
+    selections ||= provider_runtime_selections(
+      original_selections, result.fetch(:rollback_bytes), result.fetch(:path)
     )
     expected_tun = runtime_checkpoint[:expected_tun]
     return result.merge(status: rollback_before_runtime_reload(result)) unless

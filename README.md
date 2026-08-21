@@ -16,9 +16,9 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 
 ## 安全边界
 
-- **绝对不要退出、停止或重启 Clash 客户端。** Windows 受保护写入只有客户端本来就未运行时才执行；检测到客户端运行会整批延期，不要求你关闭它。
+- **绝对不要退出、停止或重启 Clash 客户端。** Windows 普通安装、卸载和单文件备份恢复只有客户端本来就未运行时才执行；运行中可以创建安全更新备份和验收清单，安全更新失败恢复是唯一允许修改订阅的受控例外，其余受保护客户端配置写入会整批延期。
 - 不运行 ClashX Meta 主程序做诊断，也不向它传 `--version`；客户端版本读取 `Info.plist`，内核版本检查 Mihomo。
-- macOS 不用 Computer Use 操作 ClashX Meta：它是纯菜单栏应用，没有主窗口。TUN 和 Clash 系统代理由 `--reconcile-client-switches` 原生命令先读状态、每个开关最多一次事件、再自动验收；无法安全自动处理时才给出菜单栏手动步骤。
+- macOS 不用 Computer Use 操作 ClashX Meta：它是纯菜单栏应用，没有主窗口。TUN 和 Clash 系统代理由 `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json` 先读状态、每个开关最多一次事件、再自动验收；无法安全自动处理时才给出菜单栏手动步骤。
 - Windows 的 Clash Verge Rev 有正常主窗口；有 Computer Use 时可以自动操作，没有或首次失败时使用其他安全自动化或给出手动步骤。
 - 不切换订阅、代理组或节点；只在用途档位要求时修改 TUN 或 Clash 自己的系统代理。
 - 不改写第三方 PAC。AdGuard for Mac 只按策略中的已验证兼容路径，通过它自己的界面调整。
@@ -117,11 +117,11 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 
 - 查看档位：macOS `--show-profile`；Windows `-ShowUsageProfile`
 - 更新订阅：macOS `--safe-update --json`；Windows `-SnapshotProfiles -Json` 先创建备份，客户端刷新后运行 Windows `-VerifySafeUpdate -RefreshConfirmed -Json`
-- 列出备份：macOS `--list-backups`；Windows `-ListBackups`
-- 比较备份：macOS `--compare-backup ID`；Windows `-CompareBackup ID`
-- 恢复备份：macOS `--restore-backup ID --expected-current-sha256 HASH`；Windows `-RestoreBackup ID -ExpectedCurrentSha256 HASH`
-- 修复 ClashX Meta 日志权限：macOS `--repair-clashx-logs`
-- 协调 ClashX Meta 客户端开关：macOS `--reconcile-client-switches --usage-profile N --json`
+- 列出备份：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups`；Windows `-ListBackups`
+- 比较备份：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --compare-backup ID`；Windows `-CompareBackup ID`
+- 恢复备份：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH`；Windows `-RestoreBackup ID -ExpectedCurrentSha256 HASH`
+- 修复 ClashX Meta 日志权限：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --repair-clashx-logs`
+- 协调 ClashX Meta 客户端开关：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`
 - JSON v1：macOS `--json`；Windows `-Json`
 
 所有公开命令的机器输出字段以 `result-contract.json` 为准；JSON 标准输出只有一个对象，实际退出码与 `exit_code` 一致。
@@ -134,7 +134,7 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试；为全部远程订阅创建更新前备份，Windows 同时只读记录原 TUN 与代理选择。
 3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 先备份；当前环境提供 Computer Use 时由代理在已经运行的 Clash Verge Rev 中进入“订阅”，确认自动更新关闭，点击顶部“更新所有订阅”。没有 Computer Use 时，Skill 给出相同步骤，用户完成后回复“我已经手动更新完了”。Windows 不使用右键菜单中的“更新”或“通过代理更新”。
 4. macOS 在写入前完成 YAML、二次转换一致性检查和 Mihomo 校验。Windows 客户端刷新会运行已安装的全局脚本，按已保存档位重新打补丁；UI 刷新完成或用户明确确认后调用 `-VerifySafeUpdate -RefreshConfirmed`，其中显式的 `-RefreshConfirmed` 就是本轮刷新凭据，订阅字节和时间戳未变化也可以是有效结果。随后逐份检查 YAML、代理组、Mihomo、全局脚本和运行配置，恢复并核对原 TUN 与代理选择；失败时恢复更新前备份并重新加载原运行配置，成功后再次确认订阅自动更新关闭。
-5. 平台更新成功只是中间状态；Skill 在 macOS 和 Windows 上都继续当前档位的客户端动作和全部验收。macOS 运行 `--reconcile-client-switches`，不尝试用 Computer Use 操作 ClashX Meta；Windows 按平台界面规则处理。档位 2 继承档位 1 的站点验收，但直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。任一原代理组或节点选择无法恢复时拒绝更新；最终状态复核通过后才报告完成。没有 Computer Use 时只把 Windows 客户端和浏览器动作交给用户，不能省略验收。
+5. 平台更新成功只是中间状态；Skill 在 macOS 和 Windows 上都继续当前档位的客户端动作和全部验收。macOS 运行 `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`，不尝试用 Computer Use 操作 ClashX Meta；Windows 按平台界面规则处理。档位 2 继承档位 1 的站点验收，但直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。任一原代理组或节点选择无法恢复时拒绝更新；最终状态复核通过后才报告完成。没有 Computer Use 时只把 Windows 客户端和浏览器动作交给用户，不能省略验收。
 
 macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 不直接构造订阅请求，只使用 Clash Verge Rev 的客户端原生刷新。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时不会接受本轮更新。
 

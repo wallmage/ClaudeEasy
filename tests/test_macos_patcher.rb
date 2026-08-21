@@ -398,6 +398,7 @@ class MacosPatcherTest < Minitest::Test
         end
         assert_equal 3, calls
         assert Dir.exist?(logs)
+        assert_empty Dir.glob(File.join(config_root, ".logs.permission-repair-*"))
       ensure
         FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
       end
@@ -447,6 +448,7 @@ class MacosPatcherTest < Minitest::Test
           end
         end
         assert_equal 0o500, File.stat(logs).mode & 0o777
+        assert_empty Dir.glob(File.join(config_root, ".logs.permission-repair-*"))
       ensure
         FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
       end
@@ -467,12 +469,94 @@ class MacosPatcherTest < Minitest::Test
 
       begin
         ClaudeEasy.stub(:log_acl_present?, acl_check) do
-          assert_raises(ClaudeEasy::LogRepairError) do
+          assert_raises(ClaudeEasy::LogRepairPartialError) do
             ClaudeEasy.repair_clashx_logs(log_root: logs)
           end
         end
+        assert File.directory?(logs)
+        assert_equal 1, Dir.glob(File.join(config_root, "logs.permission-backup-*")).length
       ensure
         FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_reports_partial_after_publishing_the_new_tree
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(logs)
+      File.chmod(0o500, logs)
+      original_chmod = ClaudeEasy.method(:chmod_log_directory)
+      calls = 0
+      chmod = lambda do |path, mode, identity|
+        calls += 1
+        raise IOError, "injected backup chmod failure" if calls == 2
+
+        original_chmod.call(path, mode, identity)
+      end
+
+      begin
+        ClaudeEasy.stub(:chmod_log_directory, chmod) do
+          assert_raises(ClaudeEasy::LogRepairPartialError) do
+            ClaudeEasy.repair_clashx_logs(log_root: logs)
+          end
+        end
+        assert Dir.exist?(logs)
+        assert_equal 1, Dir.glob(File.join(config_root, "logs.permission-backup-*")).length
+      ensure
+        FileUtils.chmod_R(0o700, config_root) if File.exist?(config_root)
+      end
+    end
+  end
+
+  def test_log_repair_removes_a_new_tree_when_acl_setup_fails
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(config_root)
+      failed_runner = lambda do |*_arguments|
+        ["", "", Struct.new(:success?).new(false)]
+      end
+
+      assert_raises(ClaudeEasy::LogRepairError) do
+        ClaudeEasy.repair_clashx_logs(log_root: logs, runner: failed_runner)
+      end
+      refute File.exist?(logs)
+    end
+  end
+
+  def test_log_repair_reports_partial_when_a_failed_new_tree_cannot_be_removed
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      logs = File.join(config_root, "logs")
+      FileUtils.mkdir_p(config_root)
+      failed_runner = lambda do |*_arguments|
+        ["", "", Struct.new(:success?).new(false)]
+      end
+
+      ClaudeEasy.stub(:remove_created_log_tree, false) do
+        assert_raises(ClaudeEasy::LogRepairPartialError) do
+          ClaudeEasy.repair_clashx_logs(log_root: logs, runner: failed_runner)
+        end
+      end
+    end
+
+    File.stub(:lstat, ->(_path) { raise Errno::EACCES }) do
+      refute ClaudeEasy.remove_created_log_tree([["unreadable", [1, 2]]])
+    end
+  end
+
+  def test_log_repair_preserves_unexpected_failures
+    Dir.mktmpdir do |home|
+      config_root = File.join(home, "clash.meta")
+      FileUtils.mkdir_p(config_root)
+      creator = ->(*_arguments, **_keywords) { raise RuntimeError, "injected" }
+      ClaudeEasy.stub(:create_log_tree, creator) do
+        error = assert_raises(RuntimeError) do
+          ClaudeEasy.repair_clashx_logs(log_root: File.join(config_root, "logs"))
+        end
+        assert_equal "injected", error.message
       end
     end
   end
@@ -509,6 +593,24 @@ class MacosPatcherTest < Minitest::Test
     end
     assert_empty stderr
     assert_equal "log_repair_failed", JSON.parse(stdout).fetch("code")
+
+    stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, -> { raise ClaudeEasy::LogRepairPartialError }) do
+        assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs", "--json"])
+      end
+    end
+    assert_empty stderr
+    partial = JSON.parse(stdout)
+    assert_equal "partial", partial.fetch("status")
+    assert_equal "log_repair_partial", partial.fetch("code")
+    assert_equal ["log_directory_permissions"], partial.fetch("changes")
+
+    _stdout, stderr = capture_io do
+      ClaudeEasy.stub(:repair_clashx_logs, -> { raise ClaudeEasy::LogRepairPartialError }) do
+        assert_equal 1, ClaudeEasy.cli(["--repair-clashx-logs"])
+      end
+    end
+    assert_includes stderr, "只完成了一部分"
 
     stdout, stderr = capture_io do
       ClaudeEasy.stub(:repair_clashx_logs, { status: :repaired, backup_preserved: true }) do
@@ -2530,7 +2632,15 @@ class MacosPatcherTest < Minitest::Test
     ClashRouteVerifier.stub(:run, ->(output:, details:, **_options) { output.puts("中文结果"); false }) do
       assert_equal 1, ClashRouteVerifier.cli([], output: output, profile_reader: -> { 3 })
     end
-    assert_equal "中文结果\n", output.string
+    assert_equal "中文结果\n实时分流验证未通过。\n", output.string
+  end
+
+  def test_route_verifier_reports_a_human_summary_when_runtime_setup_fails
+    output = StringIO.new
+    ClashRouteVerifier.stub(:run, false) do
+      assert_equal 1, ClashRouteVerifier.cli([], output: output, profile_reader: -> { 3 })
+    end
+    assert_equal "实时分流验证未通过。\n", output.string
   end
 
   def test_route_verifier_rejects_unknown_arguments_before_running
@@ -2541,6 +2651,16 @@ class MacosPatcherTest < Minitest::Test
     result = JSON.parse(output.string)
     assert_equal "invalid_request", result.fetch("status")
     assert_equal "invalid_arguments", result.fetch("code")
+  end
+
+  def test_route_verifier_reports_human_parameter_errors
+    [["--observation-seconds", "abc"], ["--observation-seconds", "0"], ["--typo"]].each do |arguments|
+      output = StringIO.new
+      ClashRouteVerifier.stub(:run, ->(**) { flunk "invalid arguments reached route verification" }) do
+        assert_equal 64, ClashRouteVerifier.cli(arguments, output: output)
+      end
+      assert_equal "参数错误。\n", output.string
+    end
   end
 
   def test_route_verifier_refuses_ai_probes_below_profile_three
@@ -13302,6 +13422,7 @@ class MacosPatcherTest < Minitest::Test
                 ])
               end
               assert_includes output, status.to_s
+              assert_includes output, "备份"
               refute_includes output, private_id
               refute_includes output, "/private/"
               assert_empty error
@@ -14398,12 +14519,21 @@ class MacosPatcherTest < Minitest::Test
         output, = capture_io { assert_equal 0, ClaudeEasy.cli(["--profile-dir", directory, "--list-backups"]) }
         assert_includes output, "backup-id"
         assert_includes output, backup_item.fetch("created_at")
+        assert_includes output, "已读取可用备份"
+      end
+      ClaudeEasy.stub(:list_backups, []) do
+        output, error = capture_io do
+          assert_equal 0, ClaudeEasy.cli(["--profile-dir", directory, "--list-backups"])
+        end
+        assert_includes output, "没有可用备份"
+        assert_empty error
       end
       ClaudeEasy.stub(:compare_backup, { status: :changed }) do
         output, = capture_io do
           assert_equal 0, ClaudeEasy.cli(["--profile-dir", directory, "--compare-backup", "backup-id"])
         end
         assert_includes output, "changed"
+        assert_includes output, "备份比较完成"
       end
     end
   end
@@ -16457,6 +16587,83 @@ class MacosPatcherTest < Minitest::Test
       assert_equal selections, ClaudeEasy.runtime_selections_for_profile(
         selections, profile, preserve_all: true
       )
+      assert_equal selections, ClaudeEasy.provider_runtime_selections(
+        selections, YAML.dump(config), profile
+      )
+    end
+  end
+
+  def test_safe_update_combines_provider_and_explicit_group_selections
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      config = {
+        "proxy-groups" => [
+          { "name" => "Main", "type" => "select", "use" => ["airport"] },
+          { "name" => "AI", "type" => "select", "proxies" => ["Main"] }
+        ]
+      }
+      File.binwrite(profile, YAML.dump(config))
+      selections = { "Main" => "Provider Node", "AI" => "Main" }
+
+      assert_nil ClaudeEasy.localized_runtime_selections(
+        selections, YAML.dump(config), profile
+      )
+      assert_equal selections, ClaudeEasy.provider_runtime_selections(
+        selections, YAML.dump(config), profile
+      )
+    end
+
+    ClaudeEasy.stub(:load_yaml, ->(*_arguments) { raise RuntimeError, "injected" }) do
+      assert_nil ClaudeEasy.provider_runtime_selections({}, "ignored", "ignored")
+    end
+  end
+
+  def test_safe_update_does_not_load_a_mixed_group_after_its_selected_inline_node_was_removed
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original_config = base_config
+      original_config.fetch("proxy-groups").first["use"] = ["airport"]
+      selected = original_config.fetch("proxies").first.fetch("name")
+      candidate_config = Marshal.load(Marshal.dump(original_config))
+      candidate_config.fetch("proxies").shift
+      candidate_config.fetch("proxy-groups").each do |group|
+        group["proxies"] = Array(group["proxies"]).reject { |name| name == selected }
+      end
+      original = YAML.dump(original_config)
+      candidate = YAML.dump(candidate_config)
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => selected, "AI" => "Main" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: candidate, candidate: candidate }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      result = {
+        path: profile, rollback_bytes: original,
+        patched_digest: Digest::SHA256.hexdigest(candidate),
+        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+      }
+      reloads = 0
+
+      activated = ClaudeEasy.activate_safe_updated_profile(
+        result, transaction: transaction, client_identity: identity,
+        runtime_checkpoint: checkpoint,
+        native_reloader: ->(_current) { reloads += 1; true },
+        runtime_waiter: ->(*_arguments, **_options) { true },
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+      )
+
+      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
+      assert_equal 0, reloads
+      assert_equal original.b, File.binread(profile)
     end
   end
 

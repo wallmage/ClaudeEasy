@@ -322,6 +322,8 @@ module ClashRouteVerifier
           summary_zh: "参数错误。", profile: nil, changes: [], checks: [], items: [],
           messages: [], warnings: []
         )
+      else
+        output.puts "参数错误。"
       end
       return 64
     end
@@ -381,6 +383,8 @@ module ClashRouteVerifier
         exit_code: exit_code, summary_zh: ok ? "实时分流验证通过。" : "实时分流验证未通过。",
         profile: saved_profile, changes: [], checks: details.fetch(:checks), items: [], messages: [], warnings: []
       )
+    else
+      output.puts(ok ? "实时分流验证通过。" : "实时分流验证未通过。")
     end
     exit_code
   end

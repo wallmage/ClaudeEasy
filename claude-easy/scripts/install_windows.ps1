@@ -1,7 +1,7 @@
 ﻿param(
     [string]$AppHome = "",
     [string]$MihomoPath = "",
-    [int]$UsageProfile = 0,
+    [object]$UsageProfile = "0",
     [switch]$ShowUsageProfile,
     [switch]$BackupSubscriptions,
     [switch]$SnapshotProfiles,
@@ -79,16 +79,16 @@ try {
         "Backup-InitialOnce", "Backup-Versioned", "Invoke-VerifiedFileTransaction", "Get-BackupTarget", "Get-PublicBackupDescriptor", "Test-RestoreCandidate",
         "Get-InstallStateEntry", "Assert-InstallState", "Assert-StateSnapshotUnchanged", "New-InstallStateEntry",
         "Split-YamlLines", "Set-YamlTopLevelScalar", "Set-YamlTunMapping", "Test-GeneratedYaml", "Get-RedactedYamlChangedPaths",
-        "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionTargets", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionResult",
+        "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionTargets", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionLabel", "Get-PublicSubscriptionResult",
         "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Merge-RemoteSubscriptionAutoUpdateOwnership", "Assert-ClaudeEasyProxyGroupCollection",
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
-        "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning",
+        "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning", "Get-ClashVergeProcessIdentity", "Test-ClashVergeProcessIdentity",
         "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
         "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
         "Get-ClashControllerContext", "Get-ClashRuntimeState", "Restore-ClashRuntimeSelections", "Invoke-ClashVergeReactivationShortcut",
         "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
-        "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles"
+        "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateActivationRecord", "Set-SafeUpdateActivationAttempt"
     )) {
         if ($null -eq (Get-Command $requiredInstallerFunction -CommandType Function -ErrorAction SilentlyContinue)) {
             throw "安装包不完整：安装模块缺少必要接口。"
@@ -102,6 +102,17 @@ try {
     }
     exit 6
 }
+
+$parsedUsageProfileArgument = 0
+if (-not [int]::TryParse(
+        [string]$UsageProfile,
+        [System.Globalization.NumberStyles]::Integer,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [ref]$parsedUsageProfileArgument
+    )) {
+    Complete-InstallResult 64 "invalid_request" "invalid_usage_profile" "用途档位无效，只能是 1、2 或 3。"
+}
+$UsageProfile = $parsedUsageProfileArgument
 
 if ([string]::IsNullOrWhiteSpace($AppHome)) {
     try {
@@ -295,10 +306,11 @@ if ($SnapshotProfiles) {
             Selections = $runtimeSelections
         }
         $manifest = [ordered]@{
-            Version = 3
+            Version = 4
             CreatedAt = [DateTimeOffset]::Now.ToString("o")
             Profiles = $manifestItems
             Runtime = $runtimeSnapshot
+            UpdateDispatchCommittedFor = $null
         }
         $manifestBytes = ConvertTo-Utf8Bytes (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
         Invoke-VerifiedFileTransaction @(
@@ -316,7 +328,9 @@ if ($SnapshotProfiles) {
         }
     }
     Write-Info "已核对远程清单，并为 $($profiles.Count) 份订阅创建安全更新前备份。"
-    foreach ($profile in $profiles) { Write-Info ("待更新：" + $(if ([string]::IsNullOrWhiteSpace($profile.Name)) { $profile.Uid } else { $profile.Name })) }
+    foreach ($profile in $profiles) {
+        Write-Info ("待更新：" + (Get-PublicSubscriptionLabel ([string]$profile.Uid) ([string]$profile.Name)))
+    }
     $snapshotItems = @($profiles | ForEach-Object {
         Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "pending"
     })
@@ -336,14 +350,24 @@ if ($VerifySafeUpdate) {
     if ($null -ne $manifest.PSObject.Properties["Kind"]) {
         $runtimeRecoveryProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
         $runtimeRecoveryVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
+        $runtimeRecoveryVersion = if ($runtimeRecoveryVersionIsNumeric) { [long]$manifest.Version } else { 0L }
+        $expectedRuntimeRecoveryProperties = if ($runtimeRecoveryVersion -eq 2) {
+            "Kind,RestoreDispatchCommittedFor,Runtime,UsageProfile,Version"
+        } else {
+            "Kind,Runtime,UsageProfile,Version"
+        }
         $runtimeRecoveryProfileIsNumeric = $manifest.UsageProfile -is [int] -or $manifest.UsageProfile -is [long]
-        if (($runtimeRecoveryProperties -join ",") -cne "Kind,Runtime,UsageProfile,Version" -or
-            -not $runtimeRecoveryVersionIsNumeric -or [long]$manifest.Version -ne 1 -or
+        if (($runtimeRecoveryProperties -join ",") -cne $expectedRuntimeRecoveryProperties -or
+            -not $runtimeRecoveryVersionIsNumeric -or $runtimeRecoveryVersion -notin @(1, 2) -or
             -not ($manifest.Kind -is [string]) -or
             [string]$manifest.Kind -cne "safe_update_runtime_recovery" -or
             -not $runtimeRecoveryProfileIsNumeric -or
             [long]$manifest.UsageProfile -notin @(1, 2, 3) -or
             [long]$manifest.UsageProfile -ne $savedUsageProfile) {
+            throw "安全更新运行状态恢复记录无效。"
+        }
+        if ($runtimeRecoveryVersion -eq 2 -and $null -ne $manifest.RestoreDispatchCommittedFor -and
+            -not (Test-SafeUpdateActivationRecord $manifest.RestoreDispatchCommittedFor)) {
             throw "安全更新运行状态恢复记录无效。"
         }
         $runtimeRecoveryRuntimeProperties = @($manifest.Runtime.PSObject.Properties.Name | Sort-Object)
@@ -376,9 +400,33 @@ if ($VerifySafeUpdate) {
                 [System.IO.File]::ReadAllBytes($runtimeRecoveryPolicyPath)
             ) | ConvertFrom-Json
             $runtimeRecoveryCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-            Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            if ($runtimeRecoveryVersion -eq 1) {
+                try {
+                    Assert-ClashRuntimeHealthy `
+                        $runtimeRecoveryContext $runtimeRecoverySelections `
+                        ([bool]$manifest.Runtime.TunEnabled) $savedUsageProfile `
+                        ([string]$runtimeRecoveryCurl.Source) $runtimeRecoveryPolicy -ReadOnly
+                    Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes `
+                        $manifestSnapshot.Identity "safe_update_running_client"
+                    Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已确认全部订阅文件和更新前运行状态均已恢复。"
+                } catch {
+                    Complete-InstallResult 1 "partial" "safe_update_legacy_runtime_recovery_pending" "旧版运行状态恢复记录无法确认是否已触发过客户端重载；未重复发送，请手动确认运行状态。" @() @("runtime_unverified")
+                }
+            }
+            $runtimeRecoveryIdentity = Get-ClashVergeProcessIdentity
+            $runtimeRecoveryAttempt = Set-SafeUpdateActivationAttempt `
+                $safeUpdateStatePath $manifestSnapshot $manifest `
+                "RestoreDispatchCommittedFor" $runtimeRecoveryIdentity $runtimeRecoveryContext
+            $manifestSnapshot = $runtimeRecoveryAttempt.Snapshot
+            $manifest = $runtimeRecoveryAttempt.Manifest
+            if ([bool]$runtimeRecoveryAttempt.Allowed) {
+                if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $runtimeRecoveryIdentity)) {
+                    Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                }
+                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            }
             $null = Wait-ClashVergeRuntimeHealthy `
-                $runtimeConfigPath $runtimeRecoveryContext $runtimeRecoverySelections `
+                $runtimeConfigPath $manifest.RestoreDispatchCommittedFor.RuntimeBefore $runtimeRecoverySelections `
                 ([bool]$manifest.Runtime.TunEnabled) $savedUsageProfile `
                 ([string]$runtimeRecoveryCurl.Source) $runtimeRecoveryPolicy
             Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes `
@@ -395,21 +443,27 @@ if ($VerifySafeUpdate) {
     ).Count -eq 1
     $manifestVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
     $manifestVersion = if ($manifestVersionIsNumeric) { [long]$manifest.Version } else { 0L }
-    $expectedManifestProperties = if ($manifestVersion -eq 3) {
+    $expectedManifestProperties = if ($manifestVersion -eq 4) {
+        "CreatedAt,Profiles,Runtime,UpdateDispatchCommittedFor,Version"
+    } elseif ($manifestVersion -eq 3) {
         "CreatedAt,Profiles,Runtime,Version"
     } else {
         "CreatedAt,Profiles,Version"
     }
     if (($manifestProperties -join ",") -cne $expectedManifestProperties -or
         -not $manifestVersionIsNumeric -or
-        $manifestVersion -notin @(1, 2, 3) -or
+        $manifestVersion -notin @(1, 2, 3, 4) -or
         -not $createdAtIsJsonString -or
         @($manifest.Profiles).Count -eq 0) {
         throw "安全更新准备记录无效。"
     }
     $expectedSelections = New-OrdinalStringDictionary
     $expectedTunEnabled = $false
-    $hasRuntimeSnapshot = $manifestVersion -eq 3
+    $hasRuntimeSnapshot = $manifestVersion -in @(3, 4)
+    if ($manifestVersion -eq 4 -and $null -ne $manifest.UpdateDispatchCommittedFor -and
+        -not (Test-SafeUpdateActivationRecord $manifest.UpdateDispatchCommittedFor)) {
+        throw "安全更新准备记录中的客户端激活状态无效。"
+    }
     if ($hasRuntimeSnapshot) {
         $runtimeProperties = @($manifest.Runtime.PSObject.Properties.Name | Sort-Object)
         if (($runtimeProperties -join ",") -cne "Selections,TunEnabled" -or
@@ -492,8 +546,9 @@ if ($VerifySafeUpdate) {
                         $beforeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($beforeBytes)
                         Assert-SubscriptionProtocolPreserved $beforeText $text
                     }
-                    Test-GeneratedYaml $text ([string]$item.File) | Out-Null
-                    Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
+                    $publicSubscriptionLabel = Get-PublicSubscriptionLabel ([string]$target[0].Uid) ([string]$target[0].Name)
+                    Test-GeneratedYaml $text $publicSubscriptionLabel | Out-Null
+                    Assert-ClaudeEasyProxyGroupCollection $text $publicSubscriptionLabel
                     Test-MihomoCandidate $core $text $profilesDirectory
                     $targetGuard.Stream.Position = 0
                     if ((Get-BytesSha256 (Get-StreamBytes $targetGuard.Stream)) -ne $validatedHash) {
@@ -526,9 +581,24 @@ if ($VerifySafeUpdate) {
                 [System.IO.File]::ReadAllBytes($runtimePolicyPath)
             ) | ConvertFrom-Json
             $runtimeCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-            Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            if ($manifestVersion -eq 3) {
+                throw "旧版安全更新记录无法确认是否已触发过客户端加载；未重复发送，改为恢复更新前订阅。"
+            }
+            $updateIdentity = Get-ClashVergeProcessIdentity
+            $updateAttempt = Set-SafeUpdateActivationAttempt `
+                $safeUpdateStatePath $manifestSnapshot $manifest `
+                "UpdateDispatchCommittedFor" $updateIdentity $runtimeContext
+            $manifestSnapshot = $updateAttempt.Snapshot
+            $manifest = $updateAttempt.Manifest
+            if ([bool]$updateAttempt.Allowed) {
+                if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $updateIdentity)) {
+                    Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在加载请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                }
+                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            }
             $runtimeContext = Wait-ClashVergeRuntimeHealthy `
-                $runtimeConfigPath $runtimeContext $expectedSelections $expectedTunEnabled `
+                $runtimeConfigPath $manifest.UpdateDispatchCommittedFor.RuntimeBefore `
+                $expectedSelections $expectedTunEnabled `
                 $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy
         }
         $versionGuards = @()
@@ -600,9 +670,10 @@ if ($VerifySafeUpdate) {
         $runtimeRecoveryBytes = $null
         if ($hasRuntimeSnapshot) {
             $runtimeRecoveryRecord = [ordered]@{
-                Version = 1
+                Version = 2
                 Kind = "safe_update_runtime_recovery"
                 UsageProfile = [int]$savedUsageProfile
+                RestoreDispatchCommittedFor = $null
                 Runtime = [ordered]@{
                     TunEnabled = [bool]$manifest.Runtime.TunEnabled
                     Selections = @($manifest.Runtime.Selections | ForEach-Object {
@@ -644,12 +715,28 @@ if ($VerifySafeUpdate) {
                     [System.IO.File]::ReadAllBytes($rollbackPolicyPath)
                 ) | ConvertFrom-Json
                 $rollbackCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-                $null = Wait-ClashVergeRuntimeHealthy `
-                    $runtimeConfigPath $rollbackRuntime $expectedSelections $expectedTunEnabled `
-                    $savedUsageProfile ([string]$rollbackCurl.Source) $rollbackPolicy
                 $runtimeRecoverySnapshot = Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新运行状态恢复记录"
                 if (-not $runtimeRecoverySnapshot.Exists) { throw "安全更新运行状态恢复记录已消失。" }
+                $runtimeRecoveryManifest = (
+                    (New-Object System.Text.UTF8Encoding($false, $true)).GetString($runtimeRecoverySnapshot.Bytes) |
+                        ConvertFrom-Json
+                )
+                $rollbackIdentity = Get-ClashVergeProcessIdentity
+                $rollbackAttempt = Set-SafeUpdateActivationAttempt `
+                    $safeUpdateStatePath $runtimeRecoverySnapshot $runtimeRecoveryManifest `
+                    "RestoreDispatchCommittedFor" $rollbackIdentity $rollbackRuntime
+                $runtimeRecoverySnapshot = $rollbackAttempt.Snapshot
+                $runtimeRecoveryManifest = $rollbackAttempt.Manifest
+                if ([bool]$rollbackAttempt.Allowed) {
+                    if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $rollbackIdentity)) {
+                        Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
+                    }
+                    Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+                }
+                $null = Wait-ClashVergeRuntimeHealthy `
+                    $runtimeConfigPath $runtimeRecoveryManifest.RestoreDispatchCommittedFor.RuntimeBefore `
+                    $expectedSelections $expectedTunEnabled `
+                    $savedUsageProfile ([string]$rollbackCurl.Source) $rollbackPolicy
                 Remove-VerifiedOwnedFile $safeUpdateStatePath $runtimeRecoverySnapshot.Bytes `
                     $runtimeRecoverySnapshot.Identity "safe_update_running_client"
                 Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已恢复全部订阅文件和更新前运行状态。" @() @() $rollbackItems
@@ -661,11 +748,12 @@ if ($VerifySafeUpdate) {
     }
     foreach ($entry in $validated) {
         $changed = [string]$entry.ValidatedSha256 -ne [string]$entry.Manifest.BeforeSha256
-        Write-Info ($(if ($changed) { "已更新并通过检查：" } else { "内容未变化并通过检查：" }) + $(if ([string]::IsNullOrWhiteSpace($entry.Target.Name)) { $entry.Target.Uid } else { $entry.Target.Name }))
+        Write-Info ($(if ($changed) { "已更新并通过检查：" } else { "内容未变化并通过检查：" }) +
+            (Get-PublicSubscriptionLabel ([string]$entry.Target.Uid) ([string]$entry.Target.Name)))
     }
     Write-Info "全部远程订阅已逐份通过全局脚本、代理组、YAML 与 Mihomo 检查。"
     if ($legacySnapshotRetirement) {
-        Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v3 快照后再更新。" @() @("legacy_manifest_retired")
+        Complete-InstallResult 1 "partial" "safe_update_legacy_snapshot_required" "当前订阅已通过检查，旧版安全更新记录已安全结束；请重新创建 v4 快照后再更新。" @() @("legacy_manifest_retired")
     }
     $verifiedItems = @($validated | ForEach-Object {
         $itemStatus = if ([string]$_.ValidatedSha256 -ne [string]$_.Manifest.BeforeSha256) {

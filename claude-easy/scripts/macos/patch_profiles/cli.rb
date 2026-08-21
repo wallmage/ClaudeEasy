@@ -511,6 +511,14 @@ module ClaudeEasy
         ) if options[:json]
         warn "ClashX Meta 日志路径不安全，未执行修改。"
         return 1
+      rescue LogRepairPartialError
+        return emit_cli_result(
+          operation: "repair_clashx_logs", exit_code: 1, status: "partial",
+          code: "log_repair_partial", summary_zh: "ClashX Meta 文件日志修复只完成了一部分；旧日志已保留。",
+          changes: ["log_directory_permissions"]
+        ) if options[:json]
+        warn "ClashX Meta 文件日志修复只完成了一部分；旧日志已保留。"
+        return 1
       rescue LogRepairError
         return emit_cli_result(
           operation: "repair_clashx_logs", exit_code: 1, status: "failed",
@@ -623,10 +631,12 @@ module ClaudeEasy
       backups = list_backups(options[:backup_root])
       return emit_cli_result(
         operation: "list_backups", exit_code: 0, status: backups.empty? ? "no_change" : "ok",
-        code: backups.empty? ? "no_backups" : "backups_listed", summary_zh: "已读取可用备份。",
+        code: backups.empty? ? "no_backups" : "backups_listed",
+        summary_zh: backups.empty? ? "没有可用备份。" : "已读取可用备份。",
         checks: [{ "name" => "backup_count", "value" => backups.length }], items: backups
       ) if options[:json]
       backups.each { |item| puts "#{item.fetch('created_at')}\t#{item.fetch('id')}" }
+      puts(backups.empty? ? "没有可用备份。" : "已读取可用备份。")
       return 0
     end
 
@@ -699,6 +709,7 @@ module ClaudeEasy
         }]
       ) if options[:json]
       puts JSON.generate(ClaudeEasyResult.sanitize(comparison))
+      puts "备份比较完成。"
       return 0
     end
 
@@ -809,6 +820,7 @@ module ClaudeEasy
       ) if options[:json]
       public_result = result.reject { |key, _value| key == :rollback_bytes }
       puts JSON.generate(ClaudeEasyResult.sanitize(public_result))
+      puts summary
       return exit_code
     end
 

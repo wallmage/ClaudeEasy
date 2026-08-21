@@ -1124,6 +1124,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_configuration_history_is_versioned_compared_and_safely_restored
+    readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
     mac_patcher = mac_patcher_source
@@ -1148,6 +1149,8 @@ class SkillContractTest < Minitest::Test
     assert_includes mac_patcher, "--list-backups"
     assert_includes mac_patcher, "--compare-backup"
     assert_includes mac_patcher, "--restore-backup"
+    assert_includes readme, "ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups"
+    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --restore-backup"
     assert_includes mac_installer, "--snapshot-initial"
     assert_includes windows_installer, "ListBackups"
     assert_includes windows_installer, "CompareBackup"
@@ -1157,6 +1160,16 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, "changed_fields"
     %w[id same backup_sha256 current_sha256].each do |field|
       assert_match(/^\s+#{field} = /, windows_installer)
+    end
+
+    Dir.mktmpdir do |directory|
+      stdout, stderr, status = Open3.capture3(
+        RbConfig.ruby, File.join(SKILL, "scripts/macos/patch_profiles.rb"),
+        "--list-backups", "--backup-dir", File.join(directory, "backups"), "--json"
+      )
+      assert status.success?, stderr
+      assert_empty stderr
+      assert_equal "no_backups", JSON.parse(stdout).fetch("code")
     end
     assert_includes windows_installer, '@($changedFields) @() @($comparison)'
     assert_includes skill, "先列出备份"
@@ -2173,6 +2186,8 @@ class SkillContractTest < Minitest::Test
     refute_includes readme, "两个平台都必须让 Clash 保持运行"
     refute_includes readme, "已更新，尚未生效"
     assert_includes readme, "Windows 安装只在客户端本来就未运行时执行写入"
+    assert_includes readme, "运行中可以创建安全更新备份和验收清单"
+    assert_includes readme, "其余受保护客户端配置写入会整批延期"
     assert_includes readme, "修改整批延期且不得报告“已更新”"
     refute_includes skill_document, "两个平台都保持 Clash 运行"
     assert_includes skill_document, "只有客户端本来就未运行时才执行"
@@ -2183,7 +2198,7 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_profiles,
                     "$updatedRawValue -match '^(?:~|null|Null|NULL)$'"
     assert_includes windows_installer, 'BeforeUpdated = [string]$profile.Updated'
-    assert_includes windows_installer, "Version = 3"
+    assert_includes windows_installer, "Version = 4"
     assert_includes windows_installer, "Runtime = $runtimeSnapshot"
     assert_includes windows_installer,
                     "Invoke-ClashVergeReactivationShortcut $reactivationShortcut"
@@ -2202,8 +2217,8 @@ class SkillContractTest < Minitest::Test
                     '@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0'
     assert_includes windows_installer, '"safe_update_legacy_recovery_pending"'
     assert_includes windows_installer, '"safe_update_legacy_snapshot_required"'
-    assert_includes windows_installer, "重新创建 v3 快照"
-    refute_includes windows_installer, "重新创建 v2 快照"
+    assert_includes windows_installer, "重新创建 v4 快照"
+    refute_includes windows_installer, "重新创建 v3 快照"
     assert_includes windows_installer, '$safeUpdateContentRestoreEligible = $false'
     assert_includes windows_installer, 'if (-not $safeUpdateContentRestoreEligible) {'
     assert_includes windows_installer, '"safe_update_verification_retry_pending"'
@@ -2404,7 +2419,7 @@ class SkillContractTest < Minitest::Test
                     '$InterruptedRecoveryPolicy = "client_stopped"'
     assert_includes safe_update,
                     '-InterruptedRecoveryPolicy "safe_update_running_client"'
-    assert_equal 4, installer.scan('"safe_update_running_client"').length
+    assert_equal 5, installer.scan('"safe_update_running_client"').length
     assert_includes transaction,
                     "function Test-SafeUpdateRunningRecoveryTargets("
     assert_includes transaction, '"claude-easy-safe-update.json"'

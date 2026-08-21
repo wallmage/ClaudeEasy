@@ -724,8 +724,8 @@ class MutationSafetyTest < Minitest::Test
         "    selections = localized_runtime_selections(\n" \
           "      original_selections, result.fetch(:rollback_bytes), result.fetch(:path)\n" \
           "    )\n" \
-          "    selections ||= runtime_selections_for_profile(\n" \
-          "      original_selections, result.fetch(:path), preserve_all: true\n" \
+          "    selections ||= provider_runtime_selections(\n" \
+          "      original_selections, result.fetch(:rollback_bytes), result.fetch(:path)\n" \
           "    )\n",
         "    selections = runtime_selections_for_profile(\n" \
           "      original_selections, result.fetch(:path), preserve_all: true\n" \
@@ -738,7 +738,7 @@ class MutationSafetyTest < Minitest::Test
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_safe_update_localizes_a_renamed_node_inside_the_same_group"
+        "--name", "test_safe_update_does_not_load_a_mixed_group_after_its_selected_inline_node_was_removed"
       )
     end
   end
@@ -1264,7 +1264,7 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/install_windows.ps1",
-        "            Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)\n",
+        "                    Assert-ClaudeEasyProxyGroupCollection $text $publicSubscriptionLabel\n",
         ""
       )
 

@@ -436,7 +436,7 @@ function Get-RemoteSubscriptionTargets([string]$ProfilesIndexText, [string]$Dire
             (Join-Path $Directory ($item.Uid + ".yml"))
         )
         $matches = @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        if ($matches.Count -ne 1) { throw "远程订阅无法对应到唯一配置文件：$($item.Uid)。" }
+        if ($matches.Count -ne 1) { throw "远程订阅无法对应到唯一配置文件。" }
         $path = (Resolve-Path -LiteralPath $matches[0]).Path
         if (-not $targetPaths.Add($path)) { throw "多个远程订阅对应到同一配置文件。" }
         $targets += [pscustomobject]@{
