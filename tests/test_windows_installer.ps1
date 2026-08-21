@@ -2749,12 +2749,20 @@ public static class FakeCurl {
             }
             $routeStartDiagnostic = ""
             if ($routeSuccessProcess.HasExited) {
-                $routeStartDiagnostic =
-                    "; exit=$($routeSuccessProcess.ExitCode); output=" +
-                    (Get-TestOutputDiagnostic (
-                        $routeSuccessProcess.StandardOutput.ReadToEnd() +
-                        $routeSuccessProcess.StandardError.ReadToEnd()
-                    ))
+                $routeStartOutput =
+                    $routeSuccessProcess.StandardOutput.ReadToEnd() +
+                    $routeSuccessProcess.StandardError.ReadToEnd()
+                try {
+                    $routeStartResult = $routeStartOutput | ConvertFrom-Json
+                    $routeStartDiagnostic =
+                        "; exit=$($routeSuccessProcess.ExitCode); " +
+                        "code=$($routeStartResult.code); " +
+                        "summary=$($routeStartResult.summary_zh)"
+                } catch {
+                    $routeStartDiagnostic =
+                        "; exit=$($routeSuccessProcess.ExitCode); output=" +
+                        (Get-TestOutputDiagnostic $routeStartOutput)
+                }
             }
             Assert-True (
                 Test-Path -LiteralPath $fakeCurlPidsPath -PathType Leaf
