@@ -2917,10 +2917,15 @@ class SkillContractTest < Minitest::Test
     {
       ["README.md"] => { "macos" => "false", "windows" => "false" },
       ["AGENTS.md"] => { "macos" => "false", "windows" => "false" },
+      ["CLAUDE.md", "claude-easy/scripts/macos/patch_profiles.rb"] => { "macos" => "true", "windows" => "false" },
+      ["tests/baseline.md.rb"] => { "macos" => "true", "windows" => "true" },
       ["claude-easy/scripts/macos/patch_profiles.rb"] => { "macos" => "true", "windows" => "false" },
       ["claude-easy/scripts/windows/install_windows.ps1"] => { "macos" => "false", "windows" => "true" },
+      ["claude-easy/references/macos.md"] => { "macos" => "true", "windows" => "false" },
+      ["claude-easy/references/windows.md"] => { "macos" => "false", "windows" => "true" },
       ["claude-easy/references/policy.json"] => { "macos" => "true", "windows" => "true" },
-      ["unexpected-file"] => { "macos" => "true", "windows" => "true" }
+      ["unexpected-file"] => { "macos" => "false", "windows" => "false" },
+      [] => { "macos" => "true", "windows" => "true" }
     }.each do |paths, expected|
       output, error, status = Open3.capture3(RbConfig.ruby, classifier, *paths, chdir: ROOT)
       assert status.success?, error
