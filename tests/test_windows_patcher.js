@@ -209,6 +209,7 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
     const input = baseConfig();
     input.ipv6 = true;
     input.tun = { enable: false };
+    input.dns['nameserver-policy'] = { 'geosite:cn': ['system'] };
     const patched = engine.claudeEasyTransform(input, 'fixture', usageProfile);
     const providerName = engine.CLAUDE_EASY_POLICY.cnDomainProvider.name;
     const provider = patched['rule-providers'][providerName];
@@ -219,6 +220,7 @@ test('lightweight profiles receive the common China-domain baseline only', { ski
     assert.equal(provider.url, engine.CLAUDE_EASY_POLICY.cnDomainProvider.url);
     assert.equal(provider.proxy, 'Main');
     assert.deepEqual(patched.dns['nameserver-policy'][`rule-set:${providerName}`], engine.CLAUDE_EASY_POLICY.directResolvers);
+    assert.deepEqual(patched.dns['nameserver-policy']['geosite:cn'], engine.CLAUDE_EASY_POLICY.directResolvers);
     assert.ok(patched.rules.indexOf(`RULE-SET,${providerName},DIRECT`) < patched.rules.indexOf('GEOSITE,CN,DIRECT'));
     assert.equal(patched.ipv6, true);
     assert.deepEqual(patched.tun, { enable: false });
@@ -1776,6 +1778,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
       'ConvertFrom-SubscriptionScalar', 'Get-FlowProxyProtocolTypes',
+      'Get-YamlBlockSequenceEnd', 'ConvertFrom-ProxyProtocolType',
       'Get-ProxyProtocolTypes', 'Assert-SubscriptionProtocolPreserved',
       'Get-PublicBackupId', 'Get-BackupTarget',
       'Get-ClaudeEasyManagedScriptBlock',

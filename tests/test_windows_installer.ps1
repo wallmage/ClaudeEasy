@@ -3123,6 +3123,47 @@ proxies:
         $dummyProtocolRegressionRejected = $true
     }
     Assert-True $dummyProtocolRegressionRejected "comments or nested mappings bypassed the AnyTLS regression gate"
+    $sameIndentRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved @'
+proxies:
+- type: anytls
+'@ @'
+proxies:
+- type: ss
+'@
+    } catch { $sameIndentRejected = $true }
+    Assert-True $sameIndentRejected "same-indent proxies list bypassed the AnyTLS regression gate"
+    $multilineFlowRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved @'
+proxies:
+  - {
+      name: Node,
+      type: anytls
+    }
+'@ @'
+proxies:
+  - {
+      name: Node,
+      type: ss
+    }
+'@
+    } catch { $multilineFlowRejected = $true }
+    Assert-True $multilineFlowRejected "multiline flow-map proxies bypassed the AnyTLS regression gate"
+    $inlineAnchorRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved @'
+proxies: &foo
+  - name: n
+    type: anytls
+'@ @'
+proxies:
+  - name: n
+    type: ss
+'@
+    } catch { $inlineAnchorRejected = $true }
+    Assert-True $inlineAnchorRejected "inline proxies anchor was treated as an empty type list"
 
     $ownershipInput = @'
 current: R-a

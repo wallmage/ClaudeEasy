@@ -839,6 +839,7 @@ function claudeEasyCommonCn(config, routeGroup) {
   dns["direct-nameserver-follow-policy"] = false;
   const policies = dns["nameserver-policy"] && typeof dns["nameserver-policy"] === "object" &&
     !Array.isArray(dns["nameserver-policy"]) ? claudeEasyClone(dns["nameserver-policy"]) : {};
+  policies["geosite:cn"] = CLAUDE_EASY_POLICY.directResolvers.slice();
   policies["rule-set:" + providerName] = CLAUDE_EASY_POLICY.directResolvers.slice();
   dns["nameserver-policy"] = policies;
 

@@ -399,24 +399,37 @@ if ($VerifySafeUpdate) {
             try {
                 $target = @($currentTargets | Where-Object { $_.Uid -eq [string]$item.Uid -and (Split-Path -Leaf $_.Path) -eq [string]$item.File })
                 if ($target.Count -ne 1) { throw "远程订阅清单在更新期间发生变化。" }
-                $validatedBytes = [System.IO.File]::ReadAllBytes($target[0].Path)
-                $validatedHash = Get-BytesSha256 $validatedBytes
-                $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
-                $recovery = @($recoveryItems | Where-Object { $_.Uid -eq [string]$item.Uid })
-                if ($recovery.Count -ne 1) { throw "安全更新准备记录中的订阅清单无效。" }
-                if ([bool]$recovery[0].CanAutoRestore) {
-                    $beforeBytes = [System.IO.File]::ReadAllBytes($recovery[0].BackupPath)
-                    if ((Get-BytesSha256 $beforeBytes) -ne [string]$recovery[0].BeforeSha256) {
-                        throw "安全更新前备份在验收期间发生变化。"
+                $targetGuard = Open-SafeUpdateVersionGuard $target[0].Path "远程订阅"
+                try {
+                    $validatedBytes = Get-StreamBytes $targetGuard.Stream
+                    $validatedHash = Get-BytesSha256 $validatedBytes
+                    $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
+                    $recovery = @($recoveryItems | Where-Object { $_.Uid -eq [string]$item.Uid })
+                    if ($recovery.Count -ne 1) { throw "安全更新准备记录中的订阅清单无效。" }
+                    if ([bool]$recovery[0].CanAutoRestore) {
+                        $backupGuard = Open-SafeUpdateVersionGuard $recovery[0].BackupPath "安全更新前备份"
+                        try {
+                            $beforeBytes = Get-StreamBytes $backupGuard.Stream
+                        } finally {
+                            $backupGuard.Stream.Dispose()
+                            foreach ($directoryGuard in @($backupGuard.DirectoryGuards)) { $directoryGuard.Dispose() }
+                        }
+                        if ((Get-BytesSha256 $beforeBytes) -ne [string]$recovery[0].BeforeSha256) {
+                            throw "安全更新前备份在验收期间发生变化。"
+                        }
+                        $beforeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($beforeBytes)
+                        Assert-SubscriptionProtocolPreserved $beforeText $text
                     }
-                    $beforeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($beforeBytes)
-                    Assert-SubscriptionProtocolPreserved $beforeText $text
-                }
-                Test-GeneratedYaml $text ([string]$item.File) | Out-Null
-                Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
-                Test-MihomoCandidate $core $text $profilesDirectory
-                if ((Get-FileSha256 $target[0].Path) -ne $validatedHash) {
-                    throw "订阅在验收期间再次发生变化。"
+                    Test-GeneratedYaml $text ([string]$item.File) | Out-Null
+                    Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
+                    Test-MihomoCandidate $core $text $profilesDirectory
+                    $targetGuard.Stream.Position = 0
+                    if ((Get-BytesSha256 (Get-StreamBytes $targetGuard.Stream)) -ne $validatedHash) {
+                        throw "订阅在验收期间再次发生变化。"
+                    }
+                } finally {
+                    $targetGuard.Stream.Dispose()
+                    foreach ($directoryGuard in @($targetGuard.DirectoryGuards)) { $directoryGuard.Dispose() }
                 }
                 $validated += [pscustomobject]@{
                     Target = $target[0]
@@ -454,40 +467,28 @@ if ($VerifySafeUpdate) {
         $versionGuards = @()
         try {
             foreach ($entry in @($validated | Sort-Object { $_.Target.Path })) {
-                $guard = [System.IO.File]::Open(
-                    $entry.Target.Path,
-                    [System.IO.FileMode]::Open,
-                    [System.IO.FileAccess]::Read,
-                    [System.IO.FileShare]::Read
-                )
-                $versionGuards += $guard
-                if ((Get-BytesSha256 (Get-StreamBytes $guard)) -ne $entry.ValidatedSha256) {
+                $opened = Open-SafeUpdateVersionGuard $entry.Target.Path "远程订阅"
+                $versionGuards += $opened
+                if ((Get-BytesSha256 (Get-StreamBytes $opened.Stream)) -ne $entry.ValidatedSha256) {
                     throw "订阅在验收期间再次发生变化。"
                 }
             }
-            $indexGuard = [System.IO.File]::Open(
-                $profilesIndexPath,
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::Read,
-                [System.IO.FileShare]::Read
-            )
-            $versionGuards += $indexGuard
-            if ((Get-BytesSha256 (Get-StreamBytes $indexGuard)) -ne (Get-BytesSha256 $indexSnapshot.Bytes)) {
+            $indexOpened = Open-SafeUpdateVersionGuard $profilesIndexPath "远程订阅清单"
+            $versionGuards += $indexOpened
+            if ((Get-BytesSha256 (Get-StreamBytes $indexOpened.Stream)) -ne (Get-BytesSha256 $indexSnapshot.Bytes)) {
                 throw "远程订阅清单在验收期间发生变化。"
             }
-            $scriptGuard = [System.IO.File]::Open(
-                $targetScript,
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::Read,
-                [System.IO.FileShare]::Read
-            )
-            $versionGuards += $scriptGuard
-            if ((Get-BytesSha256 (Get-StreamBytes $scriptGuard)) -ne (Get-BytesSha256 $scriptSnapshot.Bytes)) {
+            $scriptOpened = Open-SafeUpdateVersionGuard $targetScript "全局扩展脚本"
+            $versionGuards += $scriptOpened
+            if ((Get-BytesSha256 (Get-StreamBytes $scriptOpened.Stream)) -ne (Get-BytesSha256 $scriptSnapshot.Bytes)) {
                 throw "全局扩展脚本在验收期间发生变化。"
             }
             Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes $manifestSnapshot.Identity "safe_update_running_client"
         } finally {
-            foreach ($guard in $versionGuards) { $guard.Dispose() }
+            foreach ($guard in $versionGuards) {
+                $guard.Stream.Dispose()
+                foreach ($directoryGuard in @($guard.DirectoryGuards)) { $directoryGuard.Dispose() }
+            }
         }
     } catch {
         if (@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0) {
@@ -506,17 +507,12 @@ if ($VerifySafeUpdate) {
                 throw "缺少安全更新恢复所需的控制文件快照。"
             }
             foreach ($control in @(
-                [pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot },
-                [pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot }
+                [pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot; Label = "远程订阅清单" },
+                [pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot; Label = "全局扩展脚本" }
             )) {
-                $controlGuard = [System.IO.File]::Open(
-                    $control.Path,
-                    [System.IO.FileMode]::Open,
-                    [System.IO.FileAccess]::Read,
-                    [System.IO.FileShare]::Read
-                )
-                $controlGuards += $controlGuard
-                if ((Get-BytesSha256 (Get-StreamBytes $controlGuard)) -ne
+                $opened = Open-SafeUpdateVersionGuard $control.Path $control.Label
+                $controlGuards += $opened
+                if ((Get-BytesSha256 (Get-StreamBytes $opened.Stream)) -ne
                     (Get-BytesSha256 $control.Snapshot.Bytes)) {
                     throw "安全更新恢复所需的控制文件在验收期间变化。"
                 }
@@ -525,13 +521,19 @@ if ($VerifySafeUpdate) {
             $controlStateStable = $false
         }
         if (-not $controlStateStable) {
-            foreach ($controlGuard in $controlGuards) { $controlGuard.Dispose() }
+            foreach ($controlGuard in $controlGuards) {
+                $controlGuard.Stream.Dispose()
+                foreach ($directoryGuard in @($controlGuard.DirectoryGuards)) { $directoryGuard.Dispose() }
+            }
             Complete-InstallResult 1 "partial" "safe_update_verification_retry_pending" "验收依赖的清单、脚本或状态在检查期间变化；已保留当前订阅和安全更新清单，请待客户端写入完成后重试。" @() @("verification_state")
         }
         try {
             $restoreResult = Restore-SafeUpdateFiles $recoveryItems $observedCurrentHashes $safeUpdateStatePath $manifestSnapshot
         } finally {
-            foreach ($controlGuard in $controlGuards) { $controlGuard.Dispose() }
+            foreach ($controlGuard in $controlGuards) {
+                $controlGuard.Stream.Dispose()
+                foreach ($directoryGuard in @($controlGuard.DirectoryGuards)) { $directoryGuard.Dispose() }
+            }
         }
         if ($restoreResult.Conflicts.Count -gt 0) {
             throw "更新验收失败；检测到订阅同时发生变化，未覆盖新内容：$($restoreResult.Conflicts -join '、')。安全更新记录已保留。"

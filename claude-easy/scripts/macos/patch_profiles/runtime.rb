@@ -118,24 +118,34 @@ module ClaudeEasy
     ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
   end
 
-  def wait_for_clashx_safe_runtime(identity, reload_snapshot:, selections:, expected_tun:,
+  def wait_for_clashx_safe_runtime(identity, reload_snapshot: nil, selections:, expected_tun:,
                                     required_proxy_group: nil, requester_factory: nil,
                                     reload_receipt_reader: nil, process_reader: nil,
                                     connectivity_checker: nil, precommit_condition: nil,
-                                    sleeper: nil, attempts: 120)
+                                    sleeper: nil, attempts: 120, expected_profile_path: nil,
+                                    profile_match_reader: nil)
     requester_factory ||= method(:current_runtime_requester)
-    reload_receipt_reader ||= method(:clashx_reload_completed_since?)
     process_reader ||= method(:clashx_running_identity)
     sleeper ||= ->(seconds) { sleep(seconds) }
+    profile_match_reader ||= if expected_profile_path
+                               ->(requester) { runtime_matches_profile?(requester, expected_profile_path) }
+                             end
 
     attempts.times do |attempt|
       return false unless same_clashx_process?(identity, process_reader.call)
 
-      unless reload_receipt_reader.call(reload_snapshot)
+      requester = requester_factory.call
+      matched = if profile_match_reader
+                  requester && profile_match_reader.call(requester)
+                elsif reload_receipt_reader
+                  reload_receipt_reader.call(reload_snapshot)
+                else
+                  false
+                end
+      unless matched
         sleeper.call(0.25) if attempt + 1 < attempts
         next
       end
-      requester = requester_factory.call
       restorable_selections = requester && runtime_restorable_selections(requester, selections)
       selections_restored = requester && restorable_selections &&
                             restore_runtime_selections(requester, restorable_selections)
@@ -151,6 +161,72 @@ module ClaudeEasy
     false
   rescue StandardError
     false
+  end
+
+  def profile_runtime_identity(path)
+    config = load_yaml(File.read(path, encoding: "UTF-8"), path)
+    return nil unless config.is_a?(Hash)
+
+    proxies = Array(config["proxies"]).each_with_object([]) do |proxy, names|
+      next unless proxy.is_a?(Hash) && proxy["name"].is_a?(String) && !proxy["name"].empty?
+
+      names << proxy["name"]
+    end.sort
+    groups = Array(config["proxy-groups"]).each_with_object({}) do |group, result|
+      next unless group.is_a?(Hash) && group["name"].is_a?(String) && !group["name"].empty?
+
+      result[group["name"]] = Array(group["proxies"]).map(&:to_s).sort
+    end
+    providers = if config["proxy-providers"].is_a?(Hash)
+                  config["proxy-providers"].keys.map(&:to_s).sort
+                else
+                  []
+                end
+    { proxies: proxies, groups: groups, providers: providers }
+  rescue StandardError
+    nil
+  end
+
+  def runtime_loaded_identity(requester)
+    proxies = runtime_proxies(requester)
+    return nil unless proxies
+
+    leaf_names = proxies.each_with_object([]) do |(name, proxy), names|
+      next unless proxy.is_a?(Hash)
+
+      type = proxy["type"].to_s
+      next if runtime_proxy_group_type?(type) || runtime_non_proxy_name?(name)
+
+      names << name
+    end.sort
+    groups = proxies.each_with_object({}) do |(name, proxy), result|
+      next unless proxy.is_a?(Hash) && runtime_proxy_group_type?(proxy["type"])
+
+      result[name] = Array(proxy["all"]).map(&:to_s).sort
+    end
+    status, body = requester.call("GET", "/providers/proxies", nil)
+    providers = []
+    if status == 200
+      payload = JSON.parse(body)
+      providers = payload["providers"].keys.map(&:to_s).sort if payload["providers"].is_a?(Hash)
+    end
+    { proxies: leaf_names, groups: groups, providers: providers }
+  rescue StandardError
+    nil
+  end
+
+  def runtime_matches_profile?(requester, path)
+    expected = profile_runtime_identity(path)
+    actual = runtime_loaded_identity(requester)
+    return false unless expected && actual
+
+    return false unless expected[:proxies].all? { |name| actual[:proxies].include?(name) }
+    expected[:groups].each do |name, members|
+      loaded = actual[:groups][name]
+      return false unless loaded.is_a?(Array)
+      return false unless members.all? { |member| loaded.include?(member) }
+    end
+    expected[:providers].all? { |name| actual[:providers].include?(name) }
   end
 
   def running_mihomo_config_paths
@@ -936,7 +1012,6 @@ module ClaudeEasy
     pending = -> { result.merge(status: :reload_failed_restore_pending) }
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
-    reload_snapshot_reader ||= method(:clashx_reload_snapshot)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback_before_runtime_reload(result)) unless
       runtime_checkpoint.is_a?(Hash) &&
@@ -960,33 +1035,30 @@ module ClaudeEasy
       return result.merge(status: rollback_before_runtime_reload(result))
     end
 
-    reload_snapshot = reload_snapshot_reader.call
-    return result.merge(status: rollback_before_runtime_reload(result)) unless reload_snapshot
     return pending.call unless
       mark_profile_transaction_activation(transaction, :update, client_identity)
 
     update_loaded = native_reloader.call(client_identity) &&
                     runtime_waiter.call(
-                      client_identity, reload_snapshot: reload_snapshot,
-                      selections: selections, expected_tun: expected_tun,
+                      client_identity, selections: selections, expected_tun: expected_tun,
                       required_proxy_group: required_proxy_group,
-                      precommit_condition: precommit_condition
+                      precommit_condition: precommit_condition,
+                      expected_profile_path: result.fetch(:path)
                     )
     return result.merge(reloaded: true) if
       update_loaded && profile_result_current?(result) &&
       runtime_precommit_allowed?(precommit_condition)
 
     return result.merge(status: :reload_failed_rollback_conflict) unless restore_profile_bytes(result)
-    rollback_reload_snapshot = reload_snapshot_reader.call
-    return pending.call unless rollback_reload_snapshot
     return pending.call unless
       mark_profile_transaction_activation(transaction, :rollback, client_identity)
     return pending.call unless native_reloader.call(client_identity)
 
     restored = runtime_waiter.call(
-      client_identity, reload_snapshot: rollback_reload_snapshot,
-      selections: original_selections, expected_tun: expected_tun,
-      precommit_condition: precommit_condition
+      client_identity, selections: original_selections, expected_tun: expected_tun,
+      required_proxy_group: required_proxy_group,
+      precommit_condition: precommit_condition,
+      expected_profile_path: result.fetch(:path)
     )
     result.merge(status: restored ? :reload_failed_rolled_back : :reload_failed_restore_pending)
   rescue StandardError

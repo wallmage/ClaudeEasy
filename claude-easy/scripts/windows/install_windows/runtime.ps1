@@ -258,12 +258,17 @@ function Wait-ClashVergeRuntimeHealthy(
     [object]$Policy
 ) {
     Wait-ClashVergeRuntimeRefresh $RuntimePath $PreviousContext
+    $context = Get-ClashControllerContext $RuntimePath
+    Restore-ClashRuntimeSelections $context $Selections
+    $flush = Invoke-ClashControllerRequest $context "POST" "/cache/dns/flush"
+    if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
         try {
             $context = Get-ClashControllerContext $RuntimePath
             Assert-ClashRuntimeHealthy `
-                $context $Selections $TunEnabled $Profile $CurlPath $Policy
+                $context $Selections $TunEnabled $Profile $CurlPath $Policy `
+                -ReadOnly
             return $context
         } catch {
             $lastFailure = $_.Exception.Message
@@ -645,9 +650,12 @@ function Assert-ClashRuntimeHealthy(
     [bool]$ExpectedTunEnabled,
     [int]$UsageProfile,
     [string]$CurlPath,
-    [object]$Policy
+    [object]$Policy,
+    [switch]$ReadOnly
 ) {
-    Restore-ClashRuntimeSelections $Context $Selections
+    if (-not $ReadOnly) {
+        Restore-ClashRuntimeSelections $Context $Selections
+    }
     $state = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {
         $property = $state.Proxies.PSObject.Properties[[string]$name]
@@ -660,8 +668,10 @@ function Assert-ClashRuntimeHealthy(
     if ($UsageProfile -eq 3) {
         Assert-ClashRuntimeAiGroup $state.Proxies $state.Rules $state.Providers $Policy
     }
-    $flush = Invoke-ClashControllerRequest $Context "POST" "/cache/dns/flush"
-    if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
+    if (-not $ReadOnly) {
+        $flush = Invoke-ClashControllerRequest $Context "POST" "/cache/dns/flush"
+        if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
+    }
     $dns = Invoke-ClashControllerRequest $Context "GET" "/dns/query?name=www.baidu.com&type=A"
     if ($dns.Status -ne 200) { throw "Clash Verge Rev DNS 检查失败。" }
     $dnsPayload = $dns.Content | ConvertFrom-Json

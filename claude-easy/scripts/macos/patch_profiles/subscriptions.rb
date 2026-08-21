@@ -70,8 +70,13 @@ module ClaudeEasy
       methods: {
         "URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:": {
           implementation: function(session, task, redirectResponse, redirectRequest, completionHandler) {
-            redirectRejected = true;
-            task.cancel;
+            var nextURL = redirectRequest && redirectRequest.URL && unwrap(redirectRequest.URL.absoluteString);
+            if (!nextURL || !nextURL.match(/^https:\/\//)) {
+              redirectRejected = true;
+              completionHandler(null);
+              return;
+            }
+            completionHandler(redirectRequest);
           }
         }
       }
@@ -792,20 +797,18 @@ module ClaudeEasy
     return false unless selections && %i[enabled disabled ignore].include?(expected_tun)
 
     return false unless runtime_precommit_allowed?(precommit_condition)
-    reload_snapshot_reader ||= method(:clashx_reload_snapshot)
     native_reloader ||= method(:request_clashx_native_reload)
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
-    reload_snapshot = reload_snapshot_reader.call
-    return false unless reload_snapshot
+    required_proxy_group = profile_ai_runtime_group(active.fetch(:path)) if usage_profile == 3
     return false unless
       mark_profile_transaction_activation(transaction, :rollback, client_identity)
     return false unless native_reloader.call(client_identity)
 
     runtime_waiter.call(
-      client_identity, reload_snapshot: reload_snapshot,
-      selections: selections, expected_tun: expected_tun,
-      required_proxy_group: nil,
-      precommit_condition: precommit_condition
+      client_identity, selections: selections, expected_tun: expected_tun,
+      required_proxy_group: required_proxy_group,
+      precommit_condition: precommit_condition,
+      expected_profile_path: active.fetch(:path)
     )
   rescue StandardError
     false

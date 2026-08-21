@@ -114,38 +114,82 @@ function Get-FlowProxyProtocolTypes([string]$Text) {
     return @($types)
 }
 
+function Get-YamlBlockSequenceEnd([string[]]$Lines, [int]$KeyIndex, [int]$KeyIndent, [int]$SearchEnd) {
+    $finish = $KeyIndex + 1
+    $sawItem = $false
+    for ($index = $KeyIndex + 1; $index -lt $SearchEnd; $index++) {
+        $line = $Lines[$index]
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $indent = Get-YamlIndent $line
+        $trim = $line.TrimStart()
+        if ($trim.StartsWith("#")) {
+            if ($sawItem -and $indent -le $KeyIndent) { break }
+            continue
+        }
+        if ($indent -eq $KeyIndent -and ($trim -eq "-" -or $trim.StartsWith("- "))) {
+            $sawItem = $true
+            $finish = $index + 1
+            continue
+        }
+        if ($indent -le $KeyIndent) { break }
+        if (-not $sawItem) { break }
+        $finish = $index + 1
+    }
+    return $finish
+}
+
+function ConvertFrom-ProxyProtocolType([string]$Value) {
+    $type = (ConvertFrom-SubscriptionScalar $Value "代理类型").ToLowerInvariant()
+    if ($type.StartsWith("*") -or $type.StartsWith("&")) {
+        throw "proxies 清单无法解析，无法核对协议。"
+    }
+    return $type
+}
+
 function Get-ProxyProtocolTypes([string]$Text) {
     $lines = @(Split-YamlLines $Text)
     $node = Find-YamlMappingNode $lines "proxies" 0 0 $lines.Count
-    if ($null -eq $node) { return @() }
+    if ($null -eq $node) { throw "proxies 清单无法解析，无法核对协议。" }
     $inline = ([string]$node.Value).Trim()
     if ($inline.StartsWith("[")) {
-        return @(Get-FlowProxyProtocolTypes (($lines[$node.Start..($node.End - 1)]) -join "`n"))
+        $flowTypes = @(Get-FlowProxyProtocolTypes (($lines[$node.Start..($node.End - 1)]) -join "`n"))
+        if ($flowTypes.Count -eq 0) { throw "proxies 清单无法解析，无法核对协议。" }
+        return @($flowTypes | ForEach-Object { ConvertFrom-ProxyProtocolType $_ })
     }
     if (-not [string]::IsNullOrWhiteSpace($inline) -and -not $inline.StartsWith("#")) {
-        return @()
+        throw "proxies 不是受支持的清单，无法核对协议。"
     }
 
+    $end = Get-YamlBlockSequenceEnd $lines $node.Start $node.Indent $lines.Count
+    if ($end -le ($node.Start + 1)) { throw "proxies 清单无法解析，无法核对协议。" }
+
     $children = @()
-    for ($index = $node.Start + 1; $index -lt $node.End; $index++) {
+    for ($index = $node.Start + 1; $index -lt $end; $index++) {
         $line = $lines[$index]
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
         $children += [pscustomobject]@{ Index = $index; Indent = Get-YamlIndent $line; Text = $line.TrimStart() }
     }
-    if ($children.Count -eq 0) { return @() }
+    if ($children.Count -eq 0) { throw "proxies 清单无法解析，无法核对协议。" }
     $itemIndent = ($children | Measure-Object -Property Indent -Minimum).Minimum
     $itemStarts = @($children | Where-Object {
         $_.Indent -eq $itemIndent -and ($_.Text -eq "-" -or $_.Text.StartsWith("- "))
     })
+    if ($itemStarts.Count -eq 0) { throw "proxies 清单无法解析，无法核对协议。" }
     $types = @()
     for ($itemIndex = 0; $itemIndex -lt $itemStarts.Count; $itemIndex++) {
         $item = $itemStarts[$itemIndex]
-        $finish = if ($itemIndex + 1 -lt $itemStarts.Count) { $itemStarts[$itemIndex + 1].Index } else { $node.End }
+        $finish = if ($itemIndex + 1 -lt $itemStarts.Count) { $itemStarts[$itemIndex + 1].Index } else { $end }
         $entries = @()
         $tail = $item.Text.Substring(1).TrimStart()
         if (-not [string]::IsNullOrWhiteSpace($tail)) {
             if ($tail.StartsWith("{")) {
-                $types += @(Get-FlowProxyProtocolTypes "[$tail]")
+                $flow = $tail
+                if ($finish -gt ($item.Index + 1)) {
+                    $flow = $tail + "`n" + (($lines[($item.Index + 1)..($finish - 1)]) -join "`n")
+                }
+                $itemTypes = @(Get-FlowProxyProtocolTypes "[$flow]")
+                if ($itemTypes.Count -eq 0) { throw "proxies 清单无法解析，无法核对协议。" }
+                $types += @($itemTypes | ForEach-Object { ConvertFrom-ProxyProtocolType $_ })
                 continue
             }
             $entries += Get-YamlMappingEntry $tail
@@ -157,8 +201,10 @@ function Get-ProxyProtocolTypes([string]$Text) {
                 Get-YamlMappingEntry $_.Text
             })
         }
-        foreach ($entry in @($entries | Where-Object { $null -ne $_ -and $_.Key -ieq "type" })) {
-            $types += (ConvertFrom-SubscriptionScalar ([string]$entry.Value) "代理类型").ToLowerInvariant()
+        $typeEntries = @($entries | Where-Object { $null -ne $_ -and $_.Key -ieq "type" })
+        if ($typeEntries.Count -eq 0) { throw "proxies 清单无法解析，无法核对协议。" }
+        foreach ($entry in $typeEntries) {
+            $types += (ConvertFrom-ProxyProtocolType ([string]$entry.Value))
         }
     }
     return @($types)

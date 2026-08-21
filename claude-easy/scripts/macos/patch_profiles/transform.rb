@@ -243,6 +243,7 @@ module ClaudeEasy
     dns["direct-nameserver"] = deep_copy(policy["direct_resolvers"])
     dns["direct-nameserver-follow-policy"] = false
     policies = dns["nameserver-policy"].is_a?(Hash) ? deep_copy(dns["nameserver-policy"]) : {}
+    policies["geosite:cn"] = deep_copy(policy["direct_resolvers"])
     policies["rule-set:#{provider_name}"] = deep_copy(policy["direct_resolvers"])
     dns["nameserver-policy"] = policies
 

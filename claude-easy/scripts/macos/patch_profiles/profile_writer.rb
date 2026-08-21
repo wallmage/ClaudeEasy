@@ -934,7 +934,7 @@ module ClaudeEasy
                 result, socket: socket, requester: requester,
                 connectivity_checker: connectivity_checker,
                 precommit_condition: precommit_condition,
-                require_tun: false,
+                require_tun: runtime_tun_requirement(usage_profile),
                 require_safe_ai: usage_profile == 3
               )
             end

@@ -1930,6 +1930,7 @@ class MacosPatcherTest < Minitest::Test
     original = base_config
     original["ipv6"] = true
     original["tun"] = { "enable" => false }
+    original["dns"]["nameserver-policy"]["geosite:cn"] = ["system"]
 
     [1, 2].each do |usage_profile|
       patched = ClaudeEasy.patch(original, @policy, usage_profile: usage_profile).fetch(:config)
@@ -1943,6 +1944,8 @@ class MacosPatcherTest < Minitest::Test
       assert_equal "Main", provider.fetch("proxy")
       assert_equal @policy.fetch("direct_resolvers"),
                    patched.dig("dns", "nameserver-policy", "rule-set:#{provider_name}")
+      assert_equal @policy.fetch("direct_resolvers"),
+                   patched.dig("dns", "nameserver-policy", "geosite:cn")
       cn_index = patched.fetch("rules").index("RULE-SET,#{provider_name},DIRECT")
       broad_index = patched.fetch("rules").index("GEOSITE,CN,DIRECT")
       assert_operator cn_index, :<, broad_index
@@ -5411,7 +5414,8 @@ class MacosPatcherTest < Minitest::Test
                     'request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'willPerformHTTPRedirection:newRequest:completionHandler:'
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "task.cancel;"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "completionHandler(redirectRequest);"
+    refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "task.cancel;"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'response.URL.absoluteString'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
@@ -5709,6 +5713,36 @@ class MacosPatcherTest < Minitest::Test
 
       assert restored
       assert_nil required_group
+    end
+  end
+
+  def test_recovered_safe_update_runtime_checks_profile_three_ai_group
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      File.binwrite(path, YAML.dump(ClaudeEasy.patch(base_config, @policy, usage_profile: 3).fetch(:config)))
+      identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+      checkpoint = { path: File.realpath(path), expected_tun: :enabled, selections: {} }
+      bytes = File.binread(path)
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: path, original: bytes, candidate: bytes }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      required_group = nil
+
+      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ name: "active", path: path }], 3, "active",
+        precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
+        transaction: transaction, client_identity: identity,
+        native_reloader: ->(_current) { true },
+        runtime_waiter: lambda { |_current, **options|
+          required_group = options.fetch(:required_proxy_group)
+          true
+        }
+      )
+
+      assert restored
+      refute_nil required_group
     end
   end
 
@@ -8158,9 +8192,12 @@ class MacosPatcherTest < Minitest::Test
         assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
           result, requester: requester, require_tun: :preserve
         )
+        assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
+          result, requester: requester, require_tun: false
+        )
       end
 
-      assert_equal [:enabled, :disabled], expected_tun
+      assert_equal [:enabled, :disabled, :ignore], expected_tun
     end
   end
 
@@ -8463,6 +8500,8 @@ class MacosPatcherTest < Minitest::Test
             "AI" => { "type" => "Selector", "now" => "Main" },
             "node" => { "type" => "Shadowsocks" }
           })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => false })]
         else
           if method == "GET" && endpoint.start_with?("/dns/query?")
             [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
@@ -14927,9 +14966,9 @@ class MacosPatcherTest < Minitest::Test
     )
   end
 
-  def test_clashx_runtime_waits_for_reload_receipt_and_full_health
+  def test_clashx_runtime_waits_for_profile_match_and_full_health
     identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
-    receipts = [false, false, true]
+    matches = [false, false, true]
     dns_checks = []
     sleeps = 0
 
@@ -14943,9 +14982,9 @@ class MacosPatcherTest < Minitest::Test
         })]
       }
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
-        identity, reload_snapshot: {}, selections: { "Main" => "Taiwan" },
+        identity, selections: { "Main" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        reload_receipt_reader: ->(_before) { receipts.shift },
+        profile_match_reader: ->(_requester) { matches.shift },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
       )
@@ -14996,13 +15035,125 @@ class MacosPatcherTest < Minitest::Test
       }
       ClaudeEasy.stub(:runtime_health_healthy?, true) do
         assert ClaudeEasy.wait_for_clashx_safe_runtime(
-          identity, reload_snapshot: snapshot, selections: { "Main" => "Taiwan" },
+          identity, selections: { "Main" => "Taiwan" },
           expected_tun: :enabled, requester_factory: -> { requester },
-          reload_receipt_reader: ->(_before) { receipts.shift },
+          profile_match_reader: ->(_requester) { receipts.shift },
           process_reader: -> { identity }, sleeper: ->(_seconds) { sleeps += 1 }, attempts: 3
         )
       end
       assert_equal 1, sleeps
+    end
+  end
+
+  def test_runtime_match_rejects_an_old_in_memory_config
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      File.write(profile, YAML.dump(
+        "proxies" => [{ "name" => "New Node", "type" => "ss" }],
+        "proxy-groups" => [{ "name" => "Main", "type" => "select", "proxies" => ["New Node"] }]
+      ))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "Old Node", "all" => ["Old Node"] },
+            "Old Node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        else
+          [0, ""]
+        end
+      end
+
+      refute ClaudeEasy.runtime_matches_profile?(requester, profile)
+
+      loaded = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "New Node", "all" => ["New Node"] },
+            "New Node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        else
+          [0, ""]
+        end
+      end
+      assert ClaudeEasy.runtime_matches_profile?(loaded, profile)
+
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      ClaudeEasy.stub(:runtime_health_healthy?, true) do
+        assert ClaudeEasy.wait_for_clashx_safe_runtime(
+          identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
+          requester_factory: -> { loaded }, expected_profile_path: profile,
+          process_reader: -> { identity }, attempts: 1
+        )
+        refute ClaudeEasy.wait_for_clashx_safe_runtime(
+          identity, selections: { "Main" => "Old Node" }, expected_tun: :ignore,
+          requester_factory: -> { requester }, expected_profile_path: profile,
+          process_reader: -> { identity }, attempts: 1
+        )
+        refute ClaudeEasy.wait_for_clashx_safe_runtime(
+          identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
+          requester_factory: -> { loaded }, process_reader: -> { identity },
+          attempts: 1
+        )
+        assert ClaudeEasy.wait_for_clashx_safe_runtime(
+          identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
+          requester_factory: -> { loaded }, reload_receipt_reader: ->(_before) { true },
+          process_reader: -> { identity }, attempts: 1
+        )
+      end
+
+      refute ClaudeEasy.runtime_matches_profile?(->(*) { raise IOError }, profile)
+      refute ClaudeEasy.runtime_matches_profile?(
+        loaded, File.join(directory, "missing.yaml")
+      )
+      File.write(profile, YAML.dump(
+        "proxies" => [{ "name" => "New Node", "type" => "ss" }, { "type" => "ss" }],
+        "proxy-groups" => [
+          { "name" => "Main", "type" => "select", "proxies" => ["New Node"] },
+          { "type" => "select" }
+        ],
+        "proxy-providers" => { "sub" => { "type" => "http" } }
+      ))
+      refute ClaudeEasy.runtime_matches_profile?(loaded, profile)
+      with_provider = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "New Node", "all" => ["New Node"] },
+            "New Node" => { "type" => "Shadowsocks" },
+            "GLOBAL" => { "type" => "Selector" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => { "sub" => {} })]
+        else
+          [0, ""]
+        end
+      end
+      assert ClaudeEasy.runtime_matches_profile?(with_provider, profile)
+      missing_provider = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "New Node", "all" => ["New Node"] },
+            "New Node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [404, ""]
+        else
+          [0, ""]
+        end
+      end
+      refute ClaudeEasy.runtime_matches_profile?(missing_provider, profile)
+      File.write(profile, "[]")
+      refute ClaudeEasy.runtime_matches_profile?(loaded, profile)
     end
   end
 
@@ -15031,10 +15182,9 @@ class MacosPatcherTest < Minitest::Test
       true
     }) do
       refute ClaudeEasy.wait_for_clashx_safe_runtime(
-        identity, reload_snapshot: {},
-        selections: { "Main" => "Old Node", "AI" => "Taiwan" },
+        identity, selections: { "Main" => "Old Node", "AI" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        reload_receipt_reader: ->(_before) { true }, process_reader: -> { identity },
+        profile_match_reader: ->(_requester) { true }, process_reader: -> { identity },
         sleeper: ->(_seconds) {}, attempts: 1
       )
     end
@@ -15337,8 +15487,9 @@ class MacosPatcherTest < Minitest::Test
       identity, sender: ->(*_arguments) { raise IOError }, process_reader: -> { identity }
     )
     refute ClaudeEasy.wait_for_clashx_safe_runtime(
-      identity, reload_snapshot: {}, selections: {}, expected_tun: :disabled,
-      requester_factory: -> { raise IOError }, reload_receipt_reader: ->(_before) { true },
+      identity, selections: {}, expected_tun: :disabled,
+      requester_factory: -> { raise IOError },
+      profile_match_reader: ->(_requester) { true },
       process_reader: -> { identity }, attempts: 1
     )
     assert_nil ClaudeEasy.runtime_restorable_selections(
