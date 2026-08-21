@@ -346,6 +346,7 @@ module ClashRouteVerifier
 
     profile_code = nil
     profile_summary = nil
+    saved_profile = nil
     begin
       saved_profile = profile_reader.call
       if saved_profile.nil?
@@ -364,7 +365,7 @@ module ClashRouteVerifier
         ClaudeEasyResult.write(
           output: output, command: "verify_routes", operation: "verify_routes", ok: false,
           status: "invalid_request", code: profile_code, exit_code: 10,
-          summary_zh: profile_summary, profile: 3, changes: [], checks: [], items: [],
+          summary_zh: profile_summary, profile: saved_profile, changes: [], checks: [], items: [],
           messages: [], warnings: []
         )
       else
@@ -385,7 +386,7 @@ module ClashRouteVerifier
         output: output, command: "verify_routes", operation: "verify_routes", ok: ok,
         status: ok ? "ok" : "failed", code: ok ? "routes_verified" : "route_verification_failed",
         exit_code: exit_code, summary_zh: ok ? "实时分流验证通过。" : "实时分流验证未通过。",
-        profile: nil, changes: [], checks: details.fetch(:checks), items: [], messages: [], warnings: []
+        profile: saved_profile, changes: [], checks: details.fetch(:checks), items: [], messages: [], warnings: []
       )
     end
     exit_code

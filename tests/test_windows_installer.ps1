@@ -1961,6 +1961,7 @@ if ($Json) {
     )
     $jsonRouteFailureResult = Assert-JsonResult $jsonRouteFailure "verify_routes" 1
     Assert-True ($jsonRouteFailureResult.code -eq "route_verification_failed") "route verifier did not structure its parameter failure"
+    Assert-True ($jsonRouteFailureResult.profile -eq 3) "route verifier failure omitted the saved profile"
     Assert-True (
         -not $jsonRouteFailure.Output.Contains($rejectedRouteSecretCanary)
     ) "route verifier echoed a rejected command-line secret"
@@ -1993,6 +1994,32 @@ if ($Json) {
         "-Json"
     )) "verify_routes" 10
     Assert-True ($profileOneRouteResult.code -eq "usage_profile_mismatch") "profile 1 route verification was not refused"
+    Assert-True ($profileOneRouteResult.profile -eq 1) "profile 1 route refusal reported the wrong saved profile"
+
+    $routeProfileUnsetHome = Join-Path $sandbox "route-profile-unset"
+    New-Item -ItemType Directory -Path $routeProfileUnsetHome -Force | Out-Null
+    $profileUnsetRouteResult = Assert-JsonResult (Invoke-TestPowerShell $routeVerifier @(
+        "-AppHome", $routeProfileUnsetHome,
+        "-ObservationSeconds", "1",
+        "-Json"
+    )) "verify_routes" 10
+    Assert-True ($profileUnsetRouteResult.code -eq "usage_profile_unset") "unset route profile was not refused"
+    Assert-True ($null -eq $profileUnsetRouteResult.profile) "unset route profile was reported as profile 3"
+
+    $routeProfileInvalidHome = Join-Path $sandbox "route-profile-invalid"
+    New-Item -ItemType Directory -Path $routeProfileInvalidHome -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $routeProfileInvalidHome "claude-easy-usage-profile.json"),
+        '{"Version":1,"Profile":9}' + "`r`n",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+    $profileInvalidRouteResult = Assert-JsonResult (Invoke-TestPowerShell $routeVerifier @(
+        "-AppHome", $routeProfileInvalidHome,
+        "-ObservationSeconds", "1",
+        "-Json"
+    )) "verify_routes" 10
+    Assert-True ($profileInvalidRouteResult.code -eq "usage_profile_invalid") "invalid route profile was not refused"
+    Assert-True ($null -eq $profileInvalidRouteResult.profile) "invalid route profile was reported as profile 3"
 
     $routeHarnessPath = Join-Path $sandbox "verify-route-observer.ps1"
     $routeFunctionSources = $routeFunctionAsts | ForEach-Object {
@@ -2695,6 +2722,7 @@ public static class FakeCurl {
             ) "route verifier exposed its controller secret in output"
             $routeSuccessResult = Assert-JsonResult $routeSuccess "verify_routes" 0
             Assert-True ($routeSuccessResult.code -eq "routes_verified") "route verifier success code mismatch"
+            Assert-True ($routeSuccessResult.profile -eq 3) "route verifier success omitted the saved profile"
             Assert-True (@($routeSuccessResult.checks).Count -eq 4) "route verifier did not report all four route checks"
             Assert-True (@($routeSuccessResult.checks | Where-Object { -not [bool]$_.ok }).Count -eq 0) "route verifier reported a failed check on its success path"
             Assert-True (Test-Path -LiteralPath $fakeCurlPidsPath -PathType Leaf) "route verifier did not start the hanging curl fixture"

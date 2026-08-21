@@ -124,7 +124,8 @@ try {
 }
 if (-not [string]::IsNullOrEmpty($usageProfileCode)) {
     if ($Json) {
-        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code $usageProfileCode -ExitCode 10 -SummaryZh $usageProfileSummary -Profile 3)
+        $reportedUsageProfile = if ($usageProfileCode -eq "usage_profile_mismatch") { $savedUsageProfile } else { $null }
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code $usageProfileCode -ExitCode 10 -SummaryZh $usageProfileSummary -Profile $reportedUsageProfile)
     } else {
         Write-ClaudeEasyVerificationText "[ClaudeEasy] $usageProfileSummary" -ErrorStream
     }
@@ -632,15 +633,15 @@ try {
         (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl)
     )
     if (@($checks | Where-Object { -not $_ }).Count -gt 0) {
-        if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Checks @($script:ClaudeEasyChecks)) }
+        if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Profile $savedUsageProfile -Checks @($script:ClaudeEasyChecks)) }
         exit 1
     }
-    if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $true -Status "ok" -Code "routes_verified" -ExitCode 0 -SummaryZh "Windows 分流验证通过。" -Checks @($script:ClaudeEasyChecks)) }
+    if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $true -Status "ok" -Code "routes_verified" -ExitCode 0 -SummaryZh "Windows 分流验证通过。" -Profile $savedUsageProfile -Checks @($script:ClaudeEasyChecks)) }
     exit 0
 } catch {
     $failureMessage = Get-SafeVerificationFailureMessage $_.Exception.Message
     if ($Json) {
-        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $failureMessage) -Checks @($script:ClaudeEasyChecks))
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh ("Windows 分流验证失败：" + $failureMessage) -Profile $savedUsageProfile -Checks @($script:ClaudeEasyChecks))
     } else {
         Write-ClaudeEasyVerificationText "[ClaudeEasy] Windows 分流验证失败：$failureMessage" -ErrorStream
     }
