@@ -535,7 +535,29 @@ function Invoke-TestPowerShell(
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $output = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath @ScriptArguments 2>&1 | Out-String
+        if ($SimulateRuntimeRefresh) {
+            $payload = [pscustomobject]@{
+                ScriptPath = $ScriptPath
+                ScriptArguments = @($ScriptArguments)
+            } | ConvertTo-Json -Compress -Depth 3
+            $payloadBase64 = [Convert]::ToBase64String(
+                [System.Text.Encoding]::UTF8.GetBytes($payload)
+            )
+            $bootstrap = @'
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }'
+$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+$arguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
+& ([string]$payload.ScriptPath) @arguments
+exit $LASTEXITCODE
+'@
+            $bootstrap = $bootstrap.Replace('__PAYLOAD__', $payloadBase64)
+            $encodedBootstrap = [Convert]::ToBase64String(
+                [System.Text.Encoding]::Unicode.GetBytes($bootstrap)
+            )
+            $output = & $PowerShellPath -NoLogo -NoProfile -EncodedCommand $encodedBootstrap 2>&1 | Out-String
+        } else {
+            $output = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath @ScriptArguments 2>&1 | Out-String
+        }
         $exitCode = $LASTEXITCODE
         return [pscustomobject]@{ Output = $output; ExitCode = $exitCode }
     } finally {
@@ -3813,7 +3835,7 @@ rules:
     $verifyJson = Assert-JsonResult $verifyResult "install" 1
     Assert-True (
         $verifyJson.code -eq "safe_update_rolled_back"
-    ) "invalid safe update did not restore the previous runtime state"
+    ) "invalid safe update did not restore the previous runtime state; got $($verifyJson.code)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "failed safe update did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "failed safe update did not restore second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed rollback left a reusable stale safe-update manifest"
