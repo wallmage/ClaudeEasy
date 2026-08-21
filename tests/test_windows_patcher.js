@@ -1198,6 +1198,7 @@ test('Windows subscription updates use snapshot, client refresh, and verificatio
   assert.doesNotMatch(safeUpdate, /Invoke-SubscriptionCurlDownload|Get-SubscriptionFormatUrls/);
   assert.match(source, /if \(\$SnapshotProfiles\) \{/);
   assert.match(source, /if \(\$VerifySafeUpdate\) \{/);
+  assert.match(source, /if \(\[bool\]\$recovery\[0\]\.CanAutoRestore\) \{[\s\S]*Assert-SubscriptionProtocolPreserved \$beforeText \$text[\s\S]*\}/);
   assert.match(source, /Assert-SubscriptionProtocolPreserved \$beforeText \$text/);
 });
 

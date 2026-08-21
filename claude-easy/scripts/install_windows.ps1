@@ -372,12 +372,14 @@ if ($VerifySafeUpdate) {
                 $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
                 $recovery = @($recoveryItems | Where-Object { $_.Uid -eq [string]$item.Uid })
                 if ($recovery.Count -ne 1) { throw "安全更新准备记录中的订阅清单无效。" }
-                $beforeBytes = [System.IO.File]::ReadAllBytes($recovery[0].BackupPath)
-                if ((Get-BytesSha256 $beforeBytes) -ne [string]$recovery[0].BeforeSha256) {
-                    throw "安全更新前备份在验收期间发生变化。"
+                if ([bool]$recovery[0].CanAutoRestore) {
+                    $beforeBytes = [System.IO.File]::ReadAllBytes($recovery[0].BackupPath)
+                    if ((Get-BytesSha256 $beforeBytes) -ne [string]$recovery[0].BeforeSha256) {
+                        throw "安全更新前备份在验收期间发生变化。"
+                    }
+                    $beforeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($beforeBytes)
+                    Assert-SubscriptionProtocolPreserved $beforeText $text
                 }
-                $beforeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($beforeBytes)
-                Assert-SubscriptionProtocolPreserved $beforeText $text
                 Test-GeneratedYaml $text ([string]$item.File) | Out-Null
                 Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
                 Test-MihomoCandidate $core $text $profilesDirectory
