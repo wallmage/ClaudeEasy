@@ -217,25 +217,54 @@ function Assert-ClaudeEasyManagedScriptCurrent(
 }
 
 function Test-ClaudeEasyFlowSequenceHasItem([string]$Text) {
-    $inside = $false
+    $depth = 0
+    $hasItem = $false
     $comment = $false
+    $quote = ""
+    $escaped = $false
     foreach ($character in $Text.ToCharArray()) {
         if ($comment) {
             if ($character -eq "`r" -or $character -eq "`n") { $comment = $false }
             continue
         }
-        if (-not $inside) {
-            if ($character -eq "[") { $inside = $true }
+        if (-not [string]::IsNullOrEmpty($quote)) {
+            if ($escaped) {
+                $escaped = $false
+            } elseif ($quote -eq '"' -and $character -eq '\') {
+                $escaped = $true
+            } elseif ($character -eq $quote) {
+                $quote = ""
+            }
+            continue
+        }
+        if ($depth -eq 0) {
+            if ($character -eq "[") { $depth = 1 }
             continue
         }
         if ($character -eq "#") {
             $comment = $true
             continue
         }
-        if ($character -eq "]") { return $false }
-        if (-not [char]::IsWhiteSpace($character) -and $character -ne ",") { return $true }
+        if ($character -eq "'" -or $character -eq '"') {
+            $quote = [string]$character
+            $hasItem = $true
+            continue
+        }
+        if ($character -eq "[") {
+            $depth += 1
+            $hasItem = $true
+            continue
+        }
+        if ($character -eq "]") {
+            $depth -= 1
+            if ($depth -eq 0) { return $hasItem }
+            continue
+        }
+        if (-not [char]::IsWhiteSpace($character) -and $character -ne ",") {
+            $hasItem = $true
+        }
     }
-    return $true
+    return $false
 }
 
 function Assert-ClaudeEasyProxyGroupCollection([string]$Text, [string]$Label) {
@@ -297,34 +326,6 @@ function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes) {
     if ($TargetPath -eq $profilesIndexPath -or $TargetPath -eq $vergePath) { return }
     $core = Find-MihomoCore $MihomoPath
     Test-MihomoCandidate $core $text (Split-Path -Parent $TargetPath)
-}
-
-function Test-SafeUpdateRefreshEvidence(
-    [string]$BeforeSha256,
-    [string]$CurrentSha256,
-    [string]$BeforeUpdated,
-    [string]$CurrentUpdated,
-    [bool]$UseUpdatedEvidence
-) {
-    if ($BeforeSha256 -match '^[0-9a-f]{64}$' -and
-        $CurrentSha256 -match '^[0-9a-f]{64}$' -and
-        $CurrentSha256 -cne $BeforeSha256) {
-        return $true
-    }
-    if (-not $UseUpdatedEvidence) { return $false }
-    $currentTimestamp = 0L
-    if ([string]::IsNullOrEmpty($CurrentUpdated) -or
-        -not [long]::TryParse($CurrentUpdated, [ref]$currentTimestamp) -or
-        $currentTimestamp -lt 0) {
-        return $false
-    }
-    if ([string]::IsNullOrEmpty($BeforeUpdated)) { return $true }
-    $beforeTimestamp = 0L
-    if (-not [long]::TryParse($BeforeUpdated, [ref]$beforeTimestamp) -or
-        $beforeTimestamp -lt 0) {
-        return $false
-    }
-    return $currentTimestamp -gt $beforeTimestamp
 }
 
 function Open-SafeUpdateVersionGuard([string]$Path, [string]$Label) {
@@ -461,7 +462,6 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
             BackupPath = $backupPath
             BeforeSha256 = $beforeSha
             BeforeUpdated = $beforeUpdated
-            UseUpdatedEvidence = ($manifestVersion -ge 2)
             CanAutoRestore = ($manifestVersion -ge 2)
         }
     }

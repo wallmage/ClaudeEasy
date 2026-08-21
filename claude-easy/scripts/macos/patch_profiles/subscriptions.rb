@@ -60,11 +60,32 @@ module ClaudeEasy
 
     var data = null;
     var response = null;
+    var requestError = null;
     var finished = false;
-    var session = $.NSURLSession.sessionWithConfiguration($.NSURLSessionConfiguration.ephemeralSessionConfiguration);
+    var redirectRejected = false;
+    ObjC.registerSubclass({
+      name: "ClaudeEasyNoRedirectDelegate",
+      superclass: "NSObject",
+      protocols: ["NSURLSessionTaskDelegate"],
+      methods: {
+        "URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:": {
+          implementation: function(session, task, redirectResponse, redirectRequest, completionHandler) {
+            redirectRejected = true;
+            task.cancel;
+          }
+        }
+      }
+    });
+    var delegate = $.ClaudeEasyNoRedirectDelegate.alloc.init;
+    var session = $.NSURLSession.sessionWithConfigurationDelegateDelegateQueue(
+      $.NSURLSessionConfiguration.ephemeralSessionConfiguration,
+      delegate,
+      $.NSOperationQueue.mainQueue
+    );
     var task = session.dataTaskWithRequestCompletionHandler(request, function(receivedData, receivedResponse, error) {
       data = receivedData;
       response = receivedResponse;
+      requestError = error;
       finished = true;
     });
     task.resume;
@@ -73,7 +94,9 @@ module ClaudeEasy
       $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
     }
     session.finishTasksAndInvalidate;
-    if (!finished || !data || !response) fail("subscription request failed");
+    if (redirectRejected || !finished || requestError || !data || !response) fail("subscription request failed");
+    var finalURL = unwrap(response.URL.absoluteString);
+    if (!finalURL || !finalURL.match(/^https:\/\//)) fail("subscription request failed");
     var statusCode = Number(response.statusCode);
     if (statusCode < 200 || statusCode >= 300 || data.length === 0) fail("subscription request failed");
     $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
@@ -1193,15 +1216,9 @@ module ClaudeEasy
     matching = existing_clouds.select do |root|
       profile_paths(root).any? { |path| active_profile?(path, selected) }
     end
-    return [] if matching.length > 1
-    return [] if matching.empty? && existing_clouds.length > 1
+    return [] unless matching.length == 1
 
-    candidates = matching.empty? ? existing_clouds : matching
-    chosen = candidates.max_by do |root|
-      selected_paths = profile_paths(root).select { |path| active_profile?(path, selected) }
-      selected_paths.map { |path| File.mtime(path).to_f }.max || 0
-    end
-    chosen ? [chosen] : []
+    matching
   end
 
   def active_profile?(path, selected)

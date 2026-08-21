@@ -3029,13 +3029,7 @@ items:
         $quotedNullUpdatedRejected = $true
     }
     Assert-True $quotedNullUpdatedRejected "quoted null was accepted as client update metadata"
-    $sameRefreshHash = "a" * 64
-    Assert-True (-not (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "100" "100" $true)) "unchanged content and timestamp were accepted as refresh evidence"
-    Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash ("b" * 64) "100" "100" $false) "changed subscription bytes were not accepted as refresh evidence"
-    Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "100" "101" $true) "newer client update metadata was not accepted for unchanged subscription bytes"
-    Assert-True (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "" "101" $true) "first client update timestamp was not accepted after a null baseline"
-    Assert-True (-not (Test-SafeUpdateRefreshEvidence $sameRefreshHash $sameRefreshHash "" "101" $false)) "legacy manifest without a timestamp baseline accepted unchanged subscription bytes"
-
+    Assert-True (-not (Test-ClaudeEasyFlowSequenceHasItem "[ # missing close`nrules:`n  - MATCH,DIRECT")) "unterminated proxy-groups flow sequence consumed the next top-level section"
     $protocolRegressionRejected = $false
     try {
         Assert-SubscriptionProtocolPreserved `
@@ -3548,7 +3542,7 @@ rules:
     ) "pending safe update uninstall changed AppHome"
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), "changed: true`n")
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), "first: true`n---`nsecond: true`n")
-    $verifyResult = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-MihomoPath", $fakeCore)
+    $verifyResult = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
     Assert-True ($verifyResult.ExitCode -eq 1) "invalid safe update was accepted"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "failed safe update did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "failed safe update did not restore second remote subscription"
@@ -3565,6 +3559,7 @@ rules:
     $missingTargetVerify = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
+        "-RefreshConfirmed",
         "-MihomoPath", $fakeCore,
         "-Json"
     )
@@ -3610,7 +3605,7 @@ rules:
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $noMainUpdated)
     $noMainUpdatedMultiline = $noMainUpdated.Replace("proxy-groups: []", "proxy-groups: [ # empty flow list`n]")
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $noMainUpdatedMultiline)
-    $noMainVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-MihomoPath", $fakeCore)
+    $noMainVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
     Assert-True ($noMainVerify.ExitCode -eq 1) "safe update accepted subscriptions that the installed global script cannot patch"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "main-group validation failure did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "main-group validation failure did not restore second remote subscription"
@@ -3649,7 +3644,7 @@ rules: ["MATCH,AI"]
 '@
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeUpdated)
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeUpdated)
-    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-MihomoPath", $fakeCore)
+    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore)
     Assert-True ($successVerify.ExitCode -eq 0) "valid safe update was rejected; $(Get-TestOutputDiagnostic $successVerify.Output)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeUpdated) "valid safe update incorrectly restored first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeUpdated) "valid safe update incorrectly restored second remote subscription"
@@ -3691,6 +3686,7 @@ rules: ["MATCH,AI"]
     $legacyRetirementVerify = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
+        "-RefreshConfirmed",
         "-MihomoPath", $fakeCore,
         "-Json"
     )
@@ -3742,6 +3738,7 @@ rules: ["MATCH,AI"]
     $legacyVerify = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
+        "-RefreshConfirmed",
         "-MihomoPath", $fakeCore,
         "-Json"
     )
@@ -3768,6 +3765,7 @@ rules: ["MATCH,AI"]
     $legacyRecoveryRetry = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
+        "-RefreshConfirmed",
         "-MihomoPath", $fakeCore,
         "-Json"
     )
@@ -3802,57 +3800,31 @@ rules: ["MATCH,AI"]
     )
     Assert-JsonResult $noActionSnapshot "install" 0 | Out-Null
     $noActionManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
-    $noActionManifestBefore = [System.IO.File]::ReadAllBytes($noActionManifestPath)
+    $missingRefreshConfirmation = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $missingRefreshConfirmationJson = Assert-JsonResult $missingRefreshConfirmation "install" 64
+    Assert-True (
+        $missingRefreshConfirmationJson.code -eq "missing_refresh_confirmation" -and
+        (Test-Path -LiteralPath $noActionManifestPath)
+    ) "safe update verification accepted a missing UI refresh confirmation"
     $noActionVerify = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
+        "-RefreshConfirmed",
         "-MihomoPath", $fakeCore,
         "-Json"
     )
-    $noActionVerifyJson = Assert-JsonResult $noActionVerify "install" 1
+    $noActionVerifyJson = Assert-JsonResult $noActionVerify "install" 0
     Assert-True (
-        $noActionVerifyJson.status -eq "partial" -and
-        $noActionVerifyJson.code -eq "safe_update_refresh_pending"
-    ) "safe update verification accepted a batch in which no subscription was refreshed"
+        $noActionVerifyJson.code -eq "safe_update_verified"
+    ) "explicit UI refresh confirmation rejected unchanged valid subscriptions"
     Assert-True (
-        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($noActionManifestPath)) -eq
-        [Convert]::ToBase64String($noActionManifestBefore)
-    ) "missing refresh evidence consumed or rewrote the safe-update manifest"
-
-    $unchangedProfilesIndex = Get-Content -LiteralPath (Join-Path $safeUpdateCase "profiles.yaml") -Raw
-    $unchangedProfilesIndex = $unchangedProfilesIndex.Replace("updated: null", "updated: 101")
-    [System.IO.File]::WriteAllText((Join-Path $safeUpdateCase "profiles.yaml"), $unchangedProfilesIndex)
-    $partialRefreshVerify = Invoke-TestPowerShell $installer @(
-        "-AppHome", $safeUpdateCase,
-        "-VerifySafeUpdate",
-        "-MihomoPath", $fakeCore,
-        "-Json"
-    )
-    $partialRefreshJson = Assert-JsonResult $partialRefreshVerify "install" 1
-    Assert-True (
-        $partialRefreshJson.status -eq "partial" -and
-        $partialRefreshJson.code -eq "safe_update_refresh_pending"
-    ) "safe update verification accepted a batch in which only one subscription was refreshed"
-    Assert-True (
-        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($noActionManifestPath)) -eq
-        [Convert]::ToBase64String($noActionManifestBefore)
-    ) "partial refresh evidence consumed or rewrote the safe-update manifest"
-
-    $unchangedProfilesIndex = $unchangedProfilesIndex.Replace("updated: 200", "updated: 201")
-    [System.IO.File]::WriteAllText((Join-Path $safeUpdateCase "profiles.yaml"), $unchangedProfilesIndex)
-    $unchangedVerify = Invoke-TestPowerShell $installer @(
-        "-AppHome", $safeUpdateCase,
-        "-VerifySafeUpdate",
-        "-MihomoPath", $fakeCore,
-        "-Json"
-    )
-    $unchangedVerifyJson = Assert-JsonResult $unchangedVerify "install" 0
-    Assert-True (
-        $unchangedVerifyJson.code -eq "safe_update_verified"
-    ) "safe update rejected unchanged subscription content with a newer client update timestamp"
-    Assert-True (
-        @($unchangedVerifyJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "unchanged" }).Count -eq 0
-    ) "timestamp-only safe-update refreshes were not reported as unchanged"
+        @($noActionVerifyJson.items | ForEach-Object { $_.status } | Where-Object { $_ -ne "unchanged" }).Count -eq 0
+    ) "unchanged valid subscriptions were not reported as unchanged"
     Assert-True (-not (Test-Path -LiteralPath $noActionManifestPath)) "verified unchanged refresh retained the safe-update manifest"
 
     if ($onWindows) {
@@ -3948,6 +3920,7 @@ rules:
                 "-NoLogo", "-NoProfile", "-File", $rollbackCrashInstaller,
                 "-AppHome", $rollbackCrashHome,
                 "-VerifySafeUpdate",
+                "-RefreshConfirmed",
                 "-MihomoPath", $fakeCore,
                 "-Json"
             ) -PassThru
@@ -3975,6 +3948,7 @@ rules:
             $rollbackCrashRetry = Invoke-TestPowerShell $rollbackCrashInstaller @(
                 "-AppHome", $rollbackCrashHome,
                 "-VerifySafeUpdate",
+                "-RefreshConfirmed",
                 "-MihomoPath", $fakeCore,
                 "-Json"
             )
@@ -4011,7 +3985,7 @@ rules:
         $env:CLAUDE_EASY_MUTATE_TARGET = Join-Path $safeUpdateProfiles "R-first.yaml"
         try {
             $concurrentVerify = Invoke-TestPowerShell $installer @(
-                "-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-MihomoPath", $mutatingCore
+                "-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $mutatingCore
             )
         } finally {
             $env:CLAUDE_EASY_MUTATE_TARGET = $null
@@ -4057,6 +4031,7 @@ rules:
             $indexConcurrentVerify = Invoke-TestPowerShell $installer @(
                 "-AppHome", $safeUpdateCase,
                 "-VerifySafeUpdate",
+                "-RefreshConfirmed",
                 "-MihomoPath", $mutatingCore,
                 "-Json"
             )
@@ -4132,6 +4107,7 @@ rules:
         $schemaVerify = Invoke-TestPowerShell $installer @(
             "-AppHome", $schemaSafeUpdateCase,
             "-VerifySafeUpdate",
+            "-RefreshConfirmed",
             "-MihomoPath", $fakeCore,
             "-Json"
         )
@@ -4179,6 +4155,7 @@ rules:
         $utf8Verify = Invoke-TestPowerShell $installer @(
             "-AppHome", $utf8SafeUpdateCase,
             "-VerifySafeUpdate",
+            "-RefreshConfirmed",
             "-MihomoPath", $fakeCore,
             "-Json"
         )
