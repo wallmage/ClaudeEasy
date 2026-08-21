@@ -1263,6 +1263,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_macos_backup_recovery_includes_the_active_runtime
+    safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
@@ -1275,6 +1276,8 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "运行内核"
       assert_includes document, "恢复回滚前版本"
     end
+    assert_includes safe_update, "同一已运行 ClashX Meta 进程的官方更新事件重新加载"
+    refute_includes safe_update, "通过本地控制器重新加载"
   end
 
   def test_diagnostics_selects_tools_by_the_observed_symptom
