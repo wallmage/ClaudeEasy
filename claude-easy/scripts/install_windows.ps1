@@ -133,6 +133,10 @@ if ($requestedOperations.Count -gt 1) {
 if (-not [string]::IsNullOrWhiteSpace($ExpectedCurrentSha256) -and [string]::IsNullOrWhiteSpace($RestoreBackup)) {
     Complete-InstallResult 64 "invalid_request" "unexpected_hash" "只有恢复备份时才能提供预期 SHA-256。"
 }
+if (-not [string]::IsNullOrWhiteSpace($RestoreBackup) -and
+    $ExpectedCurrentSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    Complete-InstallResult 64 "invalid_request" "expected_current_sha256_required" "恢复备份必须提供比较时取得的当前配置 SHA-256。"
+}
 if ($RefreshConfirmed -and -not $VerifySafeUpdate) {
     Complete-InstallResult 64 "invalid_request" "unexpected_refresh_confirmation" "只有验收安全更新时才能确认客户端刷新。"
 }

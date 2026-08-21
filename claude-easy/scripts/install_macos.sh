@@ -672,7 +672,7 @@ resolve_usage_profile() {
     fi
     if [ -n "$USAGE_PROFILE" ] && [ "$USAGE_PROFILE" != "$SAVED_PROFILE" ]; then
       say "请求档位与已保存档位不一致；未执行订阅更新。"
-      USAGE_PROFILE=""
+      USAGE_PROFILE=$SAVED_PROFILE
       finish 64 invalid_request usage_profile_mismatch \
         "请求档位与已保存档位不一致；未执行订阅更新。" safe_update
     fi

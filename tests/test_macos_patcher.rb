@@ -15137,7 +15137,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_native_reload_sender_treats_wait_reply_timeout_as_delivered
+  def test_native_event_senders_only_treat_wait_reply_timeout_as_delivered
     disposer = ->(*_arguments) { 0 }
     ClaudeEasyAppleEvents.stub(:AEDisposeDesc, disposer) do
       ClaudeEasyAppleEvents.stub(:AECreateDesc, ->(*_arguments) { 0 }) do
@@ -15145,6 +15145,11 @@ class MacosPatcherTest < Minitest::Test
           ClaudeEasyAppleEvents.stub(:AEPutParamPtr, ->(*_arguments) { 0 }) do
             ClaudeEasyAppleEvents.stub(:AESendMessage, ->(*_arguments) { -1712 }) do
               assert ClaudeEasyAppleEvents.send_get_url(12_345, "clash://update-config")
+              assert ClaudeEasyAppleEvents.send_command(12_345, 0x434c5348, 0x544f4747)
+            end
+            ClaudeEasyAppleEvents.stub(:AESendMessage, ->(*_arguments) { -600 }) do
+              refute ClaudeEasyAppleEvents.send_get_url(12_345, "clash://update-config")
+              refute ClaudeEasyAppleEvents.send_command(12_345, 0x434c5348, 0x544f4747)
             end
           end
         end

@@ -1784,6 +1784,13 @@ if ($Json) {
     $orphanExpectedHashResult = Assert-JsonResult $orphanExpectedHash "install" 64
     Assert-True ($orphanExpectedHashResult.code -eq "unexpected_hash") "orphan restore hash was not rejected"
 
+    $missingExpectedHash = Invoke-TestPowerShell $installer @(
+        "-AppHome", $jsonShowCase, "-RestoreBackup", "missing", "-Json"
+    )
+    $missingExpectedHashResult = Assert-JsonResult $missingExpectedHash "install" 64
+    Assert-True ($missingExpectedHashResult.status -eq "invalid_request") "missing restore hash was not an invalid request"
+    Assert-True ($missingExpectedHashResult.code -eq "expected_current_sha256_required") "missing restore hash returned the wrong code"
+
     $listSummary = Invoke-TestPowerShellWithSeparatedStreams $installer @(
         "-AppHome", $jsonShowCase, "-ListBackups"
     )

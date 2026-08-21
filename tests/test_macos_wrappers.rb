@@ -2873,6 +2873,9 @@ class MacosWrapperTest < Minitest::Test
           assert_equal 64, status.exitstatus
           assert_empty stderr
           assert_equal original, File.binread(state)
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal "usage_profile_mismatch", result.fetch("code")
+          assert_equal 1, result.fetch("profile")
         end
       end
     end

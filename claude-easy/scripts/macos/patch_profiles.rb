@@ -17,6 +17,8 @@ require "uri"
 module ClaudeEasyAppleEvents
   extend Fiddle::Importer
 
+  ERR_AE_TIMEOUT = -1712
+
   dlload "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
   AEDesc = struct ["unsigned int descriptorType", "void* dataHandle"]
   extern "int AECreateDesc(unsigned int, void*, long, void*)"
@@ -38,8 +40,8 @@ module ClaudeEasyAppleEvents
       event, 0x2d2d2d2d, 0x75746638, Fiddle::Pointer[url_bytes], url_bytes.bytesize
     ).zero?
 
-    AESendMessage(event, reply, 3, 180)
-    true
+    status = AESendMessage(event, reply, 3, 180)
+    status.zero? || status == ERR_AE_TIMEOUT
   rescue StandardError
     false
   ensure
@@ -59,7 +61,8 @@ module ClaudeEasyAppleEvents
       Integer(event_class), Integer(event_id), target, -1, 0, event
     ).zero?
 
-    AESendMessage(event, reply, 3, 180).zero?
+    status = AESendMessage(event, reply, 3, 180)
+    status.zero? || status == ERR_AE_TIMEOUT
   rescue StandardError
     false
   ensure
