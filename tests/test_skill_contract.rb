@@ -2402,7 +2402,7 @@ class SkillContractTest < Minitest::Test
                     '$InterruptedRecoveryPolicy = "client_stopped"'
     assert_includes safe_update,
                     '-InterruptedRecoveryPolicy "safe_update_running_client"'
-    assert_equal 2, installer.scan('"safe_update_running_client"').length
+    assert_equal 4, installer.scan('"safe_update_running_client"').length
     assert_includes transaction,
                     "function Test-SafeUpdateRunningRecoveryTargets("
     assert_includes transaction, '"claude-easy-safe-update.json"'

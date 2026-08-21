@@ -727,6 +727,7 @@ module ClaudeEasy
     return nil if preserve_all && selectors.empty? && !selections.empty?
     return {} if selectors.empty?
     return nil if require_all && !selector_names.all? { |name| selections.key?(name) }
+    return selections.select { |name, _selected| selector_names.include?(name) } unless preserve_all
 
     valid = selections.select do |name, selected|
       group = selectors.find { |item| item.fetch("name") == name }

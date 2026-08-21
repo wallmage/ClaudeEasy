@@ -704,8 +704,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/runtime.rb",
-        "    selections.select { |name, _selected| selector_names.include?(name) }\n",
-        "    selections\n"
+        "    return selections.select { |name, _selected| selector_names.include?(name) } unless preserve_all\n",
+        "    return selections unless preserve_all\n"
       )
 
       assert_mutation_is_killed(
