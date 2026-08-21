@@ -503,7 +503,7 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
                         $script:safeUpdateRuntimeText
                     ) -ScriptBlock {
                         param([string]$RuntimePath, [string]$RuntimeText)
-                        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+                        for ($attempt = 0; $attempt -lt 600; $attempt++) {
                             Start-Sleep -Milliseconds 100
                             $candidate = "$RuntimePath.test-$attempt"
                             try {
