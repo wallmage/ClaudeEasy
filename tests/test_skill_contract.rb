@@ -2933,8 +2933,9 @@ class SkillContractTest < Minitest::Test
       assert_equal expected, actual, paths.join(", ")
     end
 
-    assert_includes workflow, "group: test-${{ github.workflow }}-${{ github.ref }}"
-    assert_includes workflow, "cancel-in-progress: true"
+    assert_includes workflow,
+                    "group: test-${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.ref }}"
+    assert_includes workflow, "cancel-in-progress: ${{ github.event_name != 'push' }}"
     assert_includes workflow, "ruby tests/ci_scope.rb"
     assert_includes workflow, "git diff --no-renames --name-only -z"
     %w[claude-easy/** tests/** .github/workflows/test.yml package.json package-lock.json].each do |path|
@@ -2946,7 +2947,6 @@ class SkillContractTest < Minitest::Test
     end
     {
       "macos-browser" => "macos",
-      "macos-mutation" => "macos",
       "macos-wrappers" => "macos",
       "macos-production-runtime" => "macos",
       "macos-production-probes" => "macos",
@@ -2960,6 +2960,11 @@ class SkillContractTest < Minitest::Test
       assert_includes job, "needs: scope"
       assert_includes job, "if: needs.scope.outputs.#{platform} == 'true'"
     end
+    mutation_job = workflow[/^  macos-mutation:\n(?:(?!^  \S).*\n)*/]
+    refute_nil mutation_job
+    assert_includes mutation_job, "needs: scope"
+    assert_includes mutation_job,
+                    "if: needs.scope.outputs.macos == 'true' || needs.scope.outputs.windows == 'true'"
     %w[macos-mutation macos-production-runtime].each do |job_name|
       job = workflow[/^  #{Regexp.escape(job_name)}:\n(?:(?!^  \S).*\n)*/]
       assert_includes job, "uses: actions/setup-node@", job_name

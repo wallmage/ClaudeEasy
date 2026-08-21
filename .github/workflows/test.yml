@@ -20,8 +20,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: test-${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -131,7 +131,7 @@ jobs:
 
   macos-mutation:
     needs: scope
-    if: needs.scope.outputs.macos == 'true'
+    if: needs.scope.outputs.macos == 'true' || needs.scope.outputs.windows == 'true'
     runs-on: macos-15
     timeout-minutes: 10
     steps:
