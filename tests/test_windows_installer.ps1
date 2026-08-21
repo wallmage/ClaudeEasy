@@ -504,6 +504,7 @@ function Invoke-TestPowerShell(
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeRefresh = $null
     $simulatedRuntimeCandidate = $null
+    $simulatedRuntimeSignal = $null
     $simulatedRuntimeBootstrap = $null
     $simulatedRuntimeBootstrapStatus = $null
     $simulatedRuntimeBootstrapError = $null
@@ -524,17 +525,22 @@ function Invoke-TestPowerShell(
                 [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
                 if ($SimulateRuntimeRefresh) {
                     $simulatedRuntimeCandidate = "$runtimePath.test"
+                    $simulatedRuntimeSignal = "$runtimePath.refresh"
+                    Remove-Item -LiteralPath $simulatedRuntimeSignal -Force -ErrorAction SilentlyContinue
                     $simulatedRuntimeRefresh = Start-Job -ArgumentList @(
                         $runtimePath,
                         $script:safeUpdateRuntimeText,
-                        $simulatedRuntimeCandidate
+                        $simulatedRuntimeCandidate,
+                        $simulatedRuntimeSignal
                     ) -ScriptBlock {
-                        param([string]$RuntimePath, [string]$RuntimeText, [string]$Candidate)
-                        for ($attempt = 0; $true; $attempt++) {
+                        param([string]$RuntimePath, [string]$RuntimeText, [string]$Candidate, [string]$Signal)
+                        while ($true) {
                             Start-Sleep -Milliseconds 100
+                            if (-not (Test-Path -LiteralPath $Signal -PathType Leaf)) { continue }
                             try {
-                                [System.IO.File]::WriteAllText($Candidate, $RuntimeText)
+                                [System.IO.File]::WriteAllText($Candidate, $RuntimeText + "`n# simulated refresh`n")
                                 [System.IO.File]::Replace($Candidate, $RuntimePath, $null)
+                                break
                             } catch {
                                 Remove-Item -LiteralPath $Candidate -Force -ErrorAction SilentlyContinue
                             }
@@ -565,6 +571,7 @@ function Invoke-TestPowerShell(
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 Json = $ScriptArguments -contains "-Json"
                 BootstrapStatusPath = $simulatedRuntimeBootstrapStatus
+                RuntimeRefreshSignalPath = $simulatedRuntimeSignal
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
@@ -572,7 +579,8 @@ function Invoke-TestPowerShell(
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'payload-decoded')
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static bool Send(System.UInt16[] keys) { return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string MarkerPath; public static bool Send(System.UInt16[] keys) { System.IO.File.WriteAllText(MarkerPath, "sent"); return true; } } }' -ErrorAction Stop | Out-Null
+[ClaudeEasy.SendInputNative]::MarkerPath = [string]$payload.RuntimeRefreshSignalPath
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'add-type-ok')
 $arguments = @{
     AppHome = [string]$payload.AppHome
@@ -617,6 +625,7 @@ exit $LASTEXITCODE
             Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
             Remove-Job -Job $simulatedRuntimeRefresh -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $simulatedRuntimeCandidate -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $simulatedRuntimeSignal -Force -ErrorAction SilentlyContinue
         }
         if ($null -ne $simulatedRuntimeBootstrap) {
             Remove-Item -LiteralPath $simulatedRuntimeBootstrap -Force -ErrorAction SilentlyContinue
