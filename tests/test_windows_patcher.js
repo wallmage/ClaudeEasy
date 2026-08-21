@@ -1214,12 +1214,18 @@ test('Windows subscription updates use snapshot, client refresh, and verificatio
 
 test('Windows client refresh preserves the pre-update runtime state and reloads rollback files', () => {
   const source = fs.readFileSync(installerPath, 'utf8');
+  const verifyStart = source.indexOf('if ($VerifySafeUpdate) {\n    $manifestSnapshot');
+  const verifyEnd = source.indexOf('\nif ($ListBackups) {', verifyStart);
+  const verify = source.slice(verifyStart, verifyEnd);
+  const successReload = verify.indexOf('Invoke-ClashVergeReactivationShortcut');
+  const successHealth = verify.indexOf('Wait-ClashVergeRuntimeHealthy', successReload);
+  const manifestRemoval = verify.indexOf('Remove-VerifiedOwnedFile $safeUpdateStatePath');
   assert.match(source, /Version = 3[\s\S]*Runtime = \$runtimeSnapshot/);
   assert.match(source, /Get-ClashRuntimeState \$runtimeContext/);
-  assert.match(source, /Restore-ClashRuntimeSelections \$runtimeContext \$expectedSelections/);
-  assert.match(source, /TunEnabled[\s\S]*无法保留更新前的 TUN 状态/);
   assert.match(source, /Invoke-ClashVergeReactivationShortcut \$reactivationShortcut/);
   assert.match(source, /Wait-ClashVergeRuntimeHealthy/);
+  assert.ok(successReload >= 0 && successHealth > successReload && manifestRemoval > successHealth,
+    'successful verification must reload the current subscription before deleting the manifest');
 });
 
 test('Windows verification and restore fail closed on stale or unsafe state', () => {
@@ -1232,7 +1238,7 @@ test('Windows verification and restore fail closed on stale or unsafe state', ()
   const refresh = runtime.slice(refreshStart, refreshEnd);
 
   assert.match(source, /ClaudeEasyOperation -eq "install"[\s\S]*ClaudeEasyOperation -eq "restore_backup"[\s\S]*safe_update_pending/);
-  assert.match(source, /Assert-ClashRuntimeHealthy[\s\S]*-ReadOnly/);
+  assert.match(runtime, /Assert-ClashRuntimeHealthy[\s\S]*-ReadOnly/);
   assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);
   assert.match(safeUpdate, /UsageProfile -lt 3[\s\S]*tun\.enable/);
   assert.match(runtime, /FieldOffset\(0\).*MOUSEINPUT mouse[\s\S]*struct MOUSEINPUT/);

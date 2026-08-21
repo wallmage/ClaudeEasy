@@ -2169,7 +2169,8 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, "Version = 3"
     assert_includes windows_installer, "Runtime = $runtimeSnapshot"
     assert_includes windows_installer,
-                    "Restore-ClashRuntimeSelections $runtimeContext $expectedSelections"
+                    "Invoke-ClashVergeReactivationShortcut $reactivationShortcut"
+    assert_includes windows_installer, "Wait-ClashVergeRuntimeHealthy"
     assert_includes windows_installer, "safe_update_rolled_back"
     refute_includes windows_installer, "Test-SafeUpdateRefreshEvidence"
     refute_includes windows_installer, '"safe_update_refresh_pending"'

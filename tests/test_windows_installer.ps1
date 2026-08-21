@@ -484,6 +484,7 @@ function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
 
 function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) {
     $temporarySafeUpdateClient = $null
+    $simulatedRuntimeRefresh = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -494,10 +495,26 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
         if ($appHomeIndex -ge 0 -and $appHomeIndex + 1 -lt $ScriptArguments.Count) {
             $runtimeHome = [string]$ScriptArguments[$appHomeIndex + 1]
             if (Test-Path -LiteralPath $runtimeHome -PathType Container) {
-                [System.IO.File]::WriteAllText(
-                    (Join-Path $runtimeHome "clash-verge.yaml"),
-                    $script:safeUpdateRuntimeText
-                )
+                $runtimePath = Join-Path $runtimeHome "clash-verge.yaml"
+                [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
+                if ($ScriptArguments -contains "-VerifySafeUpdate") {
+                    $simulatedRuntimeRefresh = Start-Job -ArgumentList @(
+                        $runtimePath,
+                        $script:safeUpdateRuntimeText
+                    ) -ScriptBlock {
+                        param([string]$RuntimePath, [string]$RuntimeText)
+                        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+                            Start-Sleep -Milliseconds 100
+                            $candidate = "$RuntimePath.test-$attempt"
+                            try {
+                                [System.IO.File]::WriteAllText($candidate, $RuntimeText)
+                                [System.IO.File]::Replace($candidate, $RuntimePath, $null)
+                            } catch {
+                                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+                    }
+                }
             }
         }
         $temporarySafeUpdateClient = Start-Process `
@@ -516,6 +533,10 @@ function Invoke-TestPowerShell([string]$ScriptPath, [string[]]$ScriptArguments) 
         $exitCode = $LASTEXITCODE
         return [pscustomobject]@{ Output = $output; ExitCode = $exitCode }
     } finally {
+        if ($null -ne $simulatedRuntimeRefresh) {
+            Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
+            Remove-Job -Job $simulatedRuntimeRefresh -Force -ErrorAction SilentlyContinue
+        }
         if ($null -ne $temporarySafeUpdateClient) {
             if (-not $temporarySafeUpdateClient.HasExited) {
                 Stop-Process -Id $temporarySafeUpdateClient.Id -Force -ErrorAction SilentlyContinue

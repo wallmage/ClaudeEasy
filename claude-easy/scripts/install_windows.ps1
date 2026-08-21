@@ -452,36 +452,21 @@ if ($VerifySafeUpdate) {
         }
         Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
         if ($hasRuntimeSnapshot) {
-            $runtimeContext = Get-ClashControllerContext $runtimeConfigPath
-            $runtimeState = Get-ClashRuntimeState $runtimeContext
-            if ([bool]$runtimeState.TunEnabled -ne $expectedTunEnabled) {
-                $safeUpdateContentRestoreEligible = $true
-                throw "Clash Verge Rev 无法保留更新前的 TUN 状态。"
-            }
             $safeUpdateContentRestoreEligible = $true
-            Restore-ClashRuntimeSelections $runtimeContext $expectedSelections
-            $runtimeState = Get-ClashRuntimeState $runtimeContext
-            foreach ($group in @($expectedSelections.Keys)) {
-                $groupState = $runtimeState.Proxies.PSObject.Properties[[string]$group]
-                if ($null -eq $groupState -or
-                    [string]$groupState.Value.type -ne "Selector" -or
-                    [string]$groupState.Value.now -cne [string]$expectedSelections[$group]) {
-                    throw "Clash Verge Rev 无法恢复更新前的代理选择。"
-                }
-            }
-            if ([bool]$runtimeState.TunEnabled -ne $expectedTunEnabled) {
-                throw "Clash Verge Rev 无法保留更新前的 TUN 状态。"
-            }
+            $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+            if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
+            $vergeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($vergeSnapshot.Bytes)
+            $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
+            $runtimeContext = Get-ClashControllerContext $runtimeConfigPath
             $runtimePolicyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
             $runtimePolicy = (New-Object System.Text.UTF8Encoding($false, $true)).GetString(
                 [System.IO.File]::ReadAllBytes($runtimePolicyPath)
             ) | ConvertFrom-Json
             $runtimeCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-            $runtimeDnsFlush = Invoke-ClashControllerRequest $runtimeContext "POST" "/cache/dns/flush"
-            if ($runtimeDnsFlush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
-            Assert-ClashRuntimeHealthy `
-                $runtimeContext $expectedSelections $expectedTunEnabled $savedUsageProfile `
-                ([string]$runtimeCurl.Source) $runtimePolicy -ReadOnly
+            Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+            $runtimeContext = Wait-ClashVergeRuntimeHealthy `
+                $runtimeConfigPath $runtimeContext $expectedSelections $expectedTunEnabled `
+                $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy
         }
         $versionGuards = @()
         try {
