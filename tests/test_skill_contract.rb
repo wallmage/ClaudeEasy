@@ -1345,7 +1345,9 @@ class SkillContractTest < Minitest::Test
     assert_includes documents[3], "普通 Patch 通过本地控制器加载"
     assert_includes documents[3], "备份恢复通过本地控制器加载"
     assert_includes documents[3], "安全更新通过同一已运行 ClashX Meta 进程的官方更新事件重新加载"
+    assert_includes documents[3], "对应平台的加载或刷新和运行检查"
     refute_includes documents[3], "当前订阅写入后只通过本地控制器刷新"
+    refute_includes documents[3], "当前订阅只有控制器自动刷新"
   end
 
   def test_diagnostics_selects_tools_by_the_observed_symptom

@@ -103,7 +103,7 @@ macOS 公开入口使用 `--json`，Windows 使用 `-Json`。JSON v1 的标准�
 
 ## 生效与验收
 
-当前订阅只有控制器自动刷新和运行检查都通过，才能报告已经生效。档位 1、2 只验收各自能力；档位 3 通过双平台分流脚本验证 Google、OpenAI、Anthropic 和 Claude 的实时连接链，并执行 DNS 深度测试和两项 WebRTC 页面。
+当前订阅只有对应平台的加载或刷新和运行检查都通过，才能报告已经生效。档位 1、2 只验收各自能力；档位 3 通过双平台分流脚本验证 Google、OpenAI、Anthropic 和 Claude 的实时连接链，并执行 DNS 深度测试和两项 WebRTC 页面。
 
 Claude 联网只由分流验证脚本完成。Patch、Diagnostics、复测和订阅更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`、进入账号或发送测试消息。
 
