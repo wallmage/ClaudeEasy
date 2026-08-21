@@ -511,6 +511,8 @@ function Invoke-TestPowerShell(
     $simulatedRuntimeBootstrapPhase = $null
     $standardOutput = $null
     $standardError = $null
+    $runtimeRefreshSignaled = $null
+    $runtimeRefreshApplied = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -608,6 +610,9 @@ exit $LASTEXITCODE
             $simulatedRuntimeBootstrapPhase = if (Test-Path -LiteralPath $simulatedRuntimeBootstrapStatus -PathType Leaf) {
                 [System.IO.File]::ReadAllText($simulatedRuntimeBootstrapStatus)
             } else { "not-started" }
+            $runtimeRefreshSignaled = Test-Path -LiteralPath $simulatedRuntimeSignal -PathType Leaf
+            $runtimeRefreshApplied = (Test-Path -LiteralPath $runtimePath -PathType Leaf) -and
+                [System.IO.File]::ReadAllText($runtimePath).Contains("# simulated refresh")
             $output = $standardOutput + $standardError
         } else {
             $output = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath @ScriptArguments 2>&1 | Out-String
@@ -619,6 +624,8 @@ exit $LASTEXITCODE
             StandardOutput = $standardOutput
             StandardError = $standardError
             BootstrapPhase = $simulatedRuntimeBootstrapPhase
+            RuntimeRefreshSignaled = $runtimeRefreshSignaled
+            RuntimeRefreshApplied = $runtimeRefreshApplied
         }
     } finally {
         if ($null -ne $simulatedRuntimeRefresh) {
@@ -3902,9 +3909,29 @@ rules:
         "-Json"
     ) -SimulateRuntimeRefresh
     $verifyJson = Assert-JsonResult $verifyResult "install" 1
+    $runtimeHealthDiagnostic = ""
+    if ($verifyJson.code -ne "safe_update_rolled_back") {
+        $previousDiagnosticCurl = $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS
+        try {
+            $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS = "1"
+            $directRuntimeContext = Get-ClashControllerContext (Join-Path $safeUpdateCase "clash-verge.yaml")
+            Assert-ClashRuntimeHealthy `
+                $directRuntimeContext @{ Main = "Node" } $false 1 `
+                $fakeCurlPath $safeUpdatePolicy -ReadOnly
+            $runtimeHealthDiagnostic = "direct_health=ok"
+        } catch {
+            $runtimeHealthDiagnostic = "direct_health=$($_.Exception.Message)"
+        } finally {
+            $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS = $previousDiagnosticCurl
+        }
+    }
     Assert-True (
         $verifyJson.code -eq "safe_update_rolled_back"
-    ) "invalid safe update did not restore the previous runtime state; got $($verifyJson.code)"
+    ) (
+        "invalid safe update did not restore the previous runtime state; got $($verifyJson.code); " +
+        "refresh_signaled=$($verifyResult.RuntimeRefreshSignaled); " +
+        "refresh_applied=$($verifyResult.RuntimeRefreshApplied); $runtimeHealthDiagnostic"
+    )
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "failed safe update did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "failed safe update did not restore second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed rollback left a reusable stale safe-update manifest"
