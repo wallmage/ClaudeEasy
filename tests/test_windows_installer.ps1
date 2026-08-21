@@ -5308,6 +5308,9 @@ Test-MihomoCandidate $CorePath "proxies:`n  - name: fixture-private-marker" $Dir
         [System.IO.File]::Delete($sameBytesWriteBackup)
         $sameBytesWriteCurrent = Get-OptionalFileSnapshot $sameBytesWritePath "same-bytes replaced write"
         Assert-True ($sameBytesWriteCurrent.Identity -cne $sameBytesWriteSnapshot.Identity) "same-bytes write fixture did not replace the file identity"
+        Wait-ClashVergeRuntimeRefresh $sameBytesWritePath ([pscustomobject]@{
+            Snapshot = $sameBytesWriteSnapshot
+        })
         $sameBytesWriteRejected = $false
         try {
             Invoke-VerifiedFileTransaction @(
