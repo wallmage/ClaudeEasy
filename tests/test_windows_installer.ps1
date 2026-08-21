@@ -267,22 +267,6 @@ foreach ($modulePath in $installerModules) {
     }
     . $modulePath
 }
-if ($onWindows) {
-    $originalRunningCheck = (Get-Command Test-ClashVergeRunning -CommandType Function).ScriptBlock
-    $originalSendInputInitializer = (Get-Command Initialize-ClaudeEasySendInput -CommandType Function).ScriptBlock
-    try {
-        Set-Item Function:\Test-ClashVergeRunning { return $false }
-        Set-Item Function:\Initialize-ClaudeEasySendInput { throw "SendInput initialized after client exit" }
-        $stoppedClientRejected = $false
-        try { Invoke-ClashVergeReactivationShortcut "CTRL+ALT+SHIFT+F24" } catch {
-            $stoppedClientRejected = $_.Exception.Message.Contains("已退出")
-        }
-        Assert-True $stoppedClientRejected "rollback shortcut was sent after Clash Verge Rev exited"
-    } finally {
-        Set-Item Function:\Test-ClashVergeRunning $originalRunningCheck
-        Set-Item Function:\Initialize-ClaudeEasySendInput $originalSendInputInitializer
-    }
-}
 $routeTokens = $null
 $routeParseErrors = $null
 $routeAst = [System.Management.Automation.Language.Parser]::ParseFile($routeVerifier, [ref]$routeTokens, [ref]$routeParseErrors)
@@ -345,6 +329,23 @@ $uninstallAst.FindAll({
 
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
+}
+
+if ($onWindows) {
+    $originalRunningCheck = (Get-Command Test-ClashVergeRunning -CommandType Function).ScriptBlock
+    $originalSendInputInitializer = (Get-Command Initialize-ClaudeEasySendInput -CommandType Function).ScriptBlock
+    try {
+        Set-Item Function:\Test-ClashVergeRunning { return $false }
+        Set-Item Function:\Initialize-ClaudeEasySendInput { throw "SendInput initialized after client exit" }
+        $stoppedClientRejected = $false
+        try { Invoke-ClashVergeReactivationShortcut "CTRL+ALT+SHIFT+F24" } catch {
+            $stoppedClientRejected = $_.Exception.Message.Contains("已退出")
+        }
+        Assert-True $stoppedClientRejected "rollback shortcut was sent after Clash Verge Rev exited"
+    } finally {
+        Set-Item Function:\Test-ClashVergeRunning $originalRunningCheck
+        Set-Item Function:\Initialize-ClaudeEasySendInput $originalSendInputInitializer
+    }
 }
 
 $safeUpdateFollowupCases = @(

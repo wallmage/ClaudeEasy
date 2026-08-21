@@ -2553,6 +2553,25 @@ class MacosPatcherTest < Minitest::Test
     assert_empty result.fetch("checks")
   end
 
+  def test_route_verifier_reports_unset_invalid_and_human_profile_gates
+    unset_output = StringIO.new
+    assert_equal 10, ClashRouteVerifier.cli(
+      ["--json"], output: unset_output, profile_reader: -> { nil }
+    )
+    assert_equal "usage_profile_unset", JSON.parse(unset_output.string).fetch("code")
+
+    invalid_output = StringIO.new
+    assert_equal 10, ClashRouteVerifier.cli(
+      ["--json"], output: invalid_output,
+      profile_reader: -> { raise ClaudeEasy::InvalidConfigError }
+    )
+    assert_equal "usage_profile_invalid", JSON.parse(invalid_output.string).fetch("code")
+
+    human_output = StringIO.new
+    assert_equal 10, ClashRouteVerifier.cli([], output: human_output, profile_reader: -> { 2 })
+    assert_includes human_output.string, "档位 3"
+  end
+
   def test_route_target_patterns_require_real_domain_boundaries
     patterns = ClashRouteVerifier::TARGETS.to_h { |label, _url, _kind, pattern| [label, pattern] }
 
@@ -10744,6 +10763,74 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_profile_transaction_recovery_keeps_unsafe_recorded_targets
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile_root = File.join(directory, "profiles")
+      FileUtils.mkdir_p(profile_root)
+      profile = File.join(profile_root, "friend.yaml")
+      File.binwrite(profile, "original")
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [profile_root]
+      )
+      File.link(profile, File.join(profile_root, "alias.yaml"))
+
+      assert_raises(IOError) do
+        ClaudeEasy.recover_profile_transaction(backup_root, roots: [profile_root])
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile_root = File.join(directory, "profiles")
+      moved_root = File.join(directory, "moved-profiles")
+      FileUtils.mkdir_p(profile_root)
+      profile = File.join(profile_root, "friend.yaml")
+      File.binwrite(profile, "original")
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [profile_root]
+      )
+      File.rename(profile_root, moved_root)
+      File.symlink(moved_root, profile_root)
+
+      ClaudeEasy.stub(:profile_path_allowed?, true) do
+        assert_raises(IOError) do
+          ClaudeEasy.recover_profile_transaction(backup_root, roots: [profile_root])
+        end
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_profile_transaction_keeps_journal_when_restore_loses_the_inode
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      File.binwrite(profile, "candidate")
+      failed_restore = lambda do |*_arguments, **_options|
+        replacement = File.join(directory, "replacement.yaml")
+        File.binwrite(replacement, "candidate")
+        File.rename(replacement, profile)
+        false
+      end
+
+      ClaudeEasy.stub(:transactional_compare_and_write_bytes, failed_restore) do
+        assert_raises(IOError) do
+          ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+        end
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
   def test_profile_transaction_recovery_keeps_v2_journal_when_descriptor_restore_fails
     Dir.mktmpdir do |directory|
       root = File.join(directory, "backups")
@@ -11083,6 +11170,22 @@ class MacosPatcherTest < Minitest::Test
     end
     assert recovered
     refute removed
+  end
+
+  def test_safe_update_rollback_separates_failures_from_superseded_items
+    failed = { name: "failed", committed_identity: [1, 1] }
+    superseded = { name: "superseded", committed_identity: [2, 2] }
+    result = ClaudeEasy.stub(:rollback_safe_update_items, ["failed"]) do
+      ClaudeEasy.stub(:recover_profile_transaction, true) do
+        ClaudeEasy.stub(:safe_update_item_restored?, false) do
+          ClaudeEasy.finish_safe_update_rollback(
+            [failed, superseded], {}, "/backups", ["/profiles"]
+          )
+        end
+      end
+    end
+    assert_equal ["failed"], result.fetch(:failures)
+    assert_equal ["superseded"], result.fetch(:superseded)
   end
 
   def test_mihomo_core_status_covers_supported_old_and_unreadable_results
@@ -11627,6 +11730,12 @@ class MacosPatcherTest < Minitest::Test
       rollback: { failures: [], superseded: ["friend"] }
     )
     assert_equal :rollback_superseded, superseded.fetch(:reason)
+
+    activation_superseded = run_with_stubbed_safe_update_finalization(
+      activation: false, runtime_precommit: true,
+      rollback: { failures: [], superseded: ["friend"] }
+    )
+    assert_equal :rollback_superseded, activation_superseded.fetch(:reason)
 
   end
 
@@ -15112,6 +15221,17 @@ class MacosPatcherTest < Minitest::Test
     assert_nil ClaudeEasy.runtime_restorable_selections(
       ->(*_arguments) { raise IOError }, { "Main" => "Taiwan" }
     )
+    assert_nil ClaudeEasy.clashx_runtime_generation({}, runner: ->(*_arguments) { flunk })
+    assert_nil ClaudeEasy.clashx_runtime_generation(
+      identity, runner: ->(*_arguments) { raise IOError }
+    )
+    assert_nil ClaudeEasy.stub(:controller_socket, nil) { ClaudeEasy.current_runtime_requester }
+    response = ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_request, ->(*arguments) { arguments }) do
+        ClaudeEasy.current_runtime_requester.call("GET", "/configs", nil)
+      end
+    end
+    assert_equal ["socket", "GET", "/configs", nil], response
 
     status = Struct.new(:success?).new(true)
     lsof = lambda do |*_arguments|
