@@ -441,21 +441,7 @@ function Get-WindowsShortPath([string]$Path) {
 function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode) {
     $text = $Invocation.Output.Trim()
     $diagnostic = Get-TestOutputDiagnostic $text
-    $streamDiagnostic = ""
-    if (-not [string]::IsNullOrEmpty([string]$Invocation.BootstrapPhase)) {
-        $standardOutput = [string]$Invocation.StandardOutput
-        $standardError = [string]$Invocation.StandardError
-        $trimmedStandardOutput = $standardOutput.Trim()
-        $standardOutputIsObject = $trimmedStandardOutput.StartsWith("{") -and
-            $trimmedStandardOutput.EndsWith("}")
-        $streamDiagnostic = (
-            "; stdout_$(Get-TestOutputDiagnostic $standardOutput)" +
-            " stderr_$(Get-TestOutputDiagnostic $standardError)" +
-            " bootstrap_phase=$($Invocation.BootstrapPhase)" +
-            " stdout_object=$standardOutputIsObject"
-        )
-    }
-    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic$streamDiagnostic"
+    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic"
     try {
         if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
             $result = $text | ConvertFrom-Json -DateKind String
@@ -503,16 +489,8 @@ function Invoke-TestPowerShell(
 ) {
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeRefresh = $null
-    $simulatedRuntimeCandidate = $null
     $simulatedRuntimeSignal = $null
     $simulatedRuntimeBootstrap = $null
-    $simulatedRuntimeBootstrapStatus = $null
-    $simulatedRuntimeBootstrapError = $null
-    $simulatedRuntimeBootstrapPhase = $null
-    $standardOutput = $null
-    $standardError = $null
-    $runtimeRefreshSignaled = $null
-    $runtimeRefreshApplied = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -526,26 +504,20 @@ function Invoke-TestPowerShell(
                 $runtimePath = Join-Path $runtimeHome "clash-verge.yaml"
                 [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
                 if ($SimulateRuntimeRefresh) {
-                    $simulatedRuntimeCandidate = "$runtimePath.test"
                     $simulatedRuntimeSignal = "$runtimePath.refresh"
                     Remove-Item -LiteralPath $simulatedRuntimeSignal -Force -ErrorAction SilentlyContinue
                     $simulatedRuntimeRefresh = Start-Job -ArgumentList @(
                         $runtimePath,
-                        $script:safeUpdateRuntimeText,
-                        $simulatedRuntimeCandidate,
                         $simulatedRuntimeSignal
                     ) -ScriptBlock {
-                        param([string]$RuntimePath, [string]$RuntimeText, [string]$Candidate, [string]$Signal)
+                        param([string]$RuntimePath, [string]$Signal)
                         while ($true) {
                             Start-Sleep -Milliseconds 100
                             if (-not (Test-Path -LiteralPath $Signal -PathType Leaf)) { continue }
                             try {
-                                [System.IO.File]::WriteAllText($Candidate, $RuntimeText + "`n# simulated refresh`n")
-                                [System.IO.File]::Replace($Candidate, $RuntimePath, $null)
+                                [System.IO.File]::AppendAllText($RuntimePath, "`n# simulated refresh`n")
                                 break
-                            } catch {
-                                Remove-Item -LiteralPath $Candidate -Force -ErrorAction SilentlyContinue
-                            }
+                            } catch { }
                         }
                     }
                 }
@@ -564,15 +536,12 @@ function Invoke-TestPowerShell(
     try {
         $ErrorActionPreference = "Continue"
         if ($SimulateRuntimeRefresh) {
-            $simulatedRuntimeBootstrapStatus = Join-Path $sandbox "safe-update-runtime-bootstrap.status"
-            $simulatedRuntimeBootstrapError = Join-Path $sandbox "safe-update-runtime-bootstrap.stderr"
             $mihomoPathIndex = [Array]::IndexOf($ScriptArguments, "-MihomoPath")
             $payload = [pscustomobject]@{
                 ScriptPath = $ScriptPath
                 AppHome = [string]$ScriptArguments[$appHomeIndex + 1]
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 Json = $ScriptArguments -contains "-Json"
-                BootstrapStatusPath = $simulatedRuntimeBootstrapStatus
                 RuntimeRefreshSignalPath = $simulatedRuntimeSignal
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
@@ -580,10 +549,8 @@ function Invoke-TestPowerShell(
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-[System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'payload-decoded')
 Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string MarkerPath; public static bool Send(System.UInt16[] keys) { System.IO.File.WriteAllText(MarkerPath, "sent"); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::MarkerPath = [string]$payload.RuntimeRefreshSignalPath
-[System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'add-type-ok')
 $arguments = @{
     AppHome = [string]$payload.AppHome
     MihomoPath = [string]$payload.MihomoPath
@@ -591,7 +558,6 @@ $arguments = @{
     RefreshConfirmed = $true
     Json = [bool]$payload.Json
 }
-[System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'before-target')
 & ([string]$payload.ScriptPath) @arguments
 exit $LASTEXITCODE
 '@
@@ -602,18 +568,8 @@ exit $LASTEXITCODE
                 $bootstrap,
                 [System.Text.Encoding]::ASCII
             )
-            $standardOutput = & $PowerShellPath -NoLogo -NoProfile -File $simulatedRuntimeBootstrap 2> $simulatedRuntimeBootstrapError | Out-String
+            $output = & $PowerShellPath -NoLogo -NoProfile -File $simulatedRuntimeBootstrap 2>&1 | Out-String
             $exitCode = $LASTEXITCODE
-            $standardError = if (Test-Path -LiteralPath $simulatedRuntimeBootstrapError -PathType Leaf) {
-                [System.IO.File]::ReadAllText($simulatedRuntimeBootstrapError)
-            } else { "" }
-            $simulatedRuntimeBootstrapPhase = if (Test-Path -LiteralPath $simulatedRuntimeBootstrapStatus -PathType Leaf) {
-                [System.IO.File]::ReadAllText($simulatedRuntimeBootstrapStatus)
-            } else { "not-started" }
-            $runtimeRefreshSignaled = Test-Path -LiteralPath $simulatedRuntimeSignal -PathType Leaf
-            $runtimeRefreshApplied = (Test-Path -LiteralPath $runtimePath -PathType Leaf) -and
-                [System.IO.File]::ReadAllText($runtimePath).Contains("# simulated refresh")
-            $output = $standardOutput + $standardError
         } else {
             $output = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath @ScriptArguments 2>&1 | Out-String
             $exitCode = $LASTEXITCODE
@@ -621,26 +577,15 @@ exit $LASTEXITCODE
         return [pscustomobject]@{
             Output = $output
             ExitCode = $exitCode
-            StandardOutput = $standardOutput
-            StandardError = $standardError
-            BootstrapPhase = $simulatedRuntimeBootstrapPhase
-            RuntimeRefreshSignaled = $runtimeRefreshSignaled
-            RuntimeRefreshApplied = $runtimeRefreshApplied
         }
     } finally {
         if ($null -ne $simulatedRuntimeRefresh) {
             Stop-Job -Job $simulatedRuntimeRefresh -ErrorAction SilentlyContinue
             Remove-Job -Job $simulatedRuntimeRefresh -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $simulatedRuntimeCandidate -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $simulatedRuntimeSignal -Force -ErrorAction SilentlyContinue
         }
         if ($null -ne $simulatedRuntimeBootstrap) {
             Remove-Item -LiteralPath $simulatedRuntimeBootstrap -Force -ErrorAction SilentlyContinue
-        }
-        foreach ($diagnosticPath in @($simulatedRuntimeBootstrapStatus, $simulatedRuntimeBootstrapError)) {
-            if ($null -ne $diagnosticPath) {
-                Remove-Item -LiteralPath $diagnosticPath -Force -ErrorAction SilentlyContinue
-            }
         }
         if ($null -ne $temporarySafeUpdateClient) {
             if (-not $temporarySafeUpdateClient.HasExited) {
@@ -3909,29 +3854,9 @@ rules:
         "-Json"
     ) -SimulateRuntimeRefresh
     $verifyJson = Assert-JsonResult $verifyResult "install" 1
-    $runtimeHealthDiagnostic = ""
-    if ($verifyJson.code -ne "safe_update_rolled_back") {
-        $previousDiagnosticCurl = $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS
-        try {
-            $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS = "1"
-            $directRuntimeContext = Get-ClashControllerContext (Join-Path $safeUpdateCase "clash-verge.yaml")
-            Assert-ClashRuntimeHealthy `
-                $directRuntimeContext @{ Main = "Node" } $false 1 `
-                $fakeCurlPath $safeUpdatePolicy -ReadOnly
-            $runtimeHealthDiagnostic = "direct_health=ok"
-        } catch {
-            $runtimeHealthDiagnostic = "direct_health=$($_.Exception.Message)"
-        } finally {
-            $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS = $previousDiagnosticCurl
-        }
-    }
     Assert-True (
         $verifyJson.code -eq "safe_update_rolled_back"
-    ) (
-        "invalid safe update did not restore the previous runtime state; got $($verifyJson.code); " +
-        "refresh_signaled=$($verifyResult.RuntimeRefreshSignaled); " +
-        "refresh_applied=$($verifyResult.RuntimeRefreshApplied); $runtimeHealthDiagnostic"
-    )
+    ) "invalid safe update did not restore the previous runtime state; got $($verifyJson.code)"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeOriginal) "failed safe update did not restore first remote subscription"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "failed safe update did not restore second remote subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "completed rollback left a reusable stale safe-update manifest"
