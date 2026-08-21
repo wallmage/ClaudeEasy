@@ -3850,10 +3850,10 @@ rules:
     )
     $missingTargetVerifyJson = Assert-JsonResult $missingTargetVerify "install" 1
     Assert-True (
-        $missingTargetVerifyJson.status -eq "partial" -and
-        $missingTargetVerifyJson.code -eq "safe_update_runtime_unverified" -and
-        @($missingTargetVerifyJson.warnings) -contains "runtime_unverified"
-    ) "missing safe-update target did not report unverified runtime state"
+        $missingTargetVerifyJson.status -eq "rolled_back" -and
+        $missingTargetVerifyJson.code -eq "safe_update_rolled_back" -and
+        @($missingTargetVerifyJson.warnings).Count -eq 0
+    ) "missing safe-update target did not report a complete rollback"
     Assert-True (
         (Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq
             $firstSafeOriginal
