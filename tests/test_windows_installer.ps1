@@ -549,8 +549,7 @@ Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNa
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 $arguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
 & ([string]$payload.ScriptPath) @arguments
-if (-not $?) { exit 1 }
-exit 0
+exit $LASTEXITCODE
 '@
             $bootstrap = $bootstrap.Replace('__PAYLOAD__', $payloadBase64)
             $simulatedRuntimeBootstrap = Join-Path $sandbox "safe-update-runtime-bootstrap.ps1"
