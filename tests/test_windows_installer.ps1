@@ -331,6 +331,23 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+if ($onWindows) {
+    $originalRunningCheck = (Get-Command Test-ClashVergeRunning -CommandType Function).ScriptBlock
+    $originalSendInputInitializer = (Get-Command Initialize-ClaudeEasySendInput -CommandType Function).ScriptBlock
+    try {
+        Set-Item Function:\Test-ClashVergeRunning { return $false }
+        Set-Item Function:\Initialize-ClaudeEasySendInput { throw "SendInput initialized after client exit" }
+        $stoppedClientRejected = $false
+        try { Invoke-ClashVergeReactivationShortcut "CTRL+ALT+SHIFT+F24" } catch {
+            $stoppedClientRejected = $_.Exception.Message.Contains("已退出")
+        }
+        Assert-True $stoppedClientRejected "rollback shortcut was sent after Clash Verge Rev exited"
+    } finally {
+        Set-Item Function:\Test-ClashVergeRunning $originalRunningCheck
+        Set-Item Function:\Initialize-ClaudeEasySendInput $originalSendInputInitializer
+    }
+}
+
 $safeUpdateFollowupCases = @(
     [pscustomobject]@{
         Profile = 1
@@ -1929,7 +1946,15 @@ if ($Json) {
 
     $rejectedRouteSecretCanary =
         "route-argument-canary-" + [Guid]::NewGuid().ToString("N")
+    $routeProfileThreeHome = Join-Path $sandbox "route-profile-three"
+    New-Item -ItemType Directory -Path $routeProfileThreeHome -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $routeProfileThreeHome "claude-easy-usage-profile.json"),
+        '{"Version":1,"Profile":3}' + "`r`n",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
     $jsonRouteFailure = Invoke-TestPowerShell $routeVerifier @(
+        "-AppHome", $routeProfileThreeHome,
         "-ObservationSeconds", "1",
         "-Secret", $rejectedRouteSecretCanary,
         "-Json"
@@ -1955,6 +1980,19 @@ if ($Json) {
     Assert-True (
         $blankRouteGroupResult.code -eq "invalid_arguments"
     ) "route verifier did not reject a blank group override consistently"
+    $routeProfileOneHome = Join-Path $sandbox "route-profile-one"
+    New-Item -ItemType Directory -Path $routeProfileOneHome -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $routeProfileOneHome "claude-easy-usage-profile.json"),
+        '{"Version":1,"Profile":1}' + "`r`n",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+    $profileOneRouteResult = Assert-JsonResult (Invoke-TestPowerShell $routeVerifier @(
+        "-AppHome", $routeProfileOneHome,
+        "-ObservationSeconds", "1",
+        "-Json"
+    )) "verify_routes" 10
+    Assert-True ($profileOneRouteResult.code -eq "usage_profile_mismatch") "profile 1 route verification was not refused"
 
     $routeHarnessPath = Join-Path $sandbox "verify-route-observer.ps1"
     $routeFunctionSources = $routeFunctionAsts | ForEach-Object {
@@ -2298,6 +2336,8 @@ if ($changedSnapshotPassed) { throw "Observe-Route accepted a proxy selection ch
             $routeRedirectResult = Invoke-TestPowerShellWithStandardInput `
                 $routeVerifier `
                 @(
+                    "-AppHome",
+                    $routeProfileThreeHome,
                     "-ControllerUrl",
                     "http://127.0.0.1:$routeRedirectPort",
                     "-SecretStdin",
@@ -2602,6 +2642,7 @@ public static class FakeCurl {
             $env:CLAUDE_EASY_TEST_CURL_ENV_HASH_PREFIX =
                 $fakeCurlEnvironmentHashPrefix
             $routeSuccessProcess = New-TestPowerShellProcess $routeVerifier @(
+                "-AppHome", $routeProfileThreeHome,
                 "-ControllerUrl", "http://127.0.0.1:$routeControllerPort",
                 "-SecretStdin",
                 "-ObservationSeconds", "5",
@@ -3052,6 +3093,36 @@ items:
         $protocolRegressionRejected = $true
     }
     Assert-True $protocolRegressionRejected "safe update accepted AnyTLS being replaced by Shadowsocks"
+    Assert-SubscriptionProtocolPreserved @'
+proxies:
+  - name: Existing SS
+    type: ss
+metadata:
+  type: anytls
+# type: anytls
+'@ @'
+proxies:
+  - name: Existing SS
+    type: ss
+'@
+    $dummyProtocolRegressionRejected = $false
+    try {
+        Assert-SubscriptionProtocolPreserved @'
+proxies:
+  - name: Existing AnyTLS
+    type: anytls
+'@ @'
+proxies:
+  - name: Replacement SS
+    type: ss
+    metadata:
+      type: anytls
+# type: anytls
+'@
+    } catch {
+        $dummyProtocolRegressionRejected = $true
+    }
+    Assert-True $dummyProtocolRegressionRejected "comments or nested mappings bypassed the AnyTLS regression gate"
 
     $ownershipInput = @'
 current: R-a
@@ -4393,6 +4464,11 @@ rules:
     $arrayChanges = @(Get-RedactedYamlChangedPaths $arrayBefore $arrayAfter)
     Assert-True ($arrayChanges -contains "proxies") "Windows comparison did not safely summarize a changed mapping array"
     Assert-True (-not (($arrayChanges -join " ").Contains("Secret"))) "Windows array comparison exposed a configuration value"
+    $providerBefore = "proxy-providers:`n  provider-secret:`n    url: https://old.invalid/sub`n"
+    $providerAfter = "proxy-providers:`n  provider-secret:`n    url: https://new.invalid/sub`n"
+    $providerChanges = @(Get-RedactedYamlChangedPaths $providerBefore $providerAfter)
+    Assert-True ($providerChanges -contains "proxy-providers.[item].url") "Windows comparison did not redact a provider key"
+    Assert-True (-not (($providerChanges -join " ").Contains("provider-secret"))) "Windows comparison exposed a provider key"
     $routeGroups = [pscustomobject]@{
         "Proxy" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
         "🤖 AI · ClaudeEasy" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }

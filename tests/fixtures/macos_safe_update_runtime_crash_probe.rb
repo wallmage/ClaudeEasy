@@ -79,7 +79,7 @@ ClaudeEasy.stub(:controller_socket, "socket") do
         client_identity_reader: -> { identity },
         native_reloader: native_reloader,
         runtime_waiter: ->(*_arguments, **_options) { true },
-        generation_reader: -> { "generation" }
+        generation_reader: ->(_identity) { "generation" }
       )
     end
   end

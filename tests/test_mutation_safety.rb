@@ -895,14 +895,19 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/patch_profiles/profile_writer.rb",
-        "        next unless current_snapshot.fetch(:identity) == expected_identity\n",
+        <<~RUBY.lines.map { |line| "        #{line}" }.join,
+          unless current_snapshot.fetch(:identity) == expected_identity
+            fully_restored = false
+            next
+          end
+        RUBY
         "        true\n"
       )
 
       assert_mutation_is_killed(
         root,
         RbConfig.ruby, "tests/test_macos_patcher.rb",
-        "--name", "test_profile_transaction_preserves_an_atomic_refresh_after_an_interrupted_write"
+        "--name", "test_profile_transaction_keeps_the_journal_after_an_atomic_refresh"
       )
     end
   end

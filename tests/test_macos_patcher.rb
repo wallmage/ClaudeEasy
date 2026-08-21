@@ -1835,7 +1835,7 @@ class MacosPatcherTest < Minitest::Test
                 client_identity_reader: -> { identity },
                 native_reloader: native_reloader,
                 runtime_waiter: ->(*_arguments, **_options) { true },
-                generation_reader: -> { "generation" }
+                generation_reader: ->(_identity) { "generation" }
               )
             end
           end
@@ -2421,7 +2421,7 @@ class MacosPatcherTest < Minitest::Test
   def test_route_verifier_json_mode_emits_one_contract_object_on_business_failure
     output = StringIO.new
     ClashRouteVerifier.stub(:run, false) do
-      assert_equal 1, ClashRouteVerifier.cli(["--json"], output: output)
+      assert_equal 1, ClashRouteVerifier.cli(["--json"], output: output, profile_reader: -> { 3 })
     end
 
     result = JSON.parse(output.string)
@@ -2434,7 +2434,7 @@ class MacosPatcherTest < Minitest::Test
   def test_route_verifier_cli_json_does_not_forward_human_output
     output = StringIO.new
     ClashRouteVerifier.stub(:run, ->(output:, details:, **_options) { output.puts("PRIVATE-NODE"); details[:checks] << { "name" => "google", "ok" => true, "status" => "passed" }; true }) do
-      assert_equal 0, ClashRouteVerifier.cli(["--json"], output: output)
+      assert_equal 0, ClashRouteVerifier.cli(["--json"], output: output, profile_reader: -> { 3 })
     end
 
     result = JSON.parse(output.string)
@@ -2460,7 +2460,7 @@ class MacosPatcherTest < Minitest::Test
         ClashRouteVerifier.cli(
           ["--main-group", "Main Live", "--ai-group", "AI Live",
            "--observation-seconds", "21", "--json"],
-          output: output
+          output: output, profile_reader: -> { 3 }
         )
       )
     end
@@ -2522,7 +2522,7 @@ class MacosPatcherTest < Minitest::Test
   def test_route_verifier_cli_keeps_default_human_output
     output = StringIO.new
     ClashRouteVerifier.stub(:run, ->(output:, details:, **_options) { output.puts("中文结果"); false }) do
-      assert_equal 1, ClashRouteVerifier.cli([], output: output)
+      assert_equal 1, ClashRouteVerifier.cli([], output: output, profile_reader: -> { 3 })
     end
     assert_equal "中文结果\n", output.string
   end
@@ -2535,6 +2535,38 @@ class MacosPatcherTest < Minitest::Test
     result = JSON.parse(output.string)
     assert_equal "invalid_request", result.fetch("status")
     assert_equal "invalid_arguments", result.fetch("code")
+  end
+
+  def test_route_verifier_refuses_ai_probes_below_profile_three
+    output = StringIO.new
+    ClashRouteVerifier.stub(:run, ->(**) { flunk "profile 1 reached route verification" }) do
+      assert_equal 10, ClashRouteVerifier.cli(
+        ["--json"], output: output, profile_reader: -> { 1 }
+      )
+    end
+    result = JSON.parse(output.string)
+    assert_equal "invalid_request", result.fetch("status")
+    assert_equal "usage_profile_mismatch", result.fetch("code")
+    assert_empty result.fetch("checks")
+  end
+
+  def test_route_verifier_reports_unset_invalid_and_human_profile_gates
+    unset_output = StringIO.new
+    assert_equal 10, ClashRouteVerifier.cli(
+      ["--json"], output: unset_output, profile_reader: -> { nil }
+    )
+    assert_equal "usage_profile_unset", JSON.parse(unset_output.string).fetch("code")
+
+    invalid_output = StringIO.new
+    assert_equal 10, ClashRouteVerifier.cli(
+      ["--json"], output: invalid_output,
+      profile_reader: -> { raise ClaudeEasy::InvalidConfigError }
+    )
+    assert_equal "usage_profile_invalid", JSON.parse(invalid_output.string).fetch("code")
+
+    human_output = StringIO.new
+    assert_equal 10, ClashRouteVerifier.cli([], output: human_output, profile_reader: -> { 2 })
+    assert_includes human_output.string, "档位 3"
   end
 
   def test_route_target_patterns_require_real_domain_boundaries
@@ -5382,6 +5414,8 @@ class MacosPatcherTest < Minitest::Test
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "task.cancel;"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'response.URL.absoluteString'
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
+                    "primaryApplications.count + alternateApplications.count !== 1"
 
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
@@ -5565,7 +5599,7 @@ class MacosPatcherTest < Minitest::Test
           client_identity_reader: -> { identity },
           native_reloader: ->(_current) { reloads += 1; true },
           runtime_waiter: ->(*_arguments, **_options) { true },
-          generation_reader: -> { "generation-#{reloads}" }
+          generation_reader: ->(_identity) { "generation-#{reloads}" }
         )
       end
 
@@ -5637,7 +5671,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_waiter: lambda { |_current, **options|
           observed_tun = options.fetch(:expected_tun)
           true
-        }, generation_reader: -> { "generation" }
+        }, generation_reader: ->(_identity) { "generation" }
       )
 
       assert restored
@@ -5668,7 +5702,7 @@ class MacosPatcherTest < Minitest::Test
           runtime_waiter: lambda { |_current, **options|
             required_group = options.fetch(:required_proxy_group)
             true
-          }, generation_reader: -> { "generation" }
+          }, generation_reader: ->(_identity) { "generation" }
         )
       end
 
@@ -5677,7 +5711,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_recovered_safe_update_runtime_accepts_an_already_healthy_original_runtime
+  def test_recovered_safe_update_runtime_reloads_an_already_healthy_original_runtime
     Dir.mktmpdir do |directory|
       path = File.join(directory, "active.yaml")
       File.binwrite(path, YAML.dump(base_config))
@@ -5690,20 +5724,20 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: checkpoint, activation_identity: identity
       )
 
-      restored = ClaudeEasy.stub(:current_runtime_requester, -> { :requester }) do
-        ClaudeEasy.stub(:runtime_health_healthy?, true) do
-          ClaudeEasy.reload_recovered_safe_update_runtime(
-            [{ name: "active", path: path }], 3, "active",
-            precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
-            transaction: transaction, client_identity: identity,
-            native_reloader: ->(_current) { flunk "healthy runtime must not reload" },
-            runtime_waiter: ->(*_arguments, **_options) { flunk "healthy runtime must not wait" },
-            generation_reader: -> { flunk "healthy runtime needs no generation" }
-          )
-        end
-      end
+      reloads = 0
+      waits = 0
+      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ name: "active", path: path }], 3, "active",
+        precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
+        transaction: transaction, client_identity: identity,
+        native_reloader: ->(_current) { reloads += 1; true },
+        runtime_waiter: ->(*_arguments, **_options) { waits += 1; true },
+        generation_reader: ->(_current) { "generation" }
+      )
 
       assert restored
+      assert_equal 1, reloads
+      assert_equal 1, waits
     end
   end
 
@@ -5981,11 +6015,11 @@ class MacosPatcherTest < Minitest::Test
 
       current = File.stat(profile)
       assert injected
-      assert_equal :aborted, result.fetch(:status)
+      assert_equal :rollback_failed, result.fetch(:status)
       assert_equal :concurrent_change, result.fetch(:reason)
       assert_equal external_bytes, File.binread(profile)
       assert_equal external_identity, [current.dev, current.ino]
-      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -6440,7 +6474,7 @@ class MacosPatcherTest < Minitest::Test
                   validator: ->(_path) { true }, client_identity_reader: -> { identity },
                   native_reloader: ->(_current) { reloads += 1; true },
                   runtime_waiter: ->(*_arguments, **_options) { connectivity.call },
-                  generation_reader: -> { "generation-#{reloads}" }
+                  generation_reader: ->(_identity) { "generation-#{reloads}" }
                 )
               end
             end
@@ -6684,10 +6718,8 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert injected
-      assert_equal :runtime_restore_pending, result.fetch(:status)
+      assert_equal :rollback_failed, result.fetch(:status)
       assert_equal :activation_failed, result.fetch(:reason)
-      assert_equal :reload_failed_restore_pending, result.fetch(:runtime_status)
-      assert result.fetch(:rollback_superseded)
       assert_equal refreshed, File.binread(profile)
       assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
@@ -6794,9 +6826,10 @@ class MacosPatcherTest < Minitest::Test
         )
       end
 
-      assert_equal :aborted, result.fetch(:status)
-      assert_equal :rollback_superseded, result.fetch(:reason)
+      assert_equal :rollback_failed, result.fetch(:status)
+      assert_equal :activation_failed, result.fetch(:reason)
       assert_equal external.b, File.binread(profile)
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -7609,12 +7642,12 @@ class MacosPatcherTest < Minitest::Test
 
       active = results.find { |result| File.basename(result.fetch(:path)) == "friend.yaml" }
       other = results.find { |result| File.basename(result.fetch(:path)) == "other.yaml" }
-      assert_equal :batch_rolled_back, active.fetch(:status)
+      assert_equal :reload_failed_restore_pending, active.fetch(:status)
       assert_equal :concurrent_change, other.fetch(:status)
       assert_equal originals.fetch("friend"), File.binread(paths.fetch("friend"))
       assert_equal external, File.binread(paths.fetch("other"))
-      assert_equal [File.expand_path(paths.fetch("friend"))] * 2, put_paths
-      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+      assert_equal [File.expand_path(paths.fetch("friend"))], put_paths
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -8091,6 +8124,42 @@ class MacosPatcherTest < Minitest::Test
         assert requests.any? { |method, _endpoint| method == "GET" }, "profile #{usage_profile}"
         refute requests.any? { |method, _endpoint| %w[POST PUT].include?(method) }, "profile #{usage_profile}"
       end
+    end
+  end
+
+  def test_unchanged_runtime_resolves_required_and_preserved_tun_state
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      File.write(profile, YAML.dump(base_config))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "台湾家宽 01" },
+            "AI" => { "type" => "Selector", "now" => "Main" }
+          })]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => false })]
+        else
+          [404, ""]
+        end
+      end
+      expected_tun = []
+
+      ClaudeEasy.stub(:runtime_health_healthy?, lambda { |_requester, **options|
+        expected_tun << options.fetch(:expected_tun)
+        true
+      }) do
+        result = { path: profile, status: :unchanged }
+        assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
+          result, requester: requester, require_tun: true
+        )
+        assert_equal result, ClaudeEasy.verify_unchanged_profile_runtime(
+          result, requester: requester, require_tun: :preserve
+        )
+      end
+
+      assert_equal [:enabled, :disabled], expected_tun
     end
   end
 
@@ -10419,6 +10488,10 @@ class MacosPatcherTest < Minitest::Test
         profile, require_tun: false, requester: requester
       )
       assert_equal :ignore, checkpoint.fetch(:expected_tun)
+      checkpoint = ClaudeEasy.capture_runtime_checkpoint(
+        profile, require_tun: true, requester: requester
+      )
+      assert_equal :enabled, checkpoint.fetch(:expected_tun)
       assert_nil ClaudeEasy.capture_runtime_checkpoint(
         missing_profile, require_tun: false, requester: requester
       )
@@ -10733,7 +10806,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_profile_transaction_recovery_discards_a_missing_recorded_target
+  def test_profile_transaction_recovery_keeps_a_missing_recorded_target
     Dir.mktmpdir do |directory|
       backup_root = File.join(directory, "backups")
       profile = File.join(directory, "friend.yaml")
@@ -10744,8 +10817,78 @@ class MacosPatcherTest < Minitest::Test
       )
       File.unlink(profile)
 
-      assert ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
-      refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+      assert_raises(IOError) do
+        ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_profile_transaction_recovery_keeps_unsafe_recorded_targets
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile_root = File.join(directory, "profiles")
+      FileUtils.mkdir_p(profile_root)
+      profile = File.join(profile_root, "friend.yaml")
+      File.binwrite(profile, "original")
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [profile_root]
+      )
+      File.link(profile, File.join(profile_root, "alias.yaml"))
+
+      assert_raises(IOError) do
+        ClaudeEasy.recover_profile_transaction(backup_root, roots: [profile_root])
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile_root = File.join(directory, "profiles")
+      moved_root = File.join(directory, "moved-profiles")
+      FileUtils.mkdir_p(profile_root)
+      profile = File.join(profile_root, "friend.yaml")
+      File.binwrite(profile, "original")
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [profile_root]
+      )
+      File.rename(profile_root, moved_root)
+      File.symlink(moved_root, profile_root)
+
+      ClaudeEasy.stub(:profile_path_allowed?, true) do
+        assert_raises(IOError) do
+          ClaudeEasy.recover_profile_transaction(backup_root, roots: [profile_root])
+        end
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
+    end
+  end
+
+  def test_profile_transaction_keeps_journal_when_restore_loses_the_inode
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      profile = File.join(directory, "friend.yaml")
+      File.binwrite(profile, "original")
+      ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: "original", candidate: "candidate" }],
+        backup_root, roots: [directory]
+      )
+      File.binwrite(profile, "candidate")
+      failed_restore = lambda do |*_arguments, **_options|
+        replacement = File.join(directory, "replacement.yaml")
+        File.binwrite(replacement, "candidate")
+        File.rename(replacement, profile)
+        false
+      end
+
+      ClaudeEasy.stub(:transactional_compare_and_write_bytes, failed_restore) do
+        assert_raises(IOError) do
+          ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+        end
+      end
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -11088,6 +11231,22 @@ class MacosPatcherTest < Minitest::Test
     end
     assert recovered
     refute removed
+  end
+
+  def test_safe_update_rollback_separates_failures_from_superseded_items
+    failed = { name: "failed", committed_identity: [1, 1] }
+    superseded = { name: "superseded", committed_identity: [2, 2] }
+    result = ClaudeEasy.stub(:rollback_safe_update_items, ["failed"]) do
+      ClaudeEasy.stub(:recover_profile_transaction, true) do
+        ClaudeEasy.stub(:safe_update_item_restored?, false) do
+          ClaudeEasy.finish_safe_update_rollback(
+            [failed, superseded], {}, "/backups", ["/profiles"]
+          )
+        end
+      end
+    end
+    assert_equal ["failed"], result.fetch(:failures)
+    assert_equal ["superseded"], result.fetch(:superseded)
   end
 
   def test_mihomo_core_status_covers_supported_old_and_unreadable_results
@@ -11568,11 +11727,12 @@ class MacosPatcherTest < Minitest::Test
 
       current = File.stat(path)
       assert injected
-      assert_equal :aborted, result.fetch(:status)
+      assert_equal :rollback_failed, result.fetch(:status)
       assert_equal :concurrent_change, result.fetch(:reason)
       assert_equal external.b, File.binread(path)
       assert_equal external_identity, [current.dev, current.ino]
       assert_empty Dir.glob(File.join(directory, ".claude-easy-update-swap-*"))
+      assert File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
     end
   end
 
@@ -11642,6 +11802,12 @@ class MacosPatcherTest < Minitest::Test
     )
     assert_equal :rollback_superseded, superseded.fetch(:reason)
 
+    activation_superseded = run_with_stubbed_safe_update_finalization(
+      activation: false, runtime_precommit: true,
+      rollback: { failures: [], superseded: ["friend"] }
+    )
+    assert_equal :rollback_superseded, activation_superseded.fetch(:reason)
+
   end
 
   def test_profile_transaction_preserves_ambiguous_partial_writes_for_manual_retry
@@ -11676,7 +11842,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_profile_transaction_preserves_an_atomic_refresh_after_an_interrupted_write
+  def test_profile_transaction_keeps_the_journal_after_an_atomic_refresh
     Dir.mktmpdir do |directory|
       backup_root = File.join(directory, "backups")
       profile = File.join(directory, "friend.yaml")
@@ -11692,12 +11858,14 @@ class MacosPatcherTest < Minitest::Test
       File.rename(external_path, profile)
       external_stat = File.stat(profile)
 
-      ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      assert_raises(IOError) do
+        ClaudeEasy.recover_profile_transaction(backup_root, roots: [directory])
+      end
 
       current = File.stat(profile)
       assert_equal "external-refresh", File.binread(profile)
       assert_equal [external_stat.dev, external_stat.ino], [current.dev, current.ino]
-      refute ClaudeEasy.profile_transaction_pending?(backup_root)
+      assert ClaudeEasy.profile_transaction_pending?(backup_root)
     end
   end
 
@@ -14760,7 +14928,7 @@ class MacosPatcherTest < Minitest::Test
 
   def test_clashx_runtime_waits_for_reload_generation_and_full_health
     identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
-    generations = ["before", "after"]
+    generations = %w[before before after]
     dns_checks = []
     sleeps = 0
 
@@ -14776,13 +14944,13 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.wait_for_clashx_safe_runtime(
         identity, generation_before: "before", selections: { "Main" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        generation_reader: -> { generations.shift },
+        generation_reader: ->(_current) { generations.shift },
         process_reader: -> { identity }, connectivity_checker: -> { true },
         sleeper: ->(_seconds) { sleeps += 1 }, attempts: 4
       )
     end
 
-    assert_equal 1, sleeps
+    assert_equal 2, sleeps
     assert_equal [true], dns_checks
   end
 
@@ -14814,7 +14982,7 @@ class MacosPatcherTest < Minitest::Test
         identity, generation_before: "before",
         selections: { "Main" => "Old Node", "AI" => "Taiwan" },
         expected_tun: :enabled, requester_factory: -> { requester },
-        generation_reader: -> { "after" }, process_reader: -> { identity },
+        generation_reader: ->(_current) { "after" }, process_reader: -> { identity },
         sleeper: ->(_seconds) {}, attempts: 1
       )
     end
@@ -14858,7 +15026,7 @@ class MacosPatcherTest < Minitest::Test
           restored = options.fetch(:selections)
           true
         },
-        generation_reader: -> { "before" }
+        generation_reader: ->(_identity) { "before" }
       )
 
       assert_equal true, activated[:reloaded]
@@ -14903,7 +15071,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: checkpoint,
         native_reloader: ->(_current) { reloads += 1; true },
         runtime_waiter: ->(*_arguments, **_options) { true },
-        generation_reader: -> { "before" }
+        generation_reader: ->(_identity) { "before" }
       )
 
       assert_equal :reload_failed_rolled_back, activated.fetch(:status)
@@ -14978,7 +15146,7 @@ class MacosPatcherTest < Minitest::Test
         runtime_checkpoint: checkpoint,
         native_reloader: ->(current) { reloads << current; true },
         runtime_waiter: ->(*_arguments, **_options) { true },
-        generation_reader: -> { "before" }
+        generation_reader: ->(_identity) { "before" }
       )
 
       assert_equal true, activated.fetch(:reloaded)
@@ -15013,7 +15181,7 @@ class MacosPatcherTest < Minitest::Test
           validator: ->(_candidate) { true }, client_identity_reader: -> { identity },
           native_reloader: ->(_current) { reloads += 1; true },
           runtime_waiter: ->(*_arguments, **_options) { true },
-          generation_reader: -> { "generation-#{reloads}" }
+          generation_reader: ->(_identity) { "generation-#{reloads}" }
         )
       end
 
@@ -15051,7 +15219,7 @@ class MacosPatcherTest < Minitest::Test
       activated = ClaudeEasy.activate_safe_updated_profile(
         result, transaction: transaction, client_identity: identity,
         runtime_checkpoint: checkpoint, native_reloader: native,
-        runtime_waiter: waiter, generation_reader: -> { "generation-#{reloads}" }
+        runtime_waiter: waiter, generation_reader: ->(_identity) { "generation-#{reloads}" }
       )
 
       assert_equal :reload_failed_rolled_back, activated.fetch(:status)
@@ -15062,7 +15230,7 @@ class MacosPatcherTest < Minitest::Test
         result, transaction: transaction, client_identity: identity,
         runtime_checkpoint: checkpoint,
         native_reloader: ->(_current) { flunk "same process must not reload again" },
-        runtime_waiter: waiter, generation_reader: -> { "same" }
+        runtime_waiter: waiter, generation_reader: ->(_identity) { "same" }
       )
       assert_equal :reload_failed_restore_pending, repeated.fetch(:status)
     end
@@ -15088,7 +15256,7 @@ class MacosPatcherTest < Minitest::Test
         transaction: transaction, client_identity: identity,
         native_reloader: ->(_current) { reloads += 1; true },
         runtime_waiter: ->(*_arguments, **_keywords) { true },
-        generation_reader: -> { "generation-#{reloads}" }
+        generation_reader: ->(_identity) { "generation-#{reloads}" }
       }
 
       assert ClaudeEasy.reload_recovered_safe_update_runtime(
@@ -15118,24 +15286,40 @@ class MacosPatcherTest < Minitest::Test
     )
     refute ClaudeEasy.wait_for_clashx_safe_runtime(
       identity, generation_before: "before", selections: {}, expected_tun: :disabled,
-      requester_factory: -> { raise IOError }, generation_reader: -> { "after" },
+      requester_factory: -> { raise IOError }, generation_reader: ->(_identity) { "after" },
       process_reader: -> { identity }, attempts: 1
     )
     assert_nil ClaudeEasy.runtime_restorable_selections(
       ->(*_arguments) { raise IOError }, { "Main" => "Taiwan" }
     )
-
-    Dir.mktmpdir do |directory|
-      config = File.join(directory, "runtime.yaml")
-      File.binwrite(config, "runtime")
-      generation = ClaudeEasy.stub(:running_mihomo_config_paths, [config]) do
-        ClaudeEasy.clashx_runtime_generation
+    assert_nil ClaudeEasy.clashx_runtime_generation({}, runner: ->(*_arguments) { flunk })
+    assert_nil ClaudeEasy.clashx_runtime_generation(
+      identity, runner: ->(*_arguments) { raise IOError }
+    )
+    assert_nil ClaudeEasy.stub(:controller_socket, nil) { ClaudeEasy.current_runtime_requester }
+    response = ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_request, ->(*arguments) { arguments }) do
+        ClaudeEasy.current_runtime_requester.call("GET", "/configs", nil)
       end
-      assert_match(/\A[0-9a-f]{64}\z/, generation)
-      assert_nil ClaudeEasy.stub(:running_mihomo_config_paths, [File.join(directory, "missing")]) {
-        ClaudeEasy.clashx_runtime_generation
-      }
     end
+    assert_equal ["socket", "GET", "/configs", nil], response
+
+    status = Struct.new(:success?).new(true)
+    lsof = lambda do |*_arguments|
+      ["p12345\nf10u\ntunix\nn0x111->0x222\nf11u\ntREG\nnignored\n", "", status]
+    end
+    generation = ClaudeEasy.clashx_runtime_generation(identity, runner: lsof)
+    assert_match(/\A[0-9a-f]{64}\z/, generation)
+    changed = ClaudeEasy.clashx_runtime_generation(
+      identity,
+      runner: ->(*_arguments) {
+        ["p12345\nf10u\ntunix\nn0x333->0x444\nf11u\ntREG\nnignored\n", "", status]
+      }
+    )
+    refute_equal generation, changed
+    assert_nil ClaudeEasy.clashx_runtime_generation(
+      identity, runner: ->(*_arguments) { ["p12345\nf11u\ntREG\nnignored\n", "", status] }
+    )
 
     ClaudeEasyAppleEvents.stub(:AECreateDesc, ->(*_arguments) { raise IOError }) do
       ClaudeEasyAppleEvents.stub(:AEDisposeDesc, ->(*_arguments) { 0 }) do
@@ -15208,7 +15392,7 @@ class MacosPatcherTest < Minitest::Test
 
             pending = ClaudeEasy.activate_safe_updated_profile(
               result, transaction: transaction, client_identity: {},
-              runtime_checkpoint: checkpoint, generation_reader: -> { raise IOError }
+              runtime_checkpoint: checkpoint, generation_reader: ->(_identity) { raise IOError }
             )
             assert_equal :reload_failed_restore_pending, pending.fetch(:status)
 
@@ -15268,7 +15452,7 @@ class MacosPatcherTest < Minitest::Test
       assert_equal false, ClaudeEasy.stub(:runtime_selections_for_profile, {}) {
         ClaudeEasy.reload_recovered_safe_update_runtime(
           [{ path: path }], 1, "friend", runtime_checkpoint: checkpoint,
-          transaction: {}, client_identity: {}, generation_reader: -> { raise IOError }
+          transaction: {}, client_identity: {}, generation_reader: ->(_identity) { raise IOError }
         )
       }
 

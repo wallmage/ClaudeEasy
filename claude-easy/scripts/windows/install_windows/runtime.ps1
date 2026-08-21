@@ -105,6 +105,9 @@ function Invoke-ClashVergeReactivationShortcut([string]$Shortcut) {
     if ($mainKeyCount -ne 1 -or $virtualKeys.Count -lt 1) {
         throw "重新激活订阅快捷键无效。"
     }
+    if (-not (Test-ClashVergeRunning)) {
+        throw "Clash Verge Rev 已退出，未发送重新激活快捷键。"
+    }
     Initialize-ClaudeEasySendInput
     if (-not [ClaudeEasy.SendInputNative]::Send([uint16[]]$virtualKeys)) {
         throw "无法触发 Clash Verge Rev 重新激活订阅。"
