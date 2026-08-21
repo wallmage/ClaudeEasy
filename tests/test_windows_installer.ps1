@@ -574,6 +574,7 @@ function Invoke-TestPowerShell(
                 Json = $ScriptArguments -contains "-Json"
                 BootstrapStatusPath = $simulatedRuntimeBootstrapStatus
                 RuntimeRefreshSignalPath = $simulatedRuntimeSignal
+                RuntimePath = $runtimePath
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
@@ -581,8 +582,9 @@ function Invoke-TestPowerShell(
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'payload-decoded')
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string MarkerPath; public static bool Send(System.UInt16[] keys) { System.IO.File.WriteAllText(MarkerPath, "sent"); return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string MarkerPath; public static string RuntimePath; public static bool Send(System.UInt16[] keys) { System.IO.File.WriteAllText(MarkerPath, "sent"); System.IO.File.AppendAllText(RuntimePath, "\r\n# simulated refresh\r\n"); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::MarkerPath = [string]$payload.RuntimeRefreshSignalPath
+[ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
 [System.IO.File]::WriteAllText([string]$payload.BootstrapStatusPath, 'add-type-ok')
 $arguments = @{
     AppHome = [string]$payload.AppHome
