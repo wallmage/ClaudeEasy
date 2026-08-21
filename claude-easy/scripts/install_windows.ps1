@@ -3,7 +3,6 @@
     [string]$MihomoPath = "",
     [int]$UsageProfile = 0,
     [switch]$ShowUsageProfile,
-    [switch]$SafeUpdate,
     [switch]$BackupSubscriptions,
     [switch]$SnapshotProfiles,
     [switch]$VerifySafeUpdate,
@@ -46,7 +45,7 @@ if (-not $resultContractLoaded) {
     exit 6
 }
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
-$script:ClaudeEasyOperation = if ($SafeUpdate) { "safe_update" } elseif ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
+$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
@@ -87,7 +86,6 @@ try {
         "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
         "Get-ClashControllerContext", "Get-ClashRuntimeState", "Invoke-ClashVergeReactivationShortcut",
         "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
-        "Get-RemoteSubscriptionUpdateTargets", "Get-SubscriptionFormatUrls", "Invoke-SubscriptionCurlDownload",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateRefreshEvidence"
     )) {
@@ -120,7 +118,6 @@ if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $App
 }
 
 $requestedOperations = @(
-    [bool]$SafeUpdate,
     [bool]$BackupSubscriptions,
     [bool]$SnapshotProfiles,
     [bool]$VerifySafeUpdate,
@@ -168,7 +165,7 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SafeUpdate -or $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $BackupSubscriptions -and (
+$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
@@ -184,151 +181,6 @@ if ($needsUsageProfile) {
 
 try {
 try {
-if ($SafeUpdate) {
-    if ($savedUsageProfile -eq 0) {
-        Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
-    }
-    if ($UsageProfile -ne 0 -and $UsageProfile -ne $savedUsageProfile) {
-        Complete-InstallResult 64 "invalid_request" "usage_profile_mismatch" "请求档位与已保存档位不一致；未执行安全更新。"
-    }
-    $script:ClaudeEasyProfile = $savedUsageProfile
-    if (-not (Test-ClashVergeRunning)) {
-        throw "Clash Verge Rev 没有运行，无法加载并检查更新后的配置。"
-    }
-    if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
-    $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
-    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    $indexText = $strictUtf8.GetString($indexSnapshot.Bytes)
-    if ($indexText.Length -gt 0 -and $indexText[0] -eq [char]0xFEFF) {
-        $indexText = $indexText.Substring(1)
-    }
-    $profiles = @(Get-RemoteSubscriptionUpdateTargets $indexText $profilesDirectory)
-    $snapshots = @()
-    foreach ($profile in $profiles) {
-        $profileSnapshot = Get-OptionalFileSnapshot $profile.Path "远程订阅"
-        Backup-InitialOnce `
-            $profile.Path $backupRoot `
-            -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
-        Backup-Versioned `
-            $profile.Path $backupRoot "pre-update" `
-            -SourceBytes $profileSnapshot.Bytes -UseSourceBytes | Out-Null
-        $snapshots += [pscustomobject]@{ Profile = $profile; Snapshot = $profileSnapshot }
-    }
-    Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
-    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
-    if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
-    $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
-    Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedUsageProfile $enginePath $targetScript
-    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
-    if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
-    $vergeText = $strictUtf8.GetString($vergeSnapshot.Bytes)
-    $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
-    $runtimeBefore = Get-ClashControllerContext $runtimeConfigPath
-    $runtimeStateBefore = Get-ClashRuntimeState $runtimeBefore
-    $core = Find-MihomoCore $MihomoPath
-    Test-MihomoVersion $core | Out-Null
-    $policyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
-    $policy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($policyPath)) | ConvertFrom-Json
-    $curlCommand = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $targets = @()
-    foreach ($entry in $snapshots) {
-        $downloadedBytes = $null
-        $downloadedText = $null
-        $downloadFailure = $null
-        foreach ($downloadUrl in @(Get-SubscriptionFormatUrls ([string]$entry.Profile.Url))) {
-            try {
-                $candidateBytes = Invoke-SubscriptionCurlDownload ([string]$curlCommand.Source) $downloadUrl
-                $candidateText = $strictUtf8.GetString($candidateBytes)
-                Test-GeneratedYaml $candidateText (Split-Path -Leaf $entry.Profile.Path) | Out-Null
-                $downloadedBytes = $candidateBytes
-                $downloadedText = $candidateText
-                break
-            } catch {
-                $downloadFailure = $_
-            }
-        }
-        if ($null -eq $downloadedBytes) { throw $downloadFailure }
-        $originalText = $strictUtf8.GetString($entry.Snapshot.Bytes)
-        if ($originalText.Length -gt 0 -and $originalText[0] -eq [char]0xFEFF) {
-            $originalText = $originalText.Substring(1)
-        }
-        Assert-SubscriptionProtocolPreserved $originalText $downloadedText
-        Assert-ClaudeEasyProxyGroupCollection $downloadedText (Split-Path -Leaf $entry.Profile.Path)
-        Test-MihomoCandidate $core $downloadedText $profilesDirectory
-        $targets += [pscustomobject]@{
-            Path = $entry.Profile.Path
-            Bytes = $downloadedBytes
-            Existed = $true
-            OriginalBytes = $entry.Snapshot.Bytes
-            OriginalIdentity = $entry.Snapshot.Identity
-        }
-    }
-    foreach ($control in @(
-        [pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot; Label = "远程订阅清单" },
-        [pscustomobject]@{ Path = $targetScript; Snapshot = $scriptSnapshot; Label = "全局扩展脚本" },
-        [pscustomobject]@{ Path = $vergePath; Snapshot = $vergeSnapshot; Label = "verge.yaml" }
-    )) {
-        $current = Get-OptionalFileSnapshot $control.Path $control.Label
-        if (-not $current.Exists -or $current.Identity -cne $control.Snapshot.Identity -or
-            (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $control.Snapshot.Bytes)) {
-            throw "$($control.Label) 在更新期间发生变化。"
-        }
-    }
-    $runtimeRefreshAttempted = $false
-    $filesCommitted = $false
-    try {
-        Invoke-VerifiedFileTransaction $targets -InterruptedRecoveryPolicy "safe_update_running_client"
-        $filesCommitted = $true
-        $runtimeRefreshAttempted = $true
-        Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-        $runtimeAfter = Wait-ClashVergeRuntimeHealthy `
-            $runtimeConfigPath $runtimeBefore $runtimeStateBefore.Selections `
-            $runtimeStateBefore.TunEnabled $savedUsageProfile `
-            ([string]$curlCommand.Source) $policy
-        $indexAfter = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
-        if (-not $indexAfter.Exists) { throw "远程订阅清单在更新后消失。" }
-        $indexTextAfter = $strictUtf8.GetString($indexAfter.Bytes)
-        Assert-RemoteSubscriptionAutoUpdateDisabled $indexTextAfter | Out-Null
-    } catch {
-        $updateFailure = $_.Exception.Message
-        if (-not $filesCommitted) { throw $updateFailure }
-        $restoreTargets = @()
-        foreach ($target in $targets) {
-            $current = Get-OptionalFileSnapshot $target.Path "更新后的订阅"
-            if (-not $current.Exists -or
-                (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $target.Bytes)) {
-                throw "更新失败，且订阅同时发生变化，不能安全恢复。"
-            }
-            $restoreTargets += [pscustomobject]@{
-                Path = $target.Path
-                Bytes = $target.OriginalBytes
-                Existed = $true
-                OriginalBytes = $current.Bytes
-                OriginalIdentity = $current.Identity
-            }
-        }
-        Invoke-VerifiedFileTransaction $restoreTargets -InterruptedRecoveryPolicy "safe_update_running_client"
-        if ($runtimeRefreshAttempted) {
-            $rollbackRuntime = Get-ClashControllerContext $runtimeConfigPath
-            Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-            $rollbackAfter = Wait-ClashVergeRuntimeHealthy `
-                $runtimeConfigPath $rollbackRuntime $runtimeStateBefore.Selections `
-                $runtimeStateBefore.TunEnabled $savedUsageProfile `
-                ([string]$curlCommand.Source) $policy
-        }
-        throw "更新后的配置检查失败，已恢复原订阅：$updateFailure"
-    }
-    $updatedItems = @($profiles | ForEach-Object {
-        Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "updated"
-    })
-    Complete-InstallResult 0 "ok" "safe_update_completed" `
-        "订阅、补丁和内部运行检查已完成；当前档位的后续验收尚未完成。" `
-        @("profile_backups", "subscriptions", "runtime_config") `
-        @("global_script", "yaml", "mihomo", "runtime", "dns", "connectivity", "auto_update") `
-        $updatedItems @() $false "subscription_update" `
-        @(Get-SafeUpdateRequiredFollowups $savedUsageProfile)
-}
-
 if ($BackupSubscriptions) {
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
     $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
@@ -374,11 +226,9 @@ if ($SnapshotProfiles) {
     if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
     $snapshotContext = $null
     try {
-        $core = Find-MihomoCore $MihomoPath
         $snapshotContext = New-SafeUpdateSnapshotContext `
             $profilesIndexPath `
-            $profilesDirectory `
-            $core
+            $profilesDirectory
         $profiles = @($snapshotContext.Profiles)
         $manifestItems = @()
         foreach ($profile in $profiles) {
@@ -520,6 +370,14 @@ if ($VerifySafeUpdate) {
                 $validatedBytes = [System.IO.File]::ReadAllBytes($target[0].Path)
                 $validatedHash = Get-BytesSha256 $validatedBytes
                 $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
+                $recovery = @($recoveryItems | Where-Object { $_.Uid -eq [string]$item.Uid })
+                if ($recovery.Count -ne 1) { throw "安全更新准备记录中的订阅清单无效。" }
+                $beforeBytes = [System.IO.File]::ReadAllBytes($recovery[0].BackupPath)
+                if ((Get-BytesSha256 $beforeBytes) -ne [string]$recovery[0].BeforeSha256) {
+                    throw "安全更新前备份在验收期间发生变化。"
+                }
+                $beforeText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($beforeBytes)
+                Assert-SubscriptionProtocolPreserved $beforeText $text
                 Test-GeneratedYaml $text ([string]$item.File) | Out-Null
                 Assert-ClaudeEasyProxyGroupCollection $text ([string]$item.File)
                 Test-MihomoCandidate $core $text $profilesDirectory

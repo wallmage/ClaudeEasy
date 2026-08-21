@@ -1190,45 +1190,15 @@ test('PowerShell safe update checks installed script and proxy-group prerequisit
   );
 });
 
-test('Windows curl update reloads, checks, and restores the active runtime', () => {
+test('Windows subscription updates use snapshot, client refresh, and verification only', () => {
   const source = fs.readFileSync(installerPath, 'utf8');
-  const start = source.indexOf('\nif ($SafeUpdate) {', source.indexOf('$needsUsageProfile'));
-  const end = source.indexOf('\nif ($BackupSubscriptions) {', start);
-  const update = source.slice(start, end);
-  const backup = update.indexOf('Backup-Versioned');
-  const download = update.indexOf('Invoke-SubscriptionCurlDownload');
-  const yaml = update.indexOf('Test-GeneratedYaml');
-  const mihomo = update.indexOf('Test-MihomoCandidate');
-  const write = update.indexOf('Invoke-VerifiedFileTransaction $targets');
-  const reactivate = update.indexOf('Invoke-ClashVergeReactivationShortcut');
-  const runtime = update.indexOf('Wait-ClashVergeRuntimeHealthy');
-  const autoUpdate = update.lastIndexOf('Assert-RemoteSubscriptionAutoUpdateDisabled');
-  assert.ok(backup >= 0 && backup < download);
-  assert.ok(download < yaml && yaml < mihomo && mihomo < write);
-  assert.ok(write < reactivate && reactivate < runtime && runtime < autoUpdate);
-  assert.equal((update.match(/Wait-ClashVergeRuntimeHealthy/g) || []).length, 2);
-  assert.match(update, /\$runtimeConfigPath \$runtimeBefore \$runtimeStateBefore\.Selections/);
-  assert.match(update, /\$runtimeConfigPath \$rollbackRuntime \$runtimeStateBefore\.Selections/);
-  assert.match(update, /Invoke-VerifiedFileTransaction \$restoreTargets/);
-  assert.match(update, /已恢复原订阅/);
-  assert.doesNotMatch(update, /User-Agent|user-agent/);
-  assert.match(update, /Complete-InstallResult 0 "ok" "safe_update_completed"/);
-  assert.match(
-    update,
-    /\$updatedItems\s+@\(\)\s+\$false\s+"subscription_update"\s+`?\s*@\(Get-SafeUpdateRequiredFollowups \$savedUsageProfile\)/,
-    'successful Windows updates can stop without the saved profile follow-up checks'
-  );
-});
-
-test('Windows subscription download requests Chinese Clash formats without a User-Agent', () => {
-  const installer = fs.readFileSync(installerPath, 'utf8');
   const safeUpdate = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
-  assert.match(safeUpdate, /function Get-SubscriptionFormatUrls/);
-  assert.match(safeUpdate, /flag=clashmeta/);
-  assert.match(safeUpdate, /flag=clash/);
-  assert.match(installer, /foreach \(\$downloadUrl in @\(Get-SubscriptionFormatUrls/);
-  assert.match(safeUpdate, /header = "Accept-Language: zh-CN,zh;q=0\.9"/);
-  assert.doesNotMatch(safeUpdate, /User-Agent|user-agent/);
+  assert.doesNotMatch(source, /\[switch\]\$SafeUpdate/);
+  assert.doesNotMatch(source, /Invoke-SubscriptionCurlDownload|Get-SubscriptionFormatUrls/);
+  assert.doesNotMatch(safeUpdate, /Invoke-SubscriptionCurlDownload|Get-SubscriptionFormatUrls/);
+  assert.match(source, /if \(\$SnapshotProfiles\) \{/);
+  assert.match(source, /if \(\$VerifySafeUpdate\) \{/);
+  assert.match(source, /Assert-SubscriptionProtocolPreserved \$beforeText \$text/);
 });
 
 test('Windows runtime restoration rejects every missing previous selection', () => {
@@ -1786,9 +1756,7 @@ test('Windows installer is split into side-effect-free modules with stable funct
     ],
     'safe_update.ps1': [
       'Get-PublicBackupDescriptor', 'Get-PublicSubscriptionResult',
-      'ConvertFrom-SubscriptionScalar', 'Get-RemoteSubscriptionUpdateTargets',
-      'ConvertTo-CurlConfigValue', 'Get-SubscriptionFormatUrls',
-      'Assert-SubscriptionProtocolPreserved', 'Invoke-SubscriptionCurlDownload',
+      'ConvertFrom-SubscriptionScalar', 'Assert-SubscriptionProtocolPreserved',
       'Get-PublicBackupId', 'Get-BackupTarget',
       'Get-ClaudeEasyManagedScriptBlock',
       'Get-ClaudeEasyManagedScriptEnvelope',

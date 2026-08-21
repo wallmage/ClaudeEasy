@@ -21,7 +21,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 - 不切换订阅、代理组或节点；只在用途档位要求时，通过客户端界面切换 TUN 或 Clash 自己的系统代理。
 - 不改写第三方 PAC。AdGuard for Mac 只按策略中的已验证兼容路径，通过它自己的界面调整。
 - 只处理客户端当前存储位置中的订阅；本地和 iCloud 状态不明确时停止。
-- 每份候选都经过 YAML 重读、二次转换和 Mihomo 校验；失败保留原文件。
+- macOS 候选写入前经过 YAML 重读、二次转换和 Mihomo 校验；Windows 客户端刷新后立即验收，失败时恢复更新前备份。
 - 不安装永久监听、LaunchAgent、`WatchPaths`、计划任务或后台服务。
 - 输出不包含订阅地址、密码、UUID、私钥、控制器密钥、完整路径或节点名称。
 
@@ -114,7 +114,7 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 ## 公开命令
 
 - 查看档位：macOS `--show-profile`；Windows `-ShowUsageProfile`
-- 更新订阅：macOS `--safe-update --json`；Windows `-SafeUpdate -Json`
+- 更新订阅：macOS `--safe-update --json`；Windows `-SnapshotProfiles -Json` 先创建备份，客户端刷新后运行 Windows `-VerifySafeUpdate -Json`
 - 列出备份：macOS `--list-backups`；Windows `-ListBackups`
 - 比较备份：macOS `--compare-backup ID`；Windows `-CompareBackup ID`
 - 恢复备份：macOS `--restore-backup ID --expected-current-sha256 HASH`；Windows `-RestoreBackup ID -ExpectedCurrentSha256 HASH`
@@ -129,17 +129,17 @@ Windows 安装只在客户端本来就未运行时执行写入；客户端运行
 
 1. 提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。
 2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试；只为全部远程订阅创建更新前备份。
-3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求，Windows 使用 `curl -q --config -` 自动下载全部订阅并核对受管全局脚本；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`，并按已保存档位完成 YAML、二次转换一致性检查和 Mihomo 校验，全部候选通过后才整批写入。
-4. 两端都由已经运行的客户端原生热加载，保留原 TUN 与代理选择；任一原代理组或节点选择无法恢复时拒绝更新。随后等待补丁、DNS 和实际连接全部恢复；macOS 使用 ClashX Meta 官方更新事件，Windows 使用 Clash Verge Rev 的受管重新激活入口。候选与恢复各最多加载一次，失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
-5. 更新命令成功只是中间状态；订阅文件补丁已在安全更新中重新应用，不再次运行安装命令。Skill 按已保存档位继续客户端动作和全部验收；档位 2 继承档位 1 的站点验收，但直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。最终状态复核通过后才报告完成。
+3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 先备份；当前环境提供 Computer Use 时由代理在已经运行的 Clash Verge Rev 中进入“订阅”，确认自动更新关闭，点击顶部“更新所有订阅”。没有 Computer Use 时，Skill 给出相同步骤，用户完成后回复“我已经手动更新完了”。Windows 不使用右键菜单中的“更新”或“通过代理更新”。
+4. macOS 在写入前完成 YAML、二次转换一致性检查和 Mihomo 校验。Windows 客户端刷新会运行已安装的全局脚本，按已保存档位重新打补丁；随后逐份确认本轮刷新并检查 YAML、代理组、Mihomo、全局脚本和运行配置，失败时恢复更新前备份，成功后再次确认订阅自动更新关闭。
+5. 平台更新成功只是中间状态；Skill 在 macOS 和 Windows 上都继续当前档位的客户端动作和全部验收。档位 2 继承档位 1 的站点验收，但直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。任一原代理组或节点选择无法恢复时拒绝更新；最终状态复核通过后才报告完成。没有 Computer Use 时由用户执行界面与浏览器动作，不能省略。
 
-macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时会拒绝覆盖，其他更新仍只执行上述候选检查、运行加载和档位检查。
+macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 不直接构造订阅请求，只使用 Clash Verge Rev 的客户端原生刷新。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时不会接受本轮更新。
 
 ## 配置历史与恢复
 
 第一次运行保存初始快照，每次写入前保存带日期时间的版本。比较只输出字段名和 SHA-256，不输出配置值。恢复前再次备份当前版本，并要求当前 SHA-256 仍等于比较时结果；并发变化、文件身份变化或未完成事务会阻止覆盖。
 
-macOS 安全更新恢复当前订阅后通过同一 ClashX Meta 进程的原生事件重新加载并验收；不会直接重载 Mihomo 或修改 TUN，运行恢复失败时保留事务且同一进程不重复加载。Windows 安全更新同样使用客户端原生入口并等待完整运行状态恢复；其他受保护恢复只有客户端本来就未运行时进行。
+macOS 安全更新恢复当前订阅后通过同一 ClashX Meta 进程的原生事件重新加载并验收；不会直接重载 Mihomo 或修改 TUN，运行恢复失败时保留事务且同一进程不重复加载。Windows 由 Clash Verge Rev 原生刷新；验收失败时从更新前备份恢复订阅。其他受保护恢复只有客户端本来就未运行时进行。
 
 ## 验收
 

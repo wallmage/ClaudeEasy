@@ -1110,7 +1110,7 @@ class SkillContractTest < Minitest::Test
     assert_includes skill, "-ExpectedCurrentSha256"
   end
 
-  def test_subscription_update_uses_the_native_clashx_identity_without_a_fixed_user_agent
+  def test_subscription_update_uses_platform_native_client_refresh
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
@@ -1126,7 +1126,8 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "`Accept-Language: zh-CN,zh;q=0.9`"
       assert_includes document, "任一原代理组或节点选择无法恢复时拒绝更新"
     end
-    assert_includes readme, "Windows `-SafeUpdate -Json`"
+    assert_includes readme, "Windows `-SnapshotProfiles -Json`"
+    assert_includes readme, "Windows `-VerifySafeUpdate -Json`"
     assert_includes installer, "--safe-update"
     assert_includes skill, "--safe-update --json"
     assert_includes patcher, "--safe-update-all"
@@ -1141,13 +1142,22 @@ class SkillContractTest < Minitest::Test
       *Dir.glob(File.join(SKILL, "scripts/windows/install_windows/*.ps1")).map { |path| File.read(path) }
     ].join("\n")
     refute_match(/user-agent\s*=|--user-agent|header\s*=.*user-agent/i, windows_update_sources)
-    assert_includes windows_update_sources, "'-q --config -'"
+    refute_includes windows_update_sources, "Invoke-SubscriptionCurlDownload"
+    refute_match(/^\s*\[switch\]\$SafeUpdate,/i, File.read(File.join(SKILL, "scripts/install_windows.ps1")))
     assert_includes File.read(File.join(ROOT, "AGENTS.md")),
                     "macOS 订阅下载必须使用 Foundation 原生请求"
-    assert_includes File.read(File.join(SKILL, "references/safe-update-and-recovery.md")),
-                    "Computer Use 只用于平台更新成功后的客户端开关和浏览器验收"
+    safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+    assert_includes safe_update, "先检查当前工具列表是否提供 Computer Use"
+    assert_includes safe_update, "用 Computer Use 操作已经运行的 Clash Verge Rev"
+    assert_includes safe_update, "更新所有订阅"
+    assert_includes safe_update, "我已经手动更新完了"
+    assert_includes safe_update, ".\\scripts\\install_windows.cmd -VerifySafeUpdate -Json"
+    assert_includes safe_update, "不得使用右键菜单中的“更新”或“通过代理更新”"
     update_section = skill.split("## 更新全部订阅", 2).last.split("## 配置历史与恢复", 2).first
     assert_includes update_section, "没有 Computer Use 时"
+    assert_includes update_section, "我已经手动更新完了"
+    assert_includes update_section, "-VerifySafeUpdate -Json"
+    refute_includes update_section, "Windows 用 `curl"
   end
 
   def test_subscription_update_documents_cross_platform_completion
@@ -1198,16 +1208,21 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "相同的授权、隐私、客户端安全边界和用户可见完成条件"
     assert_includes core, "不得把两端不同的实现方式写成相同"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update --json`"
-    assert_includes safe_update, "Windows 运行 `.\\scripts\\install_windows.cmd -SafeUpdate -Json`"
+    assert_includes safe_update, "Windows 先运行 `.\\scripts\\install_windows.cmd -SnapshotProfiles -Json`"
+    assert_includes safe_update, "再运行 `.\\scripts\\install_windows.cmd -VerifySafeUpdate -Json`"
     assert_includes safe_update, "macOS 通过 Foundation 原生网络请求自动下载全部远程订阅"
-    assert_includes safe_update, "Windows 使用 `curl -q --config -`"
+    assert_includes safe_update, "Windows 通过 Clash Verge Rev 的“更新所有订阅”执行客户端原生刷新"
+    assert_includes safe_update, "当前环境没有 Computer Use"
+    assert_includes safe_update, "我已经手动更新完了"
     assert_includes safe_update, "两端都按已保存用途档位"
     assert_includes safe_update, "两端都保留更新前的 TUN 与代理组选择"
     assert_includes safe_update, "macOS 不得用 curl 下载订阅"
     assert_includes profiles_and_patch, "`profile.store-selected`"
     assert_includes profiles_and_patch, "macOS 与 Windows"
     assert_includes skill, "更新全部订阅"
-    refute_includes skill, "Windows 使用 `computer-use` Skill"
+    assert_includes skill, "Windows 使用 Computer Use"
+    assert_includes skill, "我已经手动更新完了"
+    assert_includes skill, "两端更新后都必须继续"
     assert_includes readme, "macOS 与 Windows"
     assert_includes baseline, "双平台订阅更新"
   end
@@ -2131,10 +2146,9 @@ class SkillContractTest < Minitest::Test
       windows_safe_update.index("function Get-SafeUpdateRecoveryItems")
     ]
     refute_nil snapshot_function
-    assert_includes snapshot_function,
-                    'Assert-ClaudeEasyProxyGroupCollection $profileText $file'
-    assert_includes snapshot_function,
-                    'Test-MihomoCandidate $CorePath $profileText $ProfileDirectory'
+    refute_includes snapshot_function, 'Assert-ClaudeEasyProxyGroupCollection'
+    refute_includes snapshot_function, 'Test-GeneratedYaml'
+    refute_includes snapshot_function, 'Test-MihomoCandidate'
     assert_includes snapshot_function, 'SnapshotBytes = $profileBytes'
     assert_includes snapshot_function, '$fileGuards += $indexGuard'
     assert_includes snapshot_function, '$fileGuards += $profileGuard'
@@ -2181,7 +2195,7 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_tests,
                     "newer client update timestamp"
     assert_includes windows_tests,
-                    "snapshot accepted a subscription written before the client's profiles index commit"
+                    "Windows ran subscription validation before creating the update snapshot"
     assert_includes windows_tests,
                     "legacy safe-update manifest auto-restored an untrusted backup"
     assert_includes windows_tests,
@@ -2315,7 +2329,7 @@ class SkillContractTest < Minitest::Test
                     '$InterruptedRecoveryPolicy = "client_stopped"'
     assert_includes safe_update,
                     '-InterruptedRecoveryPolicy "safe_update_running_client"'
-    assert_equal 4, installer.scan('"safe_update_running_client"').length
+    assert_equal 2, installer.scan('"safe_update_running_client"').length
     assert_includes transaction,
                     "function Test-SafeUpdateRunningRecoveryTargets("
     assert_includes transaction, '"claude-easy-safe-update.json"'

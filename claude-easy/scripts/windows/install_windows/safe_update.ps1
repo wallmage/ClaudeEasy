@@ -60,113 +60,11 @@ function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
     return $value
 }
 
-function Get-RemoteSubscriptionUpdateTargets([string]$ProfilesIndexText, [string]$Directory) {
-    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { throw "找不到订阅目录。" }
-    $items = @(
-        Get-RemoteSubscriptionProfileItems @(Split-YamlLines $ProfilesIndexText) |
-            Where-Object { $_.Type -eq "remote" }
-    )
-    if ($items.Count -eq 0) { throw "没有可更新的远程订阅。" }
-    $targets = @()
-    $targetPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($item in $items) {
-        if ([int]$item.UrlCount -ne 1) { throw "远程订阅缺少唯一地址。" }
-        $url = ConvertFrom-SubscriptionScalar ([string]$item.UrlRaw) "远程订阅地址"
-        $uri = $null
-        if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or
-            -not [string]::Equals($uri.Scheme, "https", [StringComparison]::OrdinalIgnoreCase)) {
-            throw "远程订阅地址不是 HTTPS。"
-        }
-
-        if ([int]$item.FileCount -gt 1) { throw "远程订阅存在重复 file。" }
-        if ([int]$item.FileCount -eq 1) {
-            $file = ConvertFrom-SubscriptionScalar ([string]$item.FileRaw) "远程订阅文件名"
-            if ($file -ne (Split-Path -Leaf $file) -or
-                [System.IO.Path]::GetExtension($file) -notin @(".yaml", ".yml")) {
-                throw "远程订阅文件名无效。"
-            }
-            $matches = @(Join-Path $Directory $file | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        } else {
-            $matches = @(
-                (Join-Path $Directory ($item.Uid + ".yaml")),
-                (Join-Path $Directory ($item.Uid + ".yml"))
-            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
-        }
-        if ($matches.Count -ne 1) { throw "远程订阅无法对应到唯一配置文件。" }
-        $path = (Resolve-Path -LiteralPath $matches[0]).Path
-        if (-not $targetPaths.Add($path)) { throw "多个远程订阅对应到同一配置文件。" }
-        $targets += [pscustomobject]@{
-            Uid = [string]$item.Uid
-            Name = [string]$item.Name
-            Path = $path
-            Url = $url
-        }
-    }
-    return @($targets)
-}
-
-function ConvertTo-CurlConfigValue([string]$Value) {
-    if ($Value.Contains("`r") -or $Value.Contains("`n") -or $Value.IndexOf([char]0) -ge 0) {
-        throw "远程订阅地址无效。"
-    }
-    return $Value.Replace('\', '\\').Replace('"', '\"')
-}
-
-function Get-SubscriptionFormatUrls([string]$Url) {
-    if ($Url -match '(?i)(?:\?|&)flag=') { return @($Url) }
-    $separator = if ($Url.Contains("?")) { "&" } else { "?" }
-    return @($Url, "$Url${separator}flag=clashmeta", "$Url${separator}flag=clash")
-}
-
 function Assert-SubscriptionProtocolPreserved([string]$BeforeText, [string]$CandidateText) {
     $anyTls = '(?im)\btype\s*:\s*["'']?anytls\b'
     $shadowsocks = '(?im)\btype\s*:\s*["'']?ss\b'
     if ($BeforeText -match $anyTls -and $CandidateText -notmatch $anyTls -and $CandidateText -match $shadowsocks) {
         throw "远程订阅把 AnyTLS 替换为 Shadowsocks。"
-    }
-}
-
-function Invoke-SubscriptionCurlDownload([string]$CurlPath, [string]$Url) {
-    $config = @(
-        'url = "' + (ConvertTo-CurlConfigValue $Url) + '"'
-        "silent"
-        "show-error"
-        "fail"
-        "location"
-        'header = "Accept-Language: zh-CN,zh;q=0.9"'
-        'proto = "=https"'
-        "max-time = 30"
-    ) -join "`r`n"
-    $config += "`r`n"
-
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $CurlPath
-    $startInfo.Arguments = '-q --config -'
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardInput = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $startInfo
-    $output = New-Object System.IO.MemoryStream
-    try {
-        if (-not $process.Start()) { throw "无法启动 curl.exe。" }
-        $process.StandardInput.Write($config)
-        $process.StandardInput.Close()
-        $copyTask = $process.StandardOutput.BaseStream.CopyToAsync($output)
-        $errorTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(35000)) {
-            $process.Kill()
-            throw "远程订阅下载超时。"
-        }
-        $null = $copyTask.GetAwaiter().GetResult()
-        $null = $errorTask.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 0 -or $output.Length -eq 0) { throw "远程订阅下载失败。" }
-        return ,$output.ToArray()
-    } finally {
-        $output.Dispose()
-        $process.Dispose()
     }
 }
 
@@ -463,8 +361,7 @@ function Open-SafeUpdateVersionGuard([string]$Path, [string]$Label) {
 
 function New-SafeUpdateSnapshotContext(
     [string]$ProfilesIndex,
-    [string]$ProfileDirectory,
-    [string]$CorePath
+    [string]$ProfileDirectory
 ) {
     $fileGuards = @()
     $directoryGuards = @()
@@ -486,14 +383,6 @@ function New-SafeUpdateSnapshotContext(
             $fileGuards += $profileGuard
             $directoryGuards += @($profileVersionGuard.DirectoryGuards)
             $profileBytes = Get-StreamBytes $profileGuard
-            $profileText = $strictUtf8.GetString($profileBytes)
-            if ($profileText.Length -gt 0 -and $profileText[0] -eq [char]0xFEFF) {
-                $profileText = $profileText.Substring(1)
-            }
-            $file = Split-Path -Leaf $profile.Path
-            Test-GeneratedYaml $profileText $file | Out-Null
-            Assert-ClaudeEasyProxyGroupCollection $profileText $file
-            Test-MihomoCandidate $CorePath $profileText $ProfileDirectory | Out-Null
             $snapshotProfiles += [pscustomobject]@{
                 Uid = $profile.Uid
                 Name = $profile.Name

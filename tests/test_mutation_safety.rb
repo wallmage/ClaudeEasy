@@ -1408,24 +1408,6 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_safe_update_snapshot_validation_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "claude-easy/scripts/windows/install_windows/safe_update.ps1",
-        "            Test-MihomoCandidate $CorePath $profileText $ProfileDirectory | Out-Null\n",
-        ""
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name",
-        "test_p1_recovery_and_refresh_guards_are_documented_and_exercised"
-      )
-    end
-  end
-
   def test_contract_windows_safe_update_requires_a_passive_script_envelope
     source = File.read(
       File.join(
@@ -3435,20 +3417,4 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_runtime_health_wait_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "claude-easy/scripts/install_windows.ps1",
-        "        $runtimeAfter = Wait-ClashVergeRuntimeHealthy `\n",
-        "        $runtimeAfter = Wait-ClashVergeRuntimeRefresh `\n"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        "node", "--test", "--test-name-pattern=Windows curl update reloads",
-        "tests/test_windows_patcher.js"
-      )
-    end
-  end
 end

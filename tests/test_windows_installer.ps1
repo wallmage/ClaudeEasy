@@ -611,16 +611,10 @@ function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$
 try {
     $installerSource = [System.IO.File]::ReadAllText($installer)
     $runtimeSource = [System.IO.File]::ReadAllText((Join-Path $installerModuleRoot "runtime.ps1"))
-    $safeUpdateStart = $installerSource.IndexOf('if ($SafeUpdate) {', [StringComparison]::Ordinal)
-    $backupStart = $installerSource.IndexOf('Backup-Versioned', $safeUpdateStart, [StringComparison]::Ordinal)
-    $downloadStart = $installerSource.IndexOf('$curlCommand = Get-Command curl.exe', $safeUpdateStart, [StringComparison]::Ordinal)
     Assert-True (
-        $safeUpdateStart -ge 0 -and $backupStart -gt $safeUpdateStart -and $downloadStart -gt $backupStart
-    ) "safe update did not back up every remote subscription before downloading"
-    $preDownloadSafeUpdate = $installerSource.Substring($safeUpdateStart, $downloadStart - $safeUpdateStart)
-    Assert-True (
-        -not $preDownloadSafeUpdate.Contains('Test-ClashRuntimeRequiresTun')
-    ) "safe update still required the final profile TUN state before backup and download"
+        -not $installerSource.Contains('[switch]$SafeUpdate') -and
+        -not $installerSource.Contains('Invoke-SubscriptionCurlDownload')
+    ) "Windows still exposed the cancelled direct-download update path"
     Assert-True (-not (Test-ClashRuntimeRequiresTun 1)) "profile 1 unexpectedly required TUN"
     Assert-True (Test-ClashRuntimeRequiresTun 2) "profile 2 did not require TUN"
     Assert-True (Test-ClashRuntimeRequiresTun 3) "profile 3 did not require TUN"
@@ -2702,71 +2696,6 @@ public static class FakeCurl {
                 Remove-Job $routeControllerJob -Force -ErrorAction SilentlyContinue
             }
         }
-
-        $subscriptionUpdateCase = Join-Path $sandbox "curl-subscription-update"
-        $subscriptionUpdateProfiles = Join-Path $subscriptionUpdateCase "profiles"
-        New-Item -ItemType Directory -Path $subscriptionUpdateProfiles -Force | Out-Null
-        [System.IO.File]::WriteAllText(
-            (Join-Path $subscriptionUpdateCase "profiles.yaml"),
-            @'
-items:
-- uid: R-first
-  type: remote
-  name: First
-  file: R-first.yaml
-  url: https://first.example.invalid/subscription
-  option:
-    allow_auto_update: false
-- uid: R-second
-  type: remote
-  name: Second
-  file: R-second.yml
-  url: "https://second.example.invalid/subscription?token=private"
-  option:
-    allow_auto_update: false
-'@
-        )
-        [System.IO.File]::WriteAllText((Join-Path $subscriptionUpdateProfiles "R-first.yaml"), "old first`n")
-        [System.IO.File]::WriteAllText((Join-Path $subscriptionUpdateProfiles "R-second.yml"), "old second`n")
-        $subscriptionCurlConfigPath = Join-Path $sandbox "subscription-curl-config.txt"
-        $subscriptionCurlArgsPath = Join-Path $sandbox "subscription-curl-args.txt"
-        $previousPath = $env:PATH
-        $previousSubscriptionOutput = $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT
-        $previousSubscriptionConfigPath = $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH
-        $previousSubscriptionArgsPath = $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH
-        try {
-            $env:PATH = $fakeCurlDirectory + [System.IO.Path]::PathSeparator + $previousPath
-            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT = "proxies: []`nproxy-groups: []`nrules: []`n"
-            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH = $subscriptionCurlConfigPath
-            $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $subscriptionCurlArgsPath
-            $subscriptionTargets = @(Get-RemoteSubscriptionUpdateTargets (
-                Get-Content -LiteralPath (Join-Path $subscriptionUpdateCase "profiles.yaml") -Raw
-            ) $subscriptionUpdateProfiles)
-            foreach ($subscriptionTarget in $subscriptionTargets) {
-                $downloaded = Invoke-SubscriptionCurlDownload $fakeCurlPath $subscriptionTarget.Url
-                Assert-True (
-                    [System.Text.Encoding]::UTF8.GetString($downloaded) -ceq
-                    $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT
-                ) "Windows curl subscription download returned the wrong bytes"
-            }
-            $subscriptionCurlArguments = @(Get-Content -LiteralPath $subscriptionCurlArgsPath)
-            Assert-True (
-                $subscriptionCurlArguments.Count -eq 2 -and
-                @($subscriptionCurlArguments | Where-Object { $_ -cne "-q --config -" }).Count -eq 0
-            ) "Windows subscription update did not isolate curl configuration"
-            $subscriptionCurlConfigs = @(Get-Content -LiteralPath $subscriptionCurlConfigPath | ForEach-Object {
-                [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))
-            })
-            Assert-True (
-                $subscriptionCurlConfigs.Count -eq 2 -and
-                @($subscriptionCurlConfigs | Where-Object { $_ -match '(?i)user-agent' }).Count -eq 0
-            ) "Windows subscription update added a User-Agent"
-        } finally {
-            $env:PATH = $previousPath
-            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_OUTPUT = $previousSubscriptionOutput
-            $env:CLAUDE_EASY_TEST_SUBSCRIPTION_CURL_CONFIG_PATH = $previousSubscriptionConfigPath
-            $env:CLAUDE_EASY_TEST_CURL_ARGS_PATH = $previousSubscriptionArgsPath
-        }
     }
 
     $brokenPackageRoot = Join-Path $sandbox "broken-package"
@@ -3388,7 +3317,7 @@ rules:
     Assert-True ((@($remoteTargets | ForEach-Object { $_.Path } | Sort-Object -Unique)).Count -eq 2) "distinct remote subscriptions were mapped to one file"
     $snapshotGuardContext = New-SafeUpdateSnapshotContext (
         Join-Path $safeUpdateCase "profiles.yaml"
-    ) $safeUpdateProfiles $fakeCore
+    ) $safeUpdateProfiles
     try {
         foreach ($guardedPath in @(
             (Join-Path $safeUpdateCase "profiles.yaml"),
@@ -3418,34 +3347,38 @@ rules:
         try { Get-RemoteSubscriptionTargets $caseAliasIndex $safeUpdateProfiles | Out-Null } catch { $caseAliasRejected = $true }
         Assert-True $caseAliasRejected "case-alias remote subscriptions were allowed to share one file"
     }
+    $noPrecheckSnapshotCase = Join-Path $sandbox "safe-update-snapshot-with-invalid-current-content"
+    $noPrecheckSnapshotProfiles = Join-Path $noPrecheckSnapshotCase "profiles"
+    New-Item -ItemType Directory -Path $noPrecheckSnapshotProfiles -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $noPrecheckSnapshotCase "profiles.yaml"), $profilesIndexInput)
     [System.IO.File]::WriteAllText(
-        (Join-Path $safeUpdateProfiles "R-first.yaml"),
+        (Join-Path $noPrecheckSnapshotCase "claude-easy-usage-profile.json"),
+        '{"Version":1,"Profile":1}'
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $noPrecheckSnapshotProfiles "R-first.yaml"),
         "proxy-groups: []`n"
     )
-    $racedSnapshot = Invoke-TestPowerShell $installer @(
-        "-AppHome", $safeUpdateCase,
-        "-SnapshotProfiles",
-        "-MihomoPath", $fakeCore
-    )
-    Assert-True ($racedSnapshot.ExitCode -eq 1) "snapshot accepted a subscription written before the client's profiles index commit"
-    Assert-True (-not (
-        Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json")
-    )) "rejected in-progress snapshot published a manifest"
-    $rejectedSnapshotBackups = @()
-    $rejectedSnapshotBackupRoot = Join-Path $safeUpdateCase "claude-easy-backups"
-    if (Test-Path -LiteralPath $rejectedSnapshotBackupRoot -PathType Container) {
-        $rejectedSnapshotBackups = @(
-            Get-ChildItem -LiteralPath $rejectedSnapshotBackupRoot -File |
-                Where-Object { $_.Name -like "*--pre-update--*" }
-        )
-    }
-    Assert-True (
-        $rejectedSnapshotBackups.Count -eq 0
-    ) "rejected in-progress snapshot created update backups"
     [System.IO.File]::WriteAllText(
-        (Join-Path $safeUpdateProfiles "R-first.yaml"),
-        $firstSafeOriginal
+        (Join-Path $noPrecheckSnapshotProfiles "R-second.yml"),
+        "not valid Clash YAML`n"
     )
+    $noPrecheckSnapshot = Invoke-TestPowerShell $installer @(
+        "-AppHome", $noPrecheckSnapshotCase,
+        "-SnapshotProfiles",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $noPrecheckSnapshotJson = Assert-JsonResult $noPrecheckSnapshot "install" 0
+    Assert-True (
+        $noPrecheckSnapshotJson.code -eq "snapshot_created" -and
+        (Test-Path -LiteralPath (Join-Path $noPrecheckSnapshotCase "claude-easy-safe-update.json"))
+    ) "Windows ran subscription validation before creating the update snapshot"
+    $noPrecheckBackups = @(
+        Get-ChildItem -LiteralPath (Join-Path $noPrecheckSnapshotCase "claude-easy-backups") -File |
+            Where-Object { $_.Name -like "*--pre-update--*" }
+    )
+    Assert-True ($noPrecheckBackups.Count -eq 2) "Windows did not back up every remote subscription before UI refresh"
     $snapshotResult = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-SnapshotProfiles",

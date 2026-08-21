@@ -104,11 +104,13 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 
 只有用户明确要求更新节点或订阅时执行。首次收到请求时，先提醒用户：“请确保订阅开关已打开。”部分服务的开关开启后约 10 分钟有效；用户同一条消息已经明确说“打开了”或“没问题”时直接继续，否则等用户确认。用户确认前不得读取订阅、建立备份或操作客户端。
 
-确认后严格执行：更新前不运行任何测试；macOS 运行 `bash scripts/install_macos.sh --safe-update --json`，Windows 运行 `.\scripts\install_windows.cmd -SafeUpdate -Json`；两端都先为全部远程订阅创建更新前备份。macOS 通过 Foundation 原生网络请求下载，请求身份从当前运行的 ClashX Meta 动态生成；Windows 用 `curl -q --config -` 下载；两端都发送 `Accept-Language: zh-CN,zh;q=0.9`。两端都按已保存档位完成 YAML 重读、二次转换一致性检查、Mihomo 校验、整批写入、当前订阅加载和档位运行检查；内部运行检查只保留更新前 TUN 状态，档位最终要求由后续客户端动作验收。任一原代理组或节点选择无法恢复时拒绝更新。Windows 由 Clash Verge Rev 的受管重新激活入口执行全局脚本。失败时恢复原订阅和原运行配置，成功后再次确认订阅自动更新关闭。
+确认后严格执行：更新前不运行任何测试。macOS 运行 `bash scripts/install_macos.sh --safe-update --json`；Windows 先运行 `.\scripts\install_windows.cmd -SnapshotProfiles -Json`，只为全部远程订阅创建更新前备份和本轮验收记录。macOS 继续使用 Foundation 原生请求完成下载、补丁和内部运行检查，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 使用 Computer Use 操作已经运行的 Clash Verge Rev：进入“订阅”，确认自动更新关闭，点击顶部“更新所有订阅”，等待本轮刷新结束；不得使用右键菜单中的“更新”或“通过代理更新”。
 
-`safe_update_completed` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups` 中的每一项，再做最终状态复核，不得提前输出最终说明。安全更新已经重新应用订阅文件补丁，不得再次运行安装命令；这里只继续首次 Patch 中的平台客户端动作和全部验收。档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接开启 TUN 并关闭 Clash 自己的系统代理；档位 3 继承档位 2，再完成完整分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。没有 Computer Use 时，客户端开关与浏览器验收保持“未验证”，不得宣称任务完整完成。只有当前档位规定的全部验收都取得本轮通过结果，才算更新任务完成。
+Windows 先检查当前工具列表是否提供 Computer Use；没有该工具，或首次调用失败时，不重试，立即把上述界面步骤交给用户，并要求操作完成后回复“我已经手动更新完了”。收到该回复后运行 `.\scripts\install_windows.cmd -VerifySafeUpdate -Json`；客户端刷新会通过已安装的全局脚本按已保存档位重新应用补丁，验收命令逐份检查本轮刷新、YAML、代理组、Mihomo 校验、全局脚本、运行配置和自动更新关闭状态。Windows 使用 Computer Use 自动刷新成功时也必须运行同一验收命令，不能直接结束。
 
-macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能按当前运行客户端动态生成原生请求身份。Windows 固定使用 `curl -q --config -`，不读取用户 curl 配置，也不设置 User-Agent。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝覆盖。平台下载命令内部不追加 WebRTC 或区域指纹检查；命令返回后仍按已保存档位完成任务验收。
+`safe_update_completed`、`safe_update_verified` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups` 中的每一项，再做最终状态复核，不得提前输出最终说明。两端更新后都必须继续首次 Patch 中的平台客户端动作和全部验收；安全更新已经重新应用订阅文件补丁，不得再次运行安装命令。档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接开启 TUN 并关闭 Clash 自己的系统代理；档位 3 继承档位 2，再完成完整分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。没有 Computer Use 时不能省略这些步骤：把必须由界面或浏览器完成的动作逐项交给用户并读取结果；未验证项目不得宣称完成。最终状态复核必须再次确认订阅自动更新关闭；任一原代理组或节点选择无法恢复时拒绝更新。只有当前档位规定的全部验收都取得本轮通过结果，才算更新任务完成。
+
+macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能按当前运行客户端动态生成原生请求身份。Windows 不直接下载订阅，只调用 Clash Verge Rev 的客户端原生刷新。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝接受本轮更新。平台命令内部不追加 WebRTC 或区域指纹检查；命令返回后仍按已保存档位完成任务验收。
 
 ## 配置历史与恢复
 

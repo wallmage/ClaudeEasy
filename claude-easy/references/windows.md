@@ -4,7 +4,9 @@
 
 ## Windows
 
-当前订阅更新按 `safe-update-and-recovery.md` 运行 `.\scripts\install_windows.cmd -SafeUpdate -Json`；更新前不运行测试，只先备份，再用 `curl -q --config -` 自动下载，发送 `Accept-Language: zh-CN,zh;q=0.9`，不得设置 User-Agent。下载候选必须通过严格 UTF-8、YAML、代理组和 Mihomo 检查；整批写入后通过受管的“重新激活订阅”全局快捷入口让 Clash Verge Rev 执行当前用途档位的全局脚本。每轮更新只触发一次候选重新激活；失败恢复原订阅后只再触发一次恢复重新激活，不能循环重试。运行配置文件变化只是开始信号，必须继续按条件等待 `profile.store-selected`、原 TUN 与代理选择、全部受管规则及顺序、规则提供器全部字段、直连 DNS、实际连接和真实代理路径全部恢复；任一原代理组或节点选择无法恢复时拒绝更新，缺失目标不能算通过。内部运行检查保持更新前 TUN 状态；档位 2、3 的 TUN 开启要求在 `required_followups` 的客户端动作和验收中完成。任一步失败时整批恢复原订阅并重新激活原运行配置；成功后再次确认全部远程订阅的 `allow_auto_update` 都是 `false`。该回执仍是中间状态，必须继续按已保存档位完成客户端动作、全部验收和最终状态复核。`-SnapshotProfiles`、`-VerifySafeUpdate` 及相关清单只用于兼容旧流程，不得用于新的订阅更新；兼容流程同样不得在订阅刷新前加入测试。
+当前订阅更新按 `safe-update-and-recovery.md` 分两段运行：刷新前执行 `.\scripts\install_windows.cmd -SnapshotProfiles -Json`，只创建全部远程订阅的更新前备份和验收记录，不运行订阅内容、Mihomo、站点、分流、DNS、WebRTC 或区域指纹测试；刷新后执行 `.\scripts\install_windows.cmd -VerifySafeUpdate -Json`。当前工具列表提供 Computer Use 时，由代理操作已经运行的 Clash Verge Rev，进入“订阅”，确认自动更新关闭并点击顶部“更新所有订阅”；没有 Computer Use 或首次调用失败时，立即给用户相同的手动步骤，等待用户回复“我已经手动更新完了”后再验收。不得使用右键菜单中的“更新”或“通过代理更新”。
+
+Clash Verge Rev 刷新订阅时运行 `profiles/Script.js`，按已保存档位重新应用全局补丁。刷新后的验收逐份确认本轮更新凭据，核对受管全局脚本、严格 UTF-8、YAML、代理组、Mihomo 和全部远程订阅的 `allow_auto_update: false`；失败时按更新前备份恢复。验收成功仍只是中间状态，必须继续完成与 macOS 相同的当前档位 `required_followups`、客户端动作、站点与 Agent 验收、档位 3 分流/DNS/WebRTC/区域指纹测试和最终状态复核。没有 Computer Use 只改为让用户执行界面与浏览器动作，不能省略任何项目；任一原代理组或节点选择无法确认保留时不得报告完成。
 
 `profiles.yaml` 的远程订阅项目允许 `option` 出现在列表项首字段或后续字段；两种位置都必须记录唯一字段位置和原始形态。重复 `option`、重复 `allow_auto_update` 或无法唯一归属的嵌套结构必须在候选写入前拒绝，不能追加第二份字段。
 
