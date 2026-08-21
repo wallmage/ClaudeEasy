@@ -139,6 +139,9 @@ jobs:
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
         with:
           ruby-version: "3.3"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
       - name: Safety mutation checks
         run: ruby tests/test_mutation_safety.rb
 
@@ -162,6 +165,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
       - name: Ruby regressions on the production runtime
         run: /usr/bin/ruby tests/test_macos_patcher.rb
       - name: Contract regressions on the production runtime

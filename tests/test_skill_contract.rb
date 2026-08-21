@@ -2960,6 +2960,11 @@ class SkillContractTest < Minitest::Test
       assert_includes job, "needs: scope"
       assert_includes job, "if: needs.scope.outputs.#{platform} == 'true'"
     end
+    %w[macos-mutation macos-production-runtime].each do |job_name|
+      job = workflow[/^  #{Regexp.escape(job_name)}:\n(?:(?!^  \S).*\n)*/]
+      assert_includes job, "uses: actions/setup-node@", job_name
+      assert_includes job, 'node-version: "22"', job_name
+    end
   end
 
   def test_github_actions_shell_fields_are_static
