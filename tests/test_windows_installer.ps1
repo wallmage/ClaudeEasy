@@ -4577,6 +4577,7 @@ rules:
     $internalRestoreResult = Invoke-TestPowerShell $installer @(
         "-AppHome", $internalRestoreCase,
         "-RestoreBackup", (Split-Path -Leaf $internalUsageBackup),
+        "-ExpectedCurrentSha256", (Get-BytesSha256 $internalUsageBeforeRestore),
         "-MihomoPath", $fakeCore
     )
     Assert-True ($internalRestoreResult.ExitCode -eq 1) "public backup restore accepted an internal state file"
