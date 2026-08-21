@@ -5419,7 +5419,7 @@ class MacosPatcherTest < Minitest::Test
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'response.URL.absoluteString'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    "primaryApplications.count + alternateApplications.count !== 1"
+                    "Number(primaryApplications.count) + Number(alternateApplications.count) !== 1"
     refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "Alamofire/"
 
     status = Struct.new(:success?).new(true)
@@ -5437,6 +5437,69 @@ class MacosPatcherTest < Minitest::Test
     assert_raises(ClaudeEasy::InvalidConfigError) do
       ClaudeEasy.fetch_remote_subscription({ name: "missing-url" })
     end
+  end
+
+  def test_clashx_native_request_treats_bridged_application_counts_as_numbers
+    lines = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT.lines
+    count_check = lines.select do |line|
+      line.include?("primaryApplications =") ||
+        line.include?("alternateApplications =") ||
+        line.include?("ClashX Meta process is not unique")
+    end.join
+    count_check.sub!(/var primaryApplications = .*;/, 'var primaryApplications = {count: "1"};')
+    count_check.sub!(/var alternateApplications = .*;/, 'var alternateApplications = {count: "0"};')
+    script = <<~JAVASCRIPT
+      function fail(message) { throw new Error(message); }
+      #{count_check}
+      "unique";
+    JAVASCRIPT
+
+    stdout, stderr, status = Open3.capture3(
+      "/usr/bin/osascript", "-l", "JavaScript", "-e", script
+    )
+
+    assert status.success?, stderr
+    assert_equal "unique\n", stdout
+  end
+
+  def test_clashx_native_request_selects_the_nonempty_application_list_with_bridged_counts
+    selection = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT[/var application = .*?alternateApplications\.objectAtIndex\(0\);/m]
+    script = <<~JAVASCRIPT
+      var primaryApplications = {count: "1", objectAtIndex: function(index) { return "primary"; }};
+      var alternateApplications = {count: "0", objectAtIndex: function(index) { return "alternate"; }};
+      #{selection}
+      application;
+    JAVASCRIPT
+
+    stdout, stderr, status = Open3.capture3(
+      "/usr/bin/osascript", "-l", "JavaScript", "-e", script
+    )
+
+    assert status.success?, stderr
+    assert_equal "primary\n", stdout
+  end
+
+  def test_clashx_native_request_accepts_an_objective_c_nil_error
+    error_check = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT.lines.find do |line|
+      line.include?("redirectRejected || !finished")
+    end
+    script = <<~JAVASCRIPT
+      function fail(message) { throw new Error(message); }
+      var redirectRejected = false;
+      var finished = true;
+      var requestError = {isNil: function() { return true; }};
+      var data = {};
+      var response = {};
+      #{error_check}
+      "accepted";
+    JAVASCRIPT
+
+    stdout, stderr, status = Open3.capture3(
+      "/usr/bin/osascript", "-l", "JavaScript", "-e", script
+    )
+
+    assert status.success?, stderr
+    assert_equal "accepted\n", stdout
   end
 
   def test_update_candidate_rejects_encoding_transform_and_validation_failures

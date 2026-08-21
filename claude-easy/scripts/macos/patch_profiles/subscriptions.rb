@@ -34,8 +34,8 @@ module ClaudeEasy
 
     var primaryApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.metacubex.ClashX.meta");
     var alternateApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.MetaCubeX.ClashX.meta");
-    if (primaryApplications.count + alternateApplications.count !== 1) fail("ClashX Meta process is not unique");
-    var application = primaryApplications.count === 1 ?
+    if (Number(primaryApplications.count) + Number(alternateApplications.count) !== 1) fail("ClashX Meta process is not unique");
+    var application = Number(primaryApplications.count) === 1 ?
       primaryApplications.objectAtIndex(0) : alternateApplications.objectAtIndex(0);
 
     var bundle = $.NSBundle.bundleWithURL(application.bundleURL);
@@ -99,7 +99,7 @@ module ClaudeEasy
       $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
     }
     session.finishTasksAndInvalidate;
-    if (redirectRejected || !finished || requestError || !data || !response) fail("subscription request failed");
+    if (redirectRejected || !finished || (requestError && !requestError.isNil()) || !data || !response) fail("subscription request failed");
     var finalURL = unwrap(response.URL.absoluteString);
     if (!finalURL || !finalURL.match(/^https:\/\//)) fail("subscription request failed");
     var statusCode = Number(response.statusCode);
