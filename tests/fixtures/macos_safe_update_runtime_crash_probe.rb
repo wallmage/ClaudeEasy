@@ -36,7 +36,7 @@ requester = lambda do |_socket, method, endpoint, body = nil|
   case [method, endpoint]
   when ["GET", "/proxies"]
     [200, JSON.generate("proxies" => {
-      "Main" => { "type" => "Selector", "now" => "Taiwan" }
+      "Main" => { "type" => "Selector", "now" => "台湾家宽 01" }
     })]
   when ["GET", "/configs"]
     [200, JSON.generate("tun" => { "enable" => true })]
