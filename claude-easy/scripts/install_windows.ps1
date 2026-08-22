@@ -359,7 +359,8 @@ if ($BeginSafeUpdateRefresh) {
     if (-not $manifestSnapshot.Exists) { throw "没有找到本次安全更新的准备记录。" }
     $manifestText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($manifestSnapshot.Bytes)
     $manifest = $manifestText | ConvertFrom-Json
-    if (($manifest.PSObject.Properties.Name | Sort-Object) -join "," -cne
+    $manifestProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
+    if (($manifestProperties -join ",") -cne
             "CreatedAt,Profiles,RefreshStartedAt,Runtime,UpdateDispatchCommittedFor,Version" -or
         -not ($manifest.Version -is [int] -or $manifest.Version -is [long]) -or
         [long]$manifest.Version -ne 4 -or
