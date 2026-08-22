@@ -4780,6 +4780,10 @@ rules:
         $indexConcurrentManifestBefore = [System.IO.File]::ReadAllBytes(
             $indexConcurrentManifestPath
         )
+        $indexConcurrentManifestBeforeJson = (
+            [System.Text.Encoding]::UTF8.GetString($indexConcurrentManifestBefore) |
+                ConvertFrom-Json
+        )
         $profilesIndexBeforeConcurrentVerify = [System.IO.File]::ReadAllBytes(
             (Join-Path $safeUpdateCase "profiles.yaml")
         )
@@ -4804,11 +4808,18 @@ rules:
             (Get-TreeContentSnapshot $safeUpdateProfiles) -ceq
                 $indexConcurrentProfilesBefore
         ) "concurrent profiles index change overwrote valid refreshed subscriptions"
+        $indexConcurrentManifestAfterJson = (
+            [System.IO.File]::ReadAllText($indexConcurrentManifestPath) |
+                ConvertFrom-Json
+        )
         Assert-True (
-            [Convert]::ToBase64String(
-                [System.IO.File]::ReadAllBytes($indexConcurrentManifestPath)
-            ) -eq [Convert]::ToBase64String($indexConcurrentManifestBefore)
-        ) "concurrent profiles index change consumed or rewrote the recovery manifest"
+            [long]$indexConcurrentManifestAfterJson.Version -eq 4 -and
+            (Test-SafeUpdateActivationRecord $indexConcurrentManifestAfterJson.UpdateDispatchCommittedFor) -and
+            (($indexConcurrentManifestAfterJson.Profiles | ConvertTo-Json -Compress -Depth 7) -ceq
+                ($indexConcurrentManifestBeforeJson.Profiles | ConvertTo-Json -Compress -Depth 7)) -and
+            (($indexConcurrentManifestAfterJson.Runtime | ConvertTo-Json -Compress -Depth 7) -ceq
+                ($indexConcurrentManifestBeforeJson.Runtime | ConvertTo-Json -Compress -Depth 7))
+        ) "concurrent profiles index change did not preserve the recovery manifest and one-shot dispatch record"
         [System.IO.File]::WriteAllBytes(
             (Join-Path $safeUpdateCase "profiles.yaml"),
             $profilesIndexBeforeConcurrentVerify
