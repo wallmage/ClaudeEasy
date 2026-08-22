@@ -40,7 +40,7 @@ else
       selected["macos_probes"] = true
     when "tests/run_macos_mihomo_validation.rb"
       selected["macos_mihomo"] = true
-    when "claude-easy/scripts/windows/verify_routes.ps1"
+    when "claude-easy/scripts/windows/verify_routes.ps1", "tests/test_windows_routes.ps1"
       selected["windows_routes"] = true
     when "claude-easy/scripts/windows/clash_verge_global.js", "tests/test_windows_patcher.js"
       %w[windows_engine windows_mihomo].each { |name| selected[name] = true }

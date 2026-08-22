@@ -19,6 +19,7 @@ class CiScopeTest < Minitest::Test
       %w[macos_core macos_probes macos_mutation],
     ["claude-easy/scripts/install_macos.sh"] => %w[macos_wrappers],
     ["claude-easy/scripts/windows/verify_routes.ps1"] => %w[windows_routes],
+    ["tests/test_windows_routes.ps1"] => %w[windows_routes],
     ["claude-easy/scripts/windows/install_windows/transaction.ps1"] =>
       %w[windows_core windows_mutation],
     ["claude-easy/scripts/windows/clash_verge_global.js"] =>
@@ -39,6 +40,7 @@ class CiScopeTest < Minitest::Test
   end
 
   def test_routes_each_path_to_only_its_affected_jobs
+    assert File.file?(File.join(ROOT, "tests/test_windows_routes.ps1")), "missing focused Windows route suite"
     CASES.each do |paths, expected|
       assert_equal expected.sort, selected_outputs(*paths), paths.join(", ")
     end
