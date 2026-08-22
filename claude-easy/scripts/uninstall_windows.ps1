@@ -117,8 +117,8 @@ if ($unboundArguments.Count -gt 0) {
 }
 
 function Complete-RunningClientUninstall {
-    Write-Info "客户端保持运行；本次没有修改任何受保护文件或状态，已生成的安全备份继续保留。以后检测到客户端未运行时，可再次执行安全卸载。"
-    Complete-UninstallResult 1 "partial" "client_running" "客户端保持运行，本次卸载未修改受保护文件或状态。" @() @("以后检测到客户端未运行时，可再次执行安全卸载。")
+    Write-Info "客户端保持运行；安全卸载按安全边界延期，本次没有修改任何受保护文件或状态，已生成的安全备份继续保留。"
+    Complete-UninstallResult 1 "partial" "client_running" "客户端保持运行；安全卸载按安全边界延期，本次未修改受保护文件或状态。"
 }
 
 function Complete-PendingSafeUpdateUninstall {

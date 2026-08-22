@@ -67,7 +67,6 @@ module ClaudeEasy
 
   def cli_requires_outer_lock?(options)
     return false if options[:disable_subscription_auto_update] ||
-                    options[:enable_subscription_auto_update] ||
                     options[:restore_owned_subscription_auto_update] ||
                     options[:list_backups] || options[:compare_backup]
     return true if options[:snapshot_initial] || options[:recover_profile_transaction] ||
@@ -259,7 +258,6 @@ module ClaudeEasy
       print_subscription_auto_update_state: false,
       print_auto_update_ownership_state: false,
       disable_subscription_auto_update: false,
-      enable_subscription_auto_update: false,
       restore_owned_subscription_auto_update: false,
       snapshot_initial: false,
       list_backups: false,
@@ -289,7 +287,6 @@ module ClaudeEasy
       opts.on("--print-subscription-auto-update-state", "输出订阅自动更新状态") { options[:print_subscription_auto_update_state] = true }
       opts.on("--print-auto-update-ownership-state", "输出订阅自动更新所有权状态") { options[:print_auto_update_ownership_state] = true }
       opts.on("--disable-subscription-auto-update", "关闭订阅自动更新并回读确认") { options[:disable_subscription_auto_update] = true }
-      opts.on("--enable-subscription-auto-update", "恢复订阅自动更新并回读确认") { options[:enable_subscription_auto_update] = true }
       opts.on("--restore-owned-subscription-auto-update", "只恢复本工具关闭的订阅自动更新") { options[:restore_owned_subscription_auto_update] = true }
       opts.on("--snapshot-initial", "为当前存储位置创建一次初始快照") { options[:snapshot_initial] = true }
       opts.on("--list-backups", "按时间倒序列出可用备份") { options[:list_backups] = true }
@@ -327,7 +324,7 @@ module ClaudeEasy
     explicit_operations = [
       options[:print_tun_state], options[:print_core_status],
       options[:print_subscription_auto_update_state], options[:print_auto_update_ownership_state],
-      options[:disable_subscription_auto_update], options[:enable_subscription_auto_update],
+      options[:disable_subscription_auto_update],
       options[:restore_owned_subscription_auto_update], options[:snapshot_initial],
       options[:list_backups], options[:compare_backup], options[:restore_backup],
       options[:safe_update_all], options[:reconcile_client_switches],
@@ -584,16 +581,6 @@ module ClaudeEasy
         warn safe_label(error.message)
         return 1
       end
-    end
-
-    if options[:enable_subscription_auto_update]
-      return emit_cli_result(
-        operation: "enable_subscription_auto_update", exit_code: 64,
-        status: "invalid_request", code: "internal_operation_required",
-        summary_zh: "订阅自动更新只能按本工具的所有权记录恢复。"
-      ) if options[:json]
-      warn "订阅自动更新只能按本工具的所有权记录恢复。"
-      return 64
     end
 
     if options[:restore_owned_subscription_auto_update]
@@ -956,10 +943,20 @@ module ClaudeEasy
       return 1
     end
     operation_succeeded = results.all? { |result| %i[updated unchanged].include?(result[:status]) }
+    recovery_pending = results.any? { |result| result[:status] == :reload_failed_restore_pending }
     mark_wrapper_commit_receipt(options) if operation_succeeded
     if options[:json]
       status, code, summary = batch_json_status(results)
-      exit_code = %w[ok no_change].include?(status) ? 0 : 1
+      if recovery_pending
+        status = "partial"
+        code = "profile_recovery_pending"
+        summary = "配置或运行内核仍待恢复；必须保留当前档位并在下次运行时继续恢复。"
+      end
+      exit_code = if recovery_pending
+                    PROFILE_COMMIT_STATE_UNCERTAIN_EXIT
+                  else
+                    %w[ok no_change].include?(status) ? 0 : 1
+                  end
       return emit_cli_result(
         operation: options[:dry_run] ? "preview_profiles" : "patch_profiles", exit_code: exit_code,
         status: status, code: code, summary_zh: summary,
@@ -968,6 +965,8 @@ module ClaudeEasy
       )
     end
     results.each { |result| puts chinese_status(result) }
+    return PROFILE_COMMIT_STATE_UNCERTAIN_EXIT if recovery_pending
+
     operation_succeeded ? 0 : 1
   rescue OptionParser::ParseError => error
     return emit_cli_result(
@@ -1034,6 +1033,21 @@ module ClaudeEasy
     warn "配置提交状态无法确认；必须保留当前档位并在下次运行时恢复。"
     PROFILE_COMMIT_STATE_UNCERTAIN_EXIT
   rescue StandardError => error
+    recovery_pending = begin
+      !options[:dry_run] && profile_transaction_pending?(options[:backup_root])
+    rescue StandardError
+      false
+    end
+    if recovery_pending
+      return emit_cli_result(
+        operation: "patch_profiles", exit_code: PROFILE_COMMIT_STATE_UNCERTAIN_EXIT,
+        status: "partial", code: "profile_recovery_pending",
+        summary_zh: "配置恢复尚未完成；必须保留当前档位并在下次运行时继续恢复。",
+        profile: options[:usage_profile]
+      ) if json_mode
+      warn "配置恢复尚未完成；必须保留当前档位并在下次运行时继续恢复。"
+      return PROFILE_COMMIT_STATE_UNCERTAIN_EXIT
+    end
     return emit_cli_result(
       operation: "patch_profiles", exit_code: 1, status: "failed", code: "unexpected_error",
       summary_zh: "ClaudeEasy 运行失败。"

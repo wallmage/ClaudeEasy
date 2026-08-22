@@ -1123,6 +1123,11 @@ test('PowerShell installer uses the documented global script and app settings', 
   assert.match(source, /profiles[\\/]Script\.js/);
   assert.match(source, /enable_tun_mode/);
   assert.match(source, /enable_dns_settings/);
+  assert.ok(
+    source.indexOf('Set-YamlTopLevelScalar $vergeOutput "enable_dns_settings" "false"') <
+      source.indexOf('if ($resolvedUsageProfile -ne 3) {'),
+    'all Windows profiles must disable the Clash DNS overlay',
+  );
   assert.match(source, /config\.yaml/);
   assert.match(source, /\.backup/);
   assert.match(source, /[\p{Script=Han}]/u);
@@ -1300,6 +1305,8 @@ test('Windows verification and restore fail closed on stale or unsafe state', ()
   assert.doesNotMatch(safeUpdate, /\$conflicts \+= \$recovery\.File|\$failures \+= \$recovery\.File/);
   assert.match(fs.readFileSync(routeVerifierPath, 'utf8'), /Assert-NoCaseInsensitiveJsonKeyCollisions \$content[\s\S]*ConvertFrom-Json/);
   assert.match(safeUpdate, /function Test-RestoreCandidate\([^)]*\[int\]\$UsageProfile\)/);
+  assert.match(safeUpdate, /OpenSharedRead\(\$Path\)/);
+  assert.match(safeUpdate, /candidateTypes -contains "shadowsocks"/);
   assert.match(safeUpdate, /UsageProfile -lt 3[\s\S]*tun\.enable/);
   assert.match(runtime, /FieldOffset\(0\).*MOUSEINPUT mouse[\s\S]*struct MOUSEINPUT/);
   assert.match(refresh, /GetLastWriteTimeUtc\(\$RuntimePath\)\.Ticks -gt \$previousLastWriteTicks/);
@@ -1769,6 +1776,10 @@ test('Windows installation fails closed and preserves exact restore state', () =
   assert.match(installer, /function Test-ClashVergeRunning/);
   assert.match(installer, /if \(\$clientRunning\)[\s\S]*client_running_profile_three_deferred[\s\S]*client_running_auto_update_deferred/);
   assert.doesNotMatch(installer, /installed_running_client/);
+  assert.match(
+    installer,
+    /profileSource -eq "environment"[\s\S]*savedUsageProfile -ne 0[\s\S]*usage_profile_mismatch/,
+  );
   assert.match(installer, /WaitForExit\(\$TimeoutSeconds \* 1000\)/);
   assert.match(installer, /\$process\.Kill\(\)/);
   assert.doesNotMatch(installer, /Get-Process -Name "verge-mihomo"/);

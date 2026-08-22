@@ -186,8 +186,9 @@ test("the detector is one self-contained HTML file with only disclosed network p
   assert.doesNotMatch(csp[1], /\bnavigate-to\b/);
   assert.match(
     source,
-    /Copyright \(c\) 2026 LinXiaoTao \(https:\/\/github\.com\/LinXiaoTao\/FuckClaude\)/,
+    /Copyright \(c\) 2026 LinXiaoTao \(https:\/\/github\.com\/LinXiaoTao\)/,
   );
+  assert.doesNotMatch(source, /FuckClaude/);
   assert.match(source, /MIT License/);
   assert.doesNotMatch(source, /\b(?:src|href)\s*=/i);
   assert.deepEqual(

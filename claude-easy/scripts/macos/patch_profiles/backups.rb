@@ -243,7 +243,8 @@ module ClaudeEasy
       (before.keys | after.keys).map(&:to_s).sort.each do |key|
         break if output.length >= limit
         public_key = if %w[
-          proxy-providers rule-providers hosts dns.hosts dns.nameserver-policy script.shortcuts
+          proxies proxy-groups proxy-providers rule-providers hosts
+          dns.hosts dns.nameserver-policy script.shortcuts
         ].include?(prefix)
                        "[item]"
                      else

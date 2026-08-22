@@ -80,7 +80,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 
 用户可以随时改档；升档只补新增能力。档位 3 降到 1 或 2 时先安全卸载：macOS `bash scripts/uninstall_macos.sh`，Windows `.\scripts\uninstall_windows.cmd`。Windows 卸载返回 `partial` 时保留旧档位且不得继续降档。
 
-共同基线问题可以调用已保存档位的平台安装入口，因为三个档位都包含这项能力；档位 1、2 不能因此获得档位 3 增强。与共同基线无关的单项 Clash 配置修复仍留在 Diagnostics：macOS 使用策略中的单项配置事务；Windows 当前没有安全的即时单项配置写入路径。**Patch 专用验收（Diagnostics 不固定执行）**只在 Patch 或相关能力确实被修改时运行。
+共同基线问题可以调用已保存档位的平台安装入口，因为三个档位都包含这项能力；档位 1、2 不能因此获得档位 3 增强。与共同基线无关的单项 Clash 配置问题仍留在 Diagnostics；两端当前都没有公开的通用即时单项写入入口。**Patch 专用验收（Diagnostics 不固定执行）**只在 Patch 或相关能力确实被修改时运行。
 
 ## 平台入口
 
@@ -90,7 +90,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 bash scripts/install_macos.sh --profile N
 bash scripts/uninstall_macos.sh
 ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json
-ruby scripts/macos/patch_profiles.rb --usage-profile N --json
+ruby scripts/macos/verify_routes.rb
 ```
 
 Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载不通过本地控制器。
@@ -100,6 +100,7 @@ Patch 与 macOS 订阅更新的运行加载仍遵守平台策略；订阅下载�
 ```powershell
 .\scripts\install_windows.cmd -UsageProfile N
 .\scripts\uninstall_windows.cmd
+powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1
 ```
 
 平台安装脚本只完成安全的文件事务。脚本成功不等于档位完成；macOS 随后运行原生开关协调命令，Windows 按平台策略完成客户端开关与验收。

@@ -104,7 +104,9 @@ function Get-RedactedYamlChangedPaths([string]$Before, [string]$After) {
     if ($changes.Count -eq 0) { return @("无法安全识别的配置区域") }
     return @($changes | ForEach-Object {
         $parts = @([string]$_ -split '\.')
-        if ($parts.Count -gt 1 -and $parts[0] -in @("proxy-providers", "rule-providers", "hosts")) {
+        if ($parts.Count -gt 1 -and $parts[0] -in @(
+            "proxies", "proxy-groups", "proxy-providers", "rule-providers", "hosts"
+        )) {
             $parts[1] = "[item]"
         } elseif ($parts.Count -gt 2 -and $parts[0] -eq "dns" -and
             $parts[1] -in @("hosts", "nameserver-policy")) {

@@ -548,6 +548,26 @@ namespace ClaudeEasy
             return handle;
         }
 
+        public static SafeFileHandle OpenSharedRead(string path)
+        {
+            SafeFileHandle handle = CreateFile(
+                path,
+                GenericRead,
+                FileShareRead,
+                IntPtr.Zero,
+                OpenExisting,
+                OpenReparsePoint,
+                IntPtr.Zero
+            );
+            if (handle.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw new Win32Exception(error, "无法打开只读版本锁。");
+            }
+            return handle;
+        }
+
         public static SafeFileHandle OpenDirectory(string path)
         {
             SafeFileHandle handle = CreateFile(

@@ -1248,7 +1248,8 @@ class SkillContractTest < Minitest::Test
       refute_includes document, "Windows 不追加连通性检查"
     end
     assert_includes skill, "必须继续完成 `required_followups` 中的每一项"
-    assert_includes skill, "ruby scripts/macos/patch_profiles.rb --usage-profile N --json"
+    assert_includes skill, "ruby scripts/macos/verify_routes.rb"
+    assert_includes skill, "scripts/windows/verify_routes.ps1"
     refute_includes skill, "ruby scripts/macos/patch_profiles.rb --json"
     assert_includes skill, "安全更新已经重新应用订阅文件补丁，不得再次运行安装命令"
     assert_includes skill, "档位 2 不执行档位 1 的系统代理开启动作"
@@ -1270,7 +1271,8 @@ class SkillContractTest < Minitest::Test
     refute_includes policy, "区域指纹重扫"
 
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
-    assert_includes diagnostics, "候选检查、现行 Patch、运行加载、档位检查和自动更新关闭复查"
+    assert_includes diagnostics, "已保存档位的全部 `required_followups` 与验收"
+    assert_includes diagnostics, "最终状态和自动更新关闭复查"
     refute_includes diagnostics, "全部远程订阅都进入已验证成功、已恢复或明确失败状态"
   end
 
@@ -1573,10 +1575,10 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "不得把完整 Patch 伪装成单项修复"
     assert_includes skill, "Patch 专用验收"
     assert_includes skill, "Diagnostics 不固定执行"
-    assert_includes skill, "单项 Clash 配置修复仍留在 Diagnostics"
+    assert_includes skill, "单项 Clash 配置问题仍留在 Diagnostics"
     assert_includes policy, "只有用户明确要求完整安全增强时才进入 Patch"
-    assert_includes policy, "macOS 单项配置事务"
-    assert_includes policy, "保留 Fake-IP 映射，只清除 DNS 缓存"
+    assert_includes policy, "当前没有公开的通用即时单项写入命令"
+    assert_includes policy, "不手工编辑订阅"
     assert_includes policy, "Windows 当前没有安全的即时单项配置写入路径"
     assert_includes policy, "## Patch 验证标准"
   end
@@ -2249,7 +2251,7 @@ class SkillContractTest < Minitest::Test
     ]
     refute_nil version_guard_function
     assert_includes version_guard_function,
-                    '[ClaudeEasy.VerifiedDeleteNative]::Open($Path, $false, $false)'
+                    '[ClaudeEasy.VerifiedDeleteNative]::OpenSharedRead($Path)'
     assert_includes version_guard_function,
                     "[ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint"
     assert_includes version_guard_function,

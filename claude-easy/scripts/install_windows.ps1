@@ -929,6 +929,10 @@ if ($resolvedUsageProfile -eq 0) {
 if ($resolvedUsageProfile -notin @(1, 2, 3)) {
     Complete-InstallResult 64 "invalid_request" "invalid_usage_profile" "用途档位无效，只能是 1、2 或 3。"
 }
+if ($profileSource -eq "environment" -and $savedUsageProfile -ne 0 -and
+    $resolvedUsageProfile -ne $savedUsageProfile) {
+    Complete-InstallResult 64 "invalid_request" "usage_profile_mismatch" "请求档位与已保存档位不一致；未执行任何修改。"
+}
 $script:ClaudeEasyProfile = $resolvedUsageProfile
 
 try {
@@ -954,7 +958,7 @@ try {
         } else {
             "client_running_auto_update_deferred"
         }
-        Complete-InstallResult 1 "partial" $runningCode "客户端正在运行；本次未修改用途档位、自动更新所有权、脚本或客户端配置，请在客户端未运行时按当前档位重试。"
+        Complete-InstallResult 1 "partial" $runningCode "客户端保持运行；普通安装按安全边界延期，本次未修改用途档位、自动更新所有权、脚本或客户端配置。"
     }
     $profilesIndexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"
     if (-not $profilesIndexSnapshot.Exists) {
@@ -1028,6 +1032,7 @@ try {
     $vergeInput = if ($vergeExisted) { $strictUtf8.GetString($vergeOriginalBytes) } else { "" }
     $vergeOutput = Set-ClaudeEasyReactivationHotkey $vergeInput
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_global_hotkey" "true"
+    $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_dns_settings" "false"
     Test-GeneratedYaml $vergeOutput "verge.yaml" | Out-Null
     $configSnapshot = Get-OptionalFileSnapshot $configPath "config.yaml"
     $configExisted = [bool]$configSnapshot.Exists
@@ -1089,7 +1094,6 @@ try {
         Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。" @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update")
     }
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_tun_mode" "true"
-    $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_dns_settings" "false"
     $configInput = if ($configExisted) { $strictUtf8.GetString($configOriginalBytes) } else { "" }
     $configOutput = Set-YamlTopLevelScalar $configInput "ipv6" "false"
     $configOutput = Set-YamlTunMapping $configOutput

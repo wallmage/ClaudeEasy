@@ -3750,6 +3750,17 @@ class MacosPatcherTest < Minitest::Test
         refute_includes output, profile_name
         refute_includes output, provider_name
       end
+
+      map_changes = ClaudeEasy.redacted_changed_paths(
+        { "proxies" => { "secret-node" => { "type" => "ss" } },
+          "proxy-groups" => { "secret-group" => { "type" => "select" } } },
+        { "proxies" => { "secret-node" => { "type" => "trojan" } },
+          "proxy-groups" => { "secret-group" => { "type" => "url-test" } } }
+      )
+      assert_includes map_changes, "proxies.[item].type"
+      assert_includes map_changes, "proxy-groups.[item].type"
+      refute_includes JSON.generate(map_changes), "secret-node"
+      refute_includes JSON.generate(map_changes), "secret-group"
     end
   end
 
@@ -5757,13 +5768,15 @@ class MacosPatcherTest < Minitest::Test
                     'request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'willPerformHTTPRedirection:newRequest:completionHandler:'
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "completionHandler(redirectRequest);"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "originalHost"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "originalPort"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "nextURL.host"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "nextURL.port"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, 'protocols: ["NSURLSessionDataDelegate"]'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "didReceiveData:"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "dataTask.cancel;"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "data.appendData(receivedData);"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    'response.URL.absoluteString'
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "var finalURL = response.URL;"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     "Number(primaryApplications.count) + Number(alternateApplications.count) !== 1"
     refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "Alamofire/"
@@ -5944,6 +5957,16 @@ class MacosPatcherTest < Minitest::Test
         )
       end
 
+      assert_equal :protocol_regression, error.reason
+
+      shadowsocks = base_config.merge(
+        "proxies" => base_config.fetch("proxies").map { |proxy| proxy.merge("type" => "shadowsocks") }
+      )
+      error = assert_raises(ClaudeEasy::SafeUpdateCandidateError) do
+        ClaudeEasy.build_update_candidate(
+          { name: "friend", path: path }, YAML.dump(shadowsocks), @policy, 3, ->(_path) { true }
+        )
+      end
       assert_equal :protocol_regression, error.reason
     end
   end
@@ -10336,7 +10359,7 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_profile_discovery_refuses_two_icloud_roots_with_the_selected_profile
+  def test_profile_discovery_ignores_an_undeclared_legacy_icloud_root
     Dir.mktmpdir do |home|
       current = File.join(home, "Library", "Mobile Documents", "iCloud~com~metacubex~ClashX", "Documents")
       legacy = File.join(home, "Library", "Mobile Documents", "iCloud~com~west2online~ClashX", "Documents")
@@ -10349,7 +10372,7 @@ class MacosPatcherTest < Minitest::Test
         home: home, app_paths: [], cloud_enabled: true, selected: "friend"
       )
 
-      assert_empty directories
+      assert_equal [current], directories
     end
   end
 
@@ -12618,14 +12641,22 @@ class MacosPatcherTest < Minitest::Test
 
       Open3.stub(:capture2, ->(*_args) { raise IOError, "injected plist failure" }) do
         ids = ClaudeEasy.icloud_container_ids([broken_app])
-        assert_equal %w[iCloud.com.metacubex.ClashX iCloud.com.west2online.ClashX], ids
+        assert_equal %w[iCloud.com.metacubex.ClashX], ids
       end
     end
 
     roots = ["/tmp/cloud", "/tmp/local/.config/clash.meta"]
     ClaudeEasy.stub(:profile_paths, []) do
       ClaudeEasy.stub(:icloud_enabled?, false) do
-        assert_equal roots.last, ClaudeEasy.active_profile_root(roots, "friend")
+        assert_raises(ClaudeEasy::InvalidConfigError) do
+          ClaudeEasy.active_profile_root(roots, "friend")
+        end
+      end
+    end
+
+    ClaudeEasy.stub(:profile_paths, ["/tmp/friend.yaml"]) do
+      assert_raises(ClaudeEasy::InvalidConfigError) do
+        ClaudeEasy.active_profile_root(roots, "friend")
       end
     end
   end
@@ -12643,7 +12674,50 @@ class MacosPatcherTest < Minitest::Test
     assert_includes output, "--safe-update-all"
     assert_includes output, "--recover-profile-transaction"
     assert_includes output, "--reconcile-client-switches"
+    refute_includes output, "--enable-subscription-auto-update"
     assert_empty error
+  end
+
+  def test_cli_preserves_the_saved_profile_when_runtime_or_file_recovery_is_pending
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "friend.yaml")
+      backup_root = File.join(directory, "backups")
+      File.write(profile, YAML.dump(base_config))
+      arguments = [
+        "--json", "--profile-dir", directory, "--backup-dir", backup_root,
+        "--policy", POLICY_PATH, "--usage-profile", "1"
+      ]
+
+      ClaudeEasy.stub(:saved_usage_profile, 1) do
+        ClaudeEasy.stub(:run, [{ status: :reload_failed_restore_pending, path: profile }]) do
+          output, error = capture_io { assert_equal 77, ClaudeEasy.cli(arguments.dup) }
+          assert_empty error
+          result = JSON.parse(output)
+          assert_equal "partial", result.fetch("status")
+          assert_equal "profile_recovery_pending", result.fetch("code")
+        end
+
+        ClaudeEasy.stub(:run, ->(**_options) { raise IOError, "injected partial write" }) do
+          ClaudeEasy.stub(:profile_transaction_pending?, true) do
+            output, error = capture_io { assert_equal 77, ClaudeEasy.cli(arguments.dup) }
+            assert_empty error
+            assert_equal "profile_recovery_pending", JSON.parse(output).fetch("code")
+
+            output, error = capture_io do
+              assert_equal 77, ClaudeEasy.cli(arguments.reject { |item| item == "--json" })
+            end
+            assert_empty output
+            assert_includes error, "配置恢复尚未完成"
+          end
+
+          ClaudeEasy.stub(:profile_transaction_pending?, ->(_root) { raise IOError }) do
+            output, error = capture_io { assert_equal 1, ClaudeEasy.cli(arguments.dup) }
+            assert_empty error
+            assert_equal "unexpected_error", JSON.parse(output).fetch("code")
+          end
+        end
+      end
+    end
   end
 
   def test_cli_reconciles_macos_client_switches_and_returns_manual_steps
@@ -13166,8 +13240,7 @@ class MacosPatcherTest < Minitest::Test
 
       [
         ["--disable-subscription-auto-update", "disable_subscription_auto_update"],
-        ["--restore-owned-subscription-auto-update", "restore_owned_subscription_auto_update"],
-        ["--enable-subscription-auto-update", "enable_subscription_auto_update"]
+        ["--restore-owned-subscription-auto-update", "restore_owned_subscription_auto_update"]
       ].each do |argument, operation|
         output, error = capture_io do
           assert_equal 64, ClaudeEasy.cli([
@@ -13273,8 +13346,7 @@ class MacosPatcherTest < Minitest::Test
 
       [
         ["--disable-subscription-auto-update", "安装或恢复流程"],
-        ["--restore-owned-subscription-auto-update", "安装、卸载或恢复流程"],
-        ["--enable-subscription-auto-update", "所有权记录"]
+        ["--restore-owned-subscription-auto-update", "安装、卸载或恢复流程"]
       ].each do |argument, message|
         _output, error = capture_io do
           assert_equal 64, ClaudeEasy.cli([

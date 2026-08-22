@@ -66,7 +66,7 @@ ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持
 - 已有 Windows 脚本结构无法安全组合：保留原文件，请用户发送提示和 `Script.js` 截图。
 - 两端都原样保留已有的 REALITY `short-id` 文本，不补齐、不截断、不猜缺失值。macOS 读写 YAML 时显式保护容易被误判为数字的有效十六进制文本；Windows 的对象转换不得改变该字段。
 - 当前配置只有自动刷新和运行检查全部通过，才能写成“已更新并自动生效”。刷新失败并恢复时写成“自动刷新失败，已恢复原配置”；文件恢复但内核未恢复时必须单独说明。
-- ClashX Meta 正在运行时保持运行，不调用 AppleScript，不修改 `restoreTunProxy`，不切换 TUN 或代理节点。
+- ClashX Meta 正在运行时保持运行；配置事务不通过 AppleScript 或 System Events 操作界面，不修改 `restoreTunProxy`，也不切换代理组或节点。档位要求的 TUN 与系统代理状态只由 macOS 平台策略规定的原生开关协调命令处理；Foundation JXA 只用于订阅请求。
 - 远程 `proxy-providers` 在 Mihomo 写入前检查中可能需要网络；离线检查失败时保留原文件，并提示联网后重试。
 
 ## 输出格式

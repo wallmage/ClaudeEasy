@@ -17,7 +17,7 @@ function Get-ClashVergeReactivationShortcut([string]$VergeText) {
     }
     $shortcut = Get-ClaudeEasyReactivationHotkey $VergeText
     if ([string]::IsNullOrWhiteSpace($shortcut)) {
-        throw "没有找到重新激活订阅快捷键；请在客户端未运行时重新安装 ClaudeEasy。"
+        throw "没有找到重新激活订阅快捷键；当前安装无法安全发送客户端加载请求。"
     }
     return $shortcut
 }

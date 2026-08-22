@@ -5144,6 +5144,12 @@ rules:
     $providerChanges = @(Get-RedactedYamlChangedPaths $providerBefore $providerAfter)
     Assert-True ($providerChanges -contains "proxy-providers.[item].url") "Windows comparison did not redact a provider key"
     Assert-True (-not (($providerChanges -join " ").Contains("provider-secret"))) "Windows comparison exposed a provider key"
+    $mapBefore = "proxies:`n  secret-node:`n    type: ss`nproxy-groups:`n  secret-group:`n    type: select`n"
+    $mapAfter = "proxies:`n  secret-node:`n    type: trojan`nproxy-groups:`n  secret-group:`n    type: url-test`n"
+    $mapChanges = @(Get-RedactedYamlChangedPaths $mapBefore $mapAfter)
+    Assert-True ($mapChanges -contains "proxies.[item].type") "Windows comparison did not redact a map-style proxy key"
+    Assert-True ($mapChanges -contains "proxy-groups.[item].type") "Windows comparison did not redact a map-style group key"
+    Assert-True (-not (($mapChanges -join " ").Contains("secret-"))) "Windows comparison exposed a map-style proxy or group key"
     $routeGroups = [pscustomobject]@{
         "Proxy" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }
         "🤖 AI · ClaudeEasy" = [pscustomobject]@{ type = "Selector"; now = "Taiwan" }

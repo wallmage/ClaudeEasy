@@ -1987,6 +1987,20 @@ class MacosWrapperTest < Minitest::Test
       assert_equal 64, status.exitstatus
       assert_includes stdout, "用途档位无效"
     end
+
+    with_supported_mihomo_installer do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          _stdout, _stderr, status = run_script(installer, "--profile", "1", home: home)
+          assert status.success?
+          stdout, _stderr, status = run_script(
+            installer, home: home, extra_env: { "CLAUDE_EASY_USAGE_PROFILE" => "3" }
+          )
+          assert_equal 64, status.exitstatus
+          assert_includes stdout, "请求档位与已保存档位不一致"
+        end
+      end
+    end
   end
 
   def test_profile_three_fails_closed_before_saving_when_mihomo_is_missing

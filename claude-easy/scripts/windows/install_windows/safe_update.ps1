@@ -318,7 +318,7 @@ function Assert-SubscriptionProtocolPreserved([string]$BeforeText, [string]$Cand
     $beforeTypes = @(Get-ProxyProtocolTypes $BeforeText)
     $candidateTypes = @(Get-ProxyProtocolTypes $CandidateText)
     if ($beforeTypes -contains "anytls" -and $candidateTypes -notcontains "anytls" -and
-        $candidateTypes -contains "ss") {
+        ($candidateTypes -contains "ss" -or $candidateTypes -contains "shadowsocks")) {
         throw "远程订阅把 AnyTLS 替换为 Shadowsocks。"
     }
 }
@@ -608,7 +608,7 @@ function Open-SafeUpdateVersionGuard([string]$Path, [string]$Label) {
     $handle = $null
     $stream = $null
     try {
-        $handle = [ClaudeEasy.VerifiedDeleteNative]::Open($Path, $false, $false)
+        $handle = [ClaudeEasy.VerifiedDeleteNative]::OpenSharedRead($Path)
         if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($handle)) {
             throw "$Label 不能是符号链接或其他重解析点。"
         }

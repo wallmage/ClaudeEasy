@@ -53,6 +53,8 @@ module ClaudeEasy
       "; macOS " + systemVersion[0] + ")";
     var url = $.NSURL.URLWithString(urlText);
     if (!url) fail("invalid subscription URL");
+    var originalHost = unwrap(url.host).toLowerCase();
+    var originalPort = url.port && !url.port.isNil() ? Number(unwrap(url.port)) : 443;
     var request = $.NSMutableURLRequest.requestWithURL(url);
     request.HTTPMethod = "GET";
     request.cachePolicy = $.NSURLRequestReloadIgnoringLocalCacheData;
@@ -74,8 +76,12 @@ module ClaudeEasy
       methods: {
         "URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:": {
           implementation: function(session, task, redirectResponse, redirectRequest, completionHandler) {
-            var nextURL = redirectRequest && redirectRequest.URL && unwrap(redirectRequest.URL.absoluteString);
-            if (!nextURL || !nextURL.match(/^https:\/\//)) {
+            var nextURL = redirectRequest && redirectRequest.URL;
+            var nextHost = nextURL && nextURL.host && unwrap(nextURL.host).toLowerCase();
+            var nextPort = nextURL && nextURL.port && !nextURL.port.isNil() ?
+              Number(unwrap(nextURL.port)) : 443;
+            if (!nextURL || unwrap(nextURL.scheme).toLowerCase() !== "https" ||
+                nextHost !== originalHost || nextPort !== originalPort) {
               redirectRejected = true;
               completionHandler(null);
               return;
@@ -127,8 +133,12 @@ module ClaudeEasy
     }
     session.finishTasksAndInvalidate;
     if (redirectRejected || responseTooLarge || !finished || (requestError && !requestError.isNil()) || !response) fail("subscription request failed");
-    var finalURL = unwrap(response.URL.absoluteString);
-    if (!finalURL || !finalURL.match(/^https:\/\//)) fail("subscription request failed");
+    var finalURL = response.URL;
+    var finalHost = finalURL && finalURL.host && unwrap(finalURL.host).toLowerCase();
+    var finalPort = finalURL && finalURL.port && !finalURL.port.isNil() ?
+      Number(unwrap(finalURL.port)) : 443;
+    if (!finalURL || unwrap(finalURL.scheme).toLowerCase() !== "https" ||
+        finalHost !== originalHost || finalPort !== originalPort) fail("subscription request failed");
     var statusCode = Number(response.statusCode);
     if (statusCode < 200 || statusCode >= 300 || Number(data.length) === 0) fail("subscription request failed");
     $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
@@ -693,7 +703,8 @@ module ClaudeEasy
     current = load_yaml(File.read(File.realpath(target.fetch(:path)), encoding: "UTF-8"), target.fetch(:name))
     current_types = Array(current["proxies"]).map { |proxy| proxy["type"].to_s.downcase if proxy.is_a?(Hash) }.compact
     candidate_types = Array(config["proxies"]).map { |proxy| proxy["type"].to_s.downcase if proxy.is_a?(Hash) }.compact
-    if current_types.include?("anytls") && !candidate_types.include?("anytls") && candidate_types.include?("ss")
+    if current_types.include?("anytls") && !candidate_types.include?("anytls") &&
+       (candidate_types & %w[ss shadowsocks]).any?
       raise SafeUpdateCandidateError.new(
         "远程订阅把 AnyTLS 替换为 Shadowsocks", reason: :protocol_regression
       )
@@ -1274,7 +1285,7 @@ module ClaudeEasy
   end
 
   def icloud_container_ids(app_paths = clashx_app_paths)
-    ids = %w[iCloud.com.metacubex.ClashX iCloud.com.west2online.ClashX]
+    ids = %w[iCloud.com.metacubex.ClashX]
     app_paths.each do |app|
       plist = File.join(app, "Contents", "Info.plist")
       next unless File.file?(plist)
@@ -1331,13 +1342,9 @@ module ClaudeEasy
     return roots.first if roots.length == 1
 
     matching = roots.select { |root| profile_paths(root).any? { |path| active_profile?(path, selected) } }
-    candidates = matching.empty? ? roots : matching
-    preferred = if icloud_enabled?
-                  candidates.find { |path| path.include?("/Library/Mobile Documents/") }
-                else
-                  candidates.find { |path| path.end_with?("/.config/clash.meta") }
-                end
-    preferred || matching.first
+    raise InvalidConfigError, "当前订阅所在目录不唯一或无法确认" unless matching.length == 1
+
+    matching.first
   end
 
 end
