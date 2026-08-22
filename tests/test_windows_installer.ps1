@@ -4573,9 +4573,8 @@ rules: ["MATCH,AI"]
     )
     Assert-JsonResult $legacyRetirementSnapshot "install" 0 | Out-Null
     $legacyManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
-    $legacyManifestSource = (
-        [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
-    )
+    $legacyManifestRawText = [System.IO.File]::ReadAllText($legacyManifestPath)
+    $legacyManifestSource = $legacyManifestRawText | ConvertFrom-Json
     $legacyProfiles = @(
         foreach ($profile in @($legacyManifestSource.Profiles)) {
             [ordered]@{
@@ -4587,7 +4586,7 @@ rules: ["MATCH,AI"]
         }
     )
     $legacyManifest = [ordered]@{
-        CreatedAt = [string]$legacyManifestSource.CreatedAt
+        CreatedAt = [regex]::Match($legacyManifestRawText, '(?i)"CreatedAt"\s*:\s*"(?<value>[^"\\]*)"').Groups["value"].Value
         Profiles = $legacyProfiles
         Version = 1
     }
@@ -4631,9 +4630,8 @@ rules: ["MATCH,AI"]
         "-Json"
     )
     Assert-JsonResult $legacySnapshot "install" 0 | Out-Null
-    $legacyManifestSource = (
-        [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
-    )
+    $legacyManifestRawText = [System.IO.File]::ReadAllText($legacyManifestPath)
+    $legacyManifestSource = $legacyManifestRawText | ConvertFrom-Json
     $legacyBadBackup = [System.Text.Encoding]::UTF8.GetBytes("proxy-groups: [`n")
     $legacyBadBackupSha = Get-BytesSha256 $legacyBadBackup
     $legacyProfiles = @(
@@ -4653,7 +4651,7 @@ rules: ["MATCH,AI"]
         }
     )
     $legacyManifest = [ordered]@{
-        CreatedAt = [string]$legacyManifestSource.CreatedAt
+        CreatedAt = [regex]::Match($legacyManifestRawText, '(?i)"CreatedAt"\s*:\s*"(?<value>[^"\\]*)"').Groups["value"].Value
         Profiles = $legacyProfiles
         Version = 1
     }
