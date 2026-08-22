@@ -4818,6 +4818,13 @@ rules:
                 "-Json"
             )
             Assert-JsonResult $rollbackCrashSnapshot "install" 0 | Out-Null
+            $rollbackCrashBegin = Invoke-TestPowerShell $rollbackCrashInstaller @(
+                "-AppHome", $rollbackCrashHome,
+                "-BeginSafeUpdateRefresh",
+                "-MihomoPath", $fakeCore,
+                "-Json"
+            )
+            Assert-JsonResult $rollbackCrashBegin "install" 0 | Out-Null
             [System.IO.File]::WriteAllText(
                 $rollbackCrashTarget,
                 "mode: rule`nproxies: []`nproxy-groups: []`nrules: []`n"
