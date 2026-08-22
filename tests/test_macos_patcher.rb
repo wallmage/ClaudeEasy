@@ -13450,6 +13450,16 @@ class MacosPatcherTest < Minitest::Test
       FileUtils.mkdir_p(profiles)
       FileUtils.mkdir_p(backup_root)
       FileUtils.mkdir_p(File.dirname(core))
+      File.binwrite(
+        File.join(home, "Applications", "ClashX Meta.app", "Contents", "Info.plist"),
+        <<~PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleIdentifier</key><string>com.metacubex.ClashX.meta</string>
+          </dict></plist>
+        PLIST
+      )
       system("/usr/bin/plutil", "-create", "xml1", state)
       system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
       system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)

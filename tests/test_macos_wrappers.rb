@@ -83,7 +83,7 @@ class MacosWrapperTest < Minitest::Test
   end
 
   def with_supported_app(home)
-    FileUtils.mkdir_p(File.join(home, "Applications", "ClashX Meta.app"))
+    write_supported_clashx_app(home)
     yield
   end
 

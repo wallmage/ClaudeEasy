@@ -3394,6 +3394,10 @@ public static class FakeCurl {
             (Join-Path $invalidLightCase "profiles.yaml"),
             "items:`n- uid: R-light`n  type: remote`n  option:`n    allow_auto_update: true`n"
         )
+        [System.IO.File]::WriteAllBytes(
+            (Join-Path $invalidLightCase ".claude-easy.lock"),
+            [byte[]]@()
+        )
         $invalidLightBefore = Get-TreeContentSnapshot $invalidLightCase
         $invalidLightInstall = Invoke-TestPowerShell $installer @(
             "-AppHome", $invalidLightCase,

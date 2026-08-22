@@ -61,6 +61,18 @@ module MacosRuntimeFixture
     path
   end
 
+  def write_supported_clashx_app(home)
+    contents = File.join(home, "Applications", "ClashX Meta.app", "Contents")
+    FileUtils.mkdir_p(contents)
+    File.write(File.join(contents, "Info.plist"), <<~PLIST)
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0"><dict>
+      <key>CFBundleIdentifier</key><string>com.metacubex.ClashX.meta</string>
+      </dict></plist>
+    PLIST
+  end
+
   def start_release_controller(home, mixed_port:, selector_names: ["Main"])
     socket_path = File.join(
       "/tmp", "claude-easy-#{Process.pid}-#{rand(1_000_000)}.sock"
