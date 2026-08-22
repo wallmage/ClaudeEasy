@@ -370,7 +370,7 @@ $safeUpdateFollowupCases = @(
         Expected = @(
             "client_switch_verification", "site_verification", "agent_connectivity_verification",
             "route_verification", "dns_deep_test",
-            "webrtc_test_1", "webrtc_test_2", "final_state_audit"
+            "webrtc_test", "local_region_fingerprint_test", "final_state_audit"
         )
     }
 )
@@ -4228,7 +4228,7 @@ rules:
                 "subscription_refresh", "safe_update_verification",
                 "client_switch_verification", "site_verification",
                 "agent_connectivity_verification", "route_verification", "dns_deep_test",
-                "webrtc_test_1", "webrtc_test_2",
+                "webrtc_test", "local_region_fingerprint_test",
                 "final_state_audit"
             ) -join ","
         )

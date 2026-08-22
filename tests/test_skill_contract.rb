@@ -1542,9 +1542,12 @@ class SkillContractTest < Minitest::Test
     %w[当前存储位置 ClashX\ Meta Clash\ Verge\ Rev 深度测试 截图 未验证].each do |text|
       assert_includes policy, text.gsub("\\ ", " ")
     end
-    %w[ipinfo.cv/webrtc-check ip.net.coffee/dns ip.net.coffee/webrtc].each do |url|
+    %w[ip.net.coffee/dns ip.net.coffee/webrtc].each do |url|
       assert_includes policy, url
     end
+    refute_includes policy, "ipinfo.cv/webrtc-check"
+    assert_includes policy, "assets/claude-region-check.html"
+    assert_includes policy, "本地区域指纹测试"
   end
 
   def test_skill_names_every_guard_from_the_network_outage
@@ -1570,8 +1573,14 @@ class SkillContractTest < Minitest::Test
     assert_includes source, "实际连接链包含当前 AI 分组"
     assert_includes source, "三项全部通过"
     assert_includes source, "Claude/Anthropic 不打开、不请求、不测试"
+    assert_includes source, "本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名"
+    assert_includes source, "低风险才算通过；中等风险或高风险都算失败"
     assert_includes source, "macOS 和 Windows 只要当前代理工具提供 Computer Use"
-    assert_includes source, "当前环境没有 Computer Use 时，要求用户手动测试"
+    assert_includes source, "当前环境没有 Computer Use 时，要求用户手动完成全部三项"
+
+    diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
+    assert_includes diagnostics, "档位 3 的任何修复只要实际产生修改"
+    assert_includes diagnostics, "强制运行本地区域指纹测试"
   end
 
 

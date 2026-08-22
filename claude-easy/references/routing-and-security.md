@@ -104,4 +104,4 @@ AI 分组当前选择必须是代理节点，不能是 `DIRECT`；不创建安�
 
 多个检测结果如果全是代理出口，不属于真实 IP 泄漏；单一结果更容易确认。
 
-本地 Claude 区域指纹页永久禁用，不得打开或运行。Claude/Anthropic 不打开、不请求、不测试；只允许静态检查配置，AI 联网与分流只测试 ChatGPT、Gemini 和 Grok。
+Claude/Anthropic 远程域名不打开、不请求、不测试；只允许静态检查配置，AI 联网与分流只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不连接 Claude/Anthropic 域名；档位 3 的任何 Patch、更新、恢复或实际产生修改的修复后都必须运行，并以低风险为通过条件。

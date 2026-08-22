@@ -2365,7 +2365,7 @@ class MacosPatcherTest < Minitest::Test
       workflow_complete: false, completed_scope: "subscription_update",
       required_followups: %w[
         client_switch_verification site_verification agent_connectivity_verification
-        route_verification dns_deep_test webrtc_test_1 webrtc_test_2
+        route_verification dns_deep_test webrtc_test local_region_fingerprint_test
         final_state_audit
       ]
     )
@@ -13306,7 +13306,7 @@ class MacosPatcherTest < Minitest::Test
         ],
         3 => %w[
           macos_client_switch_reconciliation site_verification agent_connectivity_verification
-          route_verification dns_deep_test webrtc_test_1 webrtc_test_2
+          route_verification dns_deep_test webrtc_test local_region_fingerprint_test
           final_state_audit
         ]
       }

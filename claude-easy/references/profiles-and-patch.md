@@ -36,7 +36,7 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 | --- | --- | --- | --- | --- |
 | **档位 1｜普通浏览** | 国内网站、Twitter、Facebook、YouTube 等 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；macOS 原生开关协调命令确认 Clash 系统代理开启，Windows 按平台界面规则确认 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 国内站、Google、Twitter 和一个用户常用站点能稳定打开，速度无明显异常 |
 | **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，macOS 原生开关协调命令或 Windows 平台界面先开启 TUN，再关闭 Clash 自己的系统代理 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 国内站、Google、Twitter、一个用户常用站点、ChatGPT、Gemini 能稳定打开，速度无明显异常；命令行或 Agent 应用能联网 |
-| **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、Claude、分流、DNS 深度测试和两项 WebRTC 测试 |
+| **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、分流、DNS 深度测试、WebRTC 测试和本地区域指纹测试 |
 
 档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；除下述 AdGuard for Mac 已知兼容路径外，不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
 
@@ -46,9 +46,9 @@ macOS 与 Windows 的三个档位都把 `profile.store-selected` 设为 `true`�
 
 macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 不增加 TUN、IPv6、WebRTC 或 AI 分组补丁。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置由安装程序直接修改，不依赖 Computer Use：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读。任一平台无法安全识别、备份、写入或确认时，停止且不继续打补丁。
 
-### Claude/Anthropic 永久禁测
+### Claude/Anthropic 远程域名永久禁测
 
-Claude/Anthropic 的网站、API、域名以及本地 Claude 区域指纹页一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式产生相关测试流量；用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。
+Claude/Anthropic 的网站、API 和域名一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量；用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不连接 Claude/Anthropic 域名，不受这项禁令限制；档位 3 必须运行。
 
 ## Patch 检查顺序
 
@@ -72,18 +72,18 @@ Claude/Anthropic 的网站、API、域名以及本地 Claude 区域指纹页一�
 
 只生成 ChatGPT、Gemini 和 Grok 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`；Windows 控制器只允许本机回环地址，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。每个测试请求都通过当前 Mihomo 回环代理发出，并确认实际连接链包含当前 AI 分组；检测期间代理组或节点选择发生变化即失败。三项全部通过即为分流验证通过。Claude/Anthropic 不打开、不请求、不测试，只允许静态检查配置。
 
-任何 Patch、Diagnostics、复测或安全更新都必须遵守 Claude/Anthropic 永久禁测规则。浏览器只允许打开下列 DNS/WebRTC 页面。
+任何 Patch、Diagnostics、复测或安全更新都必须遵守 Claude/Anthropic 远程域名永久禁测规则。档位 3 的浏览器验收只运行下列项目。
 
 然后必须测试：
 
-1. `https://ipinfo.cv/webrtc-check`
-2. `https://ip.net.coffee/dns/` 的“深度测试”
-3. `https://ip.net.coffee/webrtc/`
+1. `https://ip.net.coffee/dns/` 的“深度测试”
+2. `https://ip.net.coffee/webrtc/`
+3. 本地 `assets/claude-region-check.html`，点击“开始检测并运行 WebRTC 测试”
 
-三项都没有红色提示，并且不显示用户未代理的公网 IP、私网地址或本地运营商 DNS，才算通过。
+DNS 和 WebRTC 页面没有红色提示，且不显示用户未代理的公网 IP、私网地址或本地运营商 DNS，才算通过。本地区域指纹测试必须给出明确风险等级：低风险才算通过；中等风险或高风险都算失败。不得用“不够单一”“不能完全通过”或其他含糊结论代替成功或失败。
 
-三项均为第三方页面，会接收浏览器的公网 IP，并发起 WebRTC 或 DNS 测试请求。补丁不向这些页面上传订阅、节点密码或配置文件；用户可以拒绝使用，结果写成“未验证”。
+两个远程页面会接收浏览器的公网 IP，并发起 WebRTC 或 DNS 测试请求。本地页面会连接页面已披露的 Cloudflare 出口查询和 Google、Cloudflare STUN 服务，但不连接 Claude/Anthropic 域名；这些检测都不上传订阅、节点密码或配置文件。用户可以拒绝使用，结果写成“未验证”。
 
 代理只记录每项通过、失败或未验证及失败类别，不把页面显示的公网 IP、私网地址、DNS 地址或运营商名称复制到聊天、JSON 或诊断记录。
 
-macOS 和 Windows 只要当前代理工具提供 Computer Use，就由代理打开页面、点击“深度测试”并读取结果，不把刷新或测试停给用户。当前环境没有 Computer Use 时，要求用户手动测试。只要有红色结果，就让用户发截图并继续处理，不得说已经验证。
+macOS 和 Windows 只要当前代理工具提供 Computer Use，就由代理打开两个远程页面和本地页面，执行检测并读取结果，不把刷新或测试停给用户。当前环境没有 Computer Use 时，要求用户手动完成全部三项。任一远程页面出现红色结果，或本地页面不是低风险，都判定验收失败并继续处理，不得说已经验证。
