@@ -103,7 +103,7 @@ class MutationSafetyTest < Minitest::Test
 
   def test_macos_live_group_discovery_mutations_are_killed
     {
-      "main_group = live_main_group(socket, proxies, main_group)" => [
+      "main_group = live_main_group(requester, proxies, main_group)" => [
         'main_group = "Proxy"',
         "test_route_verifier_does_not_read_the_disk_to_find_ai_group"
       ],
@@ -2171,8 +2171,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/verify_routes.rb",
-        '    provider_payload = get_json(socket, "/providers/proxies")',
-        '    provider_payload = get_json(socket, "/proxies")'
+        '    provider_payload = get_json(requester, "/providers/proxies")',
+        '    provider_payload = get_json(requester, "/proxies")'
       )
 
       assert_mutation_is_killed(
