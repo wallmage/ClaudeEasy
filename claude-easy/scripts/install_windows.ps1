@@ -537,15 +537,10 @@ if ($VerifySafeUpdate) {
         ) -or $refreshStartedAt -gt [DateTimeOffset]::Now) {
         Complete-InstallResult 1 "failed" "safe_update_refresh_not_started" "没有本轮订阅刷新的开始记录；未运行验收。"
     }
-    if ([DateTimeOffset]::Now -ge $refreshStartedAt.AddSeconds(180)) {
-        Complete-InstallResult 1 "failed" "safe_update_timeout" `
-            "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
-    }
     $safeUpdateDeadline = $refreshStartedAt.UtcDateTime.AddSeconds(180)
     $assertSafeUpdateDeadline = {
         if ([DateTime]::UtcNow -ge $safeUpdateDeadline) {
-            Complete-InstallResult 1 "failed" "safe_update_timeout" `
-                "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
+            throw "safe_update_timeout"
         }
     }
     $expectedSelections = New-OrdinalStringDictionary
@@ -581,6 +576,7 @@ if ($VerifySafeUpdate) {
     $observedCurrentHashes = @{}
     $legacySnapshotRetirement = -not $hasRuntimeSnapshot
     $safeUpdateContentRestoreEligible = $false
+    $safeUpdateTimedOut = $false
     $indexSnapshot = $null
     $scriptSnapshot = $null
     try {
@@ -605,6 +601,7 @@ if ($VerifySafeUpdate) {
             $safeUpdateContentRestoreEligible = $true
             throw "更新后的订阅文件缺失。"
         }
+        & $assertSafeUpdateDeadline
         $savedProfile = $savedUsageProfile
         if ($savedProfile -notin @(1, 2, 3)) { throw "没有可用于安全更新验收的用途档位。" }
         if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
@@ -727,15 +724,16 @@ if ($VerifySafeUpdate) {
             }
         }
     } catch {
-        if ($_.Exception.Message -eq "safe_update_timeout" -or
-            [DateTime]::UtcNow -ge $safeUpdateDeadline) {
-            Complete-InstallResult 1 "failed" "safe_update_timeout" `
-                "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
-        }
+        $safeUpdateTimedOut = $_.Exception.Message -eq "safe_update_timeout" -or
+            [DateTime]::UtcNow -ge $safeUpdateDeadline
+        if ($safeUpdateTimedOut) { $safeUpdateContentRestoreEligible = $true }
         [void]$script:ClaudeEasyMessages.Add(
             (Protect-ClaudeEasyResultText $_.Exception.Message)
         )
         if (@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0) {
+            if ($safeUpdateTimedOut) {
+                Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；旧版备份无法确认可以安全恢复，当前订阅和恢复记录已保留。" @() @("recovery_pending")
+            }
             Complete-InstallResult 1 "partial" "safe_update_legacy_recovery_pending" "旧版安全更新记录中的备份无法确认来自一致快照；已保留当前订阅和清单，请在客户端重新更新全部订阅后重试验收。" @() @("legacy_recovery")
         }
         if (-not $safeUpdateContentRestoreEligible) {
@@ -769,6 +767,9 @@ if ($VerifySafeUpdate) {
                 $controlGuard.Stream.Dispose()
                 foreach ($directoryGuard in @($controlGuard.DirectoryGuards)) { $directoryGuard.Dispose() }
             }
+            if ($safeUpdateTimedOut) {
+                Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；恢复所需的控制文件已经变化，当前订阅和恢复记录已保留。" @() @("recovery_pending")
+            }
             Complete-InstallResult 1 "partial" "safe_update_verification_retry_pending" "验收依赖的清单、脚本或状态在检查期间变化；已保留当前订阅和安全更新清单，请待客户端写入完成后重试。" @() @("verification_state")
         }
         $runtimeRecoveryBytes = $null
@@ -801,9 +802,17 @@ if ($VerifySafeUpdate) {
             }
         }
         if ($restoreResult.Conflicts.Count -gt 0) {
+            if ($safeUpdateTimedOut) {
+                Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；订阅同时发生变化，未覆盖新内容，恢复记录已保留。" @() @("recovery_pending")
+            }
             throw "更新验收失败；检测到订阅同时发生变化，未覆盖新内容：$($restoreResult.Conflicts -join '、')。安全更新记录已保留。"
         }
-        if ($restoreResult.Failures.Count -gt 0) { throw "更新验收失败，且部分订阅未能恢复：$($restoreResult.Failures -join '、')。安全更新记录已保留。" }
+        if ($restoreResult.Failures.Count -gt 0) {
+            if ($safeUpdateTimedOut) {
+                Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；部分订阅尚未恢复，恢复记录已保留。" @() @("recovery_pending")
+            }
+            throw "更新验收失败，且部分订阅未能恢复：$($restoreResult.Failures -join '、')。安全更新记录已保留。"
+        }
         $rollbackItems = @($recoveryItems | ForEach-Object {
             Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) "rolled_back"
         })
@@ -834,6 +843,9 @@ if ($VerifySafeUpdate) {
                 if ([bool]$rollbackAttempt.Allowed) {
                     try {
                         if (-not (Test-ClashVergeProcessIdentity (Get-ClashVergeProcessIdentity) $rollbackIdentity)) {
+                            if ($safeUpdateTimedOut) {
+                                Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；订阅文件已恢复，但客户端进程发生变化，原运行状态尚未验证。" @() @("runtime_unverified")
+                            }
                             Complete-InstallResult 1 "partial" "safe_update_client_changed" "客户端进程在恢复请求发送前发生变化；未发送重载，请重试。" @() @("runtime_unverified")
                         }
                         Invoke-ClashVergeReactivationShortcut $reactivationShortcut
@@ -847,10 +859,19 @@ if ($VerifySafeUpdate) {
                     $savedUsageProfile ([string]$rollbackCurl.Source) $rollbackPolicy
                 Remove-VerifiedOwnedFile $safeUpdateStatePath $runtimeRecoverySnapshot.Bytes `
                     $runtimeRecoverySnapshot.Identity "safe_update_running_client"
+                if ($safeUpdateTimedOut) {
+                    Complete-InstallResult 1 "rolled_back" "safe_update_timeout_rolled_back" "本轮更新超时失败；已恢复全部订阅文件和更新前运行状态。" @() @() $rollbackItems
+                }
                 Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已恢复全部订阅文件和更新前运行状态。" @() @() $rollbackItems
             } catch {
+                if ($safeUpdateTimedOut) {
+                    Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；全部订阅文件已恢复，但原运行状态尚未验证，恢复记录已保留。" @() @() $rollbackItems @("runtime_unverified")
+                }
                 Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")
             }
+        }
+        if ($safeUpdateTimedOut) {
+            Complete-InstallResult 1 "partial" "safe_update_timeout_recovery_pending" "本轮更新超时；全部订阅文件已恢复，但原运行状态尚未验证，恢复记录已保留。" @() @() $rollbackItems @("runtime_unverified")
         }
         Complete-InstallResult 1 "partial" "safe_update_runtime_unverified" "更新验收失败；全部订阅文件已恢复，但客户端运行配置尚未验证。" @() @() $rollbackItems @("runtime_unverified")
     }
@@ -872,7 +893,6 @@ if ($VerifySafeUpdate) {
         Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) $itemStatus
     })
     $requiredFollowups = @(Get-SafeUpdateRequiredFollowups $script:ClaudeEasyProfile)
-    & $assertSafeUpdateDeadline
     Complete-InstallResult 0 "ok" "safe_update_verified" `
         "订阅、补丁和平台检查已完成；当前档位的后续验收尚未完成。" `
         @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems @() `

@@ -493,7 +493,10 @@ function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
 function Invoke-TestPowerShell(
     [string]$ScriptPath,
     [string[]]$ScriptArguments,
-    [switch]$SimulateRuntimeRefresh
+    [switch]$SimulateRuntimeRefresh,
+    [int]$FirstRuntimeRefreshDelayMilliseconds = 200,
+    [switch]$FailRestoreRuntimeDispatch,
+    [string]$RuntimeDispatchLogPath = ""
 ) {
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeBootstrap = $null
@@ -548,14 +551,20 @@ function Invoke-TestPowerShell(
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 Json = $ScriptArguments -contains "-Json"
                 RuntimePath = $runtimePath
+                FirstRuntimeRefreshDelayMilliseconds = $FirstRuntimeRefreshDelayMilliseconds
+                FailRestoreRuntimeDispatch = [bool]$FailRestoreRuntimeDispatch
+                RuntimeDispatchLogPath = $RuntimeDispatchLogPath
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } string path = RuntimePath; new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(200); System.IO.File.AppendAllText(path, "\n# simulated refresh\n"); }).Start(); return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static string DispatchLogPath; public static int FirstDelayMilliseconds; public static bool FailRestoreDispatch; private static int SendCount; public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } int count = System.Threading.Interlocked.Increment(ref SendCount); if (!string.IsNullOrEmpty(DispatchLogPath)) { System.IO.File.AppendAllText(DispatchLogPath, count.ToString() + "\n"); } if (count == 2 && FailRestoreDispatch) { return false; } string path = RuntimePath; int delay = count == 1 ? FirstDelayMilliseconds : 200; new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(delay); System.IO.File.AppendAllText(path, "\n# simulated refresh\n"); }).Start(); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
+[ClaudeEasy.SendInputNative]::DispatchLogPath = [string]$payload.RuntimeDispatchLogPath
+[ClaudeEasy.SendInputNative]::FirstDelayMilliseconds = [int]$payload.FirstRuntimeRefreshDelayMilliseconds
+[ClaudeEasy.SendInputNative]::FailRestoreDispatch = [bool]$payload.FailRestoreRuntimeDispatch
 $arguments = @{
     AppHome = [string]$payload.AppHome
     MihomoPath = [string]$payload.MihomoPath
@@ -3994,6 +4003,9 @@ rules:
         "-AppHome", $safeUpdateCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore
     )
     Assert-True ($safeUpdateInstall.ExitCode -eq 0) "safe update fixture install failed; $(Get-TestOutputDiagnostic $safeUpdateInstall.Output)"
+    $timeoutSafeUpdateCase = Join-Path $sandbox "safe-update-timeout-case"
+    Copy-Item -LiteralPath $safeUpdateCase -Destination $timeoutSafeUpdateCase -Recurse
+    $timeoutSafeUpdateProfiles = Join-Path $timeoutSafeUpdateCase "profiles"
     $mismatchedSafeUpdate = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-SnapshotProfiles",
@@ -4237,7 +4249,6 @@ rules:
         $safeUpdateManifestPath,
         (($expiredManifest | ConvertTo-Json -Depth 5) + "`r`n")
     )
-    $expiredTree = Get-TreeContentSnapshot $safeUpdateCase
     $resetAttempt = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
@@ -4249,21 +4260,6 @@ rules:
     $resetAttemptJson = Assert-JsonResult $resetAttempt "install" 64
     Assert-True ($resetAttemptJson.code -eq "invalid_arguments") `
         "Windows allowed the caller to reset the persisted refresh start"
-    $expiredVerify = Invoke-TestPowerShell $installer @(
-        "-AppHome", $safeUpdateCase,
-        "-VerifySafeUpdate",
-        "-RefreshConfirmed",
-        "-MihomoPath", $fakeCore,
-        "-Json"
-    )
-    $expiredVerifyJson = Assert-JsonResult $expiredVerify "install" 1
-    Assert-True (
-        $expiredVerifyJson.status -eq "failed" -and
-        $expiredVerifyJson.code -eq "safe_update_timeout"
-    ) "Windows accepted a safe update after the 180-second deadline"
-    Assert-True (
-        (Get-TreeContentSnapshot $safeUpdateCase) -ceq $expiredTree
-    ) "expired safe-update verification changed AppHome"
     [System.IO.File]::WriteAllText($safeUpdateManifestPath, $unexpiredManifestText)
 
     $slowCore = Join-Path $sandbox "mihomo-slow.cmd"
@@ -4272,23 +4268,83 @@ rules:
         "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nping 127.0.0.1 -n 5 >nul`r`nexit /b 0`r`n",
         [System.Text.Encoding]::ASCII
     )
-    $crossingManifest = $unexpiredManifestText | ConvertFrom-Json
-    $crossingManifest.RefreshStartedAt = [DateTimeOffset]::Now.AddSeconds(-178).ToString("o")
-    [System.IO.File]::WriteAllText(
-        $safeUpdateManifestPath,
-        (($crossingManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    $timeoutUpdatedFirst = $firstSafeOriginal + "# refreshed before timeout`n"
+    $timeoutUpdatedSecond = $secondSafeOriginal + "# refreshed before timeout`n"
+    $timeoutScenarios = @(
+        [pscustomobject]@{ Name = "expired"; Age = 181; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
+        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
+        [pscustomobject]@{ Name = "crossing-runtime"; Age = 173; Core = $fakeCore; Delay = 8500; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
+        [pscustomobject]@{ Name = "recovery-pending"; Age = 173; Core = $fakeCore; Delay = 8500; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
     )
-    $crossingVerify = Invoke-TestPowerShell $installer @(
-        "-AppHome", $safeUpdateCase,
-        "-VerifySafeUpdate",
-        "-RefreshConfirmed",
-        "-MihomoPath", $slowCore,
-        "-Json"
-    )
-    $crossingVerifyJson = Assert-JsonResult $crossingVerify "install" 1
-    Assert-True ($crossingVerifyJson.code -eq "safe_update_timeout") `
-        "Windows accepted a safe update that crossed the deadline during verification"
-    [System.IO.File]::WriteAllText($safeUpdateManifestPath, $unexpiredManifestText)
+    foreach ($timeoutScenario in $timeoutScenarios) {
+        $timeoutSnapshot = Invoke-TestPowerShell $installer @(
+            "-AppHome", $timeoutSafeUpdateCase,
+            "-SnapshotProfiles",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        )
+        Assert-JsonResult $timeoutSnapshot "install" 0 | Out-Null
+        $timeoutBegin = Invoke-TestPowerShell $installer @(
+            "-AppHome", $timeoutSafeUpdateCase,
+            "-BeginSafeUpdateRefresh",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        )
+        Assert-JsonResult $timeoutBegin "install" 0 | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $timeoutSafeUpdateProfiles "R-first.yaml"), $timeoutUpdatedFirst
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $timeoutSafeUpdateProfiles "R-second.yml"), $timeoutUpdatedSecond
+        )
+        $timeoutManifestPath = Join-Path $timeoutSafeUpdateCase "claude-easy-safe-update.json"
+        $timeoutManifest = [System.IO.File]::ReadAllText($timeoutManifestPath) | ConvertFrom-Json
+        $timeoutManifest.RefreshStartedAt = [DateTimeOffset]::Now.AddSeconds(
+            -[int]$timeoutScenario.Age
+        ).ToString("o")
+        [System.IO.File]::WriteAllText(
+            $timeoutManifestPath,
+            (($timeoutManifest | ConvertTo-Json -Depth 5) + "`r`n")
+        )
+        $dispatchLog = Join-Path $sandbox ("timeout-" + $timeoutScenario.Name + ".log")
+        $failRestoreDispatch = [bool]$timeoutScenario.FailRestore
+        $timeoutVerify = Invoke-TestPowerShell $installer @(
+            "-AppHome", $timeoutSafeUpdateCase,
+            "-VerifySafeUpdate",
+            "-RefreshConfirmed",
+            "-MihomoPath", [string]$timeoutScenario.Core,
+            "-Json"
+        ) -SimulateRuntimeRefresh `
+            -FirstRuntimeRefreshDelayMilliseconds ([int]$timeoutScenario.Delay) `
+            -FailRestoreRuntimeDispatch:$failRestoreDispatch `
+            -RuntimeDispatchLogPath $dispatchLog
+        $timeoutVerifyJson = Assert-JsonResult $timeoutVerify "install" 1
+        Assert-True (
+            $timeoutVerifyJson.status -eq [string]$timeoutScenario.Status -and
+            $timeoutVerifyJson.code -eq [string]$timeoutScenario.Code
+        ) "Windows did not report timeout rollback for $($timeoutScenario.Name)"
+        Assert-True (
+            (Get-Content -LiteralPath (Join-Path $timeoutSafeUpdateProfiles "R-first.yaml") -Raw) -eq
+                $firstSafeOriginal -and
+            (Get-Content -LiteralPath (Join-Path $timeoutSafeUpdateProfiles "R-second.yml") -Raw) -eq
+                $secondSafeOriginal
+        ) "Windows did not restore refreshed subscriptions after $($timeoutScenario.Name)"
+        Assert-True (
+            (((Get-Content -LiteralPath $dispatchLog -Raw).Trim() -split "`r?`n") -join ",") -ceq
+                [string]$timeoutScenario.Dispatches
+        ) "Windows sent the wrong number of update or recovery activations for $($timeoutScenario.Name)"
+        if ([bool]$timeoutScenario.FailRestore) {
+            $pendingRecovery = [System.IO.File]::ReadAllText($timeoutManifestPath) | ConvertFrom-Json
+            Assert-True (
+                $pendingRecovery.Kind -eq "safe_update_runtime_recovery" -and
+                $null -ne $pendingRecovery.RestoreDispatchCommittedFor
+            ) "Windows did not retain timeout recovery state after restore failure"
+            Remove-Item -LiteralPath $timeoutManifestPath -Force
+        } else {
+            Assert-True (-not (Test-Path -LiteralPath $timeoutManifestPath)) `
+                "Windows retained a completed timeout recovery for $($timeoutScenario.Name)"
+        }
+    }
 
     $profileThreeSnapshotCase = Join-Path $sandbox "profile-three-snapshot-case"
     $profileThreeSnapshotProfiles = Join-Path $profileThreeSnapshotCase "profiles"
