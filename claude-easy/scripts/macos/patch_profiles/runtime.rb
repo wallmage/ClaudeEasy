@@ -217,7 +217,10 @@ module ClaudeEasy
   end
 
   def current_runtime_requester
-    controller_requester
+    socket = controller_socket
+    return nil unless socket
+
+    ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
   end
 
   def wait_for_clashx_safe_runtime(identity, reload_receipt: nil, selections:, expected_tun:,

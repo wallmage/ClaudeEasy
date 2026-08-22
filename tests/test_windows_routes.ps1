@@ -31,6 +31,8 @@ Assert-True (
 
 $root = Split-Path -Parent $PSScriptRoot
 $routeVerifier = Join-Path $root "claude-easy/scripts/windows/verify_routes.ps1"
+$resultContract = Join-Path $root "claude-easy/scripts/windows/result_contract.ps1"
+. $resultContract
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(

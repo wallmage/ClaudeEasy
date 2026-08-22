@@ -18295,13 +18295,13 @@ class MacosPatcherTest < Minitest::Test
     assert_nil ClaudeEasy.runtime_restorable_selections(
       ->(*_arguments) { raise IOError }, { "Main" => "Taiwan" }
     )
-    assert_nil ClaudeEasy.stub(:controller_context, nil) { ClaudeEasy.current_runtime_requester }
-    response = ClaudeEasy.stub(:controller_context, { socket: "socket", secret: "secret" }) do
-      ClaudeEasy.stub(:controller_request_with_secret, ->(*arguments) { arguments }) do
+    assert_nil ClaudeEasy.stub(:controller_socket, nil) { ClaudeEasy.current_runtime_requester }
+    response = ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_request, ->(*arguments) { arguments }) do
         ClaudeEasy.current_runtime_requester.call("GET", "/configs", nil)
       end
     end
-    assert_equal ["socket", "secret", "GET", "/configs", nil], response
+    assert_equal ["socket", "GET", "/configs", nil], response
 
     Dir.mktmpdir do |directory|
       assert_nil ClaudeEasy.clashx_reload_snapshot(log_root: File.join(directory, "missing"))
@@ -18312,6 +18312,30 @@ class MacosPatcherTest < Minitest::Test
       ClaudeEasyAppleEvents.stub(:AEDisposeDesc, ->(*_arguments) { 0 }) do
         refute ClaudeEasyAppleEvents.send_get_url(12_345, "clash://update-config")
       end
+    end
+  end
+
+  def test_runtime_identity_and_safe_update_comparison_error_boundaries
+    actual = {
+      proxies: ["New"], providers: [],
+      groups: { "Kept" => ["Shared"] }
+    }
+    expected = {
+      proxies: ["New"], providers: [],
+      groups: { "Kept" => ["Shared"] }
+    }
+    previous = {
+      proxies: ["Old"], providers: [],
+      groups: { "Removed" => ["Old"], "Kept" => ["Old", "Shared"] }
+    }
+    assert ClaudeEasy.runtime_excludes_previous_profile_entries?(actual, expected, previous)
+
+    ClaudeEasy.stub(:load_yaml, ->(*_arguments) { raise IOError, "injected" }) do
+      assert_nil ClaudeEasy.profile_runtime_identity_from_bytes("{}", "fixture")
+      refute ClaudeEasy.safe_update_runtime_equivalent?({ bytes: "{}" }, "fixture", "{}")
+    end
+    ClaudeEasy.stub(:regular_file_snapshot_once, ->(*_arguments) { raise IOError, "injected" }) do
+      refute ClaudeEasy.safe_update_runtime_snapshot_current?("fixture", {})
     end
   end
 
