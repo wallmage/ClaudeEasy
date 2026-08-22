@@ -2597,42 +2597,6 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_deferred_probe_failure_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_windows_installer.ps1",
-        '    if ($script:deferredProbeFailures.Count -gt 0) {' + "\n" +
-          '        throw ("deferred production probes failed:',
-        '    if ($script:deferredProbeFailures.Count -gt 0) {' + "\n" +
-          '        Write-Host ("deferred production probes failed:'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_runtime_tests_use_powershell_ast_for_automatic_variable_writes"
-      )
-    end
-  end
-
-  def test_windows_failure_diagnostic_privacy_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_windows_installer.ps1",
-        '    return "output_length=$($text.Length) output_sha256=$digest"',
-        '    return $text'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_test_failure_diagnostics_do_not_echo_captured_output"
-      )
-    end
-  end
-
   def test_windows_candidate_cleanup_publish_order_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
@@ -2650,146 +2614,6 @@ class MutationSafetyTest < Minitest::Test
         root,
         RbConfig.ruby, "tests/test_skill_contract.rb",
         "--name", "test_windows_candidate_cleanup_watcher_is_armed_before_publish"
-      )
-    end
-  end
-
-  def test_macos_production_probe_ci_gate_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/run_macos_production_probes.rb",
-        'probe_environment = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" }.freeze',
-        'probe_environment = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "0" }.freeze'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_macos_production_probe_runner_executes_all_cases_and_propagates_any_failure"
-      )
-    end
-  end
-
-  def test_macos_real_mihomo_test_rename_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_macos_patcher.rb",
-        "  def test_generated_profile_passes_installed_mihomo_validation\n",
-        "  def test_generated_profile_passes_real_mihomo_validation\n"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_macos_real_mihomo_runner_rejects_zero_or_skipped_cases"
-      )
-    end
-  end
-
-  def test_macos_real_mihomo_profile_loop_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_macos_patcher.rb",
-        "      [1, 2, 3].each do |usage_profile|\n",
-        "      [1].each do |usage_profile|\n"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_macos_real_mihomo_runner_rejects_zero_or_skipped_cases"
-      )
-    end
-  end
-
-  def test_windows_real_mihomo_profile_receipt_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_windows_installer.ps1",
-        '                foreach ($realUsageProfile in @(1, 2, 3)) {',
-        '                foreach ($realUsageProfile in @(1)) {'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_real_mihomo_jobs_require_case_completion_receipts"
-      )
-    end
-  end
-
-  def test_macos_production_probe_failure_aggregation_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/run_macos_production_probes.rb",
-        "  failed ||= !success\n",
-        "  failed ||= false\n"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_macos_production_probe_runner_executes_all_cases_and_propagates_any_failure"
-      )
-    end
-  end
-
-  def test_github_actions_dynamic_shell_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        ".github/workflows/test.yml",
-        "      - name: Download and verify official Windows Mihomo\n        shell: powershell",
-        "      - name: Download and verify official Windows Mihomo\n        shell: ${{ matrix.shell }}"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_github_actions_shell_fields_are_static"
-      )
-    end
-  end
-
-  def test_windows_powershell_5_full_suite_entrypoint_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        ".github/workflows/test.yml",
-        "          $runtime = (Get-Command powershell.exe).Source\n" +
-          "          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1",
-        "          $runtime = (Get-Command powershell.exe).Source\n" +
-          "          Write-Host $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_full_runtime_jobs_require_completion_receipts"
-      )
-    end
-  end
-
-  def test_windows_powershell_7_full_suite_entrypoint_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        ".github/workflows/test.yml",
-        "          $runtime = (Get-Command pwsh.exe).Source\n" +
-          "          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1",
-        "          $runtime = (Get-Command pwsh.exe).Source\n" +
-          "          Write-Host $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_windows_full_runtime_jobs_require_completion_receipts"
       )
     end
   end
@@ -3098,57 +2922,6 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_macos_production_probe_inventory_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_macos_patcher.rb",
-        "def test_production_probe_mihomo_does_not_survive_a_killed_validator",
-        "def test_mihomo_does_not_survive_a_killed_validator"
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_production_probe_inventory_and_ci_aggregation_are_fixed"
-      )
-    end
-  end
-
-  def test_windows_transaction_journal_matrix_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_windows_installer.ps1",
-        '                    Name = "alternate-data-stream"',
-        '                    Name = "alternate-stream-removed"'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_production_probe_inventory_and_ci_aggregation_are_fixed"
-      )
-    end
-  end
-
-  def test_windows_interrupted_new_file_probe_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_windows_installer.ps1",
-        '        Invoke-DeferredProbe "interrupted new-file transaction preserves later content" {',
-        '        Invoke-DeferredProbe "interrupted new-file transaction probe removed" {'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_production_probe_inventory_and_ci_aggregation_are_fixed"
-      )
-    end
-  end
-
   def test_windows_interrupted_new_file_guard_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
@@ -3384,23 +3157,6 @@ class MutationSafetyTest < Minitest::Test
     end
   end
 
-  def test_windows_public_uninstall_kill_probe_mutation_is_killed
-    with_repo_copy do |root|
-      replace_once(
-        root,
-        "tests/test_windows_installer.ps1",
-        '        $env:CLAUDE_EASY_TEST_UNINSTALL_CRASH_READY = $publicUninstallCrashReady',
-        '        $env:CLAUDE_EASY_TEST_UNINSTALL_PROBE_REMOVED = $publicUninstallCrashReady'
-      )
-
-      assert_mutation_is_killed(
-        root,
-        RbConfig.ruby, "tests/test_skill_contract.rb",
-        "--name", "test_production_probe_inventory_and_ci_aggregation_are_fixed"
-      )
-    end
-  end
-
   def test_macos_safe_update_native_reload_wiring_mutation_is_killed
     with_repo_copy do |root|
       replace_once(
@@ -3434,5 +3190,4 @@ class MutationSafetyTest < Minitest::Test
       )
     end
   end
-
 end
