@@ -1069,7 +1069,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "任一原代理组或节点选择无法恢复时拒绝更新"
     end
     assert_includes readme, "Windows `-SnapshotProfiles -Json`"
-    assert_includes readme, "Windows `-VerifySafeUpdate -RefreshConfirmed -Json`"
+    assert_includes readme, "`-VerifySafeUpdate -RefreshConfirmed -RefreshStartedAt TIME -Json`"
     assert_includes installer, "--safe-update"
     assert_includes skill, "--safe-update --json"
     assert_includes patcher, "--safe-update-all"
@@ -1093,12 +1093,12 @@ class SkillContractTest < Minitest::Test
     assert_includes safe_update, "用 Computer Use 操作已经运行的 Clash Verge Rev"
     assert_includes safe_update, "更新所有订阅"
     assert_includes safe_update, "我已经手动更新完了"
-    assert_includes safe_update, ".\\scripts\\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json"
+    assert_includes safe_update, ".\\scripts\\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -RefreshStartedAt TIME -Json"
     assert_includes safe_update, "不得使用右键菜单中的“更新”或“通过代理更新”"
     update_section = skill.split("## 更新全部订阅", 2).last.split("## 配置历史与恢复", 2).first
     assert_includes update_section, "没有 Computer Use 时"
     assert_includes update_section, "我已经手动更新完了"
-    assert_includes update_section, "-VerifySafeUpdate -RefreshConfirmed -Json"
+    assert_includes update_section, "-VerifySafeUpdate -RefreshConfirmed -RefreshStartedAt TIME -Json"
     refute_includes update_section, "Windows 用 `curl"
   end
 
@@ -1157,7 +1157,7 @@ class SkillContractTest < Minitest::Test
     assert_includes core, "不得把两端不同的实现方式写成相同"
     assert_includes safe_update, "macOS 运行 `bash scripts/install_macos.sh --safe-update --json`"
     assert_includes safe_update, "Windows 先运行 `.\\scripts\\install_windows.cmd -SnapshotProfiles -Json`"
-    assert_includes safe_update, "再运行 `.\\scripts\\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json`"
+    assert_includes safe_update, "再运行 `.\\scripts\\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -RefreshStartedAt TIME -Json`"
     assert_includes safe_update, "macOS 通过 Foundation 原生网络请求自动下载全部远程订阅"
     assert_includes safe_update, "Windows 通过 Clash Verge Rev 的“更新所有订阅”执行客户端原生刷新"
     assert_includes safe_update, "当前环境没有 Computer Use"

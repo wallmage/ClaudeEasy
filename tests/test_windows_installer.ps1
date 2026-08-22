@@ -495,6 +495,11 @@ function Invoke-TestPowerShell(
     [string[]]$ScriptArguments,
     [switch]$SimulateRuntimeRefresh
 ) {
+    if ($ScriptArguments -contains "-VerifySafeUpdate" -and
+        $ScriptArguments -contains "-RefreshConfirmed" -and
+        $ScriptArguments -notcontains "-RefreshStartedAt") {
+        $ScriptArguments += @("-RefreshStartedAt", [DateTimeOffset]::Now.ToString("o"))
+    }
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeBootstrap = $null
     $previousSafeUpdatePath = $null
@@ -530,6 +535,7 @@ function Invoke-TestPowerShell(
                 AppHome = [string]$ScriptArguments[$appHomeIndex + 1]
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 Json = $ScriptArguments -contains "-Json"
+                RefreshStartedAt = [string]$ScriptArguments[([Array]::IndexOf($ScriptArguments, "-RefreshStartedAt") + 1)]
                 RuntimePath = $runtimePath
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
@@ -544,6 +550,7 @@ $arguments = @{
     MihomoPath = [string]$payload.MihomoPath
     VerifySafeUpdate = $true
     RefreshConfirmed = $true
+    RefreshStartedAt = [string]$payload.RefreshStartedAt
     Json = [bool]$payload.Json
 }
 & ([string]$payload.ScriptPath) @arguments
@@ -4197,18 +4204,19 @@ rules:
     ) "safe update snapshot did not preserve the remaining profile 1 workflow"
 
     $safeUpdateManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
-    $unexpiredManifestText = [System.IO.File]::ReadAllText($safeUpdateManifestPath)
-    $expiredManifest = $unexpiredManifestText | ConvertFrom-Json
-    $expiredManifest.CreatedAt = [DateTimeOffset]::Now.AddSeconds(-181).ToString("o")
+    $delayedManifest = [System.IO.File]::ReadAllText($safeUpdateManifestPath) | ConvertFrom-Json
+    $delayedManifest.CreatedAt = [DateTimeOffset]::Now.AddHours(-1).ToString("o")
     [System.IO.File]::WriteAllText(
         $safeUpdateManifestPath,
-        (($expiredManifest | ConvertTo-Json -Depth 5) + "`r`n")
+        (($delayedManifest | ConvertTo-Json -Depth 5) + "`r`n")
     )
+    $unexpiredManifestText = [System.IO.File]::ReadAllText($safeUpdateManifestPath)
     $expiredTree = Get-TreeContentSnapshot $safeUpdateCase
     $expiredVerify = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
         "-RefreshConfirmed",
+        "-RefreshStartedAt", [DateTimeOffset]::Now.AddSeconds(-181).ToString("o"),
         "-MihomoPath", $fakeCore,
         "-Json"
     )

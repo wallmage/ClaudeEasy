@@ -7,6 +7,7 @@
     [switch]$SnapshotProfiles,
     [switch]$VerifySafeUpdate,
     [switch]$RefreshConfirmed,
+    [string]$RefreshStartedAt = "",
     [switch]$ListBackups,
     [string]$CompareBackup = "",
     [string]$RestoreBackup = "",
@@ -162,6 +163,12 @@ if ($RefreshConfirmed -and -not $VerifySafeUpdate) {
 }
 if ($VerifySafeUpdate -and -not $RefreshConfirmed) {
     Complete-InstallResult 64 "invalid_request" "missing_refresh_confirmation" "请先在客户端完成更新所有订阅，再明确确认本轮刷新。"
+}
+if (-not $VerifySafeUpdate -and -not [string]::IsNullOrWhiteSpace($RefreshStartedAt)) {
+    Complete-InstallResult 64 "invalid_request" "unexpected_refresh_start" "只有验收安全更新时才能提供刷新开始时间。"
+}
+if ($VerifySafeUpdate -and [string]::IsNullOrWhiteSpace($RefreshStartedAt)) {
+    Complete-InstallResult 64 "invalid_request" "missing_refresh_start" "缺少本轮更新所有订阅的开始时间。"
 }
 
 # Clash Verge Rev 的全局扩展脚本位置：profiles/Script.js。
@@ -450,9 +457,13 @@ if ($VerifySafeUpdate) {
         }
     }
     $manifestProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
-    $createdAtIsJsonString = [regex]::Matches(
+    $createdAtMatch = [regex]::Match(
         $manifestText,
-        '(?i)"CreatedAt"\s*:\s*"(?:[^"\\]|\\.)*"'
+        '(?i)"CreatedAt"\s*:\s*"(?<value>[^"\\]*)"'
+    )
+    $createdAtIsJsonString = $createdAtMatch.Success -and [regex]::Matches(
+        $manifestText,
+        '(?i)"CreatedAt"\s*:'
     ).Count -eq 1
     $manifestVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
     $manifestVersion = if ($manifestVersionIsNumeric) { [long]$manifest.Version } else { 0L }
@@ -472,7 +483,7 @@ if ($VerifySafeUpdate) {
     }
     $manifestCreatedAt = [DateTimeOffset]::MinValue
     if (-not [DateTimeOffset]::TryParseExact(
-            [string]$manifest.CreatedAt,
+            [string]$createdAtMatch.Groups["value"].Value,
             "o",
             [System.Globalization.CultureInfo]::InvariantCulture,
             [System.Globalization.DateTimeStyles]::RoundtripKind,
@@ -480,8 +491,17 @@ if ($VerifySafeUpdate) {
         )) {
         throw "安全更新准备记录无效。"
     }
-    if ($manifestVersion -eq 4 -and
-        [DateTimeOffset]::Now -ge $manifestCreatedAt.AddSeconds(180)) {
+    $refreshStartedAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParseExact(
+            $RefreshStartedAt,
+            "o",
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$refreshStartedAt
+        ) -or $refreshStartedAt -gt [DateTimeOffset]::Now) {
+        Complete-InstallResult 64 "invalid_request" "invalid_refresh_start" "本轮更新所有订阅的开始时间无效。"
+    }
+    if ([DateTimeOffset]::Now -ge $refreshStartedAt.AddSeconds(180)) {
         Complete-InstallResult 1 "failed" "safe_update_timeout" `
             "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
     }
