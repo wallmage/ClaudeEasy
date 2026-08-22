@@ -534,7 +534,14 @@ function Invoke-TestPowerShell(
             $manifestPath = Join-Path $runtimeHome "claude-easy-safe-update.json"
             if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
                 $manifestText = [System.IO.File]::ReadAllText($manifestPath)
-                if ($manifestText -match '(?i)"RefreshStartedAt"\s*:\s*null') {
+                $manifest = $manifestText | ConvertFrom-Json
+                $manifestProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
+                $canBeginRefresh = ($manifestProperties -join ",") -ceq
+                    "CreatedAt,Profiles,RefreshStartedAt,Runtime,UpdateDispatchCommittedFor,Version" -and
+                    ($manifest.Version -is [int] -or $manifest.Version -is [long]) -and
+                    [long]$manifest.Version -eq 4 -and
+                    $null -eq $manifest.RefreshStartedAt
+                if ($canBeginRefresh) {
                     $beginOutput = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath `
                         -AppHome $runtimeHome -BeginSafeUpdateRefresh -MihomoPath $fakeCore -Json 2>&1 | Out-String
                     if ($LASTEXITCODE -ne 0) {
