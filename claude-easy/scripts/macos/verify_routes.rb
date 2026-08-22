@@ -46,8 +46,14 @@ module ClashRouteVerifier
   PROXY_GROUP_TYPES = %w[Selector URLTest Fallback LoadBalance].freeze
   NON_PROXY_TYPES = %w[Direct Dns Reject RejectDrop Pass PassRule Compatible Rematch Relay].freeze
 
-  def get_json(socket, endpoint)
-    code, body = ClaudeEasy.controller_request(socket, "GET", endpoint)
+  def controller_requester(controller)
+    return controller if controller.respond_to?(:call)
+
+    ->(method, endpoint, body = nil) { ClaudeEasy.controller_request(controller, method, endpoint, body) }
+  end
+
+  def get_json(controller, endpoint)
+    code, body = controller_requester(controller).call("GET", endpoint, nil)
     return nil unless code == 200
 
     JSON.parse(body)
@@ -71,17 +77,15 @@ module ClashRouteVerifier
     listener&.close
   end
 
-  def observe_connection(socket, url, host_pattern, observation_seconds: 15,
+  def observe_connection(controller, url, host_pattern, observation_seconds: 15,
                          proxy_url: nil)
+    requester = controller_requester(controller)
     unless proxy_url
-      requester = lambda do |method, endpoint, body|
-        ClaudeEasy.controller_request(socket, method, endpoint, body)
-      end
       proxy_url = ClaudeEasy.runtime_loopback_proxy(requester)
     end
     return nil unless ClaudeEasy.mihomo_loopback_proxy_url?(proxy_url)
 
-    existing = Array(get_json(socket, "/connections")&.fetch("connections", [])).map { |entry| entry["id"] }
+    existing = Array(get_json(requester, "/connections")&.fetch("connections", [])).map { |entry| entry["id"] }
     source_port = reserve_local_port
     pid = Process.spawn(
       ClaudeEasy::CURL_ISOLATED_ENVIRONMENT,
@@ -92,7 +96,7 @@ module ClashRouteVerifier
     )
     (observation_seconds * 10).times do
       sleep 0.1
-      connections = Array(get_json(socket, "/connections")&.fetch("connections", []))
+      connections = Array(get_json(requester, "/connections")&.fetch("connections", []))
       observed = connections.find do |entry|
         metadata = entry["metadata"] || {}
         !existing.include?(entry["id"]) &&
@@ -161,7 +165,7 @@ module ClashRouteVerifier
     nil
   end
 
-  def live_main_group(socket, proxies, requested = nil)
+  def live_main_group(controller, proxies, requested = nil)
     unless requested.to_s.empty?
       proxy = proxies[requested]
       return requested if proxy.is_a?(Hash) && proxy_group_type?(proxy["type"])
@@ -169,7 +173,7 @@ module ClashRouteVerifier
       return nil
     end
 
-    rules = get_json(socket, "/rules")&.fetch("rules", nil)
+    rules = get_json(controller, "/rules")&.fetch("rules", nil)
     return nil unless rules.is_a?(Array)
 
     rule = rules.reverse.find do |entry|
@@ -225,19 +229,19 @@ module ClashRouteVerifier
 
   def run(output: $stdout, details: nil, main_group: nil, ai_group: nil,
           observation_seconds: 15)
-    socket = ClaudeEasy.controller_socket
-    return false unless socket
+    requester = ClaudeEasy.controller_requester
+    return false unless requester
 
     policy_path = File.expand_path("../../references/policy.json", __dir__)
     policy = JSON.parse(File.read(policy_path, encoding: "UTF-8"))
-    proxies = get_json(socket, "/proxies")&.fetch("proxies", {})
+    proxies = get_json(requester, "/proxies")&.fetch("proxies", {})
     return false unless proxies.is_a?(Hash)
-    main_group = live_main_group(socket, proxies, main_group)
+    main_group = live_main_group(requester, proxies, main_group)
     ai_group = find_group(proxies, policy["ai_group_names"], ai_group, ai: true)
     return false unless main_group && ai_group && usable_route_group_selection?(proxies, main_group) &&
                                                usable_route_group_selection?(proxies, ai_group)
 
-    provider_payload = get_json(socket, "/providers/proxies")
+    provider_payload = get_json(requester, "/providers/proxies")
     return false unless provider_payload.is_a?(Hash)
 
     providers = provider_payload.fetch("providers", {})
@@ -254,11 +258,11 @@ module ClashRouteVerifier
 
     checks = TARGETS.map do |label, url, kind, host_pattern|
       connection = observe_connection(
-        socket, url, host_pattern, observation_seconds: observation_seconds
+        requester, url, host_pattern, observation_seconds: observation_seconds
       )
-      current_proxies = get_json(socket, "/proxies")&.fetch("proxies", {})
-      current_provider_payload = get_json(socket, "/providers/proxies")
-      current_main = current_proxies.is_a?(Hash) ? live_main_group(socket, current_proxies) : nil
+      current_proxies = get_json(requester, "/proxies")&.fetch("proxies", {})
+      current_provider_payload = get_json(requester, "/providers/proxies")
+      current_main = current_proxies.is_a?(Hash) ? live_main_group(requester, current_proxies) : nil
       current_ai = current_proxies.is_a?(Hash) ? find_group(
         current_proxies, policy["ai_group_names"], nil, ai: true
       ) : nil

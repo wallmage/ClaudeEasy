@@ -15206,7 +15206,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_route_verifier_returns_false_when_live_proxy_loading_raises
-    ClaudeEasy.stub(:controller_socket, "socket") do
+    ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
       ClashRouteVerifier.stub(:get_json, ->(*_args) { raise IOError, "controller disappeared" }) do
         refute ClashRouteVerifier.run(output: StringIO.new)
       end
@@ -15214,12 +15214,12 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_route_verifier_fails_closed_at_every_discovery_boundary
-    ClaudeEasy.stub(:controller_socket, nil) do
+    ClaudeEasy.stub(:controller_requester, nil) do
       ClashRouteVerifier.stub(:active_profile, "/tmp/friend.yaml") do
         refute ClashRouteVerifier.run(output: StringIO.new)
       end
     end
-    ClaudeEasy.stub(:controller_socket, "socket") do
+    ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
       ClashRouteVerifier.stub(:active_profile, nil) do
         refute ClashRouteVerifier.run(output: StringIO.new)
       end
@@ -15228,7 +15228,7 @@ class MacosPatcherTest < Minitest::Test
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "friend.yaml")
       File.write(profile, YAML.dump(base_config))
-      ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClaudeEasy.stub(:detect_main_group, nil) do
             refute ClashRouteVerifier.run(output: StringIO.new)
@@ -15318,7 +15318,7 @@ class MacosPatcherTest < Minitest::Test
     }
     observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
 
-    ClaudeEasy.stub(:controller_socket, "socket") do
+    ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
       ClashRouteVerifier.stub(:active_profile, -> { flunk "read the disk for a live group" }) do
         ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
           ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
@@ -15327,6 +15327,43 @@ class MacosPatcherTest < Minitest::Test
         end
       end
     end
+  end
+
+  def test_route_verifier_uses_controller_context_once_for_all_polling_requests
+    context_calls = 0
+    context = { socket: "/tmp/controller.sock", secret: "controller-secret" }
+    responses = {
+      "/proxies" => { "proxies" => {
+        "Main" => { "type" => "Selector", "now" => "Taiwan" },
+        "AI" => { "type" => "Selector", "now" => "Japan" },
+        "Taiwan" => { "type" => "Shadowsocks" },
+        "Japan" => { "type" => "Vmess" }
+      } },
+      "/rules" => { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] },
+      "/providers/proxies" => { "providers" => {} }
+    }
+    observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
+    getter = lambda do |requester, endpoint|
+      assert_respond_to requester, :call
+      responses[endpoint]
+    end
+    observer = lambda do |requester, *_arguments, **_options|
+      assert_respond_to requester, :call
+      20.times { requester.call("GET", "/connections", nil) }
+      observations.shift
+    end
+
+    ClaudeEasy.stub(:controller_context, -> { context_calls += 1; context }) do
+      ClaudeEasy.stub(:controller_request_with_secret, [200, "{}"]) do
+        ClashRouteVerifier.stub(:get_json, getter) do
+          ClashRouteVerifier.stub(:observe_connection, observer) do
+            assert ClashRouteVerifier.run(output: StringIO.new)
+          end
+        end
+      end
+    end
+
+    assert_equal 1, context_calls
   end
 
   def test_route_verifier_rejects_a_proxy_snapshot_changed_during_observation
@@ -15346,7 +15383,7 @@ class MacosPatcherTest < Minitest::Test
     end
     observations = Array.new(3) { { "chains" => ["Same Leaf", "AI"] } }
 
-    ClaudeEasy.stub(:controller_socket, "socket") do
+    ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
       ClashRouteVerifier.stub(:get_json, getter) do
         ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
           refute ClashRouteVerifier.run(output: StringIO.new)
@@ -15387,7 +15424,7 @@ class MacosPatcherTest < Minitest::Test
     }
     details = { checks: [] }
 
-    ClaudeEasy.stub(:controller_socket, "socket") do
+    ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
       ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
         ClashRouteVerifier.stub(:observe_connection, nil) do
           refute ClashRouteVerifier.run(output: StringIO.new, details: details)
@@ -15416,7 +15453,7 @@ class MacosPatcherTest < Minitest::Test
         ai_node => { "type" => "Shadowsocks" }
       } }
       observations = Array.new(3) { { "chains" => [ai_node, ai_group] } }
-      ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies, main_group: main_group)) do
             ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
@@ -15453,7 +15490,7 @@ class MacosPatcherTest < Minitest::Test
         "Japan" => { "type" => "Shadowsocks" }
       } }
       observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
-      ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
             ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
@@ -15487,7 +15524,7 @@ class MacosPatcherTest < Minitest::Test
         "/rules" => rules_payload
       }
       observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
-      ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
             ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
@@ -15543,7 +15580,7 @@ class MacosPatcherTest < Minitest::Test
         "Japan" => { "type" => "Shadowsocks" }
       } }
       observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
-      ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
             ClashRouteVerifier.stub(:observe_connection, ->(*_args, **_options) { observations.shift }) do
@@ -15669,7 +15706,7 @@ class MacosPatcherTest < Minitest::Test
         }[endpoint]
       end
 
-      ClaudeEasy.stub(:controller_socket, "socket") do
+      ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, get_json) do
             observations = healthy_observations.map(&:dup)
@@ -15697,7 +15734,7 @@ class MacosPatcherTest < Minitest::Test
             "/providers/proxies" => payload
           }[endpoint]
         end
-        ClaudeEasy.stub(:controller_socket, "socket") do
+        ClaudeEasy.stub(:controller_requester, -> { ->(*_args) { [0, ""] } }) do
           ClashRouteVerifier.stub(:active_profile, profile) do
             ClashRouteVerifier.stub(:get_json, get_json) do
               observations = observations_fixture.map(&:dup)

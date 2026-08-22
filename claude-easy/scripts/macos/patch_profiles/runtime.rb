@@ -217,10 +217,7 @@ module ClaudeEasy
   end
 
   def current_runtime_requester
-    socket = controller_socket
-    return nil unless socket
-
-    ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+    controller_requester
   end
 
   def wait_for_clashx_safe_runtime(identity, reload_receipt: nil, selections:, expected_tun:,
@@ -565,12 +562,24 @@ module ClaudeEasy
     context[:secret] if context && context[:socket] == socket
   end
 
+  def controller_requester
+    context = controller_context
+    return nil unless context
+
+    socket = context.fetch(:socket)
+    secret = context.fetch(:secret)
+    ->(method, path, body = nil) { controller_request_with_secret(socket, secret, method, path, body) }
+  end
+
   def controller_curl_config_value(value)
     value.to_s.gsub("\\", "\\\\").gsub('"', '\\"').gsub("\r", "\\r").gsub("\n", "\\n")
   end
 
   def controller_request(socket, method, path, body = nil)
-    secret = controller_secret(socket)
+    controller_request_with_secret(socket, controller_secret(socket), method, path, body)
+  end
+
+  def controller_request_with_secret(socket, secret, method, path, body = nil)
     config = [
       'silent', 'show-error', 'proxy = ""', 'noproxy = "*"', 'max-time = 3',
       "request = \"#{controller_curl_config_value(method)}\"",
