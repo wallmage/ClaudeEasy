@@ -28,7 +28,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 1. **绝对不要退出、停止或重启 Clash 客户端。** 不得执行、建议或要求用户这样做。
 2. **不得运行 ClashX Meta 主程序做检查。** 不用 `open`、LaunchServices、Computer Use 或 `--version` 启动它；客户端版本读取 `Info.plist`，运行状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo。客户端未运行时保持未运行。
-3. **Claude/Anthropic 远程域名永久禁测。** 相关网站、API 和域名一律不打开、不请求、不测试；不得通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量。用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名；档位 3 的任何 Patch、更新、恢复或实际产生修改的修复都必须运行这个本地页面。
+3. **Claude/Anthropic 远程域名永久禁测。** 相关网站、API 和域名一律不打开、不请求、不测试；不得通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量。用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名；已保存档位为 3 时，档位 3 的任何配置任务都必须在全部配置动作结束后运行这个本地页面，每轮只测试一次。中等风险或高风险按档位策略完成用户调整或获准的 Computer Use 调整，再进入下一轮单次测试，直到低风险通过。
 4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按平台策略操作 Clash Verge Rev；AdGuard for Mac 的兼容设置只通过它自己的正常窗口。
 5. 安全更新必须保留热加载，但只能走已经运行的客户端原生入口。候选加载与失败恢复各最多一次；运行配置变化后继续等待 TUN、代理选择、DNS 和实际连接全部恢复，禁止直接重载 Mihomo、直接改 TUN 或循环重试。
 6. 只处理 Clash 当前存储位置中的订阅；无法确认本地或 iCloud 状态时停止，不猜。
@@ -77,7 +77,7 @@ macOS 文件日志缺失时使用 `/usr/bin/log show --info --debug`；TCP 摘�
 
 1. **档位 1｜普通浏览**：普通浏览、国内直连和 Clash 系统代理；不改 TUN、IPv6、WebRTC、AI 分组或节点。
 2. **档位 2｜海外 AI**：继承档位 1，增加 TUN 和普通海外 AI；关闭 Clash 自己的系统代理，避免重复接管；不增加 WebRTC 或 AI 分组补丁。
-3. **档位 3｜Claude/Claude Code**：继承档位 2，再应用完整 DNS 分流、AI 分组与规则、局域网与国内 UDP 分流及其余 UDP/WebRTC 防护；Claude/Anthropic 远程域名只做静态配置，不做任何联网测试；强制运行本地区域指纹测试。
+3. **档位 3｜Claude/Claude Code**：继承档位 2，再应用完整 DNS 分流、AI 分组与规则、局域网与国内 UDP 分流及其余 UDP/WebRTC 防护；Claude/Anthropic 远程域名只做静态配置，不做任何联网测试；任何配置任务收尾都强制运行一次本地区域指纹测试，调整后按轮次复测到低风险。
 
 用户可以随时改档；升档只补新增能力。档位 3 降到 1 或 2 时先安全卸载：macOS `bash scripts/uninstall_macos.sh`，Windows `.\scripts\uninstall_windows.cmd`。Windows 卸载返回 `partial` 时保留旧档位且不得继续降档。
 

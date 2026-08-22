@@ -1579,8 +1579,43 @@ class SkillContractTest < Minitest::Test
     assert_includes source, "当前环境没有 Computer Use 时，要求用户手动完成全部三项"
 
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
-    assert_includes diagnostics, "档位 3 的任何修复只要实际产生修改"
-    assert_includes diagnostics, "强制运行本地区域指纹测试"
+    assert_includes diagnostics, "只要任务实际执行了任何配置"
+    assert_includes diagnostics, "必须在全部配置动作结束后"
+  end
+
+  def test_profile_three_region_check_drives_single_scan_adjustment_cycles
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    profiles = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
+    routing = File.read(File.join(SKILL, "references/routing-and-security.md"))
+    page = File.read(File.join(SKILL, "assets/claude-region-check.html"))
+
+    assert_includes skill, "档位 3 的任何配置任务"
+    assert_includes skill, "每轮只测试一次"
+
+    assert_includes profiles, "绿色低风险"
+    assert_includes profiles, "我已经调整完了"
+    assert_includes profiles, "每轮调整完成后只重新测试一次"
+    assert_includes profiles, "直到得到绿色低风险"
+    assert_includes profiles, "先说明能够使用 Computer Use"
+    assert_includes profiles, "得到明确许可后"
+    assert_includes profiles, "macOS：Safari 或 Chrome"
+    assert_includes profiles, "Windows：Chrome 或 Edge"
+    assert_includes profiles, "不要设为默认浏览器"
+    assert_includes profiles, "登录或授权"
+    assert_includes profiles, "中国大陆时区加 24 分"
+    assert_includes profiles, "香港或澳门时区加 14 分"
+    assert_includes profiles, "中国大陆简体中文时加 18 分"
+    assert_includes profiles, "国产浏览器或应用内置网页加 8 分"
+
+    assert_includes routing, "台北"
+    assert_includes routing, "东京"
+    assert_includes routing, "繁體中文（台灣）"
+    assert_includes routing, "台湾家宽"
+    assert_includes routing, "台湾普通节点"
+    assert_includes routing, "系统地区"
+
+    assert_includes page, "低风险才是档位 3 的验收通过结果"
+    refute_includes page, "不是安全结论或验收门槛"
   end
 
 

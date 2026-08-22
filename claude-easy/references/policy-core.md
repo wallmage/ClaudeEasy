@@ -27,7 +27,7 @@
 
 同一用户请求和同一用途档位在 macOS 与 Windows 上遵守相同的授权、隐私、客户端安全边界和用户可见完成条件。平台文件分别定义各自的实现方式与失败处理；跨平台摘要不得把两端不同的实现方式写成相同。新增或改变共同边界时，只有两个平台都实现并通过对应测试后才能报告完成。
 
-**Claude/Anthropic 远程域名永久禁测：** 相关网站、API 和域名一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量；用户当次要求也不能覆盖。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名；档位 3 必须运行这个本地页面的区域指纹测试。
+**Claude/Anthropic 远程域名永久禁测：** 相关网站、API 和域名一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量；用户当次要求也不能覆盖。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名；已保存档位为 3 时，任何配置任务都必须在收尾运行一次本地区域指纹测试，每轮调整后再运行一次，直到低风险通过。
 
 Clash Verge Rev 有正常主窗口，Windows 当前环境提供 Computer Use 时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用 Computer Use 操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；Computer Use 仍可用于有正常窗口的浏览器和 AdGuard。没有 Computer Use 时只改变 Windows 客户端或浏览器动作由谁执行，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
 

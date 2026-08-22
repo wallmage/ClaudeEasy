@@ -117,7 +117,7 @@ Windows 的其他受保护恢复只有客户端本来就未运行时进行。
 
 - 档位 1：检查国内站、Google、Twitter、一个常用网站和 Clash 系统代理。
 - 档位 2：再检查 TUN、ChatGPT、Gemini 和命令行或 Agent 联网。
-- 档位 3：再检查 ChatGPT、Gemini、Grok 的实时连接链、DNS 深度测试、WebRTC 页面和本地区域指纹页；本地页必须是低风险才通过。
+- 档位 3：再检查 ChatGPT、Gemini、Grok 的实时连接链、DNS 深度测试、WebRTC 页面和本地区域指纹页。任何配置任务收尾只运行一次本地页；低风险通过，中高风险按提示调整后每轮再测一次，直到低风险。可用 Computer Use 时，修改系统或浏览器设置前仍会先征得你的许可。
 
 **Claude/Anthropic 远程域名永久禁测：相关网站、API 和域名一律不打开、不请求、不测试。** 只允许静态检查配置；AI 联网只测试 ChatGPT、Gemini 和 Grok。本地区域指纹页不连接这些域名，档位 3 必须运行。
 
