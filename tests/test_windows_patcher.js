@@ -1143,7 +1143,7 @@ test('Windows subscription update entry recovers interrupted transactions before
   const backupStart = source.indexOf(
     'if ($BackupSubscriptions) {', source.indexOf('$needsUsageProfile')
   );
-  const legacyStart = source.indexOf('if ($SnapshotProfiles -or $VerifySafeUpdate) {');
+  const legacyStart = source.indexOf('if ($SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate) {');
   assert.match(source, /\[switch\]\$BackupSubscriptions/);
   assert.match(source, /Enter-AppHomeMutationLock \$AppHome\r?\n/);
   assert.doesNotMatch(source, /SkipRecovery:\$BackupSubscriptions/);
@@ -2003,9 +2003,10 @@ test('Windows route verifier allows a non-AI Google group only with the main gro
   const source = fs.readFileSync(routeVerifierPath, 'utf8');
 
   assert.match(source, /function Test-RouteChains/);
-  assert.match(source, /Observe-Route "Google"[^\r\n]+\$true/);
-  assert.match(source, /Observe-Route "OpenAI"[^\r\n]+\$false/);
-  assert.match(source, /\(\?\i\)\(\^\|\\\.\)google\\\.com\$/);
+  assert.match(source, /Observe-Route "ChatGPT"[^\r\n]+\$false/);
+  assert.match(source, /Observe-Route "Gemini"[^\r\n]+\$false/);
+  assert.match(source, /Observe-Route "Grok"[^\r\n]+\$false/);
+  assert.match(source, /\(\?\i\)\^gemini\\\.google\\\.com\$/);
   assert.doesNotMatch(source, /Observe-Route "Google"[^\r\n]+"google"/);
   assert.doesNotMatch(source, /\$name -notmatch '\(\?i\)google'/);
 });

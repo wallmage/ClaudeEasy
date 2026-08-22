@@ -4573,15 +4573,23 @@ rules: ["MATCH,AI"]
     )
     Assert-JsonResult $legacyRetirementSnapshot "install" 0 | Out-Null
     $legacyManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
-    $legacyManifest = (
+    $legacyManifestSource = (
         [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
     )
-    $legacyManifest.Version = 1
-    $legacyManifest.PSObject.Properties.Remove("RefreshStartedAt")
-    $legacyManifest.PSObject.Properties.Remove("Runtime")
-    $legacyManifest.PSObject.Properties.Remove("UpdateDispatchCommittedFor")
-    foreach ($profile in @($legacyManifest.Profiles)) {
-        $profile.PSObject.Properties.Remove("BeforeUpdated")
+    $legacyProfiles = @(
+        foreach ($profile in @($legacyManifestSource.Profiles)) {
+            [ordered]@{
+                Backup = [string]$profile.Backup
+                BeforeSha256 = [string]$profile.BeforeSha256
+                File = [string]$profile.File
+                Uid = [string]$profile.Uid
+            }
+        }
+    )
+    $legacyManifest = [ordered]@{
+        CreatedAt = [string]$legacyManifestSource.CreatedAt
+        Profiles = $legacyProfiles
+        Version = 1
     }
     Remove-Item -LiteralPath (
         Join-Path (
@@ -4623,23 +4631,37 @@ rules: ["MATCH,AI"]
         "-Json"
     )
     Assert-JsonResult $legacySnapshot "install" 0 | Out-Null
-    $legacyManifest = (
+    $legacyManifestSource = (
         [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
     )
-    $legacyManifest.Version = 1
-    $legacyManifest.PSObject.Properties.Remove("RefreshStartedAt")
-    $legacyManifest.PSObject.Properties.Remove("Runtime")
-    $legacyManifest.PSObject.Properties.Remove("UpdateDispatchCommittedFor")
-    foreach ($profile in @($legacyManifest.Profiles)) {
-        $profile.PSObject.Properties.Remove("BeforeUpdated")
-    }
     $legacyBadBackup = [System.Text.Encoding]::UTF8.GetBytes("proxy-groups: [`n")
+    $legacyBadBackupSha = Get-BytesSha256 $legacyBadBackup
+    $legacyProfiles = @(
+        $legacyProfileIndex = 0
+        foreach ($profile in @($legacyManifestSource.Profiles)) {
+            [ordered]@{
+                Backup = [string]$profile.Backup
+                BeforeSha256 = if ($legacyProfileIndex -eq 0) {
+                    $legacyBadBackupSha
+                } else {
+                    [string]$profile.BeforeSha256
+                }
+                File = [string]$profile.File
+                Uid = [string]$profile.Uid
+            }
+            $legacyProfileIndex++
+        }
+    )
+    $legacyManifest = [ordered]@{
+        CreatedAt = [string]$legacyManifestSource.CreatedAt
+        Profiles = $legacyProfiles
+        Version = 1
+    }
     $legacyFirstProfile = @($legacyManifest.Profiles)[0]
     [System.IO.File]::WriteAllBytes(
         (Join-Path (Join-Path $safeUpdateCase "claude-easy-backups") $legacyFirstProfile.Backup),
         $legacyBadBackup
     )
-    $legacyFirstProfile.BeforeSha256 = Get-BytesSha256 $legacyBadBackup
     [System.IO.File]::WriteAllText(
         $legacyManifestPath,
         (($legacyManifest | ConvertTo-Json -Depth 5) + "`r`n")
