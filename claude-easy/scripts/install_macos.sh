@@ -11,7 +11,6 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PATCHER_SOURCE="$SCRIPT_DIR/macos/patch_profiles.rb"
 RESULT_CONTRACT_SOURCE="$SCRIPT_DIR/macos/result_contract.rb"
 OPERATION_LOCK_SOURCE="$SCRIPT_DIR/macos/operation_lock.rb"
-UPDATE_DEADLINE_SOURCE="$SCRIPT_DIR/macos/update_deadline.rb"
 USAGE_PROFILE_STATE_SOURCE="$SCRIPT_DIR/macos/usage_profile_state.rb"
 OPERATION_LOCK_PATH="$BACKUP_DIR/.claude-easy-wrapper.lock"
 UNINSTALLER_SOURCE="$SCRIPT_DIR/uninstall_macos.sh"
@@ -49,6 +48,64 @@ valid_child_json() {
     require ARGV.fetch(0)
     exit ClaudeEasyResult.valid_child_json?(STDIN.read) ? 0 : 1
   ' "$RESULT_CONTRACT_SOURCE"
+}
+
+run_with_update_deadline() {
+  /usr/bin/ruby -e '
+    require "tempfile"
+
+    timeout_exit = 124
+    seconds = Integer(ARGV.shift, 10)
+    abort "invalid update deadline" unless seconds.positive?
+    abort "missing update command" if ARGV.empty?
+
+    output = Tempfile.new("claude-easy-update")
+    error = Tempfile.new("claude-easy-update-error")
+    output.chmod(0o600)
+    error.chmod(0o600)
+    pid = Process.spawn(*ARGV, pgroup: true, out: output, err: error)
+    forwarded_signal = nil
+    %w[HUP INT TERM].each do |name|
+      Signal.trap(name) do
+        forwarded_signal ||= Signal.list.fetch(name)
+        Process.kill(name, -pid) rescue nil
+      end
+    end
+
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+    status = nil
+    loop do
+      waited = Process.waitpid2(pid, Process::WNOHANG)
+      if waited
+        status = waited.last
+        break
+      end
+      break if forwarded_signal || Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      sleep 0.05
+    end
+
+    unless status
+      timed_out = forwarded_signal.nil?
+      Process.kill("TERM", -pid) rescue nil if timed_out
+      grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 0.5
+      until status || Process.clock_gettime(Process::CLOCK_MONOTONIC) >= grace_deadline
+        waited = Process.waitpid2(pid, Process::WNOHANG)
+        status = waited.last if waited
+        sleep 0.05 unless status
+      end
+      unless status
+        Process.kill("KILL", -pid) rescue nil
+        _, status = Process.waitpid2(pid)
+      end
+      exit(timed_out ? timeout_exit : 128 + forwarded_signal)
+    end
+
+    output.rewind
+    error.rewind
+    IO.copy_stream(output, STDOUT)
+    IO.copy_stream(error, STDERR)
+    exit(status.exitstatus || 128 + status.termsig)
+  ' "$@"
 }
 
 valid_safe_update_child_json() {
@@ -238,7 +295,6 @@ install_package_complete() {
     "$PATCHER_SOURCE" \
     "$RESULT_CONTRACT_SOURCE" \
     "$OPERATION_LOCK_SOURCE" \
-    "$UPDATE_DEADLINE_SOURCE" \
     "$USAGE_PROFILE_STATE_SOURCE" \
     "$POLICY_SOURCE"; do
     [ -f "$required_package_file" ] && [ ! -L "$required_package_file" ] || return 1
@@ -726,12 +782,9 @@ fi
 
 if [ "$SAFE_UPDATE" -eq 1 ] &&
    [ "${CLAUDE_EASY_INTERNAL_UPDATE_DEADLINE_ACTIVE:-0}" != "1" ]; then
-  if [ ! -f "$UPDATE_DEADLINE_SOURCE" ] || [ -L "$UPDATE_DEADLINE_SOURCE" ]; then
-    finish 6 failed incomplete_package "安装包不完整。" safe_update
-  fi
   export CLAUDE_EASY_INTERNAL_UPDATE_DEADLINE_ACTIVE=1
   set +e
-  /usr/bin/ruby "$UPDATE_DEADLINE_SOURCE" "$SAFE_UPDATE_TIMEOUT_SECONDS" \
+  run_with_update_deadline "$SAFE_UPDATE_TIMEOUT_SECONDS" \
     /bin/sh "$0" "$@"
   deadline_status=$?
   set -e

@@ -28,7 +28,6 @@ class MacosWrapperTest < Minitest::Test
     macos/patch_profiles.rb
     macos/result_contract.rb
     macos/operation_lock.rb
-    macos/update_deadline.rb
     macos/usage_profile_state.rb
     macos/patch_profiles/transform.rb
     macos/patch_profiles/backups.rb
@@ -41,7 +40,7 @@ class MacosWrapperTest < Minitest::Test
     ../references/policy.json
   ].freeze
   UNINSTALL_PACKAGE_DEPENDENCIES = (
-    INSTALL_PACKAGE_DEPENDENCIES - ["uninstall_macos.sh", "macos/update_deadline.rb"]
+    INSTALL_PACKAGE_DEPENDENCIES - ["uninstall_macos.sh"]
   ).freeze
 
   def usage_state_path(home)
