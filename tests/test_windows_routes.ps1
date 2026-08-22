@@ -31,8 +31,11 @@ Assert-True (
 
 $root = Split-Path -Parent $PSScriptRoot
 $routeVerifier = Join-Path $root "claude-easy/scripts/windows/verify_routes.ps1"
-$resultContract = Join-Path $root "claude-easy/scripts/windows/result_contract.ps1"
-. $resultContract
+$windowsScripts = Join-Path $root "claude-easy/scripts/windows"
+. (Join-Path $windowsScripts "result_contract.ps1")
+foreach ($moduleName in @("transaction.ps1", "common.ps1", "yaml.ps1", "runtime.ps1")) {
+    . (Join-Path $windowsScripts "install_windows/$moduleName")
+}
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
