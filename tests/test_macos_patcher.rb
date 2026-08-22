@@ -56,6 +56,52 @@ class MacosPatcherTest < Minitest::Test
       ENV["CLAUDE_EASY_RUN_PRODUCTION_PROBES"] == "1"
   end
 
+  def clashx_native_fetch_integration_script
+    script = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT.dup
+    identity_start = script.index("var primaryApplications =")
+    request_start = script.index("var url =", identity_start)
+    raise "ClashX identity block not found" unless identity_start && request_start
+
+    script[identity_start...request_start] = 'var userAgent = "ClashX Meta/integration-test";' + "\n"
+    script.gsub!('urlText.match(/^https:\\/\\//)', 'urlText.match(/^http:\\/\\//)')
+    script.gsub!('unwrap(nextURL.scheme).toLowerCase() !== "https"',
+                 'unwrap(nextURL.scheme).toLowerCase() !== "http"')
+    script.gsub!('unwrap(finalURL.scheme).toLowerCase() !== "https"',
+                 'unwrap(finalURL.scheme).toLowerCase() !== "http"')
+    script
+  end
+
+  def run_clashx_native_fetch_integration(max_bytes: 1024, &server_behavior)
+    listener = TCPServer.new("127.0.0.1", 0)
+    server = Thread.new do
+      Thread.current.report_on_exception = false
+      server_behavior.call(listener)
+    rescue IOError
+      nil
+    end
+    Open3.capture3(
+      "/usr/bin/osascript", "-l", "JavaScript", "-e", clashx_native_fetch_integration_script,
+      stdin_data: "2\n#{max_bytes}\nhttp://127.0.0.1:#{listener.addr[1]}/subscription\n",
+      binmode: true
+    )
+  ensure
+    listener&.close
+    server&.join(1)
+    server&.kill if server&.alive?
+  end
+
+  def write_http_fixture_response(listener, status:, headers: {}, body: "", include_content_length: true)
+    client = listener.accept
+    request = +""
+    request << client.readpartial(1024) until request.include?("\r\n\r\n")
+    fields = { "Connection" => "close" }.merge(headers)
+    fields["Content-Length"] = body.bytesize if include_content_length
+    client.write(
+      "HTTP/1.1 #{status}\r\n#{fields.map { |key, value| "#{key}: #{value}\r\n" }.join}\r\n#{body}"
+    )
+    client.close
+  end
+
   def test_every_macos_usage_profile_persists_proxy_selections_across_reloads
     [1, 2, 3].each do |usage_profile|
       missing = base_config
@@ -5767,15 +5813,19 @@ class MacosPatcherTest < Minitest::Test
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     'request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    'willPerformHTTPRedirection:newRequest:completionHandler:'
+                    'connection:willSendRequest:redirectResponse:'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "originalHost"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "originalPort"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "nextURL.host"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "nextURL.port"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, 'protocols: ["NSURLSessionDataDelegate"]'
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
+                    'protocols: ["NSURLConnectionDataDelegate", "NSURLConnectionDelegate"]'
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "didReceiveData:"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "dataTask.cancel;"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "connection.cancel;"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "data.appendData(receivedData);"
+    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "request.HTTPShouldHandleCookies = false;"
+    refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
+                    "URLSession:dataTask:didReceiveResponse:completionHandler:"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "var finalURL = response.URL;"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     "Number(primaryApplications.count) + Number(alternateApplications.count) !== 1"
@@ -5812,6 +5862,50 @@ class MacosPatcherTest < Minitest::Test
         )
       end
     end
+  end
+
+  def test_clashx_native_fetch_script_completes_a_real_foundation_request
+    skip "JXA Foundation integration requires macOS" unless RbConfig::CONFIG["host_os"].include?("darwin")
+
+    body = "real-foundation-response\n"
+    stdout, stderr, status = run_clashx_native_fetch_integration do |listener|
+      write_http_fixture_response(
+        listener, status: "200 OK", headers: { "Content-Type" => "application/octet-stream" }, body: body
+      )
+    end
+
+    assert status.success?, stderr
+    assert_equal body, stdout
+  end
+
+  def test_clashx_native_fetch_script_rejects_an_oversized_real_foundation_response
+    skip "JXA Foundation integration requires macOS" unless RbConfig::CONFIG["host_os"].include?("darwin")
+
+    stdout, stderr, status = run_clashx_native_fetch_integration(max_bytes: 32) do |listener|
+      write_http_fixture_response(
+        listener, status: "200 OK", body: "x" * 64, include_content_length: false
+      )
+    end
+
+    refute status.success?
+    assert_empty stdout
+    assert_includes stderr, "subscription request failed"
+  end
+
+  def test_clashx_native_fetch_script_follows_a_same_origin_redirect
+    skip "JXA Foundation integration requires macOS" unless RbConfig::CONFIG["host_os"].include?("darwin")
+
+    body = "redirected-foundation-response\n"
+    stdout, stderr, status = run_clashx_native_fetch_integration do |listener|
+      port = listener.addr[1]
+      write_http_fixture_response(
+        listener, status: "302 Found", headers: { "Location" => "http://127.0.0.1:#{port}/final" }
+      )
+      write_http_fixture_response(listener, status: "200 OK", body: body)
+    end
+
+    assert status.success?, stderr
+    assert_equal body, stdout
   end
 
   def test_clashx_native_request_treats_bridged_application_counts_as_numbers

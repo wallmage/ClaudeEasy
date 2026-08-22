@@ -59,6 +59,7 @@ module ClaudeEasy
     request.HTTPMethod = "GET";
     request.cachePolicy = $.NSURLRequestReloadIgnoringLocalCacheData;
     request.timeoutInterval = timeoutSeconds;
+    request.HTTPShouldHandleCookies = false;
     request.setValueForHTTPHeaderField(userAgent, "User-Agent");
     request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");
     request.setValueForHTTPHeaderField("br;q=1.0, gzip;q=0.9, deflate;q=0.8", "Accept-Encoding");
@@ -70,12 +71,14 @@ module ClaudeEasy
     var redirectRejected = false;
     var responseTooLarge = false;
     ObjC.registerSubclass({
-      name: "ClaudeEasyNoRedirectDelegate",
+      name: "ClaudeEasyConnectionDelegate",
       superclass: "NSObject",
-      protocols: ["NSURLSessionDataDelegate"],
+      protocols: ["NSURLConnectionDataDelegate", "NSURLConnectionDelegate"],
       methods: {
-        "URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:": {
-          implementation: function(session, task, redirectResponse, redirectRequest, completionHandler) {
+        "connection:willSendRequest:redirectResponse:": {
+          implementation: function(connection, redirectRequest, redirectResponse) {
+            if (!redirectResponse || redirectResponse.isNil()) return redirectRequest;
+
             var nextURL = redirectRequest && redirectRequest.URL;
             var nextHost = nextURL && nextURL.host && unwrap(nextURL.host).toLowerCase();
             var nextPort = nextURL && nextURL.port && !nextURL.port.isNil() ?
@@ -83,56 +86,59 @@ module ClaudeEasy
             if (!nextURL || unwrap(nextURL.scheme).toLowerCase() !== "https" ||
                 nextHost !== originalHost || nextPort !== originalPort) {
               redirectRejected = true;
-              completionHandler(null);
-              return;
+              return null;
             }
-            completionHandler(redirectRequest);
+            return redirectRequest;
           }
         },
-        "URLSession:dataTask:didReceiveResponse:completionHandler:": {
-          implementation: function(session, dataTask, receivedResponse, completionHandler) {
+        "connection:didReceiveResponse:": {
+          implementation: function(connection, receivedResponse) {
             response = receivedResponse;
             var expectedLength = Number(receivedResponse.expectedContentLength);
             if (expectedLength > maxBytes) {
               responseTooLarge = true;
-              completionHandler($.NSURLSessionResponseCancel);
-              return;
+              finished = true;
+              connection.cancel;
             }
-            completionHandler($.NSURLSessionResponseAllow);
           }
         },
-        "URLSession:dataTask:didReceiveData:": {
-          implementation: function(session, dataTask, receivedData) {
+        "connection:didReceiveData:": {
+          implementation: function(connection, receivedData) {
             if (Number(data.length) + Number(receivedData.length) > maxBytes) {
               responseTooLarge = true;
-              dataTask.cancel;
+              finished = true;
+              connection.cancel;
               return;
             }
             data.appendData(receivedData);
           }
         },
-        "URLSession:task:didCompleteWithError:": {
-          implementation: function(session, completedTask, error) {
+        "connectionDidFinishLoading:": {
+          implementation: function(connection) {
+            finished = true;
+          }
+        },
+        "connection:didFailWithError:": {
+          implementation: function(connection, error) {
             requestError = error;
             finished = true;
           }
         }
       }
     });
-    var delegate = $.ClaudeEasyNoRedirectDelegate.alloc.init;
-    var session = $.NSURLSession.sessionWithConfigurationDelegateDelegateQueue(
-      $.NSURLSessionConfiguration.ephemeralSessionConfiguration,
-      delegate,
-      $.NSOperationQueue.mainQueue
+    var delegate = $.ClaudeEasyConnectionDelegate.alloc.init;
+    var connection = $.NSURLConnection.alloc.initWithRequestDelegateStartImmediately(
+      request, delegate, false
     );
-    var task = session.dataTaskWithRequest(request);
-    task.resume;
+    if (!connection || connection.isNil()) fail("subscription request failed");
+    connection.scheduleInRunLoopForMode($.NSRunLoop.currentRunLoop, $.NSDefaultRunLoopMode);
+    connection.start;
     var deadline = $.NSDate.dateWithTimeIntervalSinceNow(timeoutSeconds + 5);
     while (!finished && deadline.timeIntervalSinceNow > 0) {
       $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
     }
-    session.finishTasksAndInvalidate;
-    if (redirectRejected || responseTooLarge || !finished || (requestError && !requestError.isNil()) || !response) fail("subscription request failed");
+    if (!finished) connection.cancel;
+    if (redirectRejected || responseTooLarge || !finished || (requestError && !requestError.isNil()) || !data || !response) fail("subscription request failed");
     var finalURL = response.URL;
     var finalHost = finalURL && finalURL.host && unwrap(finalURL.host).toLowerCase();
     var finalPort = finalURL && finalURL.port && !finalURL.port.isNil() ?
@@ -140,7 +146,7 @@ module ClaudeEasy
     if (!finalURL || unwrap(finalURL.scheme).toLowerCase() !== "https" ||
         finalHost !== originalHost || finalPort !== originalPort) fail("subscription request failed");
     var statusCode = Number(response.statusCode);
-    if (statusCode < 200 || statusCode >= 300 || Number(data.length) === 0) fail("subscription request failed");
+    if (statusCode < 200 || statusCode >= 300 || Number(data.length) === 0 || Number(data.length) > maxBytes) fail("subscription request failed");
     $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
   JAVASCRIPT
 

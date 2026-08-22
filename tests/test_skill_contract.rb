@@ -1187,7 +1187,7 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer_source, "SafeUpdate"
     subscriptions = File.read(File.join(SKILL, "scripts/macos/patch_profiles/subscriptions.rb"))
     assert_includes subscriptions, "fetch_remote_subscription"
-    assert_includes subscriptions, "NSURLSession"
+    assert_includes subscriptions, "NSURLConnection"
     assert_includes subscriptions, "CFBundleShortVersionString"
     refute_includes subscriptions, '"/usr/bin/curl"'
     windows_update_sources = [
