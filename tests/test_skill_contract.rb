@@ -992,6 +992,7 @@ class SkillContractTest < Minitest::Test
     assert_includes source, "function Read-ControllerSecretFromStandardInput"
     assert_includes source, '$inputReader.ReadToEnd()'
     assert_includes source, '不能通过 -Secret 传入非空控制器密钥'
+    assert_includes source, 'if (-not [string]::IsNullOrEmpty($Secret)) {'
     assert_includes source, "function Get-ValidatedControllerBaseUri"
     assert_includes source, 'Test-StrictIpv4LoopbackHost $rawHost'
     assert_includes source, 'if (-not $rawHostIsLoopback)'

@@ -537,7 +537,7 @@ function Invoke-TestPowerShell(
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } System.IO.File.AppendAllText(RuntimePath, "\n# simulated refresh\n"); return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } string path = RuntimePath; new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(200); System.IO.File.AppendAllText(path, "\n# simulated refresh\n"); }).Start(); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
 $arguments = @{
     AppHome = [string]$payload.AppHome
