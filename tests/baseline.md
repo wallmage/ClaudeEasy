@@ -62,7 +62,7 @@
 - 服务商订阅开关边界：首次收到更新请求时先提醒用户自行登录服务商管理后台，打开每份远程订阅的订阅开关；部分服务的开关开启后约 10 分钟有效。收到“打开了”“没问题”或同义确认前不得读取订阅、建立备份或操作客户端，也不使用 Chrome、Browser 或 Computer Use 检查或操作后台。
 - Windows 路由验证测试：从生产 `verify_routes.ps1` 的 AST 自动加载全部函数到主测试与隔离测试脚本，不维护两份容易漏项的函数清单；新增任何辅助函数后，PowerShell 5.1 与 7 的全量测试都必须能直接调用。显式 `-AiGroup` 在整个观察窗口按同一个精确组名核对，不得退回固定候选或关键词重新识别。
 - 语法与格式：Ruby、JavaScript、Shell、PowerShell、全部 PowerShell 文件的严格 UTF-8 BOM、策略同步和 `git diff --check`。
-- 测试机制：`AGENTS.md`、`README.md`、`LICENSE`、`docs/` 和本基线等说明文档不触发 CI。Skill 文件、测试代码、CI 配置或依赖变化时先运行覆盖率、合同、语法、格式和 Windows 引擎等快速检查；平台改动只追加对应平台的完整测试，共同策略和手动触发追加双平台完整测试。同一分支的新提交取消旧 CI。macOS 浏览器、mutation、wrapper、生产 Ruby、故障探针和真实 Mihomo 分开并行运行。所有 job 都有总超时；独立生产故障探针先记录失败并继续执行，最后统一让 job 失败，避免前一个问题遮住后续测试。GitHub Actions 的 `shell` 字段必须使用静态受支持值，契约和 mutation 必须在推送前拦截会让 workflow 零 job 失败的动态 shell。mutation smoke test 覆盖文件写入恢复、安全更新回退、路径身份、整批预检、自动更新补偿、默认 Mihomo 解析、结果档位边界、分流流量绑定、发布包依赖与公开安装实际写入、生产探针 CI 开关、Windows 故障汇总和二次转换保护。mutation 的语法错误、加载失败或超时不能冒充被测试发现。
+- 测试机制：`AGENTS.md`、`README.md`、`LICENSE`、`docs/` 和本基线等说明文档不触发 CI。其他改动由 `tests/ci_scope.rb` 精确选择合同、双平台分流、macOS 核心、包装器、生产探针、mutation、真实 Mihomo、Windows 引擎和 Windows 核心任务；Windows-only 不运行 macOS 产品测试，macOS-only 不运行 Windows 产品测试，手动触发才运行完整矩阵。新增生产脚本没有任务归属时分类器测试直接失败。分流改动只运行秒级 macOS 路由测试或 Windows PowerShell 5.1/7 专用路由测试；mutation 按测试名排除另一平台。macOS 分流检测的一轮控制器请求只允许解析一次控制器配置，轮询次数不得增加 YAML 解析次数。同一分支的新提交取消旧 CI。所有 job 都有总超时；独立生产故障探针先记录失败并继续执行，最后统一让 job 失败，避免前一个问题遮住后续测试。GitHub Actions 的 `shell` 字段必须使用静态受支持值，契约和 mutation 必须在推送前拦截会让 workflow 零 job 失败的动态 shell。mutation 的语法错误、加载失败或超时不能冒充被测试发现。
 - Windows 真实 Mihomo：每个 PowerShell 版本和 Mihomo 版本的矩阵任务必须生成绑定当前随机 nonce、PowerShell 运行时、内核数量及档位 1、2、3 完成记录的凭据；只看到子进程退出码不能算完成。
 
 ## 必须持续防止

@@ -789,9 +789,9 @@ class SkillContractTest < Minitest::Test
     windows_source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
 
     assert_includes mac_source, "def live_main_group"
-    assert_includes mac_source, 'get_json(socket, "/rules")'
+    assert_includes mac_source, 'get_json(controller, "/rules")'
     assert_includes mac_source, 'rule["proxy"]'
-    assert_includes mac_source, "main_group = live_main_group(socket, proxies, main_group)"
+    assert_includes mac_source, "main_group = live_main_group(requester, proxies, main_group)"
     assert_includes mac_source, 'ai_group = find_group(proxies, policy["ai_group_names"], ai_group, ai: true)'
     assert_includes windows_source, "function Get-LiveMainGroup"
     assert_includes windows_source, 'Invoke-ControllerJson "/rules"'

@@ -18295,13 +18295,13 @@ class MacosPatcherTest < Minitest::Test
     assert_nil ClaudeEasy.runtime_restorable_selections(
       ->(*_arguments) { raise IOError }, { "Main" => "Taiwan" }
     )
-    assert_nil ClaudeEasy.stub(:controller_socket, nil) { ClaudeEasy.current_runtime_requester }
-    response = ClaudeEasy.stub(:controller_socket, "socket") do
-      ClaudeEasy.stub(:controller_request, ->(*arguments) { arguments }) do
+    assert_nil ClaudeEasy.stub(:controller_context, nil) { ClaudeEasy.current_runtime_requester }
+    response = ClaudeEasy.stub(:controller_context, { socket: "socket", secret: "secret" }) do
+      ClaudeEasy.stub(:controller_request_with_secret, ->(*arguments) { arguments }) do
         ClaudeEasy.current_runtime_requester.call("GET", "/configs", nil)
       end
     end
-    assert_equal ["socket", "GET", "/configs", nil], response
+    assert_equal ["socket", "secret", "GET", "/configs", nil], response
 
     Dir.mktmpdir do |directory|
       assert_nil ClaudeEasy.clashx_reload_snapshot(log_root: File.join(directory, "missing"))
