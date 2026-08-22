@@ -522,22 +522,25 @@ if ($VerifySafeUpdate) {
         )) {
         throw "安全更新准备记录无效。"
     }
-    $refreshStartedAt = [DateTimeOffset]::MinValue
-    $refreshStartedAtMatch = [regex]::Match(
-        $manifestText,
-        '(?i)"RefreshStartedAt"\s*:\s*"(?<value>[^"\\]*)"'
-    )
-    if (-not $refreshStartedAtMatch.Success -or
-        -not [DateTimeOffset]::TryParseExact(
-            [string]$refreshStartedAtMatch.Groups["value"].Value,
-            "o",
-            [System.Globalization.CultureInfo]::InvariantCulture,
-            [System.Globalization.DateTimeStyles]::RoundtripKind,
-            [ref]$refreshStartedAt
-        ) -or $refreshStartedAt -gt [DateTimeOffset]::Now) {
-        Complete-InstallResult 1 "failed" "safe_update_refresh_not_started" "没有本轮订阅刷新的开始记录；未运行验收。"
+    $safeUpdateDeadline = [DateTime]::MaxValue
+    if ($manifestVersion -eq 4) {
+        $refreshStartedAt = [DateTimeOffset]::MinValue
+        $refreshStartedAtMatch = [regex]::Match(
+            $manifestText,
+            '(?i)"RefreshStartedAt"\s*:\s*"(?<value>[^"\\]*)"'
+        )
+        if (-not $refreshStartedAtMatch.Success -or
+            -not [DateTimeOffset]::TryParseExact(
+                [string]$refreshStartedAtMatch.Groups["value"].Value,
+                "o",
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$refreshStartedAt
+            ) -or $refreshStartedAt -gt [DateTimeOffset]::Now) {
+            Complete-InstallResult 1 "failed" "safe_update_refresh_not_started" "没有本轮订阅刷新的开始记录；未运行验收。"
+        }
+        $safeUpdateDeadline = $refreshStartedAt.UtcDateTime.AddSeconds(180)
     }
-    $safeUpdateDeadline = $refreshStartedAt.UtcDateTime.AddSeconds(180)
     $assertSafeUpdateDeadline = {
         if ([DateTime]::UtcNow -ge $safeUpdateDeadline) {
             throw "safe_update_timeout"

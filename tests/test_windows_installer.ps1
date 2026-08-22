@@ -4234,6 +4234,16 @@ rules:
     ) "safe update snapshot did not preserve the remaining profile 1 workflow"
 
     $safeUpdateManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    $missingRefreshStartOutput = & $PowerShellPath -NoLogo -NoProfile -File $installer `
+        -AppHome $safeUpdateCase -VerifySafeUpdate -RefreshConfirmed -MihomoPath $fakeCore -Json 2>&1 |
+        Out-String
+    $missingRefreshStart = [pscustomobject]@{
+        Output = $missingRefreshStartOutput
+        ExitCode = $LASTEXITCODE
+    }
+    $missingRefreshStartJson = Assert-JsonResult $missingRefreshStart "install" 1
+    Assert-True ($missingRefreshStartJson.code -eq "safe_update_refresh_not_started") `
+        "Windows verified a current safe update without a persisted refresh start"
     $delayedManifest = [System.IO.File]::ReadAllText($safeUpdateManifestPath) | ConvertFrom-Json
     $delayedManifest.CreatedAt = [DateTimeOffset]::Now.AddHours(-1).ToString("o")
     [System.IO.File]::WriteAllText(
