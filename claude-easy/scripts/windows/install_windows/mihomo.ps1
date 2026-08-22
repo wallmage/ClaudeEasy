@@ -212,9 +212,9 @@ function Test-MihomoCandidate(
     [string]$Directory,
     [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
 ) {
-    $remaining = [int][Math]::Ceiling(($AbsoluteDeadline - [DateTime]::UtcNow).TotalSeconds)
+    $remaining = [int][Math]::Ceiling([Math]::Min(30, ($AbsoluteDeadline - [DateTime]::UtcNow).TotalSeconds))
     if ($remaining -lt 1) { throw "safe_update_timeout" }
-    Test-MihomoVersion $CorePath ([Math]::Min(30, $remaining)) | Out-Null
+    Test-MihomoVersion $CorePath $remaining | Out-Null
     $temporary = Join-Path $Directory (".claude-easy-validate-" + [System.IO.Path]::GetRandomFileName() + ".yaml")
     $staging = $temporary + ".staging"
     $stagingStream = $null
@@ -227,9 +227,9 @@ function Test-MihomoCandidate(
         $stagingStream.Dispose()
         $stagingStream = $null
         [System.IO.File]::Move($staging, $temporary)
-        $remaining = [int][Math]::Ceiling(($AbsoluteDeadline - [DateTime]::UtcNow).TotalSeconds)
+        $remaining = [int][Math]::Ceiling([Math]::Min(30, ($AbsoluteDeadline - [DateTime]::UtcNow).TotalSeconds))
         if ($remaining -lt 1) { throw "safe_update_timeout" }
-        $result = Invoke-Mihomo $CorePath @("-d", $Directory, "-t", "-f", $temporary) ([Math]::Min(30, $remaining))
+        $result = Invoke-Mihomo $CorePath @("-d", $Directory, "-t", "-f", $temporary) $remaining
         if ($result.ExitCode -ne 0) { throw "Mihomo 拒绝了生成的 config.yaml。原文件没有被修改。" }
     } finally {
         if ($null -ne $stagingStream) { $stagingStream.Dispose() }

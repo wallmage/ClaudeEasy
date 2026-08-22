@@ -728,9 +728,11 @@ function Test-ClashRuntimeConnectivity(
             $start.EnvironmentVariables[$name] = ""
         }
         $process = [System.Diagnostics.Process]::Start($start)
-        $remainingMilliseconds = [int][Math]::Floor(($AbsoluteDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+        $remainingMilliseconds = [int][Math]::Floor(
+            [Math]::Min(12000, ($AbsoluteDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+        )
         if ($remainingMilliseconds -lt 1) { $process.Kill(); $process.Dispose(); return $false }
-        $finished = $process.WaitForExit([Math]::Min(12000, $remainingMilliseconds))
+        $finished = $process.WaitForExit($remainingMilliseconds)
         if (-not $finished) { try { $process.Kill() } catch { } }
         $ok = $finished -and $process.ExitCode -eq 0
         $process.Dispose()
