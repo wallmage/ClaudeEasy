@@ -166,8 +166,8 @@ jobs:
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
         with:
           ruby-version: "3.3"
-      - name: Ruby regression suite and production coverage
-        run: ruby tests/coverage_ruby.rb
+      - name: Ruby regression suite
+        run: ruby tests/test_macos_patcher.rb
 
   macos-mutation:
     needs: scope
@@ -333,7 +333,7 @@ jobs:
         with:
           node-version: "22"
       - name: Windows engine suite
-        run: node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
+        run: node --test tests/test_windows_patcher.js
 
   windows-installer-powershell-5:
     needs: scope

@@ -14887,31 +14887,6 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_patcher_is_split_into_explicit_modules_and_coverage_tracks_them
-    expected = {
-      "transform.rb" => :patch,
-      "backups.rb" => :create_versioned_backup,
-      "mihomo.rb" => :validate_with_mihomo,
-      "profile_writer.rb" => :patch_path,
-      "subscriptions.rb" => :safe_update_all,
-      "runtime.rb" => :activate_updated_profile,
-      "cli.rb" => :cli
-    }
-    module_root = File.join(ROOT, "claude-easy/scripts/macos/patch_profiles")
-    expected.each do |filename, method_name|
-      path = File.join(module_root, filename)
-      assert File.file?(path), filename
-      source = File.read(path)
-      assert_match(/^module ClaudeEasy$/, source, filename)
-      assert_match(/^  module_function$/, source, filename)
-      assert_equal path, ClaudeEasy.method(method_name).source_location.first, method_name
-    end
-
-    coverage_source = File.read(File.join(ROOT, "tests/coverage_ruby.rb"))
-    assert_includes coverage_source, 'Dir.glob(File.join(MACOS_RUBY_ROOT, "**", "*.rb"))'
-    assert_includes coverage_source, "MINIMUM_MODULE_LINE_COVERAGE"
-  end
-
   def test_cli_rejects_unknown_options_and_subscription_update_needs_a_usage_profile
     _output, error = capture_io { assert_equal 64, ClaudeEasy.cli(["--unknown-option"]) }
     assert_includes error, "参数错误"

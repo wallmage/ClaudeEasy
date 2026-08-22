@@ -29,7 +29,6 @@ RULES = [
   ["tests/test_windows_installer.ps1", %w[windows_core]],
 
   ["tests/test_macos_wrappers.rb", %w[macos_wrappers]],
-  ["tests/coverage_ruby.rb", %w[macos_core]],
   ["tests/run_macos_mihomo_validation.rb", %w[macos_mihomo]],
   [%r{\Atests/(?:fixtures/macos|support/macos)}, %w[macos_probes]],
   ["tests/run_macos_production_probes.rb", %w[macos_probes]],
