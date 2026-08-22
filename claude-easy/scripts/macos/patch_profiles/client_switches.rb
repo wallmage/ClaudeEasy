@@ -204,7 +204,8 @@ module ClaudeEasy
     end
 
     target_proxy = usage_profile == 1 ? :enabled : :disabled
-    if state[:system_proxy_effective] == :other
+    if state[:system_proxy_effective] == :other &&
+       (target_proxy == :enabled || state[:system_proxy_intent] == true)
       return manual_client_switch_result(:third_party_proxy_active, changes)
     end
     proxy_matches = if target_proxy == :enabled
@@ -263,7 +264,8 @@ module ClaudeEasy
                         state[:system_proxy_intent] == false
                     end
     return manual_client_switch_result(:third_party_proxy_active, changes) if
-      state[:system_proxy_effective] == :other
+      state[:system_proxy_effective] == :other &&
+      (target_proxy == :enabled || state[:system_proxy_intent] == true)
     unless tun_matches && proxy_matches
       return manual_client_switch_result(:state_ambiguous, changes)
     end
