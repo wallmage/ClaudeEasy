@@ -379,6 +379,7 @@ module ClaudeEasy
 
     seen = {}
     candidate_bytes = {}
+    original_snapshots = {}
     fully_restored = true
     state.fetch("Items").each do |item|
       expected_keys = if version == 1
@@ -432,6 +433,9 @@ module ClaudeEasy
         candidate_bytes[write_path] = candidate
 
         expected_identity = item.fetch("OriginalIdentity")
+        original_snapshots[write_path] = {
+          identity: expected_identity, bytes: original
+        }
         next if current == original
         unless current_snapshot.fetch(:identity) == expected_identity
           fully_restored = false
@@ -473,7 +477,7 @@ module ClaudeEasy
     activation_state = parsed_activation_state(state.fetch("Activation")) if version == 5
     snapshot.merge(
       runtime_checkpoint: runtime_checkpoint, activation_state: activation_state,
-      candidate_bytes: candidate_bytes
+      candidate_bytes: candidate_bytes, original_snapshots: original_snapshots
     )
   rescue ArgumentError, JSON::ParserError
     raise InvalidConfigError, "配置事务记录无效"
@@ -546,10 +550,19 @@ module ClaudeEasy
     candidate_bytes = records.to_h do |record|
       [record.fetch("WritePath"), Base64.strict_decode64(record.fetch("CandidateBase64"))]
     end
+    original_snapshots = records.to_h do |record|
+      [
+        record.fetch("WritePath"),
+        {
+          identity: record.fetch("OriginalIdentity"),
+          bytes: Base64.strict_decode64(record.fetch("OriginalBase64"))
+        }
+      ]
+    end
     snapshot.merge(
       targets: targets, runtime_checkpoint: runtime_checkpoint,
       activation_state: activation_identity && parsed_activation_state(state.fetch("Activation")),
-      candidate_bytes: candidate_bytes
+      candidate_bytes: candidate_bytes, original_snapshots: original_snapshots
     )
   end
 
@@ -612,7 +625,8 @@ module ClaudeEasy
         updated.merge(
           targets: transaction[:targets], runtime_checkpoint: transaction[:runtime_checkpoint],
           activation_state: parsed_activation_state(activation),
-          candidate_bytes: transaction[:candidate_bytes]
+          candidate_bytes: transaction[:candidate_bytes],
+          original_snapshots: transaction[:original_snapshots]
         )
       )
     end

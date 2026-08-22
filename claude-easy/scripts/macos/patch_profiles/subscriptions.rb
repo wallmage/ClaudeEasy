@@ -902,27 +902,76 @@ module ClaudeEasy
     runtime_waiter ||= method(:wait_for_clashx_safe_runtime)
     reload_receipt_opener = reload_snapshot_reader || method(:open_clashx_reload_receipt)
     required_proxy_group = profile_ai_runtime_group(active.fetch(:path)) if usage_profile == 3
-    reload_receipt = reload_receipt_opener.call
-    return false unless reload_receipt
-    unless mark_profile_transaction_activation(transaction, :rollback, client_identity)
-      close_clashx_reload_receipt(reload_receipt)
-      return false
+    activation_state = transaction[:activation_state]
+    candidate_bytes = transaction[:candidate_bytes] &&
+                      transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
+    restored_snapshot = regular_file_snapshot_once(active.fetch(:path), "恢复配置")
+    expected_restored = transaction[:original_snapshots] &&
+                        transaction[:original_snapshots][File.realpath(active.fetch(:path))]
+    return false unless expected_restored &&
+                        restored_snapshot.fetch(:identity) == expected_restored.fetch(:identity) &&
+                        restored_snapshot.fetch(:bytes) == expected_restored.fetch(:bytes)
+    reload_already_requested = activation_state && activation_state[:rollback_requested] &&
+                               same_clashx_process?(activation_state, client_identity) &&
+                               safe_update_runtime_equivalent?(
+                                 restored_snapshot, active.fetch(:path), candidate_bytes
+                               )
+    reload_receipt = nil
+    unless reload_already_requested
+      reload_receipt = reload_receipt_opener.call
+      return false unless reload_receipt
+      unless mark_profile_transaction_activation(transaction, :rollback, client_identity)
+        close_clashx_reload_receipt(reload_receipt)
+        return false
+      end
     end
 
     begin
       return false unless runtime_checkpoint_checker.call(dispatch_checkpoint)
-      return false unless native_reloader.call(client_identity)
+      return false unless reload_already_requested || native_reloader.call(client_identity)
 
-      runtime_waiter.call(
+      previous_profile_identity = profile_runtime_identity_from_bytes(
+        candidate_bytes, "配置事务候选"
+      )
+      return false unless previous_profile_identity
+      validated = runtime_waiter.call(
         client_identity, reload_receipt: reload_receipt,
         selections: selections, expected_tun: expected_tun,
         required_proxy_group: required_proxy_group,
         precommit_condition: precommit_condition,
-        expected_profile_path: active.fetch(:path)
+        expected_profile_path: active.fetch(:path),
+        reload_already_requested: reload_already_requested,
+        previous_profile_identity: previous_profile_identity
+      )
+      validated && safe_update_runtime_snapshot_current?(
+        active.fetch(:path), restored_snapshot
       )
     ensure
-      close_clashx_reload_receipt(reload_receipt)
+      close_clashx_reload_receipt(reload_receipt) if reload_receipt
     end
+  rescue StandardError
+    false
+  end
+
+  def safe_update_runtime_equivalent?(restored_snapshot, restored_path, candidate_bytes)
+    candidate_text = candidate_bytes.to_s.b.dup.force_encoding(Encoding::UTF_8)
+    return false unless candidate_bytes && candidate_text.valid_encoding?
+
+    restored_text = restored_snapshot.fetch(:bytes).dup.force_encoding(Encoding::UTF_8)
+    return false unless restored_text.valid_encoding?
+
+    restored = load_yaml(restored_text, restored_path)
+    candidate = load_yaml(candidate_text, "配置事务候选")
+    profile_runtime_fingerprint_from_config(restored) ==
+      profile_runtime_fingerprint_from_config(candidate)
+  rescue StandardError
+    false
+  end
+
+  def safe_update_runtime_snapshot_current?(path, expected)
+    current = regular_file_snapshot_once(path, "恢复配置")
+    current.fetch(:identity) == expected.fetch(:identity) &&
+      current.fetch(:bytes) == expected.fetch(:bytes)
   rescue StandardError
     false
   end

@@ -12579,7 +12579,7 @@ class MacosPatcherTest < Minitest::Test
       end
 
       current = File.stat(profile)
-      assert_equal candidate, File.binread(profile)
+      assert_equal candidate.b, File.binread(profile)
       assert_equal [external_stat.dev, external_stat.ino], [current.dev, current.ino]
       assert ClaudeEasy.profile_transaction_pending?(backup_root)
     end
@@ -13264,7 +13264,7 @@ class MacosPatcherTest < Minitest::Test
       end
 
       assert_equal 0, calls
-      assert_equal original, File.binread(profile)
+      assert_equal original.b, File.binread(profile)
       refute File.exist?(File.join(directory, "backups"))
 
       output, error = ClaudeEasy.stub(:saved_usage_profile, nil) do
@@ -16863,6 +16863,98 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_safe_reload_uses_the_fresh_receipt_instead_of_the_clashx_bootstrap_config
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      bootstrap = File.join(directory, "bootstrap.yaml")
+      File.write(profile, YAML.dump(
+        "proxies" => [{ "name" => "New Node", "type" => "ss" }],
+        "proxy-groups" => [
+          { "name" => "Main", "type" => "select", "proxies" => ["New Node"] }
+        ]
+      ))
+      File.write(bootstrap, YAML.dump(
+        "mixed-port" => 7890,
+        "external-ui" => "ui",
+        "rules" => ["MATCH,DIRECT"]
+      ))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "New Node", "all" => ["New Node"] },
+            "New Node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        when ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          [0, ""]
+        end
+      end
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+
+      ClaudeEasy.stub(:running_mihomo_config_paths, [bootstrap]) do
+        ClaudeEasy.stub(:runtime_health_healthy?, true) do
+          assert ClaudeEasy.wait_for_clashx_safe_runtime(
+            identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
+            requester_factory: -> { requester }, expected_profile_path: profile,
+            reload_receipt: {}, reload_receipt_reader: ->(_receipt) { true },
+            process_reader: -> { identity }, attempts: 1
+          )
+        end
+      end
+    end
+  end
+
+  def test_safe_reload_rejects_entries_only_present_in_the_previous_profile
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      File.write(profile, YAML.dump(
+        "proxies" => [{ "name" => "New Node", "type" => "ss" }],
+        "proxy-groups" => [
+          { "name" => "Main", "type" => "select", "proxies" => ["New Node"] }
+        ]
+      ))
+      requester = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => {
+              "type" => "Selector", "now" => "New Node", "all" => ["New Node", "Old Node"]
+            },
+            "New Node" => { "type" => "Shadowsocks" },
+            "Old Node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        else
+          [0, ""]
+        end
+      end
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      previous_identity = {
+        proxies: ["New Node", "Old Node"],
+        groups: { "Main" => ["New Node", "Old Node"] }, providers: []
+      }
+
+      refute ClaudeEasy.wait_for_clashx_safe_runtime(
+        identity, selections: { "Main" => "New Node" }, expected_tun: :ignore,
+        requester_factory: -> { requester }, expected_profile_path: profile,
+        previous_profile_identity: previous_identity,
+        reload_receipt: {}, reload_receipt_reader: ->(_receipt) { true },
+        process_reader: -> { identity }, attempts: 1
+      )
+    end
+  end
+
   def test_clashx_reload_receipt_ignores_an_old_completion_moved_by_log_rotation
     Dir.mktmpdir do |directory|
       session = File.join(directory, "2026-08-21_17-00-00")
@@ -17566,7 +17658,13 @@ class MacosPatcherTest < Minitest::Test
         selections: { "Main" => "台湾家宽 01" }
       }
       transaction = {
-        candidate_bytes: { File.realpath(profile) => YAML.dump(base_config.merge("marker" => "candidate")) }
+        candidate_bytes: { File.realpath(profile) => YAML.dump(base_config.merge("marker" => "candidate")) },
+        original_snapshots: {
+          File.realpath(profile) => {
+            identity: [File.stat(profile).dev, File.stat(profile).ino],
+            bytes: File.binread(profile)
+          }
+        }
       }
       waited_selections = nil
       checkpoint_checks = [false, true]
@@ -17625,14 +17723,14 @@ class MacosPatcherTest < Minitest::Test
       assert_equal 0, request_count
       assert_equal original.b, File.binread(profile)
 
-      File.binwrite(profile, candidate)
-      stat = File.stat(profile)
-      result = result.merge(patched_identity: [stat.dev, stat.ino])
       transaction = ClaudeEasy.prepare_profile_transaction(
-        [{ path: profile, original: candidate, candidate: candidate }],
+        [{ path: profile, original: original, candidate: candidate }],
         File.join(directory, "backups"), roots: [directory],
         runtime_checkpoint: checkpoint, activation_identity: identity
       )
+      File.binwrite(profile, candidate)
+      stat = File.stat(profile)
+      result = result.merge(patched_identity: [stat.dev, stat.ino])
       native_reloads = 0
       safe = ClaudeEasy.activate_safe_updated_profile(
         result, transaction: transaction, client_identity: identity,
@@ -17772,8 +17870,8 @@ class MacosPatcherTest < Minitest::Test
   def test_safe_update_uses_one_client_native_reload_and_no_controller_reload
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
-      original = "original"
-      candidate = "candidate"
+      original = YAML.dump(base_config.merge("subscription-marker" => "original"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
       File.binwrite(profile, candidate)
       stat = File.stat(profile)
       identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
@@ -17801,7 +17899,7 @@ class MacosPatcherTest < Minitest::Test
 
       assert_equal true, activated.fetch(:reloaded)
       assert_equal [identity], reloads
-      assert_equal candidate, File.binread(profile)
+      assert_equal candidate.b, File.binread(profile)
     end
   end
 
@@ -17847,8 +17945,8 @@ class MacosPatcherTest < Minitest::Test
   def test_safe_update_failure_restores_file_and_attempts_native_rollback_only_once
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
-      original = "original"
-      candidate = "candidate"
+      original = YAML.dump(base_config.merge("subscription-marker" => "original"))
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
       File.binwrite(profile, candidate)
       stat = File.stat(profile)
       identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
@@ -17876,7 +17974,7 @@ class MacosPatcherTest < Minitest::Test
       )
 
       assert_equal :reload_failed_rolled_back, activated.fetch(:status)
-      assert_equal original, File.binread(profile)
+      assert_equal original.b, File.binread(profile)
       assert_equal 2, reloads
 
       repeated = ClaudeEasy.activate_safe_updated_profile(
@@ -17959,7 +18057,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
 
-  def test_pending_safe_update_recovery_does_not_repeat_native_reload_in_same_process
+  def test_pending_safe_update_recovery_rechecks_runtime_without_repeating_native_reload
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
       File.binwrite(profile, YAML.dump(base_config))
@@ -17986,10 +18084,161 @@ class MacosPatcherTest < Minitest::Test
       assert ClaudeEasy.reload_recovered_safe_update_runtime(
         [{ path: profile }], 1, "active", **options
       )
+      assert ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: profile }], 1, "active", **options
+      )
+      assert_equal 1, reloads
+    end
+  end
+
+  def test_pending_safe_update_recovery_keeps_different_candidate_runtime_pending
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
+      File.binwrite(profile, original)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "台湾家宽 01", "AI" => "Main" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: original, candidate: candidate }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      reloads = 0
+      options = {
+        transaction: transaction, client_identity: identity,
+        runtime_checkpoint_checker: ->(_current) { true },
+        native_reloader: ->(_current) { reloads += 1; true },
+        runtime_waiter: ->(*_arguments, **_keywords) { true },
+        reload_snapshot_reader: -> { { "log" => [1, 2, reloads] } }
+      }
+
+      assert ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: profile }], 1, "active", **options
+      )
       refute ClaudeEasy.reload_recovered_safe_update_runtime(
         [{ path: profile }], 1, "active", **options
       )
       assert_equal 1, reloads
+    end
+  end
+
+  def test_pending_safe_update_recovery_rechecks_the_restored_file_after_runtime_validation
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "台湾家宽 01", "AI" => "Main" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: original, candidate: original }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      options = {
+        transaction: transaction, client_identity: identity,
+        runtime_checkpoint_checker: ->(_current) { true },
+        native_reloader: ->(_current) { true },
+        runtime_waiter: ->(*_arguments, **_keywords) { true },
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+      }
+      assert ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: profile }], 1, "active", **options
+      )
+
+      options[:runtime_waiter] = lambda do |*_arguments, **_keywords|
+        File.binwrite(profile, YAML.dump(base_config.merge("external-change" => true)))
+        true
+      end
+      refute ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: profile }], 1, "active", **options
+      )
+    end
+  end
+
+  def test_safe_update_recovery_rechecks_the_restored_file_after_first_rollback_event
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "台湾家宽 01", "AI" => "Main" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: original, candidate: original }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      reloads = 0
+
+      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: profile }], 1, "active",
+        transaction: transaction, client_identity: identity,
+        runtime_checkpoint_checker: ->(_current) { true },
+        native_reloader: ->(_current) { reloads += 1; true },
+        runtime_waiter: lambda do |*_arguments, **_keywords|
+          File.binwrite(profile, YAML.dump(base_config.merge("external-change" => true)))
+          true
+        end,
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+      )
+
+      refute restored
+      assert_equal 1, reloads
+    end
+  end
+
+  def test_safe_update_recovery_rejects_a_same_byte_external_replacement_before_rollback
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      File.binwrite(profile, original)
+      identity = {
+        pid: 12_345, started: "same",
+        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
+      }
+      checkpoint = {
+        path: File.realpath(profile), expected_tun: :enabled,
+        selections: { "Main" => "台湾家宽 01", "AI" => "Main" }
+      }
+      transaction = ClaudeEasy.prepare_profile_transaction(
+        [{ path: profile, original: original, candidate: original }],
+        File.join(directory, "backups"), roots: [directory],
+        runtime_checkpoint: checkpoint, activation_identity: identity
+      )
+      replacement = File.join(directory, "replacement.yaml")
+      File.binwrite(replacement, original)
+      File.rename(replacement, profile)
+      reloads = 0
+
+      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
+        [{ path: profile }], 1, "active",
+        transaction: transaction, client_identity: identity,
+        runtime_checkpoint_checker: ->(_current) { true },
+        native_reloader: ->(_current) { reloads += 1; true },
+        runtime_waiter: ->(*_arguments, **_keywords) { true },
+        reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+      )
+
+      refute restored
+      assert_equal 0, reloads
     end
   end
 
