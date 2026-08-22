@@ -46,20 +46,9 @@ macOS 与 Windows 的三个档位都把 `profile.store-selected` 设为 `true`�
 
 macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 不增加 TUN、IPv6、WebRTC 或 AI 分组补丁。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置由安装程序直接修改，不依赖 Computer Use：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读。任一平台无法安全识别、备份、写入或确认时，停止且不继续打补丁。
 
-### 档位 3 的 Claude 区域指纹检测
+### Claude/Anthropic 永久禁测
 
-档位 3 必须用随 Skill 安装的 `assets/claude-region-check.html` 完成修改前后两次检测。它是单文件本地页面，不上传完整检测结果，也不会把 WebRTC 候选地址发送给其他服务。WebRTC 项连接 `stun.l.google.com`、`stun1.l.google.com` 和 `stun.cloudflare.com`，并向 `https://cloudflare.com/cdn-cgi/trace` 请求一次正常网页出口作为本地对照；页面必须在按钮前说明 Google 和 Cloudflare 会看到各自连接的源公网 IP，Cloudflare 不会收到 WebRTC 候选地址。用户点击“开始检测并运行 WebRTC 测试”或同等明确的重新扫描按钮后才能创建 `RTCPeerConnection` 或发出对照请求，CSP 只允许该固定 HTTPS 端点。页面支持 Safari、Microsoft Edge 和 Google Chrome。页面给出的是区域指纹参考分，不是 Claude 官方判定；它不检测 DNS 或 TUN，WebRTC 项也不能替代两项专用 WebRTC 验收，整页不能作为 Claude 是否可用的通过条件。WebRTC 项只有发现 `host` 候选明确暴露本地网络地址时贡献 `+10`；公网候选与网页出口一致、没有公网候选、公网出口不同、取不到同协议族网页出口、浏览器没有 `RTCPeerConnection` 或探测失败都贡献 `+0`。公网出口不同不能单独证明 WebRTC 绕过代理。选择档位 3 已授权打开本地检测页；所有网络连接仍只能由页面上写明影响的 WebRTC 检测按钮触发。
-
-以上修改前后两次检测只用于首次安装和改变档位。订阅更新按 `safe-update-and-recovery.md` 不做更新前测试；更新后只运行一次本地区域指纹检测，不做前后比较。
-
-1. **修改前基线：** 在任何系统设置或网络修改之前，从当前 Skill 根目录解析 `assets/claude-region-check.html` 的绝对路径，优先识别用户实际打开 Claude 的浏览器，用 Computer Use 在同一浏览器中打开本地文件；无法确认时才使用系统默认浏览器并明确记录限制。正式支持 macOS 的 Safari 或 Chrome、Windows 的 Edge 或 Chrome；其他浏览器能正常完成初检就记录实际检测结果，不能运行时保持“未验证”，并把兼容性限制纳入第一次授权。不得借用其他浏览器的信号，不得合成一个现实中不存在的指纹。路径含空格时必须作为完整本地文件地址打开，不能把 macOS 路径照搬到 Windows。不得使用 Codex 内置浏览器，也不得用命令行请求替代。确认页面已显示三项 STUN 端点、正常网页出口端点和公网 IP 披露后，点击“开始检测并运行 WebRTC 测试”，每 2–5 秒读取页面状态，最多等待 60 秒；超时后只刷新一次并重试，再次超时就记录“未验证：检测页超时”。本地文件缺失、不可读、JavaScript 被禁用或页面报错时记录“未验证：本地检测页不可用”。检测结束后向下滚动查看十项信号，记录时间、浏览器、参考分、风险等级、每个非零信号、“有限信息”和“无法读取”项。十项权重固定为 24、18、14、10、10、8、6、4、3、3，依次对应系统时区、浏览器语言、浏览器可见中文字体、国产厂商字体、WebRTC IP 泄露、国产浏览器/WebView、国产品牌设备、Intl 区域设置、UTC+8 偏移、Emoji 平台推断；除浏览器语言和 WebRTC 外，项目、权重、分档、颜色和计分函数与原始开源检测逻辑一致：0–30 分为绿色“低风险”，31–60 分为橙色“中等风险”，61–100 分为红色“高风险”。WebRTC 不做外部国家代码查询；只有发现 `host` 候选明确暴露本地网络地址时贡献 `+10`，其余情况都贡献 `+0`。其他项目无法读取时仍显示未知贡献；只要存在其他无法读取项，页面隐藏总分并显示已知项合计和未知权重。Safari 没有 Chromium 的 `userAgentData`、Windows 桌面浏览器没有提供设备型号时，设备项显示“有限信息”不等于失败。没有 Computer Use 时只能让用户在系统浏览器中手动检测，状态保持“未验证”。
-2. **一次申请权限：** 浏览器语言项只读取 `navigator.language` 返回的当前浏览器界面语言；`zh-CN`、`zh-Hans` 或 `zh-Hans-CN` 这类中国大陆简体中文计 1，英文、繁体中文、新加坡中文和其他语言计 0，`navigator.languages` 中的后备语言不参与计算。系统时区、浏览器语言与 Intl 区域设置、当前用于 Claude 的国产浏览器/WebView 都是可选调整项。先保存四项修改前快照，只汇总实际命中的项目、旧值→建议值和影响，向用户一次申请权限，并明确说明“这些调整只降低参考分，不保证改变 Claude 判定；是否应用？”用户只回复“同意”且没有语言偏好时，默认使用繁体中文：时区用 `Asia/Taipei`，浏览器语言用 `zh-TW`，Intl 使用台湾区域设置。用户明确要求英文时，浏览器语言用 `en-US`，Intl 使用美国区域设置，时区仍用 `Asia/Taipei`。浏览器语言不能只改界面显示：把目标语言放在首位。台北与北京、上海同为 UTC+8，不会改变当前时间，但时区标识会改变；语言还可能影响浏览器界面和网页内容，区域设置会影响系统和其他应用的日期与数字格式。用户拒绝的项目不得修改。
-3. **国产浏览器处理：** 只说明当前用于 Claude 和检测的浏览器或 WebView 会被识别，不把“安装过某个浏览器”当作命中。可以建议用户改用 Safari、Chrome 或 Edge 打开 Claude，但不得仅为降低参考分修改系统默认浏览器。只有用户明确要求更改系统默认浏览器时才执行，不卸载原浏览器。
-4. **明确保留与端点分类：** 不得删除中文字体；浏览器可见中文字体和国产厂商字体都保留。国产品牌设备不改，不得伪装设备或 User-Agent。`Asia/Taipei` 仍是 UTC+8，时区偏移不会因此改变；不得为了降分改变实际时钟。Emoji 平台推断只按 User-Agent/平台信息提示，不声称真的检测了渲染。只读分类 `ANTHROPIC_BASE_URL` 时先判断是否设置，再按 URL 解析结果依次判断：未设置为“默认端点”；解析失败、非 HTTPS 或包含 userinfo 为“端点配置异常”；只有 hostname 规范化后精确等于 `api.anthropic.com`、使用默认 443 端口且不得包含 userinfo 时才是“官方端点”；其余合法 HTTPS 地址为“自定义端点”。只报告类别，不得输出完整 hostname，也不得自动更换服务端点。
-5. **修改与网络补丁：** 只用 Computer Use 或操作系统提供的受支持界面完成用户同意的系统时区、浏览器语言、Intl 区域设置；用户另有明确要求时才修改默认浏览器。修改后逐项回读确认。若浏览器明确要求重新启动且可能中断工作，另行征得用户同意。本批设置任一步或最终验收失败时，只在当前值仍等于本轮写入值时按修改前快照恢复；用户在期间继续修改过的值不得覆盖。随后运行平台安装程序，完成档位 3 的 TUN、DNS、WebRTC、分流和站点验收。
-6. **重新扫描：** 回到修改前实际用于 Claude 的同一浏览器。原检测页仍在时直接点击“重新扫描并运行 WebRTC 测试”，不要先刷新；页面被关闭或必须重开时，重新打开本地页并点击当前可见的 WebRTC 检测或重新扫描按钮。按修改前基线的 60 秒规则等待；检测进行中不能反复点击，也不能点击保存、分享或复制结果图片。只有两次扫描都完整，或无法读取项集合完全相同，才比较数值；覆盖范围不同时分别报告已知项合计和未知权重。任何非零项都照实报告，不能据此宣布档位 3 成功或失败。
-
-复测后按非零信号重新分类，只继续处理用户已经同意且可恢复的项目。不得用删字体、伪装设备、改 User-Agent、改变实际时钟或换用 Codex 内置浏览器追分。区域指纹页不能替代 DNS、WebRTC、分流和 Claude 联网验证，也不参与这些网络验收的通过条件。
+Claude/Anthropic 的网站、API、域名以及本地 Claude 区域指纹页一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式产生相关测试流量；用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。
 
 ## Patch 检查顺序
 
@@ -81,9 +70,9 @@ macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运�
 
 档位 1 只验收系统代理、国内站、Google、Twitter、用户常用站点和速度；档位 2 验收 TUN、Clash 自己的系统代理开关、国内站、Google、Twitter、用户常用站点、速度、ChatGPT、Gemini 和一个命令行或 Agent 连接。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
 
-先生成 Google、OpenAI 和 Claude/Anthropic 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，可用 `--main-group`、`--ai-group`、`--observation-seconds` 调整；Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`，对应参数为 `-MainGroup`、`-AiGroup`、`-ObservationSeconds`。Windows 默认从当前 `AppHome` 的 `clash-verge.yaml` 读取回环控制器和密钥；显式覆盖时，`-ControllerUrl` 只允许本机回环 HTTP/HTTPS，不接受 userinfo、查询或片段，控制器密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。请求禁用系统代理和重定向，命令行、环境变量、输出与日志都不能出现密钥。两端都从 `/rules` 的最后一个 `MATCH` 读取当前运行配置实际使用的主代理组，并从 `/proxies` 的当前内存状态识别 AI 分组，不再从磁盘配置或固定名称单独推断。每个测试请求都通过当前 Mihomo 回环代理发出，隔离用户 curl 配置和代理环境，先绑定独立源端口；观察器只接受启动后出现且 TCP、源端口和目标域名全部匹配的连接 ID，同域名的浏览器、更新器或后台连接不得代替测试请求。观察到连接后必须重新读取主代理组、AI 分组、当前选择和代理提供者；检测期间任一项变化，本项失败。验收结合 `chains` 与 `providerChains` 查出本次连接的实际叶子类型，整条链出现 `Direct`、`Dns`、`Reject`、`RejectDrop`、`Pass`、`PassRule`、`Compatible`、`Rematch` 或 `Relay` 均失败，即使出站使用自定义名称也一样。Google 的连接链必须包含当前主代理组；若订阅有明确的 Google 专用组，也可同时包含该非 AI 组。主代理组与 AI 分组不同时，Google 不能经过 AI 分组；两者相同时允许共用。AI 网站的连接链必须包含 AI 分组。`Selector`、`URLTest`、`Fallback` 和 `LoadBalance` 都以实际连接链为准；没有 `now` 的主代理组或 AI `LoadBalance` 都使用观察到的叶子，请求前的 `now` 只用于预检或显示。JSON 成功码为 `routes_verified`，失败码为 `route_verification_failed`；每项检查状态只取 `passed`、`failed` 或 `not_observed`。只看配置文件或网页出口 IP 不足以证明分流正确。
+只生成 ChatGPT、Gemini 和 Grok 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`；Windows 控制器只允许本机回环地址，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。每个测试请求都通过当前 Mihomo 回环代理发出，并确认实际连接链包含当前 AI 分组；检测期间代理组或节点选择发生变化即失败。三项全部通过即为分流验证通过。Claude/Anthropic 不打开、不请求、不测试，只允许静态检查配置。
 
-Claude 联网只由分流验证脚本完成。任何 Patch、Diagnostics、复测或安全更新都不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`，也不得进入已登录账号、读取账号页面或发送测试消息。用户要求“完整流程”“确认 Claude 可用”或“不要停”都不扩大这项授权；浏览器只打开本地区域检测页和下列三项 DNS/WebRTC 页面。
+任何 Patch、Diagnostics、复测或安全更新都必须遵守 Claude/Anthropic 永久禁测规则。浏览器只允许打开下列 DNS/WebRTC 页面。
 
 然后必须测试：
 

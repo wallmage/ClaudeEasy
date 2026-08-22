@@ -638,10 +638,9 @@ try {
         Write-ClaudeEasyVerificationText "AI 分组：已识别；当前选择已隐藏"
     }
     $checks = @(
-        (Observe-Route "Google" "https://www.google.com/search?q=clash-route-verification" '(?i)(^|\.)google\.com$' $main $mainSelection $ai $true $routeSnapshot $routeProxyUrl),
-        (Observe-Route "OpenAI" "https://openai.com/" '(?i)(^|\.)openai\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
-        (Observe-Route "Anthropic" "https://www.anthropic.com/" '(?i)(^|\.)anthropic\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
-        (Observe-Route "Claude" "https://claude.ai/" '(?i)(^|\.)claude\.ai$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl)
+        (Observe-Route "ChatGPT" "https://chatgpt.com/" '(?i)(^|\.)chatgpt\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
+        (Observe-Route "Gemini" "https://gemini.google.com/" '(?i)^gemini\.google\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
+        (Observe-Route "Grok" "https://grok.com/" '(?i)(^|\.)grok\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl)
     )
     if (@($checks | Where-Object { -not $_ }).Count -gt 0) {
         if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Profile $savedUsageProfile -Checks @($script:ClaudeEasyChecks)) }

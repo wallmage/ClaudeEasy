@@ -370,7 +370,7 @@ $safeUpdateFollowupCases = @(
         Expected = @(
             "client_switch_verification", "site_verification", "agent_connectivity_verification",
             "route_verification", "dns_deep_test",
-            "webrtc_test_1", "webrtc_test_2", "region_fingerprint_test", "final_state_audit"
+            "webrtc_test_1", "webrtc_test_2", "final_state_audit"
         )
     }
 )
@@ -2888,9 +2888,9 @@ if ($changedSnapshotPassed) { throw "Observe-Route accepted a proxy selection ch
                                     Start-Sleep -Seconds 2
                                 }
                                 $routeIndex = [int]($connectionRequest / 2) - 1
-                                $hosts = @("www.google.com", "openai.com", "www.anthropic.com", "claude.ai")
-                                $groups = @("Main", "AI", "AI", "AI")
-                                $nodes = @("Provider Main", "Provider AI", "Provider AI", "Provider AI")
+                                $hosts = @("chatgpt.com", "gemini.google.com", "grok.com")
+                                $groups = @("Main", "AI", "AI")
+                                $nodes = @("Provider Main", "Provider AI", "Provider AI")
                                 $curlReadyDeadline =
                                     [DateTime]::UtcNow.AddSeconds(5)
                                 do {
@@ -3136,7 +3136,7 @@ public static class FakeCurl {
             $routeSuccessResult = Assert-JsonResult $routeSuccess "verify_routes" 0
             Assert-True ($routeSuccessResult.code -eq "routes_verified") "route verifier success code mismatch"
             Assert-True ($routeSuccessResult.profile -eq 3) "route verifier success omitted the saved profile"
-            Assert-True (@($routeSuccessResult.checks).Count -eq 4) "route verifier did not report all four route checks"
+            Assert-True (@($routeSuccessResult.checks).Count -eq 3) "route verifier did not report all three route checks"
             Assert-True (@($routeSuccessResult.checks | Where-Object { -not [bool]$_.ok }).Count -eq 0) "route verifier reported a failed check on its success path"
             Assert-True (Test-Path -LiteralPath $fakeCurlPidsPath -PathType Leaf) "route verifier did not start the hanging curl fixture"
             $fakeCurlPids = @(
@@ -3144,7 +3144,7 @@ public static class FakeCurl {
                     Where-Object { $_ -match '^\d+$' } |
                     ForEach-Object { [int]$_ }
             )
-            Assert-True ($fakeCurlPids.Count -eq 4) "route verifier did not create one isolated curl process per route"
+            Assert-True ($fakeCurlPids.Count -eq 3) "route verifier did not create one isolated curl process per route"
             Assert-True (
                 -not (Get-Content -LiteralPath $fakeCurlArgsPath -Raw).Contains(
                     $routeSecretCanary
@@ -3161,7 +3161,7 @@ public static class FakeCurl {
                     -Filter "fake-curl-environment-hashes.*" -File
             )
             Assert-True (
-                $fakeCurlEnvironmentHashFiles.Count -eq 4
+                $fakeCurlEnvironmentHashFiles.Count -eq 3
             ) "route verifier did not capture each child environment safely"
             Assert-True (
                 @($fakeCurlEnvironmentHashFiles | Where-Object {
@@ -4228,7 +4228,7 @@ rules:
                 "subscription_refresh", "safe_update_verification",
                 "client_switch_verification", "site_verification",
                 "agent_connectivity_verification", "route_verification", "dns_deep_test",
-                "webrtc_test_1", "webrtc_test_2", "region_fingerprint_test",
+                "webrtc_test_1", "webrtc_test_2",
                 "final_state_audit"
             ) -join ","
         )

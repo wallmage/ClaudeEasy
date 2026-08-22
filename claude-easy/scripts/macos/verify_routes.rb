@@ -36,10 +36,9 @@ module ClashRouteVerifier
   module_function
 
   TARGETS = [
-    ["Google", "https://www.google.com/search?q=clash-route-verification", :main, /(?:\A|\.)google\.com\z/i],
-    ["OpenAI", "https://openai.com/", :ai, /(?:\A|\.)openai\.com\z/i],
-    ["Anthropic", "https://www.anthropic.com/", :ai, /(?:\A|\.)anthropic\.com\z/i],
-    ["Claude", "https://claude.ai/", :ai, /(?:\A|\.)claude\.ai\z/i]
+    ["ChatGPT", "https://chatgpt.com/", :ai, /(?:\A|\.)chatgpt\.com\z/i],
+    ["Gemini", "https://gemini.google.com/", :ai, /\Agemini\.google\.com\z/i],
+    ["Grok", "https://grok.com/", :ai, /(?:\A|\.)grok\.com\z/i]
   ].freeze
   NON_PROXY_TERMINALS = %w[
     DIRECT DNS REJECT REJECT-DROP PASS PASS-RULE COMPATIBLE REMATCH RELAY

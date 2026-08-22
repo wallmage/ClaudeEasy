@@ -27,6 +27,8 @@
 
 同一用户请求和同一用途档位在 macOS 与 Windows 上遵守相同的授权、隐私、客户端安全边界和用户可见完成条件。平台文件分别定义各自的实现方式与失败处理；跨平台摘要不得把两端不同的实现方式写成相同。新增或改变共同边界时，只有两个平台都实现并通过对应测试后才能报告完成。
 
+**Claude/Anthropic 永久禁测：** 相关网站、API、域名和本地 Claude 区域指纹页一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式产生相关测试流量；用户当次要求也不能覆盖。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。
+
 Clash Verge Rev 有正常主窗口，Windows 当前环境提供 Computer Use 时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用 Computer Use 操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；Computer Use 仍可用于有正常窗口的浏览器和 AdGuard。没有 Computer Use 时只改变 Windows 客户端或浏览器动作由谁执行，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
 
 绝对不要退出、停止或重启 Clash 客户端。不得执行、建议或要求用户执行这类操作。中国用户通常依赖客户端越过 GFW；关闭客户端会让 AI 助手断线，并可能让修复停在一半。

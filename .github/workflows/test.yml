@@ -109,8 +109,6 @@ jobs:
         run: ruby tests/coverage_ruby.rb
       - name: Skill and CI contract suite
         run: ruby tests/test_skill_contract.rb
-      - name: Offline region fingerprint page
-        run: node --test tests/test_region_fingerprint_page.js
       - name: Windows engine suite
         run: node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
       - name: Generated policy parity
@@ -134,25 +132,6 @@ jobs:
           else
             git show --check --format= HEAD
           fi
-
-  macos-browser:
-    needs: scope
-    if: needs.scope.outputs.macos == 'true'
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: Install region fingerprint browser test dependencies
-        run: |
-          npm ci
-          npx playwright install webkit
-      - name: Real Chrome and WebKit region fingerprint page
-        env:
-          CLAUDE_EASY_BROWSER_TARGETS: chrome,webkit
-        run: node tests/test_region_fingerprint_browser.js
 
   macos-mutation:
     needs: scope
@@ -277,14 +256,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Offline region fingerprint page
-        run: node --test tests/test_region_fingerprint_page.js
-      - name: Install region fingerprint browser test dependencies
-        run: npm ci
-      - name: Real Chrome and Edge region fingerprint page
-        env:
-          CLAUDE_EASY_BROWSER_TARGETS: chrome,edge
-        run: node tests/test_region_fingerprint_browser.js
       - name: PowerShell 5.1 installer, uninstaller, and route regressions
         shell: powershell
         run: |
@@ -309,8 +280,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Offline region fingerprint page
-        run: node --test tests/test_region_fingerprint_page.js
       - name: PowerShell 7 installer, uninstaller, and route regressions
         shell: pwsh
         run: |

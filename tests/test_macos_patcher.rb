@@ -2366,13 +2366,13 @@ class MacosPatcherTest < Minitest::Test
       required_followups: %w[
         client_switch_verification site_verification agent_connectivity_verification
         route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-        region_fingerprint_test final_state_audit
+        final_state_audit
       ]
     )
 
     assert_equal false, result.fetch("workflow_complete")
     assert_equal "subscription_update", result.fetch("completed_scope")
-    assert_equal 9, result.fetch("required_followups").length
+    assert_equal 8, result.fetch("required_followups").length
     assert ClaudeEasyResult.valid_child_json?(JSON.generate(result))
     refute ClaudeEasyResult.valid_child_json?(JSON.generate(result.merge("workflow_complete" => "false")))
   end
@@ -13307,7 +13307,7 @@ class MacosPatcherTest < Minitest::Test
         3 => %w[
           macos_client_switch_reconciliation site_verification agent_connectivity_verification
           route_verification dns_deep_test webrtc_test_1 webrtc_test_2
-          region_fingerprint_test final_state_audit
+          final_state_audit
         ]
       }
       expected_followups.each do |profile, followups|

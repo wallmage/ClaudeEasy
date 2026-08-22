@@ -527,136 +527,18 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_profile_three_closes_the_claude_region_fingerprint_loop_in_the_system_browser
-    readme = File.read(File.join(ROOT, "README.md"))
-    skill = File.read(File.join(SKILL, "SKILL.md"))
-    policy = policy_document
+  def test_profile_three_permanently_disables_claude_and_anthropic_tests
+    documents = [
+      File.read(File.join(ROOT, "README.md")),
+      File.read(File.join(SKILL, "SKILL.md")),
+      File.read(File.join(SKILL, "references/policy-core.md")),
+      File.read(File.join(SKILL, "references/profiles-and-patch.md"))
+    ]
 
-    [readme, skill, policy].each do |document|
-      assert_includes document, "assets/claude-region-check.html"
-      assert_includes document, "区域指纹"
-      assert_includes document, "参考"
-      assert_includes document, "不能作为"
-      assert_includes document, "通过条件"
-    end
-
-    [policy].each do |document|
-      assert_includes document, "STUN"
-      assert_includes document, "CSP"
-      assert_includes document, "stun.l.google.com"
-      assert_includes document, "stun1.l.google.com"
-      assert_includes document, "stun.cloudflare.com"
-      assert_includes document, "不会把 WebRTC 候选地址发送给其他服务"
-      assert_includes document, "正常网页出口"
-      assert_includes document, "Cloudflare"
-      assert_includes document, "开始检测并运行 WebRTC 测试"
-      assert_includes document, "Safari"
-      assert_includes document, "Chrome"
-      assert_includes document, "Windows"
-      assert_includes document, "DNS、WebRTC"
-      assert_includes document, "不得合成"
-      assert_includes document, "不得仅为降低参考分修改系统默认浏览器"
-      assert_includes document, "只有用户明确要求"
-      assert_includes document, "十项"
-      assert_includes document, "低风险"
-      assert_includes document, "中等风险"
-      assert_includes document, "高风险"
-      assert_includes document, "0–30"
-      assert_includes document, "31–60"
-      assert_includes document, "61–100"
-      refute_includes document, "补测其余八项"
-    end
-
-    [readme, policy].each do |document|
-      refute_includes document, "IPWhois"
-    end
-
-    [policy].each do |document|
-      assert_includes document, "系统默认浏览器"
-      assert_includes document, "Computer Use"
-      assert_includes document, "不得使用 Codex 内置浏览器"
-      assert_includes document, "开始检测"
-      assert_includes document, "重新扫描"
-      assert_includes document, "实际用于 Claude"
-      assert_includes document, "修改前基线"
-      assert_includes document, "未验证"
-      assert_includes document, "最多等待 60 秒"
-      assert_includes document, "只刷新一次"
-      assert_includes document, "有限信息"
-      assert_includes document, "本地检测页不可用"
-      assert_includes document, "无法读取"
-      assert_includes document, "其他浏览器"
-      assert_includes document, "兼容性限制"
-      assert_includes document, "不得借用"
-      assert_includes document, "实际检测结果"
-      assert_includes document, "修改前快照"
-      assert_includes document, "恢复"
-      assert_includes document, "当前值仍等于本轮写入值"
-      assert_includes document, "不得覆盖"
-    end
-
-    [readme, skill, policy].each do |document|
-      refute_includes document, "https://fuck-claude.vercel.app/zh/"
-      refute_includes document, "Google Analytics"
-    end
-
-    assert_operator policy.index("修改前基线"), :<, policy.index("运行平台安装程序")
-  end
-
-  def test_profile_three_classifies_region_signals_and_requires_consent_for_user_preferences
-    policy = policy_document
-
-    [policy].each do |document|
-      %w[
-        Asia/Taipei
-        zh-TW
-        en-US
-        ANTHROPIC_BASE_URL
-        浏览器可见中文字体
-        国产厂商字体
-        国产浏览器
-        国产品牌设备
-        时区偏移
-        Emoji 平台推断
-      ].each { |term| assert_includes document, term }
-      assert_includes document, "征得用户同意"
-      assert_includes document, "浏览器语言与 Intl 区域设置"
-      assert_includes document, "不得删除中文字体"
-      assert_includes document, "只说明当前用于 Claude 和检测的浏览器"
-      assert_includes document, "不得仅为降低参考分修改系统默认浏览器"
-      assert_includes document, "不得伪装设备或 User-Agent"
-      assert_includes document, "UTC+8"
-      assert_includes document, "不会改变当前时间"
-      assert_includes document, "Safari 或 Chrome"
-      assert_includes document, "Edge 或 Chrome"
-      assert_includes document, "完整 hostname"
-      assert_includes document, "向下滚动"
-      assert_includes document, "一次申请"
-      assert_includes document, "只降低参考分"
-      assert_includes document, "不保证改变 Claude 判定"
-      %w[默认端点 官方端点 自定义端点 端点配置异常].each do |category|
-        assert_includes document, category
-      end
-      assert_includes document, "默认 443 端口"
-      assert_includes document, "不得包含 userinfo"
-      assert_includes document, "非 HTTPS"
-      assert_includes document, "只回复“同意”"
-      assert_includes document, "默认使用繁体中文"
-      assert_includes document, "台湾区域设置"
-      assert_includes document, "明确要求英文"
-      assert_includes document, "美国区域设置"
-      assert_includes document, "实际用于 Claude 的同一浏览器"
-      assert_includes document, "系统和其他应用"
-      assert_includes document, "`navigator.language`"
-      assert_includes document, "当前浏览器界面语言"
-      assert_includes document, "中国大陆简体中文"
-      assert_includes document, "新加坡中文"
-      assert_includes document, "`zh-Hans`"
-      assert_includes document, "不做外部国家代码查询"
-      assert_includes document, "只有发现 `host` 候选明确暴露本地网络地址时"
-      assert_includes document, "公网出口不同不能单独证明 WebRTC 绕过代理"
-      assert_includes document, "取不到同协议族网页出口"
-      assert_includes document, "没有公网候选"
+    documents.each do |document|
+      assert_includes document, "Claude/Anthropic"
+      assert_includes document, "不打开、不请求、不测试"
+      assert_includes document, "ChatGPT、Gemini 和 Grok"
     end
   end
 
@@ -875,10 +757,9 @@ class SkillContractTest < Minitest::Test
     policy = policy_document
 
     [mac_verifier, windows_verifier].each do |source|
-      assert_includes source, "Google"
-      assert_includes source, "OpenAI"
-      assert_includes source, "Anthropic"
-      assert_includes source, "Claude"
+      assert_includes source, "ChatGPT"
+      assert_includes source, "Gemini"
+      assert_includes source, "Grok"
       assert_includes source, "/connections"
       assert_includes source, "/proxies"
       assert_includes source, "/providers/proxies"
@@ -945,10 +826,9 @@ class SkillContractTest < Minitest::Test
     windows_source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
 
     {
-      "Google" => "https://www.google.com/search?q=clash-route-verification",
-      "OpenAI" => "https://openai.com/",
-      "Anthropic" => "https://www.anthropic.com/",
-      "Claude" => "https://claude.ai/"
+      "ChatGPT" => "https://chatgpt.com/",
+      "Gemini" => "https://gemini.google.com/",
+      "Grok" => "https://grok.com/"
     }.each do |label, url|
       assert_includes mac_source, %(["#{label}", "#{url}")
       assert_includes windows_source, %("#{label}" "#{url}")
@@ -963,20 +843,29 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_patch_validation_never_opens_claude_in_a_browser
+  def test_claude_and_anthropic_are_never_opened_or_tested
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
-      policy_document
+      File.read(File.join(SKILL, "references/policy-core.md")),
+      File.read(File.join(SKILL, "references/profiles-and-patch.md"))
     ]
 
-    [documents[2]].each do |document|
-      assert_includes document, "不得用 Computer Use、浏览器自动化或系统浏览器打开 `claude.ai`"
-      assert_includes document, "只由分流验证脚本完成"
+    documents.each do |document|
+      assert_includes document, "Claude/Anthropic"
+      assert_includes document, "不打开、不请求、不测试"
+      assert_includes document, "ChatGPT、Gemini 和 Grok"
     end
 
-    assert_includes File.read(File.join(SKILL, "scripts/macos/verify_routes.rb")), "https://claude.ai/"
-    assert_includes File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1")), "https://claude.ai/"
+    [
+      File.read(File.join(SKILL, "scripts/macos/verify_routes.rb")),
+      File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+    ].each do |source|
+      refute_match %r{https://(?:www\.)?(?:claude\.ai|anthropic\.com)/}i, source
+      assert_includes source, "https://chatgpt.com/"
+      assert_includes source, "https://gemini.google.com/"
+      assert_includes source, "https://grok.com/"
+    end
   end
 
   def test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata
@@ -1237,7 +1126,7 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "更新前不运行任何测试"
     assert_includes policy, "与首次运行该档位相同的平台客户端动作和验收"
     assert_includes policy, "档位 3 继承档位 2"
-    assert_includes policy, "更新后只运行一次本地区域指纹检测"
+    assert_includes policy, "Claude/Anthropic 不打开、不请求、不测试"
     assert_includes policy, "安全更新已经重新应用订阅文件补丁，不得再次运行平台安装命令"
     assert_includes policy, "档位 2 不执行档位 1 的系统代理开启动作"
     macos = File.read(File.join(SKILL, "references/macos.md"))
@@ -1677,12 +1566,10 @@ class SkillContractTest < Minitest::Test
   def test_skill_automates_route_and_browser_verification_when_computer_use_exists
     source = policy_document
 
-    assert_includes source, "Google 的连接链必须包含当前主代理组"
-    assert_includes source, "主代理组与 AI 分组不同时，Google 不能经过 AI 分组"
-    assert_includes source, "AI 网站的连接链必须包含 AI 分组"
-    assert_includes source, "隔离用户 curl 配置和代理环境"
-    assert_includes source, "观察到连接后必须重新读取主代理组、AI 分组、当前选择和代理提供者"
-    assert_includes source, "`Rematch` 或 `Relay`"
+    assert_includes source, "只生成 ChatGPT、Gemini 和 Grok 的真实连接"
+    assert_includes source, "实际连接链包含当前 AI 分组"
+    assert_includes source, "三项全部通过"
+    assert_includes source, "Claude/Anthropic 不打开、不请求、不测试"
     assert_includes source, "macOS 和 Windows 只要当前代理工具提供 Computer Use"
     assert_includes source, "当前环境没有 Computer Use 时，要求用户手动测试"
   end
@@ -1691,7 +1578,7 @@ class SkillContractTest < Minitest::Test
   def test_macos_route_verifier_checks_main_and_ai_destinations
     source = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
 
-    %w[Google OpenAI Anthropic Claude].each { |name| assert_includes source, name }
+    %w[ChatGPT Gemini Grok].each { |name| assert_includes source, name }
     assert_includes source, "def route_passes?"
     assert_includes source, "return false if expected_group != ai_group && chains.include?(ai_group)"
     assert_includes source, 'existing.include?(entry["id"])'
@@ -2950,7 +2837,6 @@ class SkillContractTest < Minitest::Test
       refute_includes workflow, %(- "#{path}"), path
     end
     {
-      "macos-browser" => "macos",
       "macos-wrappers" => "macos",
       "macos-production-runtime" => "macos",
       "macos-production-probes" => "macos",
@@ -3517,7 +3403,9 @@ class SkillContractTest < Minitest::Test
 
   def test_every_test_entrypoint_is_wired_into_ci
     workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
-    entrypoints = Dir[File.join(ROOT, "tests/test_*.{rb,js,ps1}")].sort
+    entrypoints = Dir[File.join(ROOT, "tests/test_*.{rb,js,ps1}")].reject do |path|
+      File.basename(path).start_with?("test_region_fingerprint_")
+    end.sort
 
     refute_empty entrypoints
     entrypoints.each do |path|
@@ -3525,32 +3413,18 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_region_fingerprint_page_runs_on_macos_and_both_windows_runtimes
+  def test_ci_never_runs_claude_region_fingerprint_tests
     workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
-    jobs = workflow.scan(
-      /^  ([a-z0-9-]+):\n(.*?)(?=^  [a-z0-9-]+:\n|\z)/m
-    ).to_h
-    command = "node --test tests/test_region_fingerprint_page.js"
 
-    %w[
-      macos
-      windows-installer-powershell-5
-      windows-installer-powershell-7
-    ].each do |job|
-      assert jobs.key?(job), "missing CI job: #{job}"
-      body = jobs.fetch(job)
-      step = body.match(
-        /^\s+- name: Offline region fingerprint page\n((?:\s{8}.+\n?)*)/m
-      )
-      assert step, "missing enabled fingerprint step in #{job}"
-      assert_match(/^\s+run: #{Regexp.escape(command)}\s*$/, step[1])
-      refute_match(/^\s+(?:if:\s*false|continue-on-error:\s*true)\s*$/i, step[1])
-    end
+    refute_includes workflow, "test_region_fingerprint_page.js"
+    refute_includes workflow, "test_region_fingerprint_browser.js"
   end
 
   def test_ci_keeps_the_full_matrix
     workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
-    local_entrypoints = Dir[File.join(ROOT, "tests/test_*.{rb,js}")].sort
+    local_entrypoints = Dir[File.join(ROOT, "tests/test_*.{rb,js}")].reject do |path|
+      File.basename(path).start_with?("test_region_fingerprint_")
+    end.sort
 
     refute_empty local_entrypoints
     local_entrypoints.each do |path|

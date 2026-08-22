@@ -41,7 +41,7 @@ ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关�
 | --- | --- | --- | --- |
 | **1｜普通浏览** | 国内网站、Google、Twitter、YouTube 等 | 安装共同国内域名直连基线，保护节点启动解析，关闭订阅自动更新，开启 Clash 系统代理 | 不改 TUN、IPv6、WebRTC、AI 分组或节点 |
 | **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承共同补丁，开启 TUN，关闭 Clash 自己的系统代理，检查常用网站和 AI 工具 | 不增加 WebRTC 或 AI 分组补丁 |
-| **3｜Claude/Claude Code** | Claude、Claude Code，或需要更完整的泄漏防护 | 继承档位 2，再增加 DNS 分流、AI 分组与规则、UDP/WebRTC 防护和区域指纹检查 | 不替你选择订阅、代理组或节点 |
+| **3｜Claude/Claude Code** | Claude、Claude Code，或需要更完整的泄漏防护 | 继承档位 2，再增加 DNS 分流、AI 分组与规则和 UDP/WebRTC 防护 | 不替你选择订阅、代理组或节点 |
 
 三个档位都会处理当前存储位置中的全部订阅，并关闭订阅自动更新。共同国内域名直连基线让国内域名和连接走 `DIRECT`。安全的节点启动解析避免节点域名依赖系统 DNS、明文 DNS 或 Fake-IP 链。
 
@@ -94,7 +94,7 @@ Windows PowerShell 5.1：
 ClaudeEasy 只有在你明确要求“更新节点”或“更新订阅”时才会更新，不会在后台自动刷新。macOS 与 Windows 执行的是同一套安全步骤，只是刷新订阅的方式不同。
 
 1. 先提醒你：“请确保订阅开关已打开。请自行登录服务商管理后台，找到订阅开关并打开。”部分服务的开关开启后约 10 分钟有效。你回复“打开了”或“没问题”后才继续。否则确认前不得读取订阅、建立备份或操作客户端。不得代替用户操作服务商后台。
-2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止。Windows `-SnapshotProfiles -Json` 还会记住原来的 TUN 和代理组选择。
+2. 更新前不做站点、Agent、分流、DNS 或 WebRTC 测试。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止。Windows `-SnapshotProfiles -Json` 还会记住原来的 TUN 和代理组选择。
 3. macOS 使用 Foundation 原生请求，请求身份从当前运行的 ClashX Meta 动态生成，并发送 `Accept-Language: zh-CN,zh;q=0.9`。它不用 curl，也不伪造 User-Agent。Windows 只用 Clash Verge Rev 顶部的“更新所有订阅”，不会直接下载，也不会使用右键菜单中的“更新”或“通过代理更新”。
 4. macOS 在写入前完成文本编码、YAML、二次转换一致性检查和 Mihomo 校验，防止损坏或不完整的配置被写入。Windows 刷新时运行已安装的全局脚本，并在刷新后逐份检查订阅、补丁、代理组、Mihomo 和运行配置。任何一端失败都会按更新前备份恢复，并继续核对运行状态。
 5. 平台命令成功只是中间状态。ClaudeEasy 还会按已保存档位完成客户端开关与验收，再次确认订阅自动更新关闭，并确认原 TUN、代理组和节点选择都已恢复。任一原代理组或节点选择无法恢复时拒绝更新。机器结果出现 `workflow_complete: false`，表示还有检查没做完，不会提前结束。
@@ -117,11 +117,9 @@ Windows 的其他受保护恢复只有客户端本来就未运行时进行。
 
 - 档位 1：检查国内站、Google、Twitter、一个常用网站和 Clash 系统代理。
 - 档位 2：再检查 TUN、ChatGPT、Gemini 和命令行或 Agent 联网。
-- 档位 3：再检查 Google、OpenAI、Anthropic、Claude 的实时连接链、DNS 深度测试和两项 WebRTC 页面。
+- 档位 3：再检查 ChatGPT、Gemini、Grok 的实时连接链、DNS 深度测试和两项 WebRTC 页面。
 
-Claude 联网只由分流验证脚本检查。ClaudeEasy 不会用浏览器打开 `claude.ai`、进入你的账号或发送测试消息。浏览器只会打开本地区域检测页和 DNS/WebRTC 测试页。
-
-档位 3 的 Claude 区域指纹检测使用本地页面 `claude-easy/assets/claude-region-check.html`，支持 macOS 的 Safari、Chrome，以及 Windows 的 Edge、Chrome。页面会先说明 Google 和 Cloudflare 的三个 STUN 连接及公网 IP 披露，只有你点击按钮后才运行 WebRTC 测试。WebRTC 候选地址不会发给其他服务。区域指纹只是参考，不能作为 Claude 是否可用的通过条件。
+**Claude/Anthropic 永久禁测：相关网站、API、域名和本地检测页一律不打开、不请求、不测试。** 只允许静态检查配置；AI 联网只测试 ChatGPT、Gemini 和 Grok。
 
 ## AdGuard for Mac
 
@@ -146,6 +144,5 @@ Windows：
 ## 目前的限制
 
 - ClaudeEasy 不替你选择订阅、代理组或节点。
-- 区域指纹参考分不能保证改变任何服务的判断。
 - Windows 的订阅增强要等订阅下次正常加载或刷新后才进入运行内核。安装完成不代表全部订阅已经生效。
 - 客户端或控制器无法提供实时状态时，结果会写“未验证”，不会假装成功。

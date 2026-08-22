@@ -104,4 +104,4 @@ AI 分组当前选择必须是代理节点，不能是 `DIRECT`；不创建安�
 
 多个检测结果如果全是代理出口，不属于真实 IP 泄漏；单一结果更容易确认。
 
-本地区域指纹页不得把 WebRTC 候选地址发送给归属地查询或其他第三方服务。页面必须在创建 `RTCPeerConnection` 前明确列出 `stun.l.google.com`、`stun1.l.google.com` 和 `stun.cloudflare.com`，并披露会向 `https://cloudflare.com/cdn-cgi/trace` 请求一次正常网页出口作为本地对照；Google 和 Cloudflare 会看到各自连接的源公网 IP，但 Cloudflare 不会收到 WebRTC 候选地址。只有用户点击“开始检测并运行 WebRTC 测试”或同等明确的重新扫描按钮后才能连接这些服务，CSP 只允许这个固定 HTTPS 对照端点。页面不做外部国家代码查询。WebRTC 项只有发现 `host` 候选明确暴露本地网络地址时计 `+10`；公网候选与网页出口一致、没有公网候选、公网出口不同、取不到同协议族网页出口、浏览器没有 WebRTC API 或探测失败都计 `+0`。公网出口不同只能证明连接出口不同，不能证明 WebRTC 绕过代理。
+本地 Claude 区域指纹页永久禁用，不得打开或运行。Claude/Anthropic 不打开、不请求、不测试；只允许静态检查配置，AI 联网与分流只测试 ChatGPT、Gemini 和 Grok。
