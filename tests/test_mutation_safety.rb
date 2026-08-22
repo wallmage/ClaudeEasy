@@ -2097,8 +2097,8 @@ class MutationSafetyTest < Minitest::Test
       replace_once(
         root,
         "claude-easy/scripts/macos/verify_routes.rb",
-        '/(?:\A|\.)google\.com\z/i',
-        "/google/i"
+        '/(?:\A|\.)chatgpt\.com\z/i',
+        "/chatgpt/i"
       )
 
       assert_mutation_is_killed(

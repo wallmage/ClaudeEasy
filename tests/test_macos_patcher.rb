@@ -2779,13 +2779,13 @@ class MacosPatcherTest < Minitest::Test
   def test_route_target_patterns_require_real_domain_boundaries
     patterns = ClashRouteVerifier::TARGETS.to_h { |label, _url, _kind, pattern| [label, pattern] }
 
-    assert_match patterns.fetch("Google"), "www.google.com"
-    refute_match patterns.fetch("Google"), "notgoogle.com"
-    refute_match patterns.fetch("Google"), "google.com.attacker.invalid"
-    assert_match patterns.fetch("OpenAI"), "api.openai.com"
-    refute_match patterns.fetch("OpenAI"), "openai.com.attacker.invalid"
-    assert_match patterns.fetch("Claude"), "claude.ai"
-    refute_match patterns.fetch("Claude"), "notclaude.ai"
+    assert_match patterns.fetch("ChatGPT"), "chatgpt.com"
+    refute_match patterns.fetch("ChatGPT"), "notchatgpt.com"
+    refute_match patterns.fetch("ChatGPT"), "chatgpt.com.attacker.invalid"
+    assert_match patterns.fetch("Gemini"), "gemini.google.com"
+    refute_match patterns.fetch("Gemini"), "notgemini.google.com"
+    assert_match patterns.fetch("Grok"), "grok.com"
+    refute_match patterns.fetch("Grok"), "notgrok.com"
   end
 
   def test_unknown_policy_version_is_rejected_without_mutating_config
@@ -15316,12 +15316,7 @@ class MacosPatcherTest < Minitest::Test
       "/rules" => { "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] },
       "/providers/proxies" => { "providers" => {} }
     }
-    observations = [
-      { "chains" => ["Taiwan", "Main"] },
-      { "chains" => ["Japan", "AI"] },
-      { "chains" => ["Japan", "AI"] },
-      { "chains" => ["Japan", "AI"] }
-    ]
+    observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
 
     ClaudeEasy.stub(:controller_socket, "socket") do
       ClashRouteVerifier.stub(:active_profile, -> { flunk "read the disk for a live group" }) do
@@ -15349,10 +15344,7 @@ class MacosPatcherTest < Minitest::Test
       next({ "rules" => [{ "type" => "MATCH", "proxy" => "Main" }] }) if endpoint == "/rules"
       { "providers" => {} }
     end
-    observations = [
-      { "chains" => ["Same Leaf", "Main"] },
-      *Array.new(3) { { "chains" => ["Same Leaf", "AI"] } }
-    ]
+    observations = Array.new(3) { { "chains" => ["Same Leaf", "AI"] } }
 
     ClaudeEasy.stub(:controller_socket, "socket") do
       ClashRouteVerifier.stub(:get_json, getter) do
@@ -15404,7 +15396,7 @@ class MacosPatcherTest < Minitest::Test
     end
 
     assert_equal(
-      %w[not_observed not_observed not_observed not_observed],
+      %w[not_observed not_observed not_observed],
       details.fetch(:checks).map { |check| check.fetch("status") }
     )
   end
@@ -15423,12 +15415,7 @@ class MacosPatcherTest < Minitest::Test
         main_node => { "type" => "Shadowsocks" },
         ai_node => { "type" => "Shadowsocks" }
       } }
-      observations = [
-        { "chains" => [main_node, main_group] },
-        { "chains" => [ai_node, ai_group] },
-        { "chains" => [ai_node, ai_group] },
-        { "chains" => [ai_node, ai_group] }
-      ]
+      observations = Array.new(3) { { "chains" => [ai_node, ai_group] } }
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies, main_group: main_group)) do
@@ -15437,8 +15424,9 @@ class MacosPatcherTest < Minitest::Test
               assert ClashRouteVerifier.run(output: output)
               assert_includes output.string, "主代理组：已识别；当前选择已隐藏"
               assert_includes output.string, "AI 分组：已识别；当前选择已隐藏"
-              assert_includes output.string, "Google：通过"
-              assert_includes output.string, "Claude：通过"
+              assert_includes output.string, "ChatGPT：通过"
+              assert_includes output.string, "Gemini：通过"
+              assert_includes output.string, "Grok：通过"
               refute_includes output.string, main_node
               refute_includes output.string, ai_node
               refute_includes output.string, main_group
@@ -15464,12 +15452,7 @@ class MacosPatcherTest < Minitest::Test
         "Taiwan" => { "type" => "Shadowsocks" },
         "Japan" => { "type" => "Shadowsocks" }
       } }
-      observations = [
-        { "chains" => ["Taiwan", "Main"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] }
-      ]
+      observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
@@ -15503,12 +15486,7 @@ class MacosPatcherTest < Minitest::Test
         "/providers/proxies" => provider_payload,
         "/rules" => rules_payload
       }
-      observations = [
-        { "chains" => ["Taiwan", "Main"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] }
-      ]
+      observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, ->(_socket, endpoint) { responses[endpoint] }) do
@@ -15564,12 +15542,7 @@ class MacosPatcherTest < Minitest::Test
         "Singapore" => { "type" => "Shadowsocks" },
         "Japan" => { "type" => "Shadowsocks" }
       } }
-      observations = [
-        { "chains" => ["Singapore", "Google", "Main"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] },
-        { "chains" => ["Japan", "AI"] }
-      ]
+      observations = Array.new(3) { { "chains" => ["Japan", "AI"] } }
       ClaudeEasy.stub(:controller_socket, "socket") do
         ClashRouteVerifier.stub(:active_profile, profile) do
           ClashRouteVerifier.stub(:get_json, route_controller_getter(proxies)) do
@@ -15683,12 +15656,9 @@ class MacosPatcherTest < Minitest::Test
           }
         }
       }
-      healthy_observations = [
-        { "chains" => ["Provider Main", "Main"], "providerChains" => ["remote", ""] },
-        { "chains" => ["Provider AI", "AI"], "providerChains" => ["remote", ""] },
-        { "chains" => ["Provider AI", "AI"], "providerChains" => ["remote", ""] },
+      healthy_observations = Array.new(3) do
         { "chains" => ["Provider AI", "AI"], "providerChains" => ["remote", ""] }
-      ]
+      end
       endpoints = []
       get_json = lambda do |_socket, endpoint|
         endpoints << endpoint
@@ -15710,7 +15680,7 @@ class MacosPatcherTest < Minitest::Test
         end
       end
       %w[/proxies /rules /providers/proxies].each do |endpoint|
-        assert_equal 5, endpoints.count(endpoint)
+        assert_equal 4, endpoints.count(endpoint)
       end
 
       [

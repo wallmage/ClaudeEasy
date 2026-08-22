@@ -2889,8 +2889,8 @@ if ($changedSnapshotPassed) { throw "Observe-Route accepted a proxy selection ch
                                 }
                                 $routeIndex = [int]($connectionRequest / 2) - 1
                                 $hosts = @("chatgpt.com", "gemini.google.com", "grok.com")
-                                $groups = @("Main", "AI", "AI")
-                                $nodes = @("Provider Main", "Provider AI", "Provider AI")
+                                $groups = @("AI", "AI", "AI")
+                                $nodes = @("Provider AI", "Provider AI", "Provider AI")
                                 $curlReadyDeadline =
                                     [DateTime]::UtcNow.AddSeconds(5)
                                 do {
