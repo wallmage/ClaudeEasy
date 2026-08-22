@@ -1215,6 +1215,27 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "最终状态复核"
   end
 
+  def test_safe_update_deadline_and_final_success_gate_are_cross_platform
+    readme = File.read(File.join(ROOT, "README.md"))
+    skill = File.read(File.join(SKILL, "SKILL.md"))
+    policy = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+
+    [readme, skill, policy].each do |document|
+      assert_includes document, "180 秒"
+      assert_includes document, "macOS"
+      assert_includes document, "Windows"
+    end
+    [skill, policy].each do |document|
+      assert_includes document, "不得原样重试"
+      assert_includes document, "回滚"
+      assert_includes document, "失败"
+    end
+    assert_includes skill, "前台命令仍在运行"
+    assert_includes policy, "safe_update_rolled_back"
+    assert_includes policy, "未完成事务"
+    assert_includes policy, "立即诊断"
+  end
+
   def test_macos_backup_recovery_includes_the_active_runtime
     safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
     documents = [

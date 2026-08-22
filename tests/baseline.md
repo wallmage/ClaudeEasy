@@ -60,6 +60,7 @@
 - 跨平台节点选择持久化：macOS 与 Windows 三个档位都必须生成 `profile.store-selected: true`，覆盖缺失、显式关闭和错误类型，同时保留 `profile` 下其他设置；macOS 继续额外执行控制器状态恢复。
 - Claude/Anthropic 远程域名永久禁测：相关网站、API 和域名不打开、不请求、不测试；脚本只对 ChatGPT、Gemini 和 Grok 发起 AI 联网与分流测试。档位 3 的任何配置任务收尾只运行一次不连接这些域名的本地区域指纹页；低风险通过，中高风险按可操作加分项提示用户调整，获准时用 Computer Use 修改系统或浏览器设置，每轮调整后只复测一次直到低风险。节点仍只建议用户选择。
 - 服务商订阅开关边界：首次收到更新请求时先提醒用户自行登录服务商管理后台，打开每份远程订阅的订阅开关；部分服务的开关开启后约 10 分钟有效。收到“打开了”“没问题”或同义确认前不得读取订阅、建立备份或操作客户端，也不使用 Chrome、Browser 或 Computer Use 检查或操作后台。
+- 双平台安全更新完成判定：macOS 从安全更新命令开始、Windows 从客户端“更新所有订阅”开始，共用 180 秒总等待上限；超时立即停止等待且不得原样重试，随后诊断和修复。下载、候选写入、短暂加载和仍在运行的命令都不是成功；任何回滚、失败、部分完成、待恢复事务或未完成验收都必须报告失败，只有命令退出成功、全部后续验收和最终状态复核通过才可报告完成。
 - Windows 路由验证测试：从生产 `verify_routes.ps1` 的 AST 自动加载全部函数到主测试与隔离测试脚本，不维护两份容易漏项的函数清单；新增任何辅助函数后，PowerShell 5.1 与 7 的全量测试都必须能直接调用。显式 `-AiGroup` 在整个观察窗口按同一个精确组名核对，不得退回固定候选或关键词重新识别。
 - 语法与格式：Ruby、JavaScript、Shell、PowerShell、全部 PowerShell 文件的严格 UTF-8 BOM、策略同步和 `git diff --check`。
 - 测试机制：`AGENTS.md`、`README.md`、`LICENSE`、`docs/` 和本基线等说明文档不触发 CI。其他改动由 `tests/ci_scope.rb` 精确选择合同、双平台分流、macOS 核心、包装器、生产探针、mutation、真实 Mihomo、Windows 引擎和 Windows 核心任务；Windows-only 不运行 macOS 产品测试，macOS-only 不运行 Windows 产品测试，手动触发才运行完整矩阵。新增生产脚本没有任务归属时分类器测试直接失败。分流改动只运行秒级 macOS 路由测试或 Windows PowerShell 5.1/7 专用路由测试；mutation 按测试名排除另一平台。macOS 分流检测的一轮控制器请求只允许解析一次控制器配置，轮询次数不得增加 YAML 解析次数。同一分支的新提交取消旧 CI。所有 job 都有总超时；独立生产故障探针先记录失败并继续执行，最后统一让 job 失败，避免前一个问题遮住后续测试。GitHub Actions 的 `shell` 字段必须使用静态受支持值，契约和 mutation 必须在推送前拦截会让 workflow 零 job 失败的动态 shell。mutation 的语法错误、加载失败或超时不能冒充被测试发现。

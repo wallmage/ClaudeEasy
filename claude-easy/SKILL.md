@@ -30,7 +30,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 2. **不得运行 ClashX Meta 主程序做检查。** 不用 `open`、LaunchServices、Computer Use 或 `--version` 启动它；客户端版本读取 `Info.plist`，运行状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo。客户端未运行时保持未运行。
 3. **Claude/Anthropic 远程域名永久禁测。** 相关网站、API 和域名一律不打开、不请求、不测试；不得通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量。用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名；已保存档位为 3 时，档位 3 的任何配置任务都必须在全部配置动作结束后运行这个本地页面，每轮只测试一次。中等风险或高风险按档位策略完成用户调整或获准的 Computer Use 调整，再进入下一轮单次测试，直到低风险通过。
 4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按平台策略操作 Clash Verge Rev；AdGuard for Mac 的兼容设置只通过它自己的正常窗口。
-5. 安全更新必须保留热加载，但只能走已经运行的客户端原生入口。候选加载与失败恢复各最多一次；运行配置变化后继续等待 TUN、代理选择、DNS 和实际连接全部恢复，禁止直接重载 Mihomo、直接改 TUN 或循环重试。
+5. 安全更新必须保留热加载，但只能走已经运行的客户端原生入口。macOS 从启动安全更新命令、Windows 从开始“更新所有订阅”起，同一轮更新最多等待 180 秒；到时仍未取得最终成功结果就立即停止等待，不得原样重试，并按更新策略立即诊断和修复。macOS 只中断本轮由代理启动且前台命令仍在运行的更新命令，Windows 停止等待且不重复点击；绝不停止或重启 Clash。候选加载与失败恢复各最多一次；运行配置变化后继续等待 TUN、代理选择、DNS 和实际连接全部恢复，禁止直接重载 Mihomo、直接改 TUN 或循环重试。
 6. 只处理 Clash 当前存储位置中的订阅；无法确认本地或 iCloud 状态时停止，不猜。
 7. 写入候选必须通过 YAML 重读、二次转换一致性检查和 Mihomo 1.19.27 以上版本的 30 秒校验；失败时保持原文件。
 8. 跟随用户使用的语言。任何输出都不得包含订阅地址、密码、UUID、私钥、控制器密钥、完整节点地址或节点名称。
@@ -117,6 +117,8 @@ Windows 普通安装、卸载和单文件备份恢复只有客户端本来就未
 Windows 先检查当前工具列表是否提供 Computer Use；没有该工具，或首次调用失败时，不重试，立即把上述界面步骤交给用户，并要求操作完成后回复“我已经手动更新完了”。收到该回复后运行 `.\scripts\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json`；只在 UI 刷新完成或用户明确确认后提供的 `-RefreshConfirmed` 就是本轮刷新凭据，订阅字节和时间戳未变化也可以是有效结果。客户端刷新会通过已安装的全局脚本按已保存档位重新应用补丁，验收命令逐份检查 YAML、代理组、Mihomo 校验、全局脚本、运行配置和自动更新关闭状态，并恢复和核对更新前 TUN 与代理选择。失败时恢复备份并重新加载原运行配置。Windows 使用 Computer Use 自动刷新成功时也必须运行同一验收命令，不能直接结束。
 
 `safe_update_completed`、`safe_update_verified` 和 `workflow_complete: false` 都是中间回执；看到后必须继续完成 `required_followups` 中的每一项，再做最终状态复核，不得提前输出最终说明。两端更新后都必须继续首次 Patch 中的平台客户端动作和全部验收；安全更新已经重新应用订阅文件补丁，不得再次运行安装命令。macOS 的 `macos_client_switch_reconciliation` 必须运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 继续按平台策略使用 Computer Use 或手动步骤。档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接开启 TUN 并关闭 Clash 自己的系统代理；档位 3 继承档位 2，再完成 ChatGPT、Gemini、Grok 分流、DNS、WebRTC 和本地区域指纹验收。没有 Computer Use 时，只影响 Windows 客户端和浏览器动作由谁执行，不得减少验收；macOS 不得因此尝试用 Computer Use 操作 ClashX Meta。未验证项目不得宣称完成。最终状态复核必须再次确认订阅自动更新关闭；任一原代理组或节点选择无法恢复时拒绝更新。只有当前档位规定的全部验收都取得本轮通过结果，才算更新任务完成。
+
+下载成功、候选写入成功、日志显示新配置加载完成，或前台命令仍在运行，都不能报告更新成功。只有命令已结束且退出码为 0、没有 `failed`、`partial`、`rolled_back` 或回滚结果、全部后续验收通过，并确认没有未完成事务，才允许报告成功。候选后来恢复成旧配置就是失败：必须明确告诉用户已经回滚，立即诊断失败原因和修复方案，不得原样重试；修复完成后才可重新真实验收。180 秒只限制本轮更新等待，不限制后续诊断和修复。
 
 macOS 不得用 curl 下载订阅，也不得固定或伪造 User-Agent；只能按当前运行客户端动态生成原生请求身份。Windows 不直接下载订阅，只调用 Clash Verge Rev 的客户端原生刷新。两端不追加通用的防倒退、数量、哈希或时间戳检查；但现有 AnyTLS 被新配置全部替换为 Shadowsocks 时必须拒绝接受本轮更新。平台命令内部不追加 WebRTC 检查；命令返回后仍按已保存档位完成任务验收。
 
