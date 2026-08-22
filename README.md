@@ -79,7 +79,7 @@ Windows PowerShell 5.1：
 | 功能 | macOS | Windows |
 | --- | --- | --- |
 | 查看档位 | `bash claude-easy/scripts/install_macos.sh --show-profile` | `.\claude-easy\scripts\install_windows.cmd -ShowUsageProfile` |
-| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json` | 先用 `-SnapshotProfiles -Json`，刷新后用 `-VerifySafeUpdate -RefreshConfirmed -RefreshStartedAt TIME -Json` |
+| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json` | 先用 `-SnapshotProfiles -Json`，点击前用 `-BeginSafeUpdateRefresh -Json`，刷新后用 `-VerifySafeUpdate -RefreshConfirmed -Json` |
 | 列出备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups --json` | `.\claude-easy\scripts\install_windows.cmd -ListBackups -Json` |
 | 比较备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --compare-backup ID --json` | `.\claude-easy\scripts\install_windows.cmd -CompareBackup ID -Json` |
 | 恢复备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH --json` | `.\claude-easy\scripts\install_windows.cmd -RestoreBackup ID -ExpectedCurrentSha256 HASH -Json` |
@@ -100,7 +100,7 @@ ClaudeEasy 只有在你明确要求“更新节点”或“更新订阅”时才
 5. 平台命令成功只是中间状态。ClaudeEasy 还会按已保存档位完成客户端开关与验收，再次确认订阅自动更新关闭，并确认原 TUN、代理组和节点选择都已恢复。任一原代理组或节点选择无法恢复时拒绝更新。机器结果出现 `workflow_complete: false`，表示还有检查没做完，不会提前结束。
 6. macOS 从启动安全更新命令、Windows 从开始“更新所有订阅”起，同一轮更新最多等待 180 秒。到时仍未成功就立即停止等待，不得原样重试，并马上检查结果、事务和日志，查明原因后修复。下载成功或短暂加载成功不代表整轮成功；只要后来回滚、恢复旧配置、仍有未完成事务或任何验收失败，就会明确报告失败，不会说“已经更新完成”。
 
-Windows 有 Computer Use 时，可以操作已经运行的 Clash Verge Rev。没有时会先等你打开订阅页并回复“准备好了”，紧接着记录当前时间并让你点击更新；你回复“我已经手动更新完了”后，用该时间运行 `-VerifySafeUpdate -RefreshConfirmed -RefreshStartedAt TIME -Json` 继续验收。180 秒从这个时间开始，不从备份开始。
+Windows 有 Computer Use 时，可以操作已经运行的 Clash Verge Rev。没有时会先等你打开订阅页并回复“准备好了”，紧接着运行 `-BeginSafeUpdateRefresh -Json` 并让你点击更新；你回复“我已经手动更新完了”后，运行 `-VerifySafeUpdate -RefreshConfirmed -Json` 继续验收。180 秒从已保存的刷新开始时间算，不从备份开始。
 
 两端不会用节点数量、哈希或时间戳简单判断更新好坏。不过，如果原配置中的 AnyTLS 在新配置里全部变成 Shadowsocks，本轮更新不会被接受。
 

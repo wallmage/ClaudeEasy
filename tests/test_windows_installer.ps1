@@ -495,18 +495,15 @@ function Invoke-TestPowerShell(
     [string[]]$ScriptArguments,
     [switch]$SimulateRuntimeRefresh
 ) {
-    if ($ScriptArguments -contains "-VerifySafeUpdate" -and
-        $ScriptArguments -contains "-RefreshConfirmed" -and
-        $ScriptArguments -notcontains "-RefreshStartedAt") {
-        $ScriptArguments += @("-RefreshStartedAt", [DateTimeOffset]::Now.ToString("o"))
-    }
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeBootstrap = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
         (Split-Path -Leaf $ScriptPath) -eq "install_windows.ps1" -and
-        ($ScriptArguments -contains "-SnapshotProfiles" -or $ScriptArguments -contains "-VerifySafeUpdate")
+        ($ScriptArguments -contains "-SnapshotProfiles" -or
+            $ScriptArguments -contains "-BeginSafeUpdateRefresh" -or
+            $ScriptArguments -contains "-VerifySafeUpdate")
     if ($usesSafeUpdateRuntime) {
         $appHomeIndex = [Array]::IndexOf($ScriptArguments, "-AppHome")
         if ($appHomeIndex -ge 0 -and $appHomeIndex + 1 -lt $ScriptArguments.Count) {
@@ -528,6 +525,21 @@ function Invoke-TestPowerShell(
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
+        if ($usesSafeUpdateRuntime -and
+            $ScriptArguments -contains "-VerifySafeUpdate" -and
+            $ScriptArguments -contains "-RefreshConfirmed") {
+            $manifestPath = Join-Path $runtimeHome "claude-easy-safe-update.json"
+            if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+                $manifestText = [System.IO.File]::ReadAllText($manifestPath)
+                if ($manifestText -match '(?i)"RefreshStartedAt"\s*:\s*null') {
+                    $beginOutput = & $PowerShellPath -NoLogo -NoProfile -File $ScriptPath `
+                        -AppHome $runtimeHome -BeginSafeUpdateRefresh -MihomoPath $fakeCore -Json 2>&1 | Out-String
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "failed to start safe-update refresh timer: $(Get-TestOutputDiagnostic $beginOutput)"
+                    }
+                }
+            }
+        }
         if ($SimulateRuntimeRefresh) {
             $mihomoPathIndex = [Array]::IndexOf($ScriptArguments, "-MihomoPath")
             $payload = [pscustomobject]@{
@@ -535,7 +547,6 @@ function Invoke-TestPowerShell(
                 AppHome = [string]$ScriptArguments[$appHomeIndex + 1]
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 Json = $ScriptArguments -contains "-Json"
-                RefreshStartedAt = [string]$ScriptArguments[([Array]::IndexOf($ScriptArguments, "-RefreshStartedAt") + 1)]
                 RuntimePath = $runtimePath
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
@@ -550,7 +561,6 @@ $arguments = @{
     MihomoPath = [string]$payload.MihomoPath
     VerifySafeUpdate = $true
     RefreshConfirmed = $true
-    RefreshStartedAt = [string]$payload.RefreshStartedAt
     Json = [bool]$payload.Json
 }
 & ([string]$payload.ScriptPath) @arguments
@@ -4186,6 +4196,7 @@ rules:
     ) -Raw | ConvertFrom-Json
     Assert-True (
         [int]$snapshotManifest.Version -eq 4 -and
+        $null -eq $snapshotManifest.RefreshStartedAt -and
         $null -eq $snapshotManifest.UpdateDispatchCommittedFor -and
         $snapshotManifest.Runtime.TunEnabled -eq $false -and
         @($snapshotManifest.Runtime.Selections).Count -eq 1 -and
@@ -4210,13 +4221,38 @@ rules:
         $safeUpdateManifestPath,
         (($delayedManifest | ConvertTo-Json -Depth 5) + "`r`n")
     )
+    $beginRefresh = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-BeginSafeUpdateRefresh",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $beginRefreshJson = Assert-JsonResult $beginRefresh "install" 0
+    Assert-True ($beginRefreshJson.code -eq "safe_update_refresh_started") `
+        "Windows did not persist the actual refresh start"
     $unexpiredManifestText = [System.IO.File]::ReadAllText($safeUpdateManifestPath)
+    $expiredManifest = $unexpiredManifestText | ConvertFrom-Json
+    $expiredManifest.RefreshStartedAt = [DateTimeOffset]::Now.AddSeconds(-181).ToString("o")
+    [System.IO.File]::WriteAllText(
+        $safeUpdateManifestPath,
+        (($expiredManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
     $expiredTree = Get-TreeContentSnapshot $safeUpdateCase
+    $resetAttempt = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-RefreshConfirmed",
+        "-RefreshStartedAt", [DateTimeOffset]::Now.ToString("o"),
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $resetAttemptJson = Assert-JsonResult $resetAttempt "install" 64
+    Assert-True ($resetAttemptJson.code -eq "invalid_arguments") `
+        "Windows allowed the caller to reset the persisted refresh start"
     $expiredVerify = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
         "-VerifySafeUpdate",
         "-RefreshConfirmed",
-        "-RefreshStartedAt", [DateTimeOffset]::Now.AddSeconds(-181).ToString("o"),
         "-MihomoPath", $fakeCore,
         "-Json"
     )

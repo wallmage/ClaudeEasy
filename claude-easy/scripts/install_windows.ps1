@@ -5,9 +5,9 @@
     [switch]$ShowUsageProfile,
     [switch]$BackupSubscriptions,
     [switch]$SnapshotProfiles,
+    [switch]$BeginSafeUpdateRefresh,
     [switch]$VerifySafeUpdate,
     [switch]$RefreshConfirmed,
-    [string]$RefreshStartedAt = "",
     [switch]$ListBackups,
     [string]$CompareBackup = "",
     [string]$RestoreBackup = "",
@@ -48,7 +48,7 @@ if (-not $resultContractLoaded) {
     exit 6
 }
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
-$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
+$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($BeginSafeUpdateRefresh) { "begin_safe_update_refresh" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
@@ -142,6 +142,7 @@ if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $App
 $requestedOperations = @(
     [bool]$BackupSubscriptions,
     [bool]$SnapshotProfiles,
+    [bool]$BeginSafeUpdateRefresh,
     [bool]$VerifySafeUpdate,
     [bool]$ListBackups,
     (-not [string]::IsNullOrWhiteSpace($CompareBackup)),
@@ -163,12 +164,6 @@ if ($RefreshConfirmed -and -not $VerifySafeUpdate) {
 }
 if ($VerifySafeUpdate -and -not $RefreshConfirmed) {
     Complete-InstallResult 64 "invalid_request" "missing_refresh_confirmation" "请先在客户端完成更新所有订阅，再明确确认本轮刷新。"
-}
-if (-not $VerifySafeUpdate -and -not [string]::IsNullOrWhiteSpace($RefreshStartedAt)) {
-    Complete-InstallResult 64 "invalid_request" "unexpected_refresh_start" "只有验收安全更新时才能提供刷新开始时间。"
-}
-if ($VerifySafeUpdate -and [string]::IsNullOrWhiteSpace($RefreshStartedAt)) {
-    Complete-InstallResult 64 "invalid_request" "missing_refresh_start" "缺少本轮更新所有订阅的开始时间。"
 }
 
 # Clash Verge Rev 的全局扩展脚本位置：profiles/Script.js。
@@ -218,7 +213,7 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SnapshotProfiles -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) -or (-not $BackupSubscriptions -and (
+$needsUsageProfile = $SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) -or (-not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
@@ -259,7 +254,7 @@ if ($BackupSubscriptions) {
         @("profile_backups") @() $backupItems
 }
 
-if ($SnapshotProfiles -or $VerifySafeUpdate) {
+if ($SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate) {
     if ($savedUsageProfile -eq 0) {
         Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
     }
@@ -324,6 +319,7 @@ if ($SnapshotProfiles) {
         $manifest = [ordered]@{
             Version = 4
             CreatedAt = [DateTimeOffset]::Now.ToString("o")
+            RefreshStartedAt = $null
             Profiles = $manifestItems
             Runtime = $runtimeSnapshot
             UpdateDispatchCommittedFor = $null
@@ -356,6 +352,40 @@ if ($SnapshotProfiles) {
         "已创建全部远程订阅的安全更新前备份；订阅刷新、验收和最终复核尚未完成。" `
         @("profile_backups") @() $snapshotItems @() `
         $false "subscription_snapshot" $snapshotFollowups
+}
+
+if ($BeginSafeUpdateRefresh) {
+    $manifestSnapshot = Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录"
+    if (-not $manifestSnapshot.Exists) { throw "没有找到本次安全更新的准备记录。" }
+    $manifestText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($manifestSnapshot.Bytes)
+    $manifest = $manifestText | ConvertFrom-Json
+    if (($manifest.PSObject.Properties.Name | Sort-Object) -join "," -cne
+            "CreatedAt,Profiles,RefreshStartedAt,Runtime,UpdateDispatchCommittedFor,Version" -or
+        -not ($manifest.Version -is [int] -or $manifest.Version -is [long]) -or
+        [long]$manifest.Version -ne 4 -or
+        [regex]::Matches($manifestText, '(?i)("RefreshStartedAt"\s*:\s*)null').Count -ne 1) {
+        Complete-InstallResult 1 "failed" "safe_update_refresh_already_started" `
+            "本轮订阅刷新已经开始，不能重置 180 秒计时。"
+    }
+    $refreshStartedAt = [DateTimeOffset]::Now.ToString("o")
+    $updatedManifestText = [regex]::Replace(
+        $manifestText,
+        '(?i)("RefreshStartedAt"\s*:\s*)null',
+        ('$1' + "`"$refreshStartedAt`""),
+        1
+    )
+    Invoke-VerifiedFileTransaction @(
+        [pscustomobject]@{
+            Path = $safeUpdateStatePath
+            Bytes = ConvertTo-Utf8Bytes $updatedManifestText
+            Existed = $true
+            OriginalBytes = $manifestSnapshot.Bytes
+            OriginalIdentity = $manifestSnapshot.Identity
+        }
+    ) -InterruptedRecoveryPolicy "safe_update_running_client"
+    Complete-InstallResult 0 "ok" "safe_update_refresh_started" `
+        "已记录本轮订阅刷新开始时间；180 秒计时现在开始。" @("refresh_timer") @() @() @() `
+        $false "subscription_refresh" @("safe_update_verification")
 }
 
 if ($VerifySafeUpdate) {
@@ -468,7 +498,7 @@ if ($VerifySafeUpdate) {
     $manifestVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
     $manifestVersion = if ($manifestVersionIsNumeric) { [long]$manifest.Version } else { 0L }
     $expectedManifestProperties = if ($manifestVersion -eq 4) {
-        "CreatedAt,Profiles,Runtime,UpdateDispatchCommittedFor,Version"
+        "CreatedAt,Profiles,RefreshStartedAt,Runtime,UpdateDispatchCommittedFor,Version"
     } elseif ($manifestVersion -eq 3) {
         "CreatedAt,Profiles,Runtime,Version"
     } else {
@@ -492,14 +522,19 @@ if ($VerifySafeUpdate) {
         throw "安全更新准备记录无效。"
     }
     $refreshStartedAt = [DateTimeOffset]::MinValue
-    if (-not [DateTimeOffset]::TryParseExact(
-            $RefreshStartedAt,
+    $refreshStartedAtMatch = [regex]::Match(
+        $manifestText,
+        '(?i)"RefreshStartedAt"\s*:\s*"(?<value>[^"\\]*)"'
+    )
+    if (-not $refreshStartedAtMatch.Success -or
+        -not [DateTimeOffset]::TryParseExact(
+            [string]$refreshStartedAtMatch.Groups["value"].Value,
             "o",
             [System.Globalization.CultureInfo]::InvariantCulture,
             [System.Globalization.DateTimeStyles]::RoundtripKind,
             [ref]$refreshStartedAt
         ) -or $refreshStartedAt -gt [DateTimeOffset]::Now) {
-        Complete-InstallResult 64 "invalid_request" "invalid_refresh_start" "本轮更新所有订阅的开始时间无效。"
+        Complete-InstallResult 1 "failed" "safe_update_refresh_not_started" "没有本轮订阅刷新的开始记录；未运行验收。"
     }
     if ([DateTimeOffset]::Now -ge $refreshStartedAt.AddSeconds(180)) {
         Complete-InstallResult 1 "failed" "safe_update_timeout" `
