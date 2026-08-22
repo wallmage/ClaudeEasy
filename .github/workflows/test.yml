@@ -35,8 +35,18 @@ jobs:
     timeout-minutes: 5
     outputs:
       base: ${{ steps.scope.outputs.base }}
-      macos: ${{ steps.scope.outputs.macos }}
-      windows: ${{ steps.scope.outputs.windows }}
+      contract: ${{ steps.scope.outputs.contract }}
+      macos_routes: ${{ steps.scope.outputs.macos_routes }}
+      macos_core: ${{ steps.scope.outputs.macos_core }}
+      macos_wrappers: ${{ steps.scope.outputs.macos_wrappers }}
+      macos_probes: ${{ steps.scope.outputs.macos_probes }}
+      macos_mutation: ${{ steps.scope.outputs.macos_mutation }}
+      macos_mihomo: ${{ steps.scope.outputs.macos_mihomo }}
+      windows_routes: ${{ steps.scope.outputs.windows_routes }}
+      windows_engine: ${{ steps.scope.outputs.windows_engine }}
+      windows_core: ${{ steps.scope.outputs.windows_core }}
+      windows_mutation: ${{ steps.scope.outputs.windows_mutation }}
+      windows_mihomo: ${{ steps.scope.outputs.windows_mihomo }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,9 +101,10 @@ jobs:
           done < <(git diff --no-renames --name-only -z "$base_sha" "$GITHUB_SHA")
           ruby tests/ci_scope.rb "${paths[@]}" >> "$GITHUB_OUTPUT"
 
-  macos:
+  contract:
     needs: scope
-    runs-on: macos-15
+    if: needs.scope.outputs.contract == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,19 +116,16 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Ruby regression suite and production coverage
-        run: ruby tests/coverage_ruby.rb
+      - name: CI routing contract
+        run: ruby tests/test_ci_scope.rb
       - name: Skill and CI contract suite
         run: ruby tests/test_skill_contract.rb
-      - name: Windows engine suite
-        run: node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
       - name: Generated policy parity
         run: ruby tests/generate_windows_policy.rb --check
-      - name: Production runtime and syntax checks
+      - name: Syntax checks
         run: |
-          /usr/bin/ruby -e 'abort "expected Ruby 2.6" unless RUBY_VERSION.start_with?("2.6.")'
-          /usr/bin/ruby -c claude-easy/scripts/macos/patch_profiles.rb
-          /usr/bin/ruby -c claude-easy/scripts/macos/verify_routes.rb
+          ruby -c claude-easy/scripts/macos/patch_profiles.rb
+          ruby -c claude-easy/scripts/macos/verify_routes.rb
           ruby -c tests/ci_scope.rb
           node --check claude-easy/scripts/windows/clash_verge_global.js
           sh -n claude-easy/scripts/install_macos.sh
@@ -133,9 +141,37 @@ jobs:
             git show --check --format= HEAD
           fi
 
+  macos-routes:
+    needs: scope
+    if: needs.scope.outputs.macos_routes == 'true'
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - name: Focused route regressions
+        run: |
+          ruby tests/test_macos_patcher.rb --name '/route_verifier|route_observation/'
+          /usr/bin/ruby tests/test_macos_patcher.rb --name '/route_verifier|route_observation/'
+
+  macos-core:
+    needs: scope
+    if: needs.scope.outputs.macos_core == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - name: Ruby regression suite and production coverage
+        run: ruby tests/coverage_ruby.rb
+
   macos-mutation:
     needs: scope
-    if: needs.scope.outputs.macos == 'true' || needs.scope.outputs.windows == 'true'
+    if: needs.scope.outputs.macos_mutation == 'true'
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -147,11 +183,27 @@ jobs:
         with:
           node-version: "22"
       - name: Safety mutation checks
-        run: ruby tests/test_mutation_safety.rb
+        run: ruby tests/test_mutation_safety.rb --exclude /windows/
+
+  windows-mutation:
+    needs: scope
+    if: needs.scope.outputs.windows_mutation == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Windows safety mutation checks
+        run: ruby tests/test_mutation_safety.rb --name /windows/
 
   macos-wrappers:
     needs: scope
-    if: needs.scope.outputs.macos == 'true'
+    if: needs.scope.outputs.macos_wrappers == 'true'
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -164,7 +216,7 @@ jobs:
 
   macos-production-runtime:
     needs: scope
-    if: needs.scope.outputs.macos == 'true'
+    if: needs.scope.outputs.macos_core == 'true'
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -174,14 +226,10 @@ jobs:
           node-version: "22"
       - name: Ruby regressions on the production runtime
         run: /usr/bin/ruby tests/test_macos_patcher.rb
-      - name: Contract regressions on the production runtime
-        run: /usr/bin/ruby tests/test_skill_contract.rb
-      - name: Command wrappers on the production runtime
-        run: /usr/bin/ruby tests/test_macos_wrappers.rb
 
   macos-production-probes:
     needs: scope
-    if: needs.scope.outputs.macos == 'true'
+    if: needs.scope.outputs.macos_probes == 'true'
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -194,7 +242,7 @@ jobs:
 
   mihomo:
     needs: scope
-    if: needs.scope.outputs.macos == 'true'
+    if: needs.scope.outputs.macos_mihomo == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -246,9 +294,50 @@ jobs:
           CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
         run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
 
+  windows-routes-powershell-5:
+    needs: scope
+    if: needs.scope.outputs.windows_routes == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Focused route regressions on PowerShell 5.1
+        shell: powershell
+        run: |
+          $runtime = (Get-Command powershell.exe).Source
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5
+          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
+
+  windows-routes-powershell-7:
+    needs: scope
+    if: needs.scope.outputs.windows_routes == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Focused route regressions on PowerShell 7
+        shell: pwsh
+        run: |
+          $runtime = (Get-Command pwsh.exe).Source
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
+          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
+
+  windows-engine:
+    needs: scope
+    if: needs.scope.outputs.windows_engine == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Windows engine suite
+        run: node --experimental-test-coverage --test --test-coverage-include=claude-easy/scripts/windows/clash_verge_global.js --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=80 tests/test_windows_patcher.js
+
   windows-installer-powershell-5:
     needs: scope
-    if: needs.scope.outputs.windows == 'true'
+    if: needs.scope.outputs.windows_core == 'true'
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -272,7 +361,7 @@ jobs:
 
   windows-installer-powershell-7:
     needs: scope
-    if: needs.scope.outputs.windows == 'true'
+    if: needs.scope.outputs.windows_core == 'true'
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -296,7 +385,7 @@ jobs:
 
   windows-mihomo:
     needs: scope
-    if: needs.scope.outputs.windows == 'true'
+    if: needs.scope.outputs.windows_mihomo == 'true'
     strategy:
       fail-fast: false
       matrix:

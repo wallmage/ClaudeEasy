@@ -2791,29 +2791,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_ci_scope_routes_heavy_jobs_by_changed_platform
-    classifier = File.join(ROOT, "tests/ci_scope.rb")
     workflow = File.read(File.join(ROOT, ".github/workflows/test.yml"))
-    assert File.file?(classifier), "missing CI scope classifier"
-
-    {
-      ["README.md"] => { "macos" => "false", "windows" => "false" },
-      ["AGENTS.md"] => { "macos" => "false", "windows" => "false" },
-      ["CLAUDE.md", "claude-easy/scripts/macos/patch_profiles.rb"] => { "macos" => "true", "windows" => "false" },
-      ["tests/baseline.md.rb"] => { "macos" => "true", "windows" => "true" },
-      ["claude-easy/scripts/macos/patch_profiles.rb"] => { "macos" => "true", "windows" => "false" },
-      ["claude-easy/scripts/windows/install_windows.ps1"] => { "macos" => "false", "windows" => "true" },
-      ["claude-easy/references/macos.md"] => { "macos" => "true", "windows" => "false" },
-      ["claude-easy/references/windows.md"] => { "macos" => "false", "windows" => "true" },
-      ["claude-easy/references/policy.json"] => { "macos" => "true", "windows" => "true" },
-      ["unexpected-file"] => { "macos" => "false", "windows" => "false" },
-      [] => { "macos" => "true", "windows" => "true" }
-    }.each do |paths, expected|
-      output, error, status = Open3.capture3(RbConfig.ruby, classifier, *paths, chdir: ROOT)
-      assert status.success?, error
-      actual = output.lines.to_h { |line| line.strip.split("=", 2) }
-      assert_equal expected, actual, paths.join(", ")
-    end
-
     assert_includes workflow,
                     "group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
     assert_includes workflow, "cancel-in-progress: true"
@@ -2828,6 +2806,7 @@ class SkillContractTest < Minitest::Test
     assert_includes workflow, 'CI_BASE_SHA: ${{ needs.scope.outputs.base }}'
     refute_includes workflow, "github.run_id"
     assert_includes workflow, "ruby tests/ci_scope.rb"
+    assert_includes workflow, "ruby tests/test_ci_scope.rb"
     assert_includes workflow, "git diff --no-renames --name-only -z"
     %w[claude-easy/** tests/** .github/workflows/test.yml package.json package-lock.json].each do |path|
       assert_equal 2, workflow.scan(%(- "#{path}")).length, path
@@ -2836,30 +2815,40 @@ class SkillContractTest < Minitest::Test
     %w[AGENTS.md README.md LICENSE docs/**].each do |path|
       refute_includes workflow, %(- "#{path}"), path
     end
+    outputs = %w[
+      contract macos_routes macos_core macos_wrappers macos_probes macos_mutation macos_mihomo
+      windows_routes windows_engine windows_core windows_mutation windows_mihomo
+    ]
+    outputs.each do |output|
+      assert_includes workflow, "#{output}: ${{ steps.scope.outputs.#{output} }}"
+    end
     {
-      "macos-wrappers" => "macos",
-      "macos-production-runtime" => "macos",
-      "macos-production-probes" => "macos",
-      "mihomo" => "macos",
-      "windows-installer-powershell-5" => "windows",
-      "windows-installer-powershell-7" => "windows",
-      "windows-mihomo" => "windows"
-    }.each do |job_name, platform|
+      "contract" => "contract",
+      "macos-routes" => "macos_routes",
+      "macos-core" => "macos_core",
+      "macos-production-runtime" => "macos_core",
+      "macos-wrappers" => "macos_wrappers",
+      "macos-production-probes" => "macos_probes",
+      "macos-mutation" => "macos_mutation",
+      "mihomo" => "macos_mihomo",
+      "windows-routes-powershell-5" => "windows_routes",
+      "windows-routes-powershell-7" => "windows_routes",
+      "windows-engine" => "windows_engine",
+      "windows-installer-powershell-5" => "windows_core",
+      "windows-installer-powershell-7" => "windows_core",
+      "windows-mutation" => "windows_mutation",
+      "windows-mihomo" => "windows_mihomo"
+    }.each do |job_name, output|
       job = workflow[/^  #{Regexp.escape(job_name)}:\n(?:(?!^  \S).*\n)*/]
       refute_nil job, job_name
       assert_includes job, "needs: scope"
-      assert_includes job, "if: needs.scope.outputs.#{platform} == 'true'"
+      assert_includes job, "if: needs.scope.outputs.#{output} == 'true'"
     end
-    mutation_job = workflow[/^  macos-mutation:\n(?:(?!^  \S).*\n)*/]
-    refute_nil mutation_job
-    assert_includes mutation_job, "needs: scope"
-    assert_includes mutation_job,
-                    "if: needs.scope.outputs.macos == 'true' || needs.scope.outputs.windows == 'true'"
-    %w[macos-mutation macos-production-runtime].each do |job_name|
-      job = workflow[/^  #{Regexp.escape(job_name)}:\n(?:(?!^  \S).*\n)*/]
-      assert_includes job, "uses: actions/setup-node@", job_name
-      assert_includes job, 'node-version: "22"', job_name
-    end
+    assert_includes workflow, "ruby tests/test_mutation_safety.rb --exclude /windows/"
+    assert_includes workflow, "ruby tests/test_mutation_safety.rb --name /windows/"
+    assert_includes workflow, "tests/test_windows_routes.ps1"
+    assert_includes workflow, "--name '/route_verifier|route_observation/'"
+    refute_includes workflow, "needs.scope.outputs.macos == 'true' ||"
   end
 
   def test_github_actions_shell_fields_are_static
