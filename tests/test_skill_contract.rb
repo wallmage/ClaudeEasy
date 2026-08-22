@@ -184,6 +184,7 @@ class SkillContractTest < Minitest::Test
 
       if RUBY_PLATFORM.include?("darwin")
         release_home = File.join(directory, "安装 用户")
+        write_supported_clashx_app(release_home)
         fake_core = File.join(
           release_home, "Applications", "ClashX Meta.app", "Contents", "Resources",
           "com.metacubex.ClashX.ProxyConfigHelper.meta"
