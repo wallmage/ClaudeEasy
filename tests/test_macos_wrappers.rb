@@ -28,6 +28,7 @@ class MacosWrapperTest < Minitest::Test
     macos/patch_profiles.rb
     macos/result_contract.rb
     macos/operation_lock.rb
+    macos/update_deadline.rb
     macos/usage_profile_state.rb
     macos/patch_profiles/transform.rb
     macos/patch_profiles/backups.rb
@@ -40,7 +41,7 @@ class MacosWrapperTest < Minitest::Test
     ../references/policy.json
   ].freeze
   UNINSTALL_PACKAGE_DEPENDENCIES = (
-    INSTALL_PACKAGE_DEPENDENCIES - ["uninstall_macos.sh"]
+    INSTALL_PACKAGE_DEPENDENCIES - ["uninstall_macos.sh", "macos/update_deadline.rb"]
   ).freeze
 
   def usage_state_path(home)
@@ -2926,6 +2927,55 @@ class MacosWrapperTest < Minitest::Test
           assert_equal "safe_update_completed", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
           assert_equal ["remote_subscriptions"], result.fetch("changes")
+        end
+      end
+    end
+  end
+
+  def test_safe_update_deadline_stops_the_update_without_stopping_unrelated_processes
+    patcher = <<~'RUBY'
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--safe-update-all")
+        File.write(File.join(ENV.fetch("HOME"), "safe-update-child-pid"), Process.pid.to_s)
+        sleep 5
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      installer_source = File.binread(installer)
+      replacement = installer_source.sub("SAFE_UPDATE_TIMEOUT_SECONDS=180", "SAFE_UPDATE_TIMEOUT_SECONDS=1")
+      refute_equal installer_source, replacement
+      File.binwrite(installer, replacement)
+
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          write_usage_profile(home, 1)
+          unrelated_pid = Process.spawn("/bin/sleep", "30")
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          stdout, stderr, status = run_script(
+            installer, "--safe-update", "--json", home: home
+          )
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_operator elapsed, :<, 3
+          refute status.success?
+          assert_empty stderr
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal "safe_update_timeout", result.fetch("code")
+          assert Process.kill(0, unrelated_pid)
+          child_pid = Integer(File.read(File.join(home, "safe-update-child-pid")))
+          assert_raises(Errno::ESRCH) { Process.kill(0, child_pid) }
+        ensure
+          begin
+            Process.kill("KILL", unrelated_pid) if unrelated_pid
+          rescue Errno::ESRCH
+            nil
+          end
+          Process.wait(unrelated_pid) if unrelated_pid
         end
       end
     end

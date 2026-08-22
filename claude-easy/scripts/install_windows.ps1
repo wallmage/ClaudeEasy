@@ -470,6 +470,21 @@ if ($VerifySafeUpdate) {
         @($manifest.Profiles).Count -eq 0) {
         throw "安全更新准备记录无效。"
     }
+    $manifestCreatedAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParseExact(
+            [string]$manifest.CreatedAt,
+            "o",
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$manifestCreatedAt
+        )) {
+        throw "安全更新准备记录无效。"
+    }
+    if ($manifestVersion -eq 4 -and
+        [DateTimeOffset]::Now -ge $manifestCreatedAt.AddSeconds(180)) {
+        Complete-InstallResult 1 "failed" "safe_update_timeout" `
+            "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
+    }
     $expectedSelections = New-OrdinalStringDictionary
     $expectedTunEnabled = $false
     $hasRuntimeSnapshot = $manifestVersion -in @(3, 4)

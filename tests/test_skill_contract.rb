@@ -37,6 +37,7 @@ class SkillContractTest < Minitest::Test
     claude-easy/scripts/uninstall_windows.ps1
     claude-easy/scripts/uninstall_windows.cmd
     claude-easy/scripts/macos/operation_lock.rb
+    claude-easy/scripts/macos/update_deadline.rb
     claude-easy/scripts/macos/usage_profile_state.rb
     claude-easy/scripts/macos/patch_profiles.rb
     claude-easy/scripts/macos/patch_profiles/transform.rb

@@ -11,6 +11,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PATCHER_SOURCE="$SCRIPT_DIR/macos/patch_profiles.rb"
 RESULT_CONTRACT_SOURCE="$SCRIPT_DIR/macos/result_contract.rb"
 OPERATION_LOCK_SOURCE="$SCRIPT_DIR/macos/operation_lock.rb"
+UPDATE_DEADLINE_SOURCE="$SCRIPT_DIR/macos/update_deadline.rb"
 USAGE_PROFILE_STATE_SOURCE="$SCRIPT_DIR/macos/usage_profile_state.rb"
 OPERATION_LOCK_PATH="$BACKUP_DIR/.claude-easy-wrapper.lock"
 UNINSTALLER_SOURCE="$SCRIPT_DIR/uninstall_macos.sh"
@@ -40,6 +41,7 @@ PROFILE_OPERATION_RECEIPT_INVALID=0
 PROFILE_OPERATION_RESULT_FAILED=0
 PROFILE_OPERATION_RESULT_UNKNOWN=0
 OPERATION_LOCK_REQUIRED=1
+SAFE_UPDATE_TIMEOUT_SECONDS=180
 child_json=""
 
 valid_child_json() {
@@ -236,6 +238,7 @@ install_package_complete() {
     "$PATCHER_SOURCE" \
     "$RESULT_CONTRACT_SOURCE" \
     "$OPERATION_LOCK_SOURCE" \
+    "$UPDATE_DEADLINE_SOURCE" \
     "$USAGE_PROFILE_STATE_SOURCE" \
     "$POLICY_SOURCE"; do
     [ -f "$required_package_file" ] && [ ! -L "$required_package_file" ] || return 1
@@ -719,6 +722,26 @@ operation_count=0
 [ "$SAFE_UPDATE" -eq 1 ] && operation_count=$((operation_count + 1))
 if [ "$operation_count" -gt 1 ]; then
   finish 64 invalid_request conflicting_operations "一次只能执行一个操作。" parse_arguments
+fi
+
+if [ "$SAFE_UPDATE" -eq 1 ] &&
+   [ "${CLAUDE_EASY_INTERNAL_UPDATE_DEADLINE_ACTIVE:-0}" != "1" ]; then
+  if [ ! -f "$UPDATE_DEADLINE_SOURCE" ] || [ -L "$UPDATE_DEADLINE_SOURCE" ]; then
+    finish 6 failed incomplete_package "安装包不完整。" safe_update
+  fi
+  export CLAUDE_EASY_INTERNAL_UPDATE_DEADLINE_ACTIVE=1
+  set +e
+  /usr/bin/ruby "$UPDATE_DEADLINE_SOURCE" "$SAFE_UPDATE_TIMEOUT_SECONDS" \
+    /bin/sh "$0" "$@"
+  deadline_status=$?
+  set -e
+  if [ "$deadline_status" -eq 124 ]; then
+    finish 1 failed safe_update_timeout \
+      "订阅更新等待已达到 180 秒，已停止本轮更新；ClashX Meta 保持运行。" \
+      safe_update
+  fi
+  trap - EXIT HUP INT TERM
+  exit "$deadline_status"
 fi
 if [ "$SHOW_PROFILE" -eq 1 ] && [ -n "$USAGE_PROFILE" ]; then
   finish 64 invalid_request conflicting_operations "读取档位时不能同时保存新档位。" parse_arguments

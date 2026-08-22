@@ -4196,6 +4196,32 @@ rules:
         )
     ) "safe update snapshot did not preserve the remaining profile 1 workflow"
 
+    $safeUpdateManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    $unexpiredManifestText = [System.IO.File]::ReadAllText($safeUpdateManifestPath)
+    $expiredManifest = $unexpiredManifestText | ConvertFrom-Json
+    $expiredManifest.CreatedAt = [DateTimeOffset]::Now.AddSeconds(-181).ToString("o")
+    [System.IO.File]::WriteAllText(
+        $safeUpdateManifestPath,
+        (($expiredManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
+    $expiredTree = Get-TreeContentSnapshot $safeUpdateCase
+    $expiredVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-RefreshConfirmed",
+        "-MihomoPath", $fakeCore,
+        "-Json"
+    )
+    $expiredVerifyJson = Assert-JsonResult $expiredVerify "install" 1
+    Assert-True (
+        $expiredVerifyJson.status -eq "failed" -and
+        $expiredVerifyJson.code -eq "safe_update_timeout"
+    ) "Windows accepted a safe update after the 180-second deadline"
+    Assert-True (
+        (Get-TreeContentSnapshot $safeUpdateCase) -ceq $expiredTree
+    ) "expired safe-update verification changed AppHome"
+    [System.IO.File]::WriteAllText($safeUpdateManifestPath, $unexpiredManifestText)
+
     $profileThreeSnapshotCase = Join-Path $sandbox "profile-three-snapshot-case"
     $profileThreeSnapshotProfiles = Join-Path $profileThreeSnapshotCase "profiles"
     New-Item -ItemType Directory -Path $profileThreeSnapshotProfiles -Force | Out-Null
