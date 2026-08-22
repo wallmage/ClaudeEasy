@@ -23,12 +23,46 @@ class SkillContractTest < Minitest::Test
     claude-easy/references/windows.md
   ].freeze
 
-  REQUIRED_PUBLIC_FILES = (
-    Dir.glob(File.join(ROOT, "claude-easy/**/*"), File::FNM_EXTGLOB)
-       .select { |path| File.file?(path) }
-       .map { |path| path.delete_prefix("#{ROOT}/") } +
-    %w[README.md LICENSE]
-  ).sort.freeze
+  REQUIRED_PUBLIC_FILES = (POLICY_REFERENCE_FILES + %w[
+    README.md
+    claude-easy/SKILL.md
+    claude-easy/agents/openai.yaml
+    claude-easy/assets/claude-region-check.html
+    claude-easy/references/policy.json
+    claude-easy/references/result-contract.json
+    claude-easy/scripts/install_macos.sh
+    claude-easy/scripts/install_windows.ps1
+    claude-easy/scripts/install_windows.cmd
+    claude-easy/scripts/uninstall_macos.sh
+    claude-easy/scripts/uninstall_windows.ps1
+    claude-easy/scripts/uninstall_windows.cmd
+    claude-easy/scripts/macos/operation_lock.rb
+    claude-easy/scripts/macos/usage_profile_state.rb
+    claude-easy/scripts/macos/patch_profiles.rb
+    claude-easy/scripts/macos/patch_profiles/transform.rb
+    claude-easy/scripts/macos/patch_profiles/backups.rb
+    claude-easy/scripts/macos/patch_profiles/mihomo.rb
+    claude-easy/scripts/macos/patch_profiles/profile_writer.rb
+    claude-easy/scripts/macos/patch_profiles/subscriptions.rb
+    claude-easy/scripts/macos/patch_profiles/runtime.rb
+    claude-easy/scripts/macos/patch_profiles/client_switches.rb
+    claude-easy/scripts/macos/patch_profiles/log_repair.rb
+    claude-easy/scripts/macos/patch_profiles/cli.rb
+    claude-easy/scripts/macos/result_contract.rb
+    claude-easy/scripts/macos/verify_routes.rb
+    claude-easy/scripts/windows/verify_routes.ps1
+    claude-easy/scripts/windows/clash_verge_global.js
+    claude-easy/scripts/windows/result_contract.ps1
+    claude-easy/scripts/windows/install_windows/common.ps1
+    claude-easy/scripts/windows/install_windows/yaml.ps1
+    claude-easy/scripts/windows/install_windows/profiles.ps1
+    claude-easy/scripts/windows/install_windows/mihomo.ps1
+    claude-easy/scripts/windows/install_windows/transaction.ps1
+    claude-easy/scripts/windows/install_windows/script_js.ps1
+    claude-easy/scripts/windows/install_windows/runtime.ps1
+    claude-easy/scripts/windows/install_windows/safe_update.ps1
+    LICENSE
+  ]).freeze
 
   def windows_installer_source
     paths = [File.join(SKILL, "scripts/install_windows.ps1")] +
