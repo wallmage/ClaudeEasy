@@ -4266,6 +4266,30 @@ rules:
     ) "expired safe-update verification changed AppHome"
     [System.IO.File]::WriteAllText($safeUpdateManifestPath, $unexpiredManifestText)
 
+    $slowCore = Join-Path $sandbox "mihomo-slow.cmd"
+    [System.IO.File]::WriteAllText(
+        $slowCore,
+        "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nping 127.0.0.1 -n 5 >nul`r`nexit /b 0`r`n",
+        [System.Text.Encoding]::ASCII
+    )
+    $crossingManifest = $unexpiredManifestText | ConvertFrom-Json
+    $crossingManifest.RefreshStartedAt = [DateTimeOffset]::Now.AddSeconds(-178).ToString("o")
+    [System.IO.File]::WriteAllText(
+        $safeUpdateManifestPath,
+        (($crossingManifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
+    $crossingVerify = Invoke-TestPowerShell $installer @(
+        "-AppHome", $safeUpdateCase,
+        "-VerifySafeUpdate",
+        "-RefreshConfirmed",
+        "-MihomoPath", $slowCore,
+        "-Json"
+    )
+    $crossingVerifyJson = Assert-JsonResult $crossingVerify "install" 1
+    Assert-True ($crossingVerifyJson.code -eq "safe_update_timeout") `
+        "Windows accepted a safe update that crossed the deadline during verification"
+    [System.IO.File]::WriteAllText($safeUpdateManifestPath, $unexpiredManifestText)
+
     $profileThreeSnapshotCase = Join-Path $sandbox "profile-three-snapshot-case"
     $profileThreeSnapshotProfiles = Join-Path $profileThreeSnapshotCase "profiles"
     New-Item -ItemType Directory -Path $profileThreeSnapshotProfiles -Force | Out-Null

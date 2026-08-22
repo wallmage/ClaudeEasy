@@ -372,7 +372,11 @@ function Restore-ClashRuntimeSelections([object]$Context, [object]$Selections) {
     }
 }
 
-function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousContext) {
+function Wait-ClashVergeRuntimeRefresh(
+    [string]$RuntimePath,
+    [object]$PreviousContext,
+    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
+) {
     $previousIdentity = ""
     $previousSha256 = ""
     $previousLastWriteTicks = 0L
@@ -396,6 +400,7 @@ function Wait-ClashVergeRuntimeRefresh([string]$RuntimePath, [object]$PreviousCo
         $previousLastWriteTicks = [long]$PreviousContext.LastWriteTicks
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    if ($AbsoluteDeadline -lt $deadline) { $deadline = $AbsoluteDeadline }
     do {
         if (Test-Path -LiteralPath $RuntimePath -PathType Leaf) {
             $current = Get-OptionalFileSnapshot $RuntimePath "Clash Verge Rev 运行配置"
@@ -419,20 +424,22 @@ function Wait-ClashVergeRuntimeHealthy(
     [bool]$TunEnabled,
     [int]$Profile,
     [string]$CurlPath,
-    [object]$Policy
+    [object]$Policy,
+    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
 ) {
-    Wait-ClashVergeRuntimeRefresh $RuntimePath $PreviousContext
+    Wait-ClashVergeRuntimeRefresh $RuntimePath $PreviousContext $AbsoluteDeadline
     $context = Get-ClashControllerContext $RuntimePath
     Restore-ClashRuntimeSelections $context $Selections
     $flush = Invoke-ClashControllerRequest $context "POST" "/cache/dns/flush"
     if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    if ($AbsoluteDeadline -lt $deadline) { $deadline = $AbsoluteDeadline }
     do {
         try {
             $context = Get-ClashControllerContext $RuntimePath
             Assert-ClashRuntimeHealthy `
                 $context $Selections $TunEnabled $Profile $CurlPath $Policy `
-                -ReadOnly
+                -ReadOnly -AbsoluteDeadline $AbsoluteDeadline
             return $context
         } catch {
             $lastFailure = $_.Exception.Message
@@ -689,7 +696,13 @@ function Test-ClashRuntimeRequiresTun([int]$UsageProfile) {
     return $UsageProfile -ge 2
 }
 
-function Test-ClashRuntimeConnectivity([object]$Context, [object]$State, [string]$CurlPath, [bool]$UseTun) {
+function Test-ClashRuntimeConnectivity(
+    [object]$Context,
+    [object]$State,
+    [string]$CurlPath,
+    [bool]$UseTun,
+    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
+) {
     $proxy = ""
     if (-not $UseTun) {
         foreach ($field in @("mixed-port", "port", "socks-port")) {
@@ -715,7 +728,9 @@ function Test-ClashRuntimeConnectivity([object]$Context, [object]$State, [string
             $start.EnvironmentVariables[$name] = ""
         }
         $process = [System.Diagnostics.Process]::Start($start)
-        $finished = $process.WaitForExit(12000)
+        $remainingMilliseconds = [int][Math]::Floor(($AbsoluteDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if ($remainingMilliseconds -lt 1) { $process.Kill(); $process.Dispose(); return $false }
+        $finished = $process.WaitForExit([Math]::Min(12000, $remainingMilliseconds))
         if (-not $finished) { try { $process.Kill() } catch { } }
         $ok = $finished -and $process.ExitCode -eq 0
         $process.Dispose()
@@ -815,7 +830,8 @@ function Assert-ClashRuntimeHealthy(
     [int]$UsageProfile,
     [string]$CurlPath,
     [object]$Policy,
-    [switch]$ReadOnly
+    [switch]$ReadOnly,
+    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
 ) {
     if (-not $ReadOnly) {
         Restore-ClashRuntimeSelections $Context $Selections
@@ -854,7 +870,7 @@ function Assert-ClashRuntimeHealthy(
         }
     }
     Assert-ClashRuntimePatch ([string]$Context.RuntimeText) $state $Policy $UsageProfile
-    if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled)) {
+    if (-not (Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled $AbsoluteDeadline)) {
         throw "更新后的配置无法连接 Google。"
     }
 }

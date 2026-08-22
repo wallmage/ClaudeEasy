@@ -541,6 +541,13 @@ if ($VerifySafeUpdate) {
         Complete-InstallResult 1 "failed" "safe_update_timeout" `
             "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
     }
+    $safeUpdateDeadline = $refreshStartedAt.UtcDateTime.AddSeconds(180)
+    $assertSafeUpdateDeadline = {
+        if ([DateTime]::UtcNow -ge $safeUpdateDeadline) {
+            Complete-InstallResult 1 "failed" "safe_update_timeout" `
+                "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
+        }
+    }
     $expectedSelections = New-OrdinalStringDictionary
     $expectedTunEnabled = $false
     $hasRuntimeSnapshot = $manifestVersion -in @(3, 4)
@@ -606,6 +613,7 @@ if ($VerifySafeUpdate) {
         Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript
         $core = Find-MihomoCore $MihomoPath
         foreach ($item in @($manifest.Profiles)) {
+            & $assertSafeUpdateDeadline
             try {
                 $target = @($currentTargets | Where-Object { $_.Uid -eq [string]$item.Uid -and (Split-Path -Leaf $_.Path) -eq [string]$item.File })
                 if ($target.Count -ne 1) { throw "远程订阅清单在更新期间发生变化。" }
@@ -633,7 +641,8 @@ if ($VerifySafeUpdate) {
                     $publicSubscriptionLabel = Get-PublicSubscriptionLabel ([string]$target[0].Uid) ([string]$target[0].Name)
                     Test-GeneratedYaml $text $publicSubscriptionLabel | Out-Null
                     Assert-ClaudeEasyProxyGroupCollection $text $publicSubscriptionLabel
-                    Test-MihomoCandidate $core $text $profilesDirectory
+                    Test-MihomoCandidate $core $text $profilesDirectory $safeUpdateDeadline
+                    & $assertSafeUpdateDeadline
                     $targetGuard.Stream.Position = 0
                     if ((Get-BytesSha256 (Get-StreamBytes $targetGuard.Stream)) -ne $validatedHash) {
                         throw "订阅在验收期间再次发生变化。"
@@ -687,7 +696,8 @@ if ($VerifySafeUpdate) {
             $runtimeContext = Wait-ClashVergeRuntimeHealthy `
                 $runtimeConfigPath $manifest.UpdateDispatchCommittedFor.RuntimeBefore `
                 $expectedSelections $expectedTunEnabled `
-                $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy
+                $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy $safeUpdateDeadline
+            & $assertSafeUpdateDeadline
         }
         $versionGuards = @()
         try {
@@ -708,6 +718,7 @@ if ($VerifySafeUpdate) {
             if ((Get-BytesSha256 (Get-StreamBytes $scriptOpened.Stream)) -ne (Get-BytesSha256 $scriptSnapshot.Bytes)) {
                 throw "全局扩展脚本在验收期间发生变化。"
             }
+            & $assertSafeUpdateDeadline
             Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes $manifestSnapshot.Identity "safe_update_running_client"
         } finally {
             foreach ($guard in $versionGuards) {
@@ -716,6 +727,11 @@ if ($VerifySafeUpdate) {
             }
         }
     } catch {
+        if ($_.Exception.Message -eq "safe_update_timeout" -or
+            [DateTime]::UtcNow -ge $safeUpdateDeadline) {
+            Complete-InstallResult 1 "failed" "safe_update_timeout" `
+                "订阅更新等待已达到 180 秒，已停止本轮验收；Clash Verge Rev 保持运行。"
+        }
         [void]$script:ClaudeEasyMessages.Add(
             (Protect-ClaudeEasyResultText $_.Exception.Message)
         )
@@ -856,6 +872,7 @@ if ($VerifySafeUpdate) {
         Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) $itemStatus
     })
     $requiredFollowups = @(Get-SafeUpdateRequiredFollowups $script:ClaudeEasyProfile)
+    & $assertSafeUpdateDeadline
     Complete-InstallResult 0 "ok" "safe_update_verified" `
         "订阅、补丁和平台检查已完成；当前档位的后续验收尚未完成。" `
         @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems @() `

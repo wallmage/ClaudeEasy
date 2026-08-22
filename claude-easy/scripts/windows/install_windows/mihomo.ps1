@@ -139,11 +139,11 @@ function Test-MihomoVersionText([string]$Text) {
     return $actual.CompareTo($minimum) -ge 0
 }
 
-function Test-MihomoVersion([string]$CorePath) {
+function Test-MihomoVersion([string]$CorePath, [int]$TimeoutSeconds = 30) {
     if ([string]::IsNullOrWhiteSpace($CorePath) -or -not (Test-Path -LiteralPath $CorePath -PathType Leaf)) {
         throw "没有找到可用的 Mihomo 内核。请更新 Clash Verge Rev，或用 -MihomoPath 指定可信的内核路径。"
     }
-    $result = Invoke-Mihomo $CorePath @("-v")
+    $result = Invoke-Mihomo $CorePath @("-v") $TimeoutSeconds
     if ($result.ExitCode -ne 0 -or -not (Test-MihomoVersionText $result.Output)) {
         throw "需要 Mihomo 1.19.27 或更高版本，当前内核版本无法确认或过旧。"
     }
@@ -206,8 +206,15 @@ if ([System.IO.Path]::GetFileName(`$candidate) -like ".claude-easy-validate-*.ya
     $watcher.Dispose()
 }
 
-function Test-MihomoCandidate([string]$CorePath, [string]$Text, [string]$Directory) {
-    Test-MihomoVersion $CorePath | Out-Null
+function Test-MihomoCandidate(
+    [string]$CorePath,
+    [string]$Text,
+    [string]$Directory,
+    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
+) {
+    $remaining = [int][Math]::Ceiling(($AbsoluteDeadline - [DateTime]::UtcNow).TotalSeconds)
+    if ($remaining -lt 1) { throw "safe_update_timeout" }
+    Test-MihomoVersion $CorePath ([Math]::Min(30, $remaining)) | Out-Null
     $temporary = Join-Path $Directory (".claude-easy-validate-" + [System.IO.Path]::GetRandomFileName() + ".yaml")
     $staging = $temporary + ".staging"
     $stagingStream = $null
@@ -220,7 +227,9 @@ function Test-MihomoCandidate([string]$CorePath, [string]$Text, [string]$Directo
         $stagingStream.Dispose()
         $stagingStream = $null
         [System.IO.File]::Move($staging, $temporary)
-        $result = Invoke-Mihomo $CorePath @("-d", $Directory, "-t", "-f", $temporary)
+        $remaining = [int][Math]::Ceiling(($AbsoluteDeadline - [DateTime]::UtcNow).TotalSeconds)
+        if ($remaining -lt 1) { throw "safe_update_timeout" }
+        $result = Invoke-Mihomo $CorePath @("-d", $Directory, "-t", "-f", $temporary) ([Math]::Min(30, $remaining))
         if ($result.ExitCode -ne 0) { throw "Mihomo 拒绝了生成的 config.yaml。原文件没有被修改。" }
     } finally {
         if ($null -ne $stagingStream) { $stagingStream.Dispose() }
