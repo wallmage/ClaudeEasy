@@ -17330,6 +17330,24 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_current_runtime_loaded_profile_state_uses_the_live_requester
+    requester = Object.new
+    classifier = lambda do |actual_requester, path, bytes|
+      assert_same requester, actual_requester
+      assert_equal "/tmp/restored.yaml", path
+      assert_equal "candidate", bytes
+      :candidate
+    end
+
+    ClaudeEasy.stub(:current_runtime_requester, requester) do
+      ClaudeEasy.stub(:runtime_loaded_profile_state, classifier) do
+        assert_equal :candidate, ClaudeEasy.current_runtime_loaded_profile_state(
+          "/tmp/restored.yaml", "candidate"
+        )
+      end
+    end
+  end
+
   def test_recovered_profile_runtime_keeps_a_user_selection_changed_after_the_crash
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")

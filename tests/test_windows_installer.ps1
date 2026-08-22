@@ -3416,6 +3416,10 @@ public static class FakeCurl {
     New-Item -ItemType Directory -Path (
         Join-Path $invalidSafeUpdateStateCase "claude-easy-safe-update.json"
     ) -Force | Out-Null
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $invalidSafeUpdateStateCase ".claude-easy.lock"),
+        [byte[]]@()
+    )
     $invalidSafeUpdateStateBefore = Get-TreeContentSnapshot $invalidSafeUpdateStateCase
     $invalidSafeUpdateStateResult = Assert-JsonResult (Invoke-TestPowerShell $installer @(
         "-AppHome", $invalidSafeUpdateStateCase,

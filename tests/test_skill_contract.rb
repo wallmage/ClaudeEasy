@@ -75,7 +75,6 @@ class SkillContractTest < Minitest::Test
     tests/test_skill_contract.rb
     tests/test_windows_installer.ps1
     tests/test_windows_patcher.js
-    docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md
     LICENSE
   ]).freeze
 
@@ -259,12 +258,11 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_tests_and_product_spec_are_distributed_but_generated_material_is_ignored
+  def test_tests_and_current_product_spec_are_distributed_but_generated_material_is_ignored
     ignore = File.read(File.join(ROOT, ".gitignore"))
     ignore_lines = ignore.lines.map(&:strip)
 
     assert_includes ignore_lines, "docs/*"
-    assert_includes ignore_lines, "!docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"
     refute_includes ignore.lines.map(&:strip), "tests/baseline.md"
     refute_includes ignore.lines.map(&:strip), "tests/"
     assert_includes ignore.lines.map(&:strip), "dist/"
@@ -317,8 +315,7 @@ class SkillContractTest < Minitest::Test
       File.join(ROOT, "AGENTS.md"),
       File.join(SKILL, "SKILL.md"),
       File.join(SKILL, "agents/openai.yaml"),
-      *policy_reference_paths,
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+      *policy_reference_paths
     ] + Dir.glob(File.join(SKILL, "scripts/**/*.{rb,js,ps1,sh,cmd}"))
 
     offenders = product_files.select do |path|
@@ -382,7 +379,6 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
     assert_includes policy, "## 规则归属与冲突处理"
     assert_includes policy, "`policy.json`"
@@ -393,7 +389,7 @@ class SkillContractTest < Minitest::Test
 
     assert_includes skill, "保留代理入口、模块选择、执行顺序和不可突破的安全边界"
     assert_includes readme, "只解释用户可见行为，不重新定义执行规则"
-    assert_includes design, "只定义产品目标、组件边界和规则归属"
+    assert_includes policy, "只定义产品目标、组件边界和规则归属"
     assert_includes policy, "`SKILL.md` 保留触发后必须立即可见的安全边界"
   end
 
@@ -403,7 +399,6 @@ class SkillContractTest < Minitest::Test
       File.join(ROOT, "README.md"),
       File.join(SKILL, "SKILL.md"),
       *policy_reference_paths,
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"),
       File.join(ROOT, "tests/baseline.md")
     ]
     strings = []
@@ -451,7 +446,6 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
     joined = documents.join("\n")
@@ -471,12 +465,11 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     mac_installer = File.read(File.join(SKILL, "scripts/install_macos.sh"))
     mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows_installer = windows_installer_source
 
-    [readme, skill, policy, design].each do |document|
+    [readme, skill, policy].each do |document|
       %w[普通浏览 海外\ AI Claude/Claude\ Code].each do |profile|
         assert_includes document, profile.gsub("\\ ", " ")
       end
@@ -491,7 +484,6 @@ class SkillContractTest < Minitest::Test
     refute_includes skill, "语音输入中的 `cloud`"
     refute_includes readme, "语音输入中的 `cloud`"
     refute_includes policy, "语音输入把 Claude 识别为 `cloud`"
-    refute_includes design, "语音输入 `cloud`"
     assert_includes policy, "只应用满足已选用途所需的最少改动"
 
     assert_includes mac_installer, "CLAUDE_EASY_USAGE_PROFILE"
@@ -538,9 +530,8 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
 
-    [readme, skill, policy, design].each do |document|
+    [readme, skill, policy].each do |document|
       assert_includes document, "assets/claude-region-check.html"
       assert_includes document, "区域指纹"
       assert_includes document, "参考"
@@ -575,7 +566,7 @@ class SkillContractTest < Minitest::Test
       refute_includes document, "补测其余八项"
     end
 
-    [readme, policy, design].each do |document|
+    [readme, policy].each do |document|
       refute_includes document, "IPWhois"
     end
 
@@ -603,7 +594,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不得覆盖"
     end
 
-    [readme, skill, policy, design].each do |document|
+    [readme, skill, policy].each do |document|
       refute_includes document, "https://fuck-claude.vercel.app/zh/"
       refute_includes document, "Google Analytics"
     end
@@ -693,12 +684,11 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy_doc = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
     mac_patcher = mac_patcher_source
     windows_patcher = File.read(File.join(SKILL, "scripts/windows/clash_verge_global.js"))
 
-    [readme, skill, policy_doc, design].each do |document|
+    [readme, skill, policy_doc].each do |document|
       assert_includes document, "共同国内域名直连基线"
       assert_includes document, "全部订阅"
     end
@@ -770,10 +760,9 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     metadata = YAML.safe_load(File.read(File.join(SKILL, "agents/openai.yaml")))
 
-    [readme, skill, policy, design].each { |document| assert_includes document, "档位" }
+    [readme, skill, policy].each { |document| assert_includes document, "档位" }
     assert_includes skill, "读取已保存用途档位"
     assert_includes skill, "故障本身不能自动升档"
     assert_includes policy, "用途档位是 Diagnostics 的需求边界"
@@ -977,13 +966,7 @@ class SkillContractTest < Minitest::Test
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(
-        File.join(
-          ROOT,
-          "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"
-        )
-      )
+      policy_document
     ]
 
     [documents[2]].each do |document|
@@ -1001,12 +984,6 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(
-          ROOT,
-          "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"
-        )
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
 
@@ -1021,7 +998,7 @@ class SkillContractTest < Minitest::Test
     assert_includes source, '$request.Proxy = $null'
     assert_includes source, '$script:ClaudeEasyControllerSecret'
     refute_includes source, '"Bearer $Secret"'
-    [documents[2], documents[4]].each do |document|
+    [documents[2], documents[3]].each do |document|
       assert_includes document, "-SecretStdin"
       assert_includes document, "本机回环"
       assert_includes document, "非空 `-Secret`"
@@ -1313,7 +1290,6 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")),
       openai_agent
     ]
 
@@ -1330,7 +1306,7 @@ class SkillContractTest < Minitest::Test
       assert_includes document, "不得代替用户操作服务商后台"
       assert_includes document, "任一备份失败时停止"
     end
-    [documents[0], documents[1], documents[4]].each do |document|
+    [documents[0], documents[1], documents[3]].each do |document|
       assert_includes document, "请自行登录服务商管理后台"
       assert_includes document, "不得代替用户操作服务商后台"
     end
@@ -1353,8 +1329,7 @@ class SkillContractTest < Minitest::Test
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+      policy_document
     ]
 
     [documents[2]].each do |document|
@@ -1366,12 +1341,6 @@ class SkillContractTest < Minitest::Test
     assert_includes safe_update, "macOS 恢复当前订阅后通过 Mihomo 本地控制器重新加载"
     assert_includes documents[0], "Windows 的其他受保护恢复只有客户端本来就未运行时进行"
     refute_match(/^其他受保护恢复只有客户端本来就未运行时进行/, documents[0])
-    assert_includes documents[3], "普通 Patch 通过本地控制器加载"
-    assert_includes documents[3], "备份恢复通过本地控制器加载"
-    assert_includes documents[3], "安全更新通过同一已运行 ClashX Meta 进程的官方更新事件重新加载"
-    assert_includes documents[3], "对应平台的加载或刷新和运行检查"
-    refute_includes documents[3], "当前订阅写入后只通过本地控制器刷新"
-    refute_includes documents[3], "当前订阅只有控制器自动刷新"
   end
 
   def test_diagnostics_selects_tools_by_the_observed_symptom
@@ -1412,9 +1381,6 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-    )
 
     [skill, policy].each do |document|
       assert_includes document, "任务合同"
@@ -1445,7 +1411,7 @@ class SkillContractTest < Minitest::Test
     assert_operator skill.index("任务合同"), :<, skill.index("外部服务状态")
     assert_operator policy.index("任务合同"), :<, policy.index("外部服务状态")
 
-    public_contract = [readme, skill, policy, design].join("\n")
+    public_contract = [readme, skill, policy].join("\n")
     refute_match(/Workbuddy|Work Body|MESL|Yue\.to|月点兔/, public_contract)
   end
 
@@ -1826,8 +1792,7 @@ class SkillContractTest < Minitest::Test
     files = [
       File.join(ROOT, "README.md"),
       File.join(SKILL, "SKILL.md"),
-      *policy_reference_paths,
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
+      *policy_reference_paths
     ]
 
     files.each do |path|
@@ -2019,12 +1984,9 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each do |document|
       assert_includes document, "TERM"
       assert_includes document, "operation_committed_interrupted"
@@ -2120,12 +2082,9 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each do |document|
       assert_includes document, "每次控制器加载前"
       assert_includes document, "绝不加载旧订阅"
@@ -2149,8 +2108,7 @@ class SkillContractTest < Minitest::Test
     documents = [
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
+      policy_document
     ]
     documents = [documents[2]]
     documents.each do |document|
@@ -2164,9 +2122,6 @@ class SkillContractTest < Minitest::Test
   def test_p1_recovery_and_refresh_guards_are_documented_and_exercised
     readme = File.read(File.join(ROOT, "README.md"))
     skill_document = File.read(File.join(SKILL, "SKILL.md"))
-    design = File.read(
-      File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-    )
     patch_policy = policy_document
     mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows_installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
@@ -2203,9 +2158,6 @@ class SkillContractTest < Minitest::Test
     assert_includes readme, "运行中可以创建安全更新备份和验收清单"
     assert_includes readme, "其余受保护客户端配置写入会整批延期"
     assert_includes readme, "修改整批延期且不得报告“已更新”"
-    assert_includes design, "普通安装、卸载和单文件备份恢复只有客户端本来就未运行时"
-    assert_includes design, "客户端运行时可以创建安全更新备份和验收清单"
-    assert_includes design, "安全更新失败恢复是唯一允许修改订阅的受控例外"
     refute_includes skill_document, "两个平台都保持 Clash 运行"
     assert_includes skill_document, "普通安装、卸载和单文件备份恢复只有客户端本来就未运行时"
     assert_includes skill_document, "客户端运行时可以创建安全更新备份和验收清单"
@@ -2327,12 +2279,9 @@ class SkillContractTest < Minitest::Test
       readme,
       skill_document,
       patch_policy,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each do |document|
       assert_includes document, "already_disabled_owned"
       assert_includes document, "client_running_profile_three_deferred"
@@ -2586,12 +2535,9 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each do |document|
       assert_includes document, "中断的客户端敏感事务"
       assert_includes document, "transaction_recovery_pending"
@@ -2667,12 +2613,9 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each { |document| assert_includes document, "提交条件" }
   end
 
@@ -2716,12 +2659,9 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each do |document|
       assert_includes document, "安装、备份恢复和卸载"
       assert_includes document, "提交条件"
@@ -2760,12 +2700,9 @@ class SkillContractTest < Minitest::Test
       File.read(File.join(ROOT, "README.md")),
       File.read(File.join(SKILL, "SKILL.md")),
       policy_document,
-      File.read(
-        File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md")
-      ),
       File.read(File.join(ROOT, "tests/baseline.md"))
     ]
-    documents = [documents[2], documents[4]]
+    documents = [documents[2], documents[3]]
     documents.each do |document|
       assert_includes document, "尚未验收"
       assert_includes document, "safe_update_pending"
@@ -2859,10 +2796,9 @@ class SkillContractTest < Minitest::Test
   def test_diagnostics_never_launches_clash_client_as_an_inspection_probe
     skill = File.read(File.join(SKILL, "SKILL.md"))
     policy = policy_document
-    design = File.read(File.join(ROOT, "docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md"))
     agent_instructions = File.read(File.join(ROOT, "AGENTS.md"))
 
-    [skill, policy, design, agent_instructions].each do |source|
+    [skill, policy, agent_instructions].each do |source|
       assert_includes source, "不得运行 ClashX Meta 主程序"
       assert_includes source, "`--version`"
       assert_includes source, "`Info.plist`"

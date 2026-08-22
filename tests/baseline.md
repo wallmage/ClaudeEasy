@@ -1,6 +1,6 @@
 # 当前测试基线
 
-本文件记录现行测试范围，不定义产品功能。产品要求见 `docs/superpowers/specs/2026-07-20-claude-easy-skill-design.md`、`claude-easy/references/policy-core.md` 及 `SKILL.md` 按任务路由到的模块策略。
+本文件记录现行测试范围，不定义产品功能。产品要求见 `claude-easy/references/policy-core.md` 及 `SKILL.md` 按任务路由到的模块策略。
 
 ## 必须通过
 
