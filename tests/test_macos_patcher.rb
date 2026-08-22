@@ -16892,6 +16892,60 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_runtime_match_accepts_members_removed_by_a_group_exclude_filter
+    Dir.mktmpdir do |directory|
+      profile = File.join(directory, "active.yaml")
+      File.write(profile, YAML.dump(
+        "proxies" => [
+          { "name" => "Available Node", "type" => "ss" },
+          { "name" => "Expired Node", "type" => "ss" }
+        ],
+        "proxy-groups" => [{
+          "name" => "Main", "type" => "select",
+          "proxies" => ["Available Node", "Expired Node"],
+          "exclude-filter" => "(?i)(expired|remaining)"
+        }]
+      ))
+      loaded = lambda do |method, endpoint, _body = nil|
+        case [method, endpoint]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => {
+              "type" => "Selector", "now" => "Available Node", "all" => ["Available Node"]
+            },
+            "Available Node" => { "type" => "Shadowsocks" },
+            "Expired Node" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        else
+          [0, ""]
+        end
+      end
+
+      assert ClaudeEasy.runtime_matches_profile?(
+        loaded, profile, runtime_path_reader: -> { [profile] }
+      )
+
+      stale = lambda do |method, endpoint, body = nil|
+        next loaded.call(method, endpoint, body) unless [method, endpoint] == ["GET", "/proxies"]
+
+        [200, JSON.generate("proxies" => {
+          "Main" => {
+            "type" => "Selector", "now" => "Available Node",
+            "all" => ["Available Node", "Removed Node"]
+          },
+          "Available Node" => { "type" => "Shadowsocks" },
+          "Expired Node" => { "type" => "Shadowsocks" },
+          "Removed Node" => { "type" => "Shadowsocks" }
+        })]
+      end
+      refute ClaudeEasy.runtime_matches_profile?(
+        stale, profile, runtime_path_reader: -> { [profile] }
+      )
+    end
+  end
+
   def test_safe_reload_uses_the_fresh_receipt_instead_of_the_clashx_bootstrap_config
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")

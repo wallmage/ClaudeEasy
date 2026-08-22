@@ -376,6 +376,15 @@ module ClaudeEasy
     end
   end
 
+  def explicit_group_members_are_filtered?(group)
+    return false unless group.is_a?(Hash) && Array(group["use"]).empty?
+    return false if %w[include-all include-all-proxies include-all-providers].any? do |key|
+      group[key] == true
+    end
+
+    %w[filter exclude-filter exclude-type].any? { |key| !group[key].to_s.empty? }
+  end
+
   def runtime_matches_profile_config?(requester, config, runtime_path_reader: nil,
                                       require_runtime_file: true,
                                       previous_profile_identity: nil)
@@ -399,7 +408,13 @@ module ClaudeEasy
     expected[:groups].each do |name, members|
       loaded = actual[:groups][name]
       return false unless loaded.is_a?(Array)
-      return false unless members.all? { |member| loaded.include?(member) }
+      group = Array(config["proxy-groups"]).find { |item| item.is_a?(Hash) && item["name"] == name }
+      if explicit_group_members_are_filtered?(group)
+        return false if members.any? && loaded.empty?
+        return false unless loaded.all? { |member| members.include?(member) }
+      else
+        return false unless members.all? { |member| loaded.include?(member) }
+      end
     end
     expected[:providers].all? { |name| actual[:providers].include?(name) } &&
       runtime_excludes_previous_profile_entries?(
