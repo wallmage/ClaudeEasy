@@ -4280,8 +4280,8 @@ rules:
     $timeoutScenarios = @(
         [pscustomobject]@{ Name = "expired"; Age = 181; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
         [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-runtime"; Age = 173; Core = $fakeCore; Delay = 8500; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
-        [pscustomobject]@{ Name = "recovery-pending"; Age = 173; Core = $fakeCore; Delay = 8500; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
+        [pscustomobject]@{ Name = "crossing-runtime"; Age = 160; Core = $fakeCore; Delay = 25000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
+        [pscustomobject]@{ Name = "recovery-pending"; Age = 160; Core = $fakeCore; Delay = 25000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
     )
     foreach ($timeoutScenario in $timeoutScenarios) {
         $timeoutSnapshot = Invoke-TestPowerShell $installer @(
@@ -4567,6 +4567,7 @@ rules: ["MATCH,AI"]
         [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
     )
     $legacyManifest.Version = 1
+    $legacyManifest.PSObject.Properties.Remove("RefreshStartedAt")
     $legacyManifest.PSObject.Properties.Remove("Runtime")
     $legacyManifest.PSObject.Properties.Remove("UpdateDispatchCommittedFor")
     foreach ($profile in @($legacyManifest.Profiles)) {
@@ -4616,6 +4617,7 @@ rules: ["MATCH,AI"]
         [System.IO.File]::ReadAllText($legacyManifestPath) | ConvertFrom-Json
     )
     $legacyManifest.Version = 1
+    $legacyManifest.PSObject.Properties.Remove("RefreshStartedAt")
     $legacyManifest.PSObject.Properties.Remove("Runtime")
     $legacyManifest.PSObject.Properties.Remove("UpdateDispatchCommittedFor")
     foreach ($profile in @($legacyManifest.Profiles)) {
