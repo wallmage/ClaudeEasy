@@ -1,90 +1,53 @@
 # ClaudeEasy
 
-ClaudeEasy 是给 AI 助手使用的 Clash 网络配置与诊断 Skill，支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev。它包含两个模块：Patch 按用途安装最少配置；Diagnostics 从网络现象出发取证、解释、修复和复测。
+ClaudeEasy 是一个给 AI 助手用的 Clash 配置与诊断 Skill。它支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev，可以用 Patch 按用途配置网络，也能排查连接问题、安全更新全部订阅、比较和恢复备份。
 
 ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关系。
 
-本文档面向用户，只解释用户可见行为，不重新定义执行规则。代理入口和策略读取路由在 `claude-easy/SKILL.md`：每次先读共同策略，再按 Diagnostics、Patch、订阅更新或恢复任务读取对应模块和当前平台文件。详细策略位于 `claude-easy/references/`；配置常量和机器输出分别以 `policy.json`、`result-contract.json` 为准。
+本文档面向用户，只解释用户可见行为，不重新定义执行规则。普通用户不需要阅读内部策略。代理入口和策略读取路由在 `claude-easy/SKILL.md`：每次先读共同策略，再按任务读取诊断、配置、更新或恢复规则，以及当前平台文件。详细规则在 `claude-easy/references/`。配置常量和机器输出分别以 `policy.json`、`result-contract.json` 为准。
+
+## 它能做什么
+
+- **按用途配置网络：** 为当前存储位置中的全部订阅应用合适的国内直连、DNS、TUN、AI 分流和 WebRTC 防护。
+- **Diagnostics（故障排查）：** 处理速度慢、偶尔断线、网站打不开、节点全红、分流错误或隐私泄漏。先确认原因，再做最小改动。临时对照只用来找原因，诊断对照不是持久修复。macOS 与 Windows 使用同一套判断方法，平台只改变证据来源和安全写入方式，不改变判断标准。
+- **安全更新订阅：** 更新前先备份，更新后重新应用当前档位的配置，并确认原来的 TUN、代理组和节点选择都能恢复。
+- **管理备份：** 列出、比较和恢复历史版本。比较结果只显示字段名和哈希，不显示配置内容。
+- **验证结果：** 检查实际运行配置、代理组、规则、DNS、网站连接和必要的浏览器测试，不把“脚本退出成功”当成全部完成。
 
 ## 支持范围
 
-- macOS：最新版 ClashX Meta，使用 Mihomo 1.19.27 或更高版本。
-- Windows：最新版 Clash Verge Rev，使用 Mihomo 1.19.27 或更高版本。
+- macOS：最新版 ClashX Meta，Mihomo 1.19.27 或更高版本。
+- Windows：最新版 Clash Verge Rev，Mihomo 1.19.27 或更高版本。
 - 不支持旧版 ClashX、旧版 Clash Verge、Linux 或其他客户端。
 
-找不到内核、版本过旧或无法确认能力时只检查，不修改。
+找不到内核、版本过旧或无法确认能力时，ClaudeEasy 只检查，不修改。
 
 ## 安全边界
 
-- **绝对不要退出、停止或重启 Clash 客户端。** Windows 普通安装、卸载和单文件备份恢复只有客户端本来就未运行时才执行；运行中可以创建安全更新备份和验收清单，安全更新失败恢复是唯一允许修改订阅的受控例外，其余受保护客户端配置写入会整批延期。
-- 不运行 ClashX Meta 主程序做诊断，也不向它传 `--version`；客户端版本读取 `Info.plist`，内核版本检查 Mihomo。
-- macOS 不用 Computer Use 操作 ClashX Meta：它是纯菜单栏应用，没有主窗口。TUN 和 Clash 系统代理由 `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json` 先读状态、每个开关最多一次事件、再自动验收；无法安全自动处理时才给出菜单栏手动步骤。
-- Windows 的 Clash Verge Rev 有正常主窗口；有 Computer Use 时可以自动操作，没有或首次失败时使用其他安全自动化或给出手动步骤。
-- 不切换订阅、代理组或节点；只在用途档位要求时修改 TUN 或 Clash 自己的系统代理。
-- 不改写第三方 PAC。AdGuard for Mac 只按策略中的已验证兼容路径，通过它自己的界面调整。
-- 只处理客户端当前存储位置中的订阅；本地和 iCloud 状态不明确时停止。
-- macOS 候选写入前经过 YAML 重读、二次转换和 Mihomo 校验；Windows 客户端刷新后立即验收，失败时恢复更新前备份。
-- 不安装永久监听、LaunchAgent、`WatchPaths`、计划任务或后台服务。
-- 输出不包含订阅地址、密码、UUID、私钥、控制器密钥、完整路径或节点名称。
+- **绝对不要退出、停止或重启 Clash 客户端。** ClaudeEasy 也不会要求你这样做。
+- 不会自动切换订阅、代理组或节点。只有所选用途档位需要时，才调整 TUN 或 Clash 自己的系统代理。
+- 只处理客户端当前存储位置中的订阅。本地和 iCloud 状态不明确时会停止，不会猜。
+- 不改写第三方 PAC，不安装永久监听、LaunchAgent、`WatchPaths`、计划任务或后台服务。
+- macOS 不会启动 ClashX Meta 主程序来做检查。macOS 不用 Computer Use 操作 ClashX Meta，因为它是纯菜单栏应用。ClaudeEasy 会先读取状态，需要调整时每个开关最多一次。
+- Windows 普通安装、卸载和单文件备份恢复只有客户端本来就未运行时才执行。客户端正在运行时，这些操作会暂停，也不会要求你退出客户端。
+- 运行中可以创建安全更新备份和验收清单。安全更新失败恢复是唯一允许修改订阅的受控例外，其余受保护客户端配置写入会整批延期。
+- 输出不会包含订阅地址、密码、UUID、私钥、控制器密钥、完整路径或节点名称。
 
-## 两个模块
+## 选择用途档位
 
-### Patch
+第一次配置时，ClaudeEasy 会问：“你使用网络代理主要用于哪些用途？”选择会保存在本机，以后可以更改。
 
-用于首次安装、改变用途档位或明确要求配置网络。它只应用当前档位需要的能力，不把档位 3 的完整增强塞进较低档位。
-
-### Diagnostics
-
-用于慢、间歇失败、打不开、全部节点不可用、分流异常或泄漏。代理先确定真正的问题范围，再读取原始会话、备份、应用日志、控制器日志、系统日志和配置差异；不会因为用户提到 Clash 或某个应用就先改配置，也不会把单个应用断线误当成完整问题。
-
-分析或复核任务以结论、证据、反证和未知项完整为完成；修复任务才要求最小修复、原场景复测和受影响能力回归。诊断实验可以在隔离环境或明确授权、可完整恢复的单变量对照中执行，但诊断对照不是持久修复。
-
-这套方法共同适用于 macOS 与 Windows；平台只改变证据来源和安全写入方式，不改变判断标准。多个订阅同时异常时逐份订阅取证，不得共用结论；故障原因与恢复原因分开判断。同一份配置未修改而恢复时，要验证共用运行状态或外部状态恢复，不得把恢复归给改过的其他配置文件。
-
-外部服务状态只在证据已经把异常限制到单个服务时查询；跨应用、跨目标或跨订阅异常时不查询单个服务状态。
-
-## 用途档位
-
-首次修改前会问：“你使用网络代理主要用于哪些用途？”选择保存在本机，以后可以改。
-
-| 档位 | 用途 | 安装能力 | 不会增加 |
+| 档位 | 适合谁 | 会做什么 | 不会做什么 |
 | --- | --- | --- | --- |
-| **1｜普通浏览** | 国内站、Google、Twitter、YouTube 等 | 全部订阅的共同国内直连与安全节点启动解析；关闭订阅自动更新；使用 Clash 系统代理 | TUN、IPv6、WebRTC、AI 分组或节点改动 |
-| **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承共同补丁和站点验收；直接开启 TUN，关闭 Clash 自己的系统代理 | WebRTC 或 AI 分组补丁 |
-| **3｜Claude/Claude Code** | Claude、Claude Code 或更强的泄漏防护 | 继承档位 2；增加 DNS 分流、AI 规则、局域网与国内 UDP 分流、其余 UDP/WebRTC 防护和区域指纹检查 | 自动切换订阅、代理组或节点 |
+| **1｜普通浏览** | 国内网站、Google、Twitter、YouTube 等 | 安装共同国内域名直连基线，保护节点启动解析，关闭订阅自动更新，开启 Clash 系统代理 | 不改 TUN、IPv6、WebRTC、AI 分组或节点 |
+| **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承共同补丁，开启 TUN，关闭 Clash 自己的系统代理，检查常用网站和 AI 工具 | 不增加 WebRTC 或 AI 分组补丁 |
+| **3｜Claude/Claude Code** | Claude、Claude Code，或需要更完整的泄漏防护 | 继承档位 2，再增加 DNS 分流、AI 分组与规则、UDP/WebRTC 防护和区域指纹检查 | 不替你选择订阅、代理组或节点 |
 
-档位 3 会让局域网 UDP，以及命中国内域名库或国内 IP 的 UDP 直连，其余 UDP 经过 AI 分组；QUIC、游戏、语音和视频都按这套规则处理，无法确认目的地时可能受影响。AI 节点可以建议台湾家宽优先、其次日本家宽，但不会替用户切换。
+三个档位都会处理当前存储位置中的全部订阅，并关闭订阅自动更新。共同国内域名直连基线让国内域名和连接走 `DIRECT`。安全的节点启动解析避免节点域名依赖系统 DNS、明文 DNS 或 Fake-IP 链。
 
-升档只补新增能力。档位 3 降到 1 或 2 时先安全卸载，再安装新档位；只能撤销仍能确认属于本工具且未被用户继续修改的内容。Windows 卸载返回 `partial` 时保留旧档位，不继续降档。
+档位 3 会让局域网 UDP、国内域名和国内 IP 直连，其余 UDP 经过 AI 分组。QUIC、游戏、语音和视频也按这套规则处理。无法确认目的地时，使用方式可能受到影响。ClaudeEasy 可以建议台湾家宽优先、其次日本家宽，但最终由你自己选择节点。
 
-## 三档共同保护
-
-三个档位都会处理当前存储位置中的全部订阅，并做两件事：
-
-1. 用策略指定的 MetaCubeX `cn.mrs` 建立共同国内域名直连基线，让国内 DNS 和连接路由都命中 `DIRECT`。
-2. 保留安全的 `default-nameserver` 和 `proxy-server-nameserver`；缺失或含 `system`、明文 DNS、错误类型、旧危险值的节点启动解析改用 `policy.json` 中的大陆 IP DoH。这样解析节点域名时不依赖系统 DNS、明文 53 或解析器域名引导。
-
-这两项属于所有档位，不是档位 3 专属能力。服务商后续更新覆盖配置时，安全更新会在 macOS 与 Windows 上按已保存档位重新应用补丁。
-
-## 档位 3 增强
-
-- TUN 使用 system stack、DNS 劫持、自动路由和严格路由；关闭 IPv6。
-- 国内域名直连大陆 DoH；普通境外 DNS 随主代理组；AI DNS 随 AI 分组。
-- 复用已有可选 AI 分组，不改它的成员和当前选择；没有时才创建包含全部可用真实节点和代理提供者的独立选择器。
-- 补全 OpenAI、Anthropic、Claude 和 Gemini 相关规则；不把通用 GitHub 或 Google 存储域名塞进 AI 规则。
-- AI 流量先走 AI 分组；局域网、国内域名和国内 IP 的 UDP 直连；其余 UDP 走 AI 分组，节点不支持 UDP 时拒绝兜底。
-
-详细解析器、域名和规则清单只在 `policy.json` 保存，避免文档复制后漂移。
-
-### Claude 区域指纹
-
-档位 3 在修改前后用实际打开 Claude 的浏览器运行本地页面 `claude-easy/assets/claude-region-check.html`。页面会在检测按钮前列明 Google、Cloudflare 的三个 STUN 端点及公网 IP 披露，点击后才运行 WebRTC 测试；不会把检测到的 IP 发送给归属地查询或其他服务，CSP 也禁止其他网络请求。支持 macOS 的 Safari、Chrome 和 Windows 的 Edge、Chrome。
-
-页面显示十项参考信号、已知项合计和未知权重。WebRTC 项只有明确暴露本地网络地址时计 `10` 分；公网出口不同、没有公网候选或无法完成对照都计 `0` 分，因为这些情况不能单独证明 WebRTC 绕过代理。它不查询国家，也不会把候选地址发给对照服务。它不是 Claude 官方判定，不能作为 Claude 是否可用的通过条件，也不替代 DNS、WebRTC 和实时分流验证。不会为了降分删除字体、伪装设备、修改 User-Agent 或擅自更改系统默认浏览器。任何可选设置都会先展示影响并单独取得授权。
-
-## AdGuard for Mac
-
-档位 2、3 使用 Clash TUN 时，AdGuard for Mac 的 `Network Extension` 可能与透明接管冲突。只有现场表现和单变量对照支持时，才通过 AdGuard 界面改为“自动代理”；Fake-IP 重用证据成立且当前 Mihomo HTTP 端口已验证时，才配置 AdGuard 出站代理按域名交给 Mihomo。不会用 `networksetup`、Plist 编辑或逐站例外，也不会全局关闭 HTTPS 过滤。
+升档只增加新档位需要的能力。从档位 3 降到 1 或 2 时，会先安全卸载旧档位，再安装新档位。已经被你或客户端继续修改的内容不会被强行覆盖。Windows 卸载返回 `partial` 时会保留旧档位，不会继续降档。
 
 ## 安装
 
@@ -109,46 +72,60 @@ Windows PowerShell 5.1：
 .\claude-easy\scripts\install_windows.cmd -UsageProfile 3
 ```
 
-这些安装命令只完成安全的文件事务。脚本成功不等于档位完成；macOS 随后由 Skill 运行原生开关协调命令，Windows 按平台界面规则完成客户端开关与验收。
+这些命令只完成安全的文件处理。脚本成功不等于档位完成，之后还要完成客户端开关与验收。Windows 安装只在客户端本来就未运行时执行写入。客户端运行时修改整批延期且不得报告“已更新”。
 
-Windows 安装只在客户端本来就未运行时执行写入；客户端运行时修改整批延期且不得报告“已更新”。
+## 常用命令
 
-## 公开命令
+| 功能 | macOS | Windows |
+| --- | --- | --- |
+| 查看档位 | `bash claude-easy/scripts/install_macos.sh --show-profile` | `.\claude-easy\scripts\install_windows.cmd -ShowUsageProfile` |
+| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json` | 先用 `-SnapshotProfiles -Json`，刷新后再用 `-VerifySafeUpdate -RefreshConfirmed -Json` |
+| 列出备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups --json` | `.\claude-easy\scripts\install_windows.cmd -ListBackups -Json` |
+| 比较备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --compare-backup ID --json` | `.\claude-easy\scripts\install_windows.cmd -CompareBackup ID -Json` |
+| 恢复备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH --json` | `.\claude-easy\scripts\install_windows.cmd -RestoreBackup ID -ExpectedCurrentSha256 HASH -Json` |
+| 修复日志权限 | `ruby claude-easy/scripts/macos/patch_profiles.rb --repair-clashx-logs` | 不适用 |
+| 协调客户端开关 | `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json` | 按 Clash Verge Rev 界面规则处理 |
+| 验证实时分流 | `ruby claude-easy/scripts/macos/verify_routes.rb --json` | `powershell.exe -NoProfile -File claude-easy/scripts/windows/verify_routes.ps1 -Json` |
 
-- 查看档位：macOS `--show-profile`；Windows `-ShowUsageProfile`
-- 更新订阅：macOS `--safe-update --json`；Windows `-SnapshotProfiles -Json` 先创建备份，客户端刷新后运行 Windows `-VerifySafeUpdate -RefreshConfirmed -Json`
-- 列出备份：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups`；Windows `-ListBackups`
-- 比较备份：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --compare-backup ID`；Windows `-CompareBackup ID`
-- 恢复备份：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH`；Windows `-RestoreBackup ID -ExpectedCurrentSha256 HASH`
-- 修复 ClashX Meta 日志权限：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --repair-clashx-logs`
-- 协调 ClashX Meta 客户端开关：macOS `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`
-- JSON v1：macOS `--json`；Windows `-Json`
+所有公开命令都支持中文结果，机器调用使用 JSON v1。JSON 标准输出只有一个对象，实际退出码与 `exit_code` 一致，字段以 `result-contract.json` 为准。
 
-所有公开命令的机器输出字段以 `result-contract.json` 为准；JSON 标准输出只有一个对象，实际退出码与 `exit_code` 一致。
+## 更新全部订阅
 
-## 更新订阅
+ClaudeEasy 只有在你明确要求“更新节点”或“更新订阅”时才会更新，不会在后台自动刷新。macOS 与 Windows 执行的是同一套安全步骤，只是刷新订阅的方式不同。
 
-只有用户明确要求更新节点或订阅时执行：
+1. 先提醒你：“请确保订阅开关已打开。请自行登录服务商管理后台，找到订阅开关并打开。”部分服务的开关开启后约 10 分钟有效。你回复“打开了”或“没问题”后才继续。否则确认前不得读取订阅、建立备份或操作客户端。不得代替用户操作服务商后台。
+2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试。两端都先为全部远程订阅创建更新前备份，任一备份失败时停止。Windows `-SnapshotProfiles -Json` 还会记住原来的 TUN 和代理组选择。
+3. macOS 使用 Foundation 原生请求，请求身份从当前运行的 ClashX Meta 动态生成，并发送 `Accept-Language: zh-CN,zh;q=0.9`。它不用 curl，也不伪造 User-Agent。Windows 只用 Clash Verge Rev 顶部的“更新所有订阅”，不会直接下载，也不会使用右键菜单中的“更新”或“通过代理更新”。
+4. macOS 在写入前完成文本编码、YAML、二次转换一致性检查和 Mihomo 校验，防止损坏或不完整的配置被写入。Windows 刷新时运行已安装的全局脚本，并在刷新后逐份检查订阅、补丁、代理组、Mihomo 和运行配置。任何一端失败都会按更新前备份恢复，并继续核对运行状态。
+5. 平台命令成功只是中间状态。ClaudeEasy 还会按已保存档位完成客户端开关与验收，再次确认订阅自动更新关闭，并确认原 TUN、代理组和节点选择都已恢复。任一原代理组或节点选择无法恢复时拒绝更新。机器结果出现 `workflow_complete: false`，表示还有检查没做完，不会提前结束。
 
-1. 提醒用户：“请确保订阅开关已打开。请自行登录服务商管理后台，找到订阅开关并打开。”部分服务的开关开启后约 10 分钟有效；用户回复“打开了”或“没问题”后继续。不得代替用户操作服务商后台。
-2. 更新前不做站点、Agent、分流、DNS、WebRTC 或区域指纹测试；为全部远程订阅创建更新前备份，Windows 同时只读记录原 TUN 与代理选择。
-3. macOS 使用与当前 ClashX Meta 身份一致的 Foundation 原生请求并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 先备份；当前环境提供 Computer Use 时由代理在已经运行的 Clash Verge Rev 中进入“订阅”，确认自动更新关闭，点击顶部“更新所有订阅”。没有 Computer Use 时，Skill 给出相同步骤，用户完成后回复“我已经手动更新完了”。Windows 不使用右键菜单中的“更新”或“通过代理更新”。
-4. macOS 在写入前完成 YAML、二次转换一致性检查和 Mihomo 校验。Windows 客户端刷新会运行已安装的全局脚本，按已保存档位重新打补丁；UI 刷新完成或用户明确确认后调用 `-VerifySafeUpdate -RefreshConfirmed`，其中显式的 `-RefreshConfirmed` 就是本轮刷新凭据，订阅字节和时间戳未变化也可以是有效结果。随后逐份检查 YAML、代理组、Mihomo、全局脚本和运行配置，恢复并核对原 TUN 与代理选择；失败时恢复更新前备份并重新加载原运行配置，成功后再次确认订阅自动更新关闭。
-5. 平台更新成功只是中间状态；Skill 在 macOS 和 Windows 上都继续当前档位的客户端动作和全部验收。macOS 运行 `ruby claude-easy/scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`，不尝试用 Computer Use 操作 ClashX Meta；Windows 按平台界面规则处理。档位 2 继承档位 1 的站点验收，但直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成分流、DNS、两项 WebRTC 和一次更新后本地区域指纹检测。任一原代理组或节点选择无法恢复时拒绝更新；最终状态复核通过后才报告完成。没有 Computer Use 时只把 Windows 客户端和浏览器动作交给用户，不能省略验收。
+Windows 有 Computer Use 时，可以操作已经运行的 Clash Verge Rev。没有时会给你同样的界面步骤，等你回复“我已经手动更新完了”后运行 Windows `-VerifySafeUpdate -RefreshConfirmed -Json` 继续验收。没有 Computer Use 只改变由谁点击，不会减少检查项目。
 
-macOS 不使用 curl，也不固定或伪造 User-Agent；请求身份由当前运行的 ClashX Meta 动态生成。Windows 不直接构造订阅请求，只使用 Clash Verge Rev 的客户端原生刷新。两端不做通用的防倒退检查；但更新把现有 AnyTLS 全部替换为 Shadowsocks 时不会接受本轮更新。
+两端不会用节点数量、哈希或时间戳简单判断更新好坏。不过，如果原配置中的 AnyTLS 在新配置里全部变成 Shadowsocks，本轮更新不会被接受。
 
-## 配置历史与恢复
+## 备份与恢复
 
-第一次运行保存初始快照，每次写入前保存带日期时间的版本。比较只输出字段名和 SHA-256，不输出配置值。恢复前再次备份当前版本，并要求当前 SHA-256 仍等于比较时结果；并发变化、文件身份变化或未完成事务会阻止覆盖。
+第一次运行会保存初始快照，之后每次写入前都会保存带时间的版本。公开备份 ID 不含真实文件名。比较只显示字段路径和 SHA-256，不显示配置值。
 
-macOS 安全更新恢复当前订阅后通过同一 ClashX Meta 进程的原生事件重新加载并验收；不会直接重载 Mihomo 或修改 TUN，运行恢复失败时保留事务且同一进程不重复加载。Windows 由 Clash Verge Rev 原生刷新；验收失败时从更新前备份恢复订阅，并保留一次性的运行恢复记录，直到原 TUN 与代理选择重新加载并验证成功。Windows 的其他受保护恢复只有客户端本来就未运行时进行。
+恢复前会再次备份当前版本，并确认当前 SHA-256 仍等于你比较时看到的值。文件被其他程序改过、文件身份变化、事务未完成或运行状态无法恢复时，ClaudeEasy 会停止，不会覆盖新内容。
 
-## 验收
+恢复当前订阅后，还会恢复运行配置，并保留恢复前的 TUN 和仍然存在的代理组选择。中途被强制结束时，下一次公开操作会先处理未完成记录。同一个恢复阶段不会反复发送加载事件。
 
-档位 1 验收国内站、Google、Twitter、常用站点和 Clash 系统代理；档位 2 再验收 TUN、ChatGPT、Gemini 与 Agent 联网；档位 3 再验收 Google、OpenAI、Anthropic、Claude 的实时连接链、DNS 深度测试和两项 WebRTC 页面。
+Windows 的其他受保护恢复只有客户端本来就未运行时进行。
 
-Claude 联网只由分流验证脚本完成；不会用 Computer Use 或浏览器打开 `claude.ai`、进入账号或发送消息。浏览器只打开本地区域检测页和 DNS/WebRTC 测试页。
+## 怎么判断配置真的生效了
+
+- 档位 1：检查国内站、Google、Twitter、一个常用网站和 Clash 系统代理。
+- 档位 2：再检查 TUN、ChatGPT、Gemini 和命令行或 Agent 联网。
+- 档位 3：再检查 Google、OpenAI、Anthropic、Claude 的实时连接链、DNS 深度测试和两项 WebRTC 页面。
+
+Claude 联网只由分流验证脚本检查。ClaudeEasy 不会用浏览器打开 `claude.ai`、进入你的账号或发送测试消息。浏览器只会打开本地区域检测页和 DNS/WebRTC 测试页。
+
+档位 3 的 Claude 区域指纹检测使用本地页面 `claude-easy/assets/claude-region-check.html`，支持 macOS 的 Safari、Chrome，以及 Windows 的 Edge、Chrome。页面会先说明 Google 和 Cloudflare 的三个 STUN 连接及公网 IP 披露，只有你点击按钮后才运行 WebRTC 测试。WebRTC 候选地址不会发给其他服务。区域指纹只是参考，不能作为 Claude 是否可用的通过条件。
+
+## AdGuard for Mac
+
+档位 2、3 使用 Clash TUN 时，AdGuard for Mac 的 `Network Extension` 可能发生冲突。只有实际现象和单变量对照都指向这个问题时，ClaudeEasy 才会通过 AdGuard 自己的界面调整设置。它不会改第三方 PAC，也不会为了省事全局关闭 HTTPS 过滤。
 
 ## 卸载
 
@@ -164,11 +141,11 @@ Windows：
 .\claude-easy\scripts\uninstall_windows.cmd
 ```
 
-卸载只撤销本工具拥有且未被继续修改的内容，不删除版本化备份。Windows 客户端运行时只返回延期状态，不要求你关闭客户端。
+卸载只撤销仍能确认属于 ClaudeEasy、且之后没有被继续修改的内容。版本化备份会保留。Windows 客户端运行时，受保护的卸载会返回 `partial`，但不会要求你关闭客户端。
 
-## 限制
+## 目前的限制
 
-- 不替用户选择订阅、代理组或节点。
-- 不保证区域指纹参考分能改变任何服务判定。
-- Windows 订阅增强在各订阅以后正常加载或刷新时生效；安装完成不能代表全部订阅已在运行内核中采用。
-- 客户端或控制器无法提供实时状态时会标记“未验证”，不会伪造成功。
+- ClaudeEasy 不替你选择订阅、代理组或节点。
+- 区域指纹参考分不能保证改变任何服务的判断。
+- Windows 的订阅增强要等订阅下次正常加载或刷新后才进入运行内核。安装完成不代表全部订阅已经生效。
+- 客户端或控制器无法提供实时状态时，结果会写“未验证”，不会假装成功。
