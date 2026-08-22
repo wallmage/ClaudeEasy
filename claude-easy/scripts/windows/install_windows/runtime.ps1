@@ -729,7 +729,7 @@ function Test-ClashRuntimeConnectivity(
         }
         $process = [System.Diagnostics.Process]::Start($start)
         $remainingMilliseconds = [int][Math]::Floor(
-            [Math]::Min(12000, ($AbsoluteDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+            [Math]::Min([double]12000, [double]($AbsoluteDeadline - [DateTime]::UtcNow).TotalMilliseconds)
         )
         if ($remainingMilliseconds -lt 1) { $process.Kill(); $process.Dispose(); return $false }
         $finished = $process.WaitForExit($remainingMilliseconds)
