@@ -568,8 +568,8 @@ class SkillContractTest < Minitest::Test
     )
   }ix
   EXEC_RUBY_JS = %r{
-    \b(?:system|exec(?:File|Sync)?|spawn(?:Sync)?|popen)\s*\(
-    |\.(?:spawn(?:Sync)?|popen|exec(?:File|Sync)?)\b
+    \b(?:system|exec(?:File(?:Sync)?|Sync)?|spawn(?:Sync)?|popen)\s*\(
+    |\.(?:spawn(?:Sync)?|popen|exec(?:File(?:Sync)?|Sync)?)\b
     |Open3\.(?:popen3|capture2|capture3|pipeline)
     |%x
   }ix
@@ -636,13 +636,19 @@ class SkillContractTest < Minitest::Test
         current << char
         in_single = false if char == "'"
       elsif in_double
-        if (char == "\\" || char == "`") && line[index + 1] == '"'
-          current << char << '"'
-          index += 1
-        else
-          current << char
-          in_double = false if char == '"'
+        if char == "\\" || char == "`"
+          run = 1
+          run += 1 while line[index + run] == char
+          current << (char * run)
+          index += run
+          if run.odd? && line[index] == '"'
+            current << '"'
+            index += 1
+          end
+          next
         end
+        current << char
+        in_double = false if char == '"'
       elsif char == "'"
         in_single = true
         current << char
