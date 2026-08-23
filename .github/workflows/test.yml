@@ -345,19 +345,42 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+      - name: Parse shipped PowerShell sources
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = Get-ChildItem -LiteralPath ./claude-easy -Filter *.ps1 -File -Recurse
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              throw ("PowerShell parse failed for {0}:{1}{2}" -f $file.FullName, [Environment]::NewLine, ($errors | Out-String))
+            }
+          }
+      - name: Smoke-test install_windows.ps1 JSON contract
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP ("claude-easy-smoke-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $fixtureRoot "profiles") -Force | Out-Null
+          [System.IO.File]::WriteAllText((Join-Path $fixtureRoot "config.yaml"), "mixed-port: 7890`nmode: rule`n")
+          [System.IO.File]::WriteAllText((Join-Path $fixtureRoot "verge.yaml"), "enable_tun_mode: false`n")
+          [System.IO.File]::WriteAllText((Join-Path $fixtureRoot "profiles.yaml"), "items: []`n")
+          $runtime = (Get-Command powershell.exe).Source
+          $output = & $runtime -NoLogo -NoProfile -File ./claude-easy/scripts/install_windows.ps1 -AppHome $fixtureRoot -ShowUsageProfile -Json 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "install_windows.ps1 smoke test failed with exit code $LASTEXITCODE" }
+          $result = $output.Trim() | ConvertFrom-Json
+          foreach ($field in @("command", "status", "code")) {
+            if ($null -eq $result.PSObject.Properties[$field]) { throw "smoke JSON omitted $field" }
+          }
       - name: PowerShell 5.1 installer, uninstaller, and route regressions
         shell: powershell
         run: |
-          $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-full-5.json"
-          Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
           $runtime = (Get-Command powershell.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5 -CompletionReceiptPath $receipt
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5
           if ($LASTEXITCODE -ne 0) { throw "Windows full suite failed with exit code $LASTEXITCODE" }
-          if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "Windows full suite did not produce its completion receipt" }
-          $completed = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
-          if ($completed.Mode -ne "Full" -or $completed.PSEdition -ne "Desktop" -or [int]$completed.PSMajor -ne 5) {
-            throw "Windows full suite produced an invalid completion receipt"
-          }
 
   windows-installer-powershell-7:
     needs: scope
@@ -372,16 +395,9 @@ jobs:
       - name: PowerShell 7 installer, uninstaller, and route regressions
         shell: pwsh
         run: |
-          $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-full-7.json"
-          Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
           $runtime = (Get-Command pwsh.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7 -CompletionReceiptPath $receipt
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
           if ($LASTEXITCODE -ne 0) { throw "Windows full suite failed with exit code $LASTEXITCODE" }
-          if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "Windows full suite did not produce its completion receipt" }
-          $completed = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
-          if ($completed.Mode -ne "Full" -or $completed.PSEdition -ne "Core" -or [int]$completed.PSMajor -ne 7) {
-            throw "Windows full suite produced an invalid completion receipt"
-          }
 
   windows-mihomo:
     needs: scope
@@ -450,33 +466,12 @@ jobs:
           $core = @(Get-ChildItem -LiteralPath $destination -Filter "mihomo*.exe" -File -Recurse)
           if ($core.Count -ne 1) { throw "Mihomo executable is missing before validation" }
           $targetPowerShell = (Get-Command '${{ matrix.executable }}').Source
-          $receipt = Join-Path $env:RUNNER_TEMP "claude-easy-windows-mihomo.json"
           $geosite = Join-Path $env:RUNNER_TEMP "GeoSite.dat"
-          Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
-          $nonce = [Guid]::NewGuid().ToString("N")
           & $targetPowerShell -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 `
             -PowerShellPath $targetPowerShell `
             -ExpectedPSEdition '${{ matrix.edition }}' `
             -ExpectedPSMajor ${{ matrix.major }} `
             -RealMihomoPaths @($core[0].FullName) `
             -RealMihomoGeoSitePath $geosite `
-            -RealMihomoOnly `
-            -CompletionReceiptPath $receipt `
-            -CompletionReceiptNonce $nonce
+            -RealMihomoOnly
           if ($LASTEXITCODE -ne 0) { throw "Windows real Mihomo suite failed" }
-          if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) {
-            throw "Windows real Mihomo suite did not produce its completion receipt"
-          }
-          $completed = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
-          if ($completed.Mode -ne "RealMihomo" -or
-              $completed.PSEdition -ne '${{ matrix.edition }}' -or
-              [int]$completed.PSMajor -ne ${{ matrix.major }} -or
-              $completed.Nonce -ne $nonce -or
-              [int]$completed.CoreCount -ne $core.Count) {
-            throw "Windows real Mihomo suite produced an invalid completion receipt"
-          }
-          $actualCases = @($completed.Cases | ForEach-Object { "$($_.Core):$($_.Profile)" })
-          $expectedCases = @("1:1", "1:2", "1:3")
-          if (@(Compare-Object $expectedCases $actualCases).Count -ne 0) {
-            throw "Windows real Mihomo suite did not complete every usage profile"
-          }

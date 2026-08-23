@@ -10477,18 +10477,14 @@ class MacosPatcherTest < Minitest::Test
         profiles_completed << usage_profile
       end
     end
-    receipt_path = ENV["CLAUDE_EASY_MIHOMO_RECEIPT_PATH"].to_s
-    unless receipt_path.empty?
-      receipt = {
-        "schema" => "claude-easy.mihomo-validation",
-        "version" => 1,
-        "nonce" => ENV.fetch("CLAUDE_EASY_MIHOMO_RECEIPT_NONCE"),
-        "core_sha256" => Digest::SHA256.file(core).hexdigest,
-        "profiles_completed" => profiles_completed,
-        "validations" => validations
-      }
-      File.write(receipt_path, JSON.generate(receipt))
+    assert_equal [1, 2, 3], profiles_completed.sort
+    expected_validations = [1, 2, 3].flat_map do |usage_profile|
+      [
+        { "profile" => usage_profile, "stage" => "baseline" },
+        { "profile" => usage_profile, "stage" => "patched" }
+      ]
     end
+    assert_equal expected_validations, validations
   end
 
   def test_rule_parser_keeps_nested_commas_and_identifies_no_resolve_target

@@ -9,9 +9,7 @@
     [int]$ExpectedPSMajor,
     [string[]]$RealMihomoPaths = @(),
     [string]$RealMihomoGeoSitePath,
-    [switch]$RealMihomoOnly,
-    [string]$CompletionReceiptPath,
-    [string]$CompletionReceiptNonce
+    [switch]$RealMihomoOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +48,7 @@ $safeUpdateControllerJob = $null
 $previousUsageProfile = $env:CLAUDE_EASY_USAGE_PROFILE
 $env:CLAUDE_EASY_USAGE_PROFILE = "3"
 $script:deferredProbeFailures = New-Object System.Collections.ArrayList
+$script:executedScenarioCount = 0
 $fakeCore = Join-Path $sandbox $(if ($onWindows) { "mihomo-test.cmd" } else { "mihomo-test.sh" })
 $hangingCore = Join-Path $sandbox $(if ($onWindows) { "mihomo-hang.cmd" } else { "mihomo-hang.sh" })
 $mutatingCore = Join-Path $sandbox "mihomo-mutate.cmd"
@@ -202,6 +201,7 @@ function Get-WindowsShortPath([string]$Path) {
 }
 
 function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode) {
+    $script:executedScenarioCount++
     $text = $Invocation.Output.Trim()
     $diagnostic = Get-TestOutputDiagnostic $text
     Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic"
@@ -238,6 +238,7 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
 }
 
 function Invoke-DeferredProbe([string]$Name, [scriptblock]$Probe) {
+    $script:executedScenarioCount++
     try {
         & $Probe
     } catch {
@@ -492,6 +493,7 @@ function Write-TestUtf8Text([string]$Path, [string]$Text) {
 }
 
 function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$MessageFragment) {
+    $script:executedScenarioCount++
     $case = Join-Path $sandbox $Name
     $profiles = Join-Path $case "profiles"
     New-Item -ItemType Directory -Path $profiles -Force | Out-Null
@@ -1042,24 +1044,20 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
             if ($script:deferredProbeFailures.Count -gt 0) {
                 throw ("deferred production probes failed:`n- " + ($script:deferredProbeFailures -join "`n- "))
             }
-            if (-not [string]::IsNullOrWhiteSpace($CompletionReceiptPath)) {
-                Assert-True (
-                    -not [string]::IsNullOrWhiteSpace($CompletionReceiptNonce)
-                ) "real Mihomo completion receipt nonce is required"
-                $realCompletionReceipt = [ordered]@{
-                    Mode = "RealMihomo"
-                    PSEdition = $ExpectedPSEdition
-                    PSMajor = $ExpectedPSMajor
-                    Nonce = $CompletionReceiptNonce
-                    CoreCount = $RealMihomoPaths.Count
-                    Cases = @($realCompletedCases)
-                } | ConvertTo-Json -Compress -Depth 4
-                [System.IO.File]::WriteAllText(
-                    $CompletionReceiptPath,
-                    $realCompletionReceipt,
-                    (New-Object System.Text.UTF8Encoding($false))
-                )
+            $expectedRealCases = @()
+            $expectedCoreIndex = 0
+            foreach ($realMihomoPath in $RealMihomoPaths) {
+                $expectedCoreIndex++
+                foreach ($realUsageProfile in @(1, 2, 3)) {
+                    $expectedRealCases += ("{0}:{1}" -f $expectedCoreIndex, $realUsageProfile)
+                }
             }
+            $actualRealCases = @($realCompletedCases | ForEach-Object {
+                "{0}:{1}" -f $_.Core, $_.Profile
+            })
+            Assert-True (@(Compare-Object $expectedRealCases $actualRealCases).Count -eq 0) (
+                "real Mihomo suite did not execute every core/profile pair; expected=$($expectedRealCases -join ',') actual=$($actualRealCases -join ',')"
+            )
             Write-Host "Windows real Mihomo public-entry cases passed"
             return
         }
@@ -7508,17 +7506,5 @@ function main(config) {
     if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }
 }
 
-if (-not [string]::IsNullOrWhiteSpace($CompletionReceiptPath)) {
-    $completionReceipt = [ordered]@{
-        Mode = "Full"
-        PSEdition = $ExpectedPSEdition
-        PSMajor = $ExpectedPSMajor
-    } | ConvertTo-Json -Compress
-    [System.IO.File]::WriteAllText(
-        $CompletionReceiptPath,
-        $completionReceipt,
-        (New-Object System.Text.UTF8Encoding($false))
-    )
-}
-
+Assert-True ($script:executedScenarioCount -gt 0) "Windows installer suite did not execute any scenarios"
 exit 0
