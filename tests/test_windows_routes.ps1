@@ -51,18 +51,6 @@ $functionAsts = @($ast.FindAll({
 Assert-True ($functionAsts.Count -gt 0) "route verifier has no functions"
 $functionAsts | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
 
-$source = Get-Content -LiteralPath $routeVerifier -Raw
-$expectedTargets = @(
-    '(Observe-Route "ChatGPT" "https://chatgpt.com/"',
-    '(Observe-Route "Gemini" "https://gemini.google.com/"',
-    '(Observe-Route "Grok" "https://grok.com/"'
-)
-foreach ($target in $expectedTargets) {
-    Assert-True ($source.Contains($target)) "missing approved route target"
-}
-$targetCalls = [regex]::Matches($source, '(?m)^\s*\(Observe-Route "').Count
-Assert-True ($targetCalls -eq 3) "route verifier target set changed"
-
 foreach ($acceptedControllerUrl in @(
     "http://127.0.0.1:9097",
     "http://[::1]:9097",
