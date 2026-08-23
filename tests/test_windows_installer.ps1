@@ -346,9 +346,9 @@ if ($payload.RefreshStartedAgeSeconds -gt 0) {
     $refreshStartedAt = [DateTimeOffset]::UtcNow.AddSeconds(
         -[int]$payload.RefreshStartedAgeSeconds
     ).ToString("o")
-    $updatedManifestText = [regex]::Replace(
+    $refreshStampPattern = [regex]'(?i)("RefreshStartedAt"\s*:\s*)(?:null|"(?:[^"\\]|\\.)*")'
+    $updatedManifestText = $refreshStampPattern.Replace(
         $manifestText,
-        '(?i)("RefreshStartedAt"\s*:\s*)(?:null|"(?:[^"\\]|\\.)*")',
         ('$1"' + $refreshStartedAt + '"'),
         1
     )
