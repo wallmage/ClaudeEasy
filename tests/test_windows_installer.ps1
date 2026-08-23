@@ -342,14 +342,19 @@ Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNa
 [ClaudeEasy.SendInputNative]::FailRestoreDispatch = [bool]$payload.FailRestoreRuntimeDispatch
 if ($payload.RefreshStartedAgeSeconds -gt 0) {
     $manifestPath = Join-Path ([string]$payload.AppHome) "claude-easy-safe-update.json"
-    $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
-    $manifest.RefreshStartedAt = [DateTimeOffset]::UtcNow.AddSeconds(
+    $manifestText = [System.IO.File]::ReadAllText($manifestPath)
+    $refreshStartedAt = [DateTimeOffset]::UtcNow.AddSeconds(
         -[int]$payload.RefreshStartedAgeSeconds
     ).ToString("o")
-    [System.IO.File]::WriteAllText(
-        $manifestPath,
-        (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
+    $updatedManifestText = [regex]::Replace(
+        $manifestText,
+        '(?i)("RefreshStartedAt"\s*:\s*)(?:null|"(?:[^"\\]|\\.)*")',
+        ('$1"' + $refreshStartedAt + '"'),
+        1
     )
+    $manifestTempPath = $manifestPath + ".stamp.tmp"
+    [System.IO.File]::WriteAllText($manifestTempPath, $updatedManifestText)
+    [System.IO.File]::Replace($manifestTempPath, $manifestPath, $null)
 }
 $arguments = @{
     AppHome = [string]$payload.AppHome
