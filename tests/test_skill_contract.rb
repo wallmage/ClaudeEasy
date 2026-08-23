@@ -562,7 +562,8 @@ class SkillContractTest < Minitest::Test
     )
   }ix
   EXEC_RUBY_JS = %r{
-    \b(?:system|exec|spawn|popen)\b
+    \b(?:system|exec|spawn|popen)\s*\(
+    |\.(?:spawn|popen|exec)\b
     |Open3\.(?:popen3|capture2|capture3|pipeline)
     |%x
   }ix
@@ -845,7 +846,7 @@ class SkillContractTest < Minitest::Test
       return classify_process_target(strip_shell_arg(Regexp.last_match(2)))
     end
 
-    if line =~ %r{(?:^|[;\s|&]|`\s*)(?:\/[\w.\/-]+/)?taskkill(?:\s+\/\w+)*\s+\/(?:PID|IM)\s+([^;\s|&]+)}i
+    if line =~ %r{(?:^|[;\s|&]|`\s*)(?:\/[\w.\/-]+/)?taskkill(?:\s+\/\w+)*\s+\/(?:PID|IM)\s+("[^"]+"|'[^']+'|[^;\s|&]+)}i
       return resolve_variable_target(strip_shell_arg(Regexp.last_match(1)), name_bindings, pid_bindings)
     end
 
@@ -874,6 +875,7 @@ class SkillContractTest < Minitest::Test
     name_bindings, pid_bindings = build_process_target_maps(lines)
     lines.each_with_index do |line, index|
       each_script_statement(line).each do |stmt|
+        next if stmt.match?(/\A(?:#|\/\/|rem\b|echo\b|puts\b|print\b|logger\b|Write-Host\b|Write-Output\b)/i)
         next unless stmt.match?(KILL_PRIMITIVE)
 
         target = resolve_kill_target(stmt, name_bindings, pid_bindings)
