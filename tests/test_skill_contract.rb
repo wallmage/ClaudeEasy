@@ -568,8 +568,8 @@ class SkillContractTest < Minitest::Test
     )
   }ix
   EXEC_RUBY_JS = %r{
-    \b(?:system|exec|spawn|popen)\s*\(
-    |\.(?:spawn|popen|exec)\b
+    \b(?:system|exec(?:File|Sync)?|spawn(?:Sync)?|popen)\s*\(
+    |\.(?:spawn(?:Sync)?|popen|exec(?:File|Sync)?)\b
     |Open3\.(?:popen3|capture2|capture3|pipeline)
     |%x
   }ix
@@ -629,13 +629,20 @@ class SkillContractTest < Minitest::Test
     current = +""
     in_single = false
     in_double = false
-    line.each_char do |char|
+    index = 0
+    while index < line.length
+      char = line[index]
       if in_single
         current << char
         in_single = false if char == "'"
       elsif in_double
-        current << char
-        in_double = false if char == '"'
+        if (char == "\\" || char == "`") && line[index + 1] == '"'
+          current << char << '"'
+          index += 1
+        else
+          current << char
+          in_double = false if char == '"'
+        end
       elsif char == "'"
         in_single = true
         current << char
@@ -648,6 +655,7 @@ class SkillContractTest < Minitest::Test
       else
         current << char
       end
+      index += 1
     end
     segments << current
     segments.map(&:strip).reject(&:empty?)
