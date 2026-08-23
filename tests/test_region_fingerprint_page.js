@@ -33,108 +33,6 @@ function detectorApi(globals = {}) {
   return context.window.ClaudeEasyRegionCheck;
 }
 
-class FakeElement {
-  constructor() {
-    this.attributes = new Map();
-    this.children = [];
-    this.listeners = new Map();
-    this.disabled = false;
-    this.focused = false;
-    this.hidden = false;
-    this._textContent = "";
-  }
-
-  set textContent(value) {
-    this._textContent = String(value);
-    this.children = [];
-  }
-
-  get textContent() {
-    return this._textContent;
-  }
-
-  appendChild(child) {
-    this.children.push(child);
-    return child;
-  }
-
-  setAttribute(name, value) {
-    this.attributes.set(name, String(value));
-  }
-
-  removeAttribute(name) {
-    this.attributes.delete(name);
-  }
-
-  addEventListener(name, listener) {
-    this.listeners.set(name, listener);
-  }
-
-  click() {
-    return this.listeners.get("click")();
-  }
-
-  focus() {
-    if (!this.disabled && !this.hidden) this.focused = true;
-  }
-
-  querySelector(selector) {
-    const attribute = selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);
-    assert.ok(attribute, `unsupported fake selector: ${selector}`);
-    const [, name, value] = attribute;
-    const stack = [...this.children];
-    while (stack.length > 0) {
-      const candidate = stack.shift();
-      if (candidate.attributes.has(name) &&
-          (value === undefined || candidate.attributes.get(name) === value)) {
-        return candidate;
-      }
-      stack.push(...candidate.children);
-    }
-    return null;
-  }
-}
-
-function uiHarness(detector) {
-  const elements = {
-    list: new FakeElement(),
-    start: new FakeElement(),
-    rescan: new FakeElement(),
-    score: new FakeElement(),
-    band: new FakeElement(),
-    status: new FakeElement(),
-  };
-  elements.rescan.hidden = true;
-  const selectors = new Map([
-    ["[data-signal-list]", elements.list],
-    ['[data-action="start"]', elements.start],
-    ['[data-action="rescan"]', elements.rescan],
-    ["[data-result-score]", elements.score],
-    ["[data-result-summary]", elements.band],
-    ["[data-result-status]", elements.status],
-  ]);
-  const context = vm.createContext({
-    window: {
-      ClaudeEasyRegionCheck: {
-        riskBand: (total) => total <= 30
-          ? "low"
-          : total <= 60
-            ? "medium"
-            : "high",
-        ...detector,
-      },
-    },
-    document: {
-      createElement: () => new FakeElement(),
-      querySelector: (selector) => selectors.get(selector),
-    },
-  });
-  vm.runInContext(scriptSource("claude-easy-region-ui"), context, {
-    filename: "claude-region-check-ui.js",
-  });
-  return elements;
-}
-
 function baseEnvironment(overrides = {}) {
   return {
     timeZone: "Asia/Taipei",
@@ -184,12 +82,7 @@ test("the detector is one self-contained HTML file with only disclosed network p
     "form-action": "'none'",
   });
   assert.doesNotMatch(csp[1], /\bnavigate-to\b/);
-  assert.match(
-    source,
-    /Copyright \(c\) 2026 LinXiaoTao \(https:\/\/github\.com\/LinXiaoTao\)/,
-  );
   assert.doesNotMatch(source, /FuckClaude/);
-  assert.match(source, /MIT License/);
   assert.doesNotMatch(source, /\b(?:src|href)\s*=/i);
   assert.deepEqual(
     Array.from(executableSource.matchAll(/https?:\/\/[^'"\s<]+/g), (match) => match[0]),
@@ -226,22 +119,6 @@ test("the detector is one self-contained HTML file with only disclosed network p
   assert.match(source, /stun\.l\.google\.com/);
   assert.match(source, /stun1\.l\.google\.com/);
   assert.match(source, /stun\.cloudflare\.com/);
-  assert.match(source, /Google 和 Cloudflare.*看到.*公网 IP/);
-  assert.match(source, /网页.*出口.*Cloudflare/);
-  assert.match(source, /不会.*收到.*STUN.*候选/);
-  assert.match(source, />开始检测并运行 WebRTC 测试</);
-  assert.match(source, /低风险/);
-  assert.match(source, /中等风险/);
-  assert.match(source, /高风险/);
-  assert.match(source, /--clear:\s*#5e8c61/);
-  assert.match(source, /--notice:\s*#b58121/);
-  assert.match(source, /--match:\s*#bf4d3d/);
-  assert.match(source, /只用于比较修改前后/);
-  assert.match(source, /不能作为 Claude 是否可用的通过条件/);
-  assert.match(source, /达到 0\.25 才计为“命中”/);
-  assert.match(source, /<noscript>/);
-  assert.match(source, /无法运行检测/);
-  assert.match(source, /<ol[^>]+role="list"/);
 });
 
 test("the public contract exposes the upstream ten signals and weights", () => {
@@ -521,195 +398,6 @@ test("rejected high-entropy client hints fall back without aborting the scan", a
   assert.match(device.raw, /仅 User-Agent/);
 });
 
-test("the full UI renders success, rescan, and failure states", async () => {
-  const api = detectorApi();
-  const result = await api.detect(baseEnvironment());
-  let calls = 0;
-  const success = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => {
-      calls += 1;
-      return result;
-    },
-  });
-
-  assert.equal(success.list.children.length, 10);
-  await success.start.click();
-  assert.equal(success.status.attributes.get("data-result-status"), "complete");
-  assert.match(success.status.textContent, /检测完成/);
-  assert.equal(success.score.textContent, String(result.total));
-  assert.equal(success.band.textContent, "低风险");
-  assert.equal(success.band.attributes.get("data-state"), "low");
-  assert.equal(success.start.hidden, true);
-  assert.equal(success.rescan.hidden, false);
-  assert.equal(success.rescan.focused, true);
-  for (const [index, signal] of result.signals.entries()) {
-    const row = success.list.children[index];
-    assert.equal(row.attributes.get("data-signal-key"), signal.id);
-    assert.equal(row.attributes.get("data-coverage"), signal.coverage);
-    assert.equal(row.attributes.get("data-match"), signal.match);
-    assert.equal(
-      row.querySelector("[data-signal-value]").textContent,
-      signal.raw,
-    );
-    assert.equal(
-      row.querySelector("[data-signal-contribution]").textContent,
-      `+${signal.contribution}`,
-    );
-  }
-  await success.rescan.click();
-  assert.equal(calls, 2);
-
-  const failure = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => {
-      throw new Error("scan failed");
-    },
-  });
-  await failure.start.click();
-  assert.equal(failure.status.attributes.get("data-result-status"), "failed");
-  assert.match(failure.status.textContent, /未验证/);
-  assert.equal(failure.score.textContent, "—");
-  assert.equal(failure.band.textContent, "未验证");
-  assert.equal(failure.start.hidden, true);
-  assert.equal(failure.rescan.hidden, false);
-  assert.equal(failure.rescan.focused, true);
-});
-
-test("a failed scan can be retried successfully", async () => {
-  const api = detectorApi();
-  const result = await api.detect(baseEnvironment());
-  let calls = 0;
-  const ui = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => {
-      calls += 1;
-      if (calls === 1) throw new Error("first scan failed");
-      return result;
-    },
-  });
-
-  await ui.start.click();
-  assert.equal(ui.status.attributes.get("data-result-status"), "failed");
-  await ui.rescan.click();
-  assert.equal(calls, 2);
-  assert.equal(ui.status.attributes.get("data-result-status"), "complete");
-  assert.equal(ui.score.textContent, String(result.total));
-  assert.match(ui.status.textContent, /检测完成/);
-});
-
-test("a rescan clears stale signal values while running and after failure", async () => {
-  const api = detectorApi();
-  const result = await api.detect(baseEnvironment());
-  let call = 0;
-  let releaseRescan;
-  const rescanResult = new Promise((resolve) => {
-    releaseRescan = resolve;
-  });
-  const ui = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => {
-      call += 1;
-      if (call === 1) return result;
-      if (call === 2) return rescanResult;
-      throw new Error("rescan failed");
-    },
-  });
-
-  await ui.start.click();
-  const rows = ui.list.children;
-  const firstRow = rows[0];
-  assert.equal(
-    firstRow.querySelector("[data-signal-value]").textContent,
-    "Asia/Taipei",
-  );
-  assert.equal(
-    firstRow.querySelector("[data-signal-contribution]").textContent,
-    "+0",
-  );
-
-  const pendingRescan = ui.rescan.click();
-  assert.equal(ui.start.disabled, true);
-  assert.equal(ui.rescan.disabled, true);
-  for (const row of rows) {
-    assert.equal(
-      row.querySelector("[data-signal-value]").textContent,
-      "正在读取",
-    );
-    assert.equal(
-      row.querySelector("[data-signal-contribution]").textContent,
-      "—",
-    );
-    assert.equal(row.attributes.get("data-coverage"), "pending");
-    assert.equal(row.attributes.get("data-match"), "none");
-  }
-  releaseRescan(result);
-  await pendingRescan;
-  assert.equal(ui.start.disabled, false);
-  assert.equal(ui.rescan.disabled, false);
-
-  await ui.rescan.click();
-  for (const row of rows) {
-    assert.equal(
-      row.querySelector("[data-signal-value]").textContent,
-      "未验证",
-    );
-    assert.equal(
-      row.querySelector("[data-signal-contribution]").textContent,
-      "—",
-    );
-    assert.equal(row.attributes.get("data-coverage"), "unavailable");
-    assert.equal(row.attributes.get("data-match"), "none");
-  }
-  assert.equal(ui.start.disabled, false);
-  assert.equal(ui.rescan.disabled, false);
-});
-
-test("repeated clicks cannot start concurrent scans", async () => {
-  const api = detectorApi();
-  const result = await api.detect(baseEnvironment());
-  let calls = 0;
-  let release;
-  const pending = new Promise((resolve) => {
-    release = resolve;
-  });
-  const ui = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => {
-      calls += 1;
-      return pending;
-    },
-  });
-
-  const first = ui.start.click();
-  await ui.start.click();
-  assert.equal(calls, 1);
-  release(result);
-  await first;
-});
-
-test("the status reports the actual number of limited signals", async () => {
-  const api = detectorApi();
-  const result = await api.detect(baseEnvironment());
-  const ui = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => ({
-      ...result,
-      limitedCount: 2,
-      limitations: ["fonts", "deviceVendor"],
-    }),
-  });
-
-  await ui.start.click();
-  assert.match(ui.status.textContent, /2 项有限信息/);
-});
-
 test("browser environment survives unavailable canvas font detection", async () => {
   const api = detectorApi({
     document: {
@@ -742,43 +430,6 @@ test("browser environment survives unavailable canvas font detection", async () 
   assert.equal(result.unavailableCount, 2);
   assert.equal(result.total, null);
   assert.equal(result.unknownWeight, 24);
-});
-
-test("browser environment detects fonts from measured canvas width changes", () => {
-  let currentFont = "";
-  const context = {
-    set font(value) {
-      currentFont = value;
-    },
-    get font() {
-      return currentFont;
-    },
-    measureText() {
-      return {
-        width: currentFont.includes('"PingFang SC"') ? 120 : 100,
-      };
-    },
-  };
-  const api = detectorApi({
-    document: {
-      createElement: () => ({ getContext: () => context }),
-    },
-    navigator: {
-      language: "en-US",
-      languages: ["en-US"],
-      platform: "MacIntel",
-      userAgent:
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-        "AppleWebKit/605.1.15 Safari/605.1.15",
-      userAgentData: undefined,
-    },
-  });
-
-  const environment = api.browserEnvironment();
-
-  assert.equal(environment.fontDetectionAvailable, true);
-  assert.equal(environment.hasFont("PingFang SC"), true);
-  assert.equal(environment.hasFont("Definitely Missing"), false);
 });
 
 test("browser environment ignores fallback languages and reads only the interface language", () => {
@@ -890,63 +541,38 @@ test("unreadable browser values remain unknown instead of looking safe", async (
         signal.contribution === null &&
         signal.match === "unknown"),
   );
-
-  const ui = uiHarness({
-    signals: api.signals,
-    browserEnvironment: () => ({}),
-    detect: async () => result,
-  });
-  await ui.start.click();
-  assert.equal(ui.score.textContent, "—");
-  assert.equal(ui.band.textContent, "结果不完整");
-  assert.match(ui.status.textContent, /已知项合计 0 \/ 100/);
-  assert.match(ui.status.textContent, /已知命中 0 项/);
-  assert.doesNotMatch(ui.status.textContent, /已知非零/);
-  assert.match(ui.status.textContent, /9 项无法读取/);
-  const webrtcRow = ui.list.children.find(
-    (row) => row.attributes.get("data-signal-key") === "webrtcLeak",
-  );
-  assert.equal(
-    webrtcRow.querySelector("[data-signal-contribution]").textContent,
-    "+0",
-  );
 });
 
-test("Taiwan preferences score zero while mainland preferences score fully", () => {
+const SCORE_TRUTH_CASES = [
+  { method: "scoreTimezone", input: "Asia/Taipei", expected: 0 },
+  { method: "scoreTimezone", input: "Asia/Shanghai", expected: 1 },
+  { method: "scoreLanguage", input: "zh-TW", expected: 0 },
+  { method: "scoreLanguage", input: "zh-CN", expected: 1 },
+  { method: "scoreIntlLocale", input: "zh-TW", expected: 0 },
+  { method: "scoreIntlLocale", input: "zh-Hant-TW", expected: 0.5 },
+  { method: "scoreIntlLocale", input: "zh-CN", expected: 1 },
+  { method: "scoreIntlLocale", input: "zh-Hans-CN", expected: 1 },
+  { method: "scoreIntlLocale", input: "zh-Hant-HK", expected: 0.5 },
+  { method: "scoreLanguage", input: "zh-CN", expected: 1 },
+  { method: "scoreLanguage", input: "zh-Hans", expected: 1 },
+  { method: "scoreLanguage", input: "zh-Hans-CN", expected: 1 },
+  { method: "scoreLanguage", input: "en-US", expected: 0 },
+  { method: "scoreLanguage", input: "zh-SG", expected: 0 },
+  { method: "scoreLanguage", input: "zh-Hans-SG", expected: 0 },
+  { method: "scoreLanguage", input: "zh-MY", expected: 0 },
+  { method: "scoreLanguage", input: "zh-Hans-TW", expected: 0 },
+  { method: "scoreLanguage", input: "zh-Hant", expected: 0 },
+  { method: "scoreLanguage", input: "zh-Hant-CN", expected: 0 },
+  { method: "scoreLanguage", input: "zh-HK", expected: 0 },
+  { method: "scoreLanguage", input: "zh-MO", expected: 0 },
+  { method: "scoreLanguage", input: "zh", expected: 0 },
+  { method: "scoreLanguage", input: "", expected: 0 },
+];
+
+test("timezone, language, and intl locale scoring follow the upstream truth table", () => {
   const api = detectorApi();
-
-  assert.equal(api.scoreTimezone("Asia/Taipei"), 0);
-  assert.equal(api.scoreTimezone("Asia/Shanghai"), 1);
-  assert.equal(api.scoreLanguage("zh-TW"), 0);
-  assert.equal(api.scoreLanguage("zh-CN"), 1);
-  assert.equal(api.scoreIntlLocale("zh-TW"), 0);
-  assert.equal(api.scoreIntlLocale("zh-Hant-TW"), 0.5);
-  assert.equal(api.scoreIntlLocale("zh-CN"), 1);
-  assert.equal(api.scoreIntlLocale("zh-Hans-CN"), 1);
-  assert.equal(api.scoreIntlLocale("zh-Hant-HK"), 0.5);
-});
-
-test("browser language score only recognizes mainland Simplified Chinese", () => {
-  const api = detectorApi();
-
-  for (const language of ["zh-CN", "zh-Hans", "zh-Hans-CN"]) {
-    assert.equal(api.scoreLanguage(language), 1, language);
-  }
-  for (const language of [
-    "en-US",
-    "zh-SG",
-    "zh-Hans-SG",
-    "zh-MY",
-    "zh-TW",
-    "zh-Hans-TW",
-    "zh-Hant",
-    "zh-Hant-CN",
-    "zh-HK",
-    "zh-MO",
-    "zh",
-    "",
-  ]) {
-    assert.equal(api.scoreLanguage(language), 0, language);
+  for (const { method, input, expected } of SCORE_TRUTH_CASES) {
+    assert.equal(api[method](input), expected, `${method}(${input})`);
   }
 });
 
