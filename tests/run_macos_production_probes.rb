@@ -27,6 +27,26 @@ SURVIVORS = [
     suite: "tests/test_macos_patcher.rb",
     name: "test_production_probe_next_safe_update_recovers_batch_killed_after_first_descriptor_commit",
   },
+  {
+    suite: "tests/test_macos_patcher.rb",
+    name: "test_production_probe_normal_batch_rejects_duplicate_file_aliases",
+  },
+  {
+    suite: "tests/test_macos_wrappers.rb",
+    name: "test_production_probe_uninstall_preserves_a_file_replaced_after_staging",
+  },
+  {
+    suite: "tests/test_macos_wrappers.rb",
+    name: "test_production_probe_shared_wrapper_lock_prevents_uninstall_from_deleting_a_concurrent_install",
+  },
+  {
+    suite: "tests/test_macos_wrappers.rb",
+    name: "test_production_probe_install_recovers_a_killed_ready_uninstall_before_changing_profile",
+  },
+  {
+    suite: "tests/test_macos_wrappers.rb",
+    name: "test_production_probe_uninstall_recovers_a_killed_profile_transaction_before_enabling_updates",
+  },
 ].freeze
 
 failed = false
