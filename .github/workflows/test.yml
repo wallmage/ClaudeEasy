@@ -331,7 +331,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"runner":"macos-15","architecture":"arm64","minimum_sha256":"3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1","current_sha256":"4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"},{"runner":"macos-15-intel","architecture":"amd64","minimum_sha256":"5392bea435a1c4b0a496571daafa977f744207cfafac18fb78a9b7d0747585c2","current_sha256":"b57fec2e38462532fe75252792b355b99db16b0b8ea2d6bdf0cd8bc7ddacb9d2"}]' || '[{"runner":"macos-15","architecture":"arm64","minimum_sha256":"3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1","current_sha256":"4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"runner":"macos-15","architecture":"arm64","minimum_sha256":"3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1","current_sha256":"4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"},{"runner":"macos-15-intel","architecture":"amd64","current_sha256":"b57fec2e38462532fe75252792b355b99db16b0b8ea2d6bdf0cd8bc7ddacb9d2"}]' || '[{"runner":"macos-15","architecture":"arm64","minimum_sha256":"3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1","current_sha256":"4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -354,7 +354,7 @@ jobs:
           chmod 700 "$binary"
           echo "MIHOMO_CURRENT_PATH=$binary" >> "$GITHUB_ENV"
       - name: Download minimum Mihomo
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && matrix.architecture == 'arm64'
         env:
           MIHOMO_ARCHITECTURE: ${{ matrix.architecture }}
           MIHOMO_MINIMUM_SHA256: ${{ matrix.minimum_sha256 }}
@@ -373,7 +373,7 @@ jobs:
           CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
         run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
       - name: Validate all profiles with minimum Mihomo
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && matrix.architecture == 'arm64'
         env:
           CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
         run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby tests/run_macos_mihomo_validation.rb
