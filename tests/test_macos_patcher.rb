@@ -1897,6 +1897,63 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_generated_profile_passes_installed_mihomo_validation
+    core = ENV["CLAUDE_EASY_TEST_MIHOMO"]
+    if core.to_s.empty?
+      flunk "CI required a real Mihomo core but CLAUDE_EASY_TEST_MIHOMO was empty" if ENV["CLAUDE_EASY_REQUIRE_REAL_MIHOMO"] == "1"
+      skip "set CLAUDE_EASY_RUN_INSTALLED_CORE_TEST=1 to test the locally installed Mihomo core" unless ENV["CLAUDE_EASY_RUN_INSTALLED_CORE_TEST"] == "1"
+      core = ClaudeEasy.mihomo_core_path
+      skip "ClashX Meta Mihomo core is not installed" unless core
+    end
+    assert_equal :supported, ClaudeEasy.mihomo_core_status(core)
+
+    text = <<~YAML
+      mixed-port: 7890
+      proxies:
+        - name: node
+          type: socks5
+          server: 127.0.0.1
+          port: 1080
+          username: yes
+          password: on
+          udp: true
+      proxy-groups:
+        - name: Main
+          type: select
+          proxies: [node]
+      rules:
+        - MATCH,Main
+    YAML
+    validations = []
+    profiles_completed = []
+    Dir.mktmpdir do |directory|
+      [1, 2, 3].each do |usage_profile|
+        profile = File.join(directory, "profile-#{usage_profile}.yaml")
+        File.write(profile, text)
+        assert_equal true, ClaudeEasy.validate_with_mihomo(profile, core_path: core),
+                     "profile #{usage_profile} baseline fixture must be valid"
+        validations << { "profile" => usage_profile, "stage" => "baseline" }
+        validator = ->(path) { ClaudeEasy.validate_with_mihomo(path, core_path: core) }
+        result = ClaudeEasy.patch_path(
+          profile, @policy, validator: validator, usage_profile: usage_profile
+        )
+        assert_equal :updated, result.fetch(:status), "profile #{usage_profile}"
+        assert_equal true, ClaudeEasy.validate_with_mihomo(profile, core_path: core),
+                     "profile #{usage_profile} patch must stay valid"
+        validations << { "profile" => usage_profile, "stage" => "patched" }
+        profiles_completed << usage_profile
+      end
+    end
+    assert_equal [1, 2, 3], profiles_completed.sort
+    expected_validations = [1, 2, 3].flat_map do |usage_profile|
+      [
+        { "profile" => usage_profile, "stage" => "baseline" },
+        { "profile" => usage_profile, "stage" => "patched" }
+      ]
+    end
+    assert_equal expected_validations, validations
+  end
+
   def base_config
     {
       "proxies" => [

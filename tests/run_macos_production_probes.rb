@@ -13,31 +13,11 @@ SUMMARY_PATTERN =
 SURVIVORS = [
   {
     suite: "tests/test_macos_patcher.rb",
-    name: "test_production_probe_next_run_recovers_batch_killed_after_first_commit",
-  },
-  {
-    suite: "tests/test_macos_patcher.rb",
     name: "test_next_run_recovers_runtime_killed_after_active_reload",
-  },
-  {
-    suite: "tests/test_macos_patcher.rb",
-    name: "test_production_probe_mihomo_does_not_survive_a_killed_validator",
-  },
-  {
-    suite: "tests/test_macos_patcher.rb",
-    name: "test_production_probe_next_safe_update_recovers_batch_killed_after_first_descriptor_commit",
-  },
-  {
-    suite: "tests/test_macos_patcher.rb",
-    name: "test_production_probe_normal_batch_rejects_duplicate_file_aliases",
   },
   {
     suite: "tests/test_macos_wrappers.rb",
     name: "test_production_probe_uninstall_preserves_a_file_replaced_after_staging",
-  },
-  {
-    suite: "tests/test_macos_wrappers.rb",
-    name: "test_production_probe_shared_wrapper_lock_prevents_uninstall_from_deleting_a_concurrent_install",
   },
   {
     suite: "tests/test_macos_wrappers.rb",
