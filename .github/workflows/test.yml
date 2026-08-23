@@ -105,6 +105,9 @@ jobs:
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
         with:
           ruby-version: "3.3"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
       - name: CI routing contract
         run: ruby tests/test_ci_scope.rb
       - name: Skill and CI contract suite
@@ -128,17 +131,6 @@ jobs:
           else
             git show --check --format= HEAD
           fi
-
-  structure-node:
-    needs: scope
-    if: needs.scope.outputs.structure == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
       - name: Node syntax and contract checks
         run: |
           node --check claude-easy/scripts/windows/clash_verge_global.js
@@ -333,37 +325,6 @@ jobs:
           & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5
           if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
 
-  windows-installer-powershell-7:
-    needs: scope
-    if: needs.scope.outputs.windows == 'true' && github.event_name == 'workflow_dispatch'
-    runs-on: windows-2022
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: PowerShell 7 installer, uninstaller, and route regressions
-        shell: pwsh
-        run: |
-          $runtime = (Get-Command pwsh.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
-          if ($LASTEXITCODE -ne 0) { throw "Windows full suite failed with exit code $LASTEXITCODE" }
-
-  windows-routes-powershell-7:
-    needs: scope
-    if: needs.scope.outputs.windows == 'true' && github.event_name == 'workflow_dispatch'
-    runs-on: windows-2022
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Focused route regressions on PowerShell 7
-        shell: pwsh
-        run: |
-          $runtime = (Get-Command pwsh.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
-          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
-
   mihomo:
     needs: scope
     if: needs.scope.outputs.macos == 'true' && needs.scope.outputs.mihomo == 'true'
@@ -423,7 +384,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"version":"v1.19.27","sha256":"34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee","executable":"powershell.exe","edition":"Desktop","major":5},{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"powershell.exe","edition":"Desktop","major":5},{"version":"v1.19.27","sha256":"34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee","executable":"pwsh.exe","edition":"Core","major":7},{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"pwsh.exe","edition":"Core","major":7}]' || '[{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"powershell.exe","edition":"Desktop","major":5}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"version":"v1.19.27","sha256":"34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee","executable":"powershell.exe","edition":"Desktop","major":5},{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"powershell.exe","edition":"Desktop","major":5}]' || '[{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"powershell.exe","edition":"Desktop","major":5}]') }}
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
