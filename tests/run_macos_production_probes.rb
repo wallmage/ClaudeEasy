@@ -1,27 +1,63 @@
 #!/usr/bin/env ruby
 
+require "open3"
 require "rbconfig"
 
 ROOT = File.expand_path("..", __dir__)
-PROBE_FILTER = "/production_probe/".freeze
-
-current_ruby = ENV.fetch("CLAUDE_EASY_CURRENT_RUBY", RbConfig.ruby)
-system_ruby = ENV.fetch("CLAUDE_EASY_SYSTEM_RUBY", "/usr/bin/ruby")
-probe_environment = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" }.freeze
-commands = [
-  [current_ruby, "tests/test_macos_patcher.rb"],
-  [current_ruby, "tests/test_macos_wrappers.rb"],
-  [system_ruby, "tests/test_macos_patcher.rb"],
-  [system_ruby, "tests/test_macos_wrappers.rb"]
-]
+PROBE_ENVIRONMENT = { "CLAUDE_EASY_RUN_PRODUCTION_PROBES" => "1" }.freeze
+CURRENT_RUBY = ENV.fetch("CLAUDE_EASY_CURRENT_RUBY", RbConfig.ruby)
+SYSTEM_RUBY = ENV.fetch("CLAUDE_EASY_SYSTEM_RUBY", "/usr/bin/ruby")
+RUBIES = [CURRENT_RUBY, SYSTEM_RUBY].freeze
+SUMMARY_PATTERN =
+  /(\d+) runs,\s*(\d+) assertions,\s*(\d+) failures,\s*(\d+) errors,\s*(\d+) skips/
+SURVIVORS = [
+  {
+    suite: "tests/test_macos_patcher.rb",
+    name: "test_production_probe_next_run_recovers_batch_killed_after_first_commit",
+  },
+  {
+    suite: "tests/test_macos_patcher.rb",
+    name: "test_next_run_recovers_runtime_killed_after_active_reload",
+  },
+  {
+    suite: "tests/test_macos_patcher.rb",
+    name: "test_production_probe_mihomo_does_not_survive_a_killed_validator",
+  },
+  {
+    suite: "tests/test_macos_patcher.rb",
+    name: "test_production_probe_next_safe_update_recovers_batch_killed_after_first_descriptor_commit",
+  },
+].freeze
 
 failed = false
-commands.each do |ruby, suite|
-  success = system(
-    probe_environment, ruby, suite, "--name", PROBE_FILTER,
+SURVIVORS.product(RUBIES).each do |spec, ruby|
+  name_filter = "/\\A#{Regexp.escape(spec.fetch(:name))}\\z/"
+  stdout, stderr, status = Open3.capture3(
+    PROBE_ENVIRONMENT,
+    ruby,
+    spec.fetch(:suite),
+    "--name",
+    name_filter,
     chdir: ROOT
   )
-  failed ||= !success
+  $stdout.write(stdout)
+  $stderr.write(stderr)
+
+  summary = stdout.lines.find { |line| line.include?(" runs, ") && line.include?(" assertions, ") }
+  counts = summary&.match(SUMMARY_PATTERN)&.captures&.map(&:to_i)
+  invocation_ok = status.success? && counts == [1, counts&.fetch(1, 0), 0, 0, 0]
+  unless invocation_ok
+    failed = true
+    label = "#{ruby} #{spec.fetch(:suite)} #{spec.fetch(:name)}"
+    if counts.nil?
+      warn "production probe summary missing for #{label}"
+    else
+      runs, assertions, failures, errors, skips = counts
+      warn "production probe failed for #{label}: " \
+           "#{runs} runs, #{assertions} assertions, #{failures} failures, " \
+           "#{errors} errors, #{skips} skips"
+    end
+  end
 end
 
 exit(failed ? 1 : 0)

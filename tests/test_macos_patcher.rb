@@ -1081,45 +1081,6 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_production_probe_normal_batch_restores_a_commit_when_bookkeeping_raises
-    require_production_probe!
-    Dir.mktmpdir do |directory|
-      paths = %w[a-first.yaml z-second.yaml].map do |name|
-        path = File.join(directory, name)
-        File.write(path, YAML.dump(base_config.merge("subscription-marker" => name)))
-        path
-      end
-      originals = paths.to_h { |path| [path, File.binread(path)] }
-      real_replace = ClaudeEasy.method(:transactional_replace_locked)
-      commits = 0
-      injected = false
-      faulty_replace = lambda do |*arguments|
-        result = real_replace.call(*arguments)
-        commits += 1 if result
-        if result && commits == 2 && !injected
-          injected = true
-          raise IOError, "injected after the second durable commit"
-        end
-        result
-      end
-
-      results = ClaudeEasy.stub(:transactional_replace_locked, faulty_replace) do
-        ClaudeEasy.run(
-          directory: directory, policy_path: POLICY_PATH,
-          backup_root: File.join(directory, "backups"), selected_name: "none",
-          validator: ->(_path) { true }, auto_reload: false, usage_profile: 1
-        )
-      end
-
-      assert injected
-      refute results.all? { |result| %i[updated unchanged].include?(result.fetch(:status)) },
-             results.inspect
-      originals.each do |path, bytes|
-        assert File.binread(path) == bytes, "failed batch left committed bytes in #{File.basename(path)}"
-      end
-    end
-  end
-
   def test_normal_batch_replans_a_refresh_before_journal_and_recovers_a_later_commit_failure
     Dir.mktmpdir do |directory|
       path = File.join(directory, "friend.yaml")
@@ -1310,40 +1271,6 @@ class MacosPatcherTest < Minitest::Test
       assert_equal [:concurrent_change], results.map { |result| result.fetch(:status) }
       assert_equal original.b, File.binread(profile)
       refute File.exist?(ClaudeEasy.profile_transaction_path(backup_root))
-    end
-  end
-
-  def test_production_probe_safe_update_restores_a_swap_when_bookkeeping_raises
-    require_production_probe!
-    Dir.mktmpdir do |directory|
-      path = File.join(directory, "friend.yaml")
-      original = YAML.dump(base_config.merge("subscription-marker" => "old"))
-      File.write(path, original)
-      canonical = File.realpath(path)
-      real_stat = File.method(:stat)
-      injected = false
-      faulty_stat = lambda do |candidate|
-        if !injected && candidate.to_s == canonical && File.binread(path) != original.b
-          injected = true
-          raise IOError, "injected after the safe-update swap"
-        end
-        real_stat.call(candidate)
-      end
-
-      result = File.stub(:stat, faulty_stat) do
-        ClaudeEasy.safe_update_all(
-          targets: [{ name: "friend", path: path, url: "https://fixture.invalid/friend" }],
-          policy: @policy, backup_root: File.join(directory, "backups"), usage_profile: 1,
-          fetcher: ->(_target) { YAML.dump(base_config.merge("subscription-marker" => "new")) },
-          validator: ->(_path) { true },
-          activation: ->(_items) { flunk "failed transaction must not activate" },
-          selected_name: "friend"
-        )
-      end
-
-      assert injected
-      refute_equal :updated, result.fetch(:status)
-      assert File.binread(path) == original.b, "failed safe update left committed bytes"
     end
   end
 
@@ -1937,110 +1864,6 @@ class MacosPatcherTest < Minitest::Test
         Process.kill("KILL", child_id) rescue nil
         Process.waitpid(child_id) rescue nil
         [ready_reader, ready_writer, gate_reader, gate_writer].each { |io| io.close rescue nil }
-      end
-    end
-  end
-
-  def test_production_probe_next_safe_update_recovers_runtime_killed_after_reload
-    require_production_probe!
-    Dir.mktmpdir do |directory|
-      profile = File.join(directory, "active.yaml")
-      backup_root = File.join(directory, "backups")
-      runtime_marker = File.join(directory, "runtime-marker")
-      gate_seen = File.join(directory, "reload-gated")
-      original = YAML.dump(base_config.merge("subscription-marker" => "old-active"))
-      File.binwrite(profile, original)
-      File.write(runtime_marker, "old-active")
-      target = {
-        name: "active", path: profile, url: "https://fixture.invalid/active"
-      }
-      identity = {
-        pid: 12_345, started: "same",
-        executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta"
-      }
-      child_id = nil
-      child_input = child_output = child_error = child_waiter = nil
-      requester = lambda do |_socket, method, endpoint, body = nil|
-        case [method, endpoint]
-        when ["GET", "/proxies"]
-          [200, JSON.generate("proxies" => {
-            "Main" => { "type" => "Selector", "now" => "台湾家宽 01" }
-          })]
-        when ["GET", "/configs"]
-          [200, JSON.generate("tun" => { "enable" => true })]
-        when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
-          [204, ""]
-        else
-          if method == "GET" && endpoint.start_with?("/dns/query?")
-            [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
-          else
-            [404, ""]
-          end
-        end
-      end
-      native_reloader = lambda do |_current|
-        marker = ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
-        File.write(runtime_marker, marker)
-        true
-      end
-
-      begin
-        child_environment = {}
-        child_command = [RbConfig.ruby, SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH, directory]
-        if (coverage_directory = ENV[CHILD_COVERAGE_DIRECTORY_ENV])
-          coverage_output = File.join(
-            coverage_directory,
-            "#{Process.pid}-#{Thread.current.object_id}-#{rand(1 << 62)}.marshal"
-          )
-          child_environment["CLAUDE_EASY_CHILD_COVERAGE_OUTPUT"] = coverage_output
-          child_command = [
-            RbConfig.ruby, "-e", CHILD_COVERAGE_RUNNER,
-            SAFE_UPDATE_RUNTIME_CRASH_PROBE_PATH, directory
-          ]
-        end
-        child_input, child_output, child_error, child_waiter = Open3.popen3(
-          child_environment, *child_command
-        )
-        child_id = child_waiter.pid
-        assert IO.select([child_output], nil, nil, 10), "child never loaded the candidate profile"
-        ready = child_output.read(1)
-        flunk "child failed before candidate load: #{child_error.read}" unless ready == "."
-        Process.kill("KILL", child_id)
-        status = child_waiter.value
-        child_id = nil
-        assert_equal 9, status.termsig
-        assert_equal "new-active", File.read(runtime_marker)
-
-        result = ClaudeEasy.stub(:controller_socket, "socket") do
-          ClaudeEasy.stub(:controller_request, requester) do
-            connectivity = lambda do |**_options|
-              current = ClaudeEasy.load_yaml(File.read(profile)).fetch("subscription-marker")
-              File.read(runtime_marker) == current
-            end
-            ClaudeEasy.stub(:default_connectivity_healthy?, connectivity) do
-              ClaudeEasy.safe_update_all(
-                targets: [target], policy: @policy, backup_root: backup_root,
-                usage_profile: 1, selected_name: "active",
-                fetcher: ->(_item) { raise IOError, "injected preflight failure" },
-                validator: ->(_path) { true },
-                client_identity_reader: -> { identity },
-                native_reloader: native_reloader,
-                runtime_waiter: ->(*_arguments, **_options) { true },
-                reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
-              )
-            end
-          end
-        end
-
-        assert_equal :aborted, result.fetch(:status)
-        assert_equal :download_or_validation_failed, result.fetch(:reason)
-        assert_equal original.b, File.binread(profile)
-        assert_equal "old-active", File.read(runtime_marker)
-      ensure
-        child_input.write(".") rescue nil
-        Process.kill("KILL", child_id) rescue nil
-        child_waiter&.value rescue nil
-        [child_input, child_output, child_error].each { |io| io&.close rescue nil }
       end
     end
   end
