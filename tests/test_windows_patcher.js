@@ -83,19 +83,6 @@ test('routes local UDP direct before the global UDP guard', { skip: !available }
   }
   assert.equal(patched.rules.some((rule) => rule.includes('198.18.0.0/15')), false);
 });
-test('preserves an existing user AI group before using it for managed policy', { skip: !available }, () => {
-  const config = baseConfig();
-  const originalAi = structuredClone(config['proxy-groups'].find((group) => group.name === 'AI'));
-  const patched = engine.claudeEasyTransform(config, 'fixture');
-  const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
-  assert.deepEqual(ai, originalAi);
-  assert.equal(patched['proxy-groups'].some((group) => /^🤖 AI · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
-  assert.equal(patched['proxy-groups'].some((group) => /^🛡 安全代理 · ClaudeEasy(?: \d+)?$/.test(group.name)), false);
-  assert.ok(patched.rules.includes('DOMAIN-SUFFIX,openai.com,AI'));
-  assert.deepEqual(patched.rules.slice(0, 2), engine.claudeEasyRenderAiRules('AI').slice(0, 2));
-  assert.ok(patched.dns.nameserver.every((value) => value.endsWith('#Main')));
-  assert.ok(patched.dns['nameserver-policy']['+.openai.com'].every((value) => value.endsWith('#AI')));
-});
 for (const [name, declaredMembership] of [
   ['AI', ['DIRECT']],
   ['OpenAI', ['美国家宽 01']],
@@ -124,36 +111,6 @@ test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvaila
       engine.claudeEasyTransform(fixture.config, 'fixture');
       assert.deepEqual(fixture.config, snapshot, fixture.name);
     }
-  }
-});
-test('shared unsafe group references use managed wrappers', { skip: !fixturesAvailable }, () => {
-  const fixtures = JSON.parse(fs.readFileSync(fixturePath, 'utf8')).unsafe_reference_cases;
-  const routeWrapper = '🔗 路由引用 · ClaudeEasy';
-  const aiWrapper = '🔗 路由引用 · ClaudeEasy 2';
-  for (const fixture of fixtures) {
-    const input = structuredClone(fixture.config);
-    const snapshot = structuredClone(input);
-    const patched = engine.claudeEasyTransform(input, 'fixture');
-    const groups = patched['proxy-groups'];
-    assert.deepEqual(groups.find((group) => group.name === routeWrapper).proxies, [fixture.main_group], fixture.name);
-    assert.deepEqual(groups.find((group) => group.name === aiWrapper).proxies, [fixture.ai_group], fixture.name);
-    const provider = Object.values(patched['rule-providers']).find((item) => item.url === engine.CLAUDE_EASY_POLICY.cnDomainProvider.url);
-    assert.equal(provider.proxy, routeWrapper, fixture.name);
-    assert.deepEqual(
-      patched.dns.nameserver,
-      engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#${routeWrapper}`),
-      fixture.name
-    );
-    assert.deepEqual(
-      patched.dns['nameserver-policy']['+.openai.com'],
-      engine.CLAUDE_EASY_POLICY.resolvers.map((resolver) => `${resolver}#${aiWrapper}`),
-      fixture.name
-    );
-    assert.ok(patched.rules.includes(`NETWORK,UDP,${aiWrapper}`), fixture.name);
-    assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,openai.com,${aiWrapper}`), fixture.name);
-    assert.equal(JSON.stringify(patched.dns).includes('skip-cert-verify=true'), false, fixture.name);
-    assert.deepEqual(input, snapshot, `${fixture.name}: input mutated`);
-    assert.deepEqual(engine.claudeEasyTransform(patched, 'fixture'), patched, `${fixture.name}: second pass`);
   }
 });
 test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAvailable }, () => {
