@@ -3256,7 +3256,12 @@ rules:
         Assert-True (
             $timeoutVerifyJson.status -eq [string]$timeoutScenario.Status -and
             $timeoutVerifyJson.code -eq [string]$timeoutScenario.Code
-        ) "Windows did not report timeout rollback for $($timeoutScenario.Name) (status=$($timeoutVerifyJson.status), code=$($timeoutVerifyJson.code))"
+        ) (
+            "Windows did not report timeout rollback for $($timeoutScenario.Name) " +
+            "(status=$($timeoutVerifyJson.status), code=$($timeoutVerifyJson.code), " +
+            "summary=$($timeoutVerifyJson.summary_zh), " +
+            "messages=$(@($timeoutVerifyJson.messages) -join ';'))"
+        )
         Assert-True (
             (Get-Content -LiteralPath (Join-Path $timeoutSafeUpdateProfiles "R-first.yaml") -Raw) -eq
                 $firstSafeOriginal -and
