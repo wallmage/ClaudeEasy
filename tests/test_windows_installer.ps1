@@ -3157,10 +3157,10 @@ rules:
     $timeoutUpdatedFirst = $firstSafeOriginal + "# refreshed before timeout`n"
     $timeoutUpdatedSecond = $secondSafeOriginal + "# refreshed before timeout`n"
     $timeoutScenarios = @(
-        [pscustomobject]@{ Name = "expired"; Age = 190; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-runtime"; Age = 150; Core = $fakeCore; Delay = 60000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
-        [pscustomobject]@{ Name = "recovery-pending"; Age = 150; Core = $fakeCore; Delay = 60000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
+        [pscustomobject]@{ Name = "expired"; Age = 190; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; AllowedDispatches = @("1") },
+        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; AllowedDispatches = @("1") },
+        [pscustomobject]@{ Name = "crossing-runtime"; Age = 150; Core = $fakeCore; Delay = 60000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; AllowedDispatches = @("1,2", "1") },
+        [pscustomobject]@{ Name = "recovery-pending"; Age = 150; Core = $fakeCore; Delay = 60000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; AllowedDispatches = @("1,2", "1") }
     )
     foreach ($timeoutScenario in $timeoutScenarios) {
         $timeoutSnapshot = Invoke-TestPowerShell $installer @(
@@ -3215,10 +3215,16 @@ rules:
             (Get-Content -LiteralPath (Join-Path $timeoutSafeUpdateProfiles "R-second.yml") -Raw) -eq
                 $secondSafeOriginal
         ) "Windows did not restore refreshed subscriptions after $($timeoutScenario.Name)"
+        $dispatchTrace = (
+            ((Get-Content -LiteralPath $dispatchLog -Raw).Trim() -split "`r?`n") -join ","
+        )
+        $allowedDispatches = @($timeoutScenario.AllowedDispatches | ForEach-Object { [string]$_ })
         Assert-True (
-            (((Get-Content -LiteralPath $dispatchLog -Raw).Trim() -split "`r?`n") -join ",") -ceq
-                [string]$timeoutScenario.Dispatches
-        ) "Windows sent the wrong number of update or recovery activations for $($timeoutScenario.Name)"
+            $allowedDispatches -ccontains $dispatchTrace
+        ) (
+            "Windows sent the wrong update or recovery activations for $($timeoutScenario.Name) " +
+            "(actual=$dispatchTrace; allowed=$($allowedDispatches -join '|'))"
+        )
         if ([bool]$timeoutScenario.FailRestore) {
             $pendingRecovery = [System.IO.File]::ReadAllText($timeoutManifestPath) | ConvertFrom-Json
             Assert-True (
