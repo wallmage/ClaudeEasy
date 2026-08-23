@@ -352,9 +352,7 @@ if ($payload.RefreshStartedAgeSeconds -gt 0) {
         ('$1"' + $refreshStartedAt + '"'),
         1
     )
-    $manifestTempPath = $manifestPath + ".stamp.tmp"
-    [System.IO.File]::WriteAllText($manifestTempPath, $updatedManifestText)
-    [System.IO.File]::Replace($manifestTempPath, $manifestPath, $null)
+    [System.IO.File]::WriteAllText($manifestPath, $updatedManifestText)
 }
 $arguments = @{
     AppHome = [string]$payload.AppHome
