@@ -6,8 +6,8 @@ class CiScopeTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   CLASSIFIER = File.join(ROOT, "tests/ci_scope.rb")
   OUTPUTS = %w[
-    contract macos_routes macos_core macos_wrappers macos_probes macos_mutation macos_mihomo
-    windows_routes windows_engine windows_core windows_mutation windows_mihomo
+    contract macos_routes macos_core macos_wrappers macos_probes macos_mihomo
+    windows_routes windows_engine windows_core windows_mihomo
   ].freeze
 
   def selected_outputs(*paths)

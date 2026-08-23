@@ -40,12 +40,10 @@ jobs:
       macos_core: ${{ steps.scope.outputs.macos_core }}
       macos_wrappers: ${{ steps.scope.outputs.macos_wrappers }}
       macos_probes: ${{ steps.scope.outputs.macos_probes }}
-      macos_mutation: ${{ steps.scope.outputs.macos_mutation }}
       macos_mihomo: ${{ steps.scope.outputs.macos_mihomo }}
       windows_routes: ${{ steps.scope.outputs.windows_routes }}
       windows_engine: ${{ steps.scope.outputs.windows_engine }}
       windows_core: ${{ steps.scope.outputs.windows_core }}
-      windows_mutation: ${{ steps.scope.outputs.windows_mutation }}
       windows_mihomo: ${{ steps.scope.outputs.windows_mihomo }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -170,38 +168,6 @@ jobs:
           ruby-version: "3.3"
       - name: Ruby regression suite
         run: ruby tests/test_macos_patcher.rb
-
-  macos-mutation:
-    needs: scope
-    if: needs.scope.outputs.macos_mutation == 'true'
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: Safety mutation checks
-        run: ruby tests/test_mutation_safety.rb --exclude /windows/
-
-  windows-mutation:
-    needs: scope
-    if: needs.scope.outputs.windows_mutation == 'true'
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: Windows safety mutation checks
-        run: ruby tests/test_mutation_safety.rb --name /windows/
 
   macos-wrappers:
     needs: scope

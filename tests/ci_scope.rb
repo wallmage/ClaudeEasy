@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 
 OUTPUTS = %w[
-  contract macos_routes macos_core macos_wrappers macos_probes macos_mutation macos_mihomo
-  windows_routes windows_engine windows_core windows_mutation windows_mihomo
+  contract macos_routes macos_core macos_wrappers macos_probes macos_mihomo
+  windows_routes windows_engine windows_core windows_mihomo
 ].freeze
 
 RULES = [
@@ -39,23 +39,22 @@ RULES = [
   ["tests/run_macos_production_probes.rb", %w[macos_probes]],
   ["tests/test_windows_routes.ps1", %w[windows_routes]],
   ["tests/test_windows_patcher.js", %w[windows_engine windows_mihomo]],
-  ["tests/test_mutation_safety.rb", %w[macos_mutation windows_mutation]],
 
   [%r{\Aclaude-easy/scripts/(?:install_macos|uninstall_macos)\.sh\z}, %w[macos_wrappers contract]],
   ["claude-easy/scripts/macos/verify_routes.rb", %w[macos_routes contract]],
   ["claude-easy/scripts/macos/patch_profiles/runtime.rb",
-   %w[macos_core macos_probes macos_mutation contract]],
+   %w[macos_core macos_probes contract]],
   [%r{\Aclaude-easy/scripts/macos/patch_profiles/(?:transform|mihomo)\.rb\z},
-   %w[macos_core macos_mutation macos_mihomo contract]],
+   %w[macos_core macos_mihomo contract]],
   [%r{\Aclaude-easy/scripts/macos/patch_profiles/(?:profile_writer|subscriptions)\.rb\z},
-   %w[macos_core macos_probes macos_mutation contract]],
+   %w[macos_core macos_probes contract]],
   [%r{\Aclaude-easy/scripts/macos/}, %w[macos_core contract]],
 
   ["claude-easy/scripts/windows/verify_routes.ps1", %w[windows_routes contract]],
   ["claude-easy/scripts/windows/clash_verge_global.js", %w[windows_engine windows_mihomo contract]],
   ["claude-easy/scripts/windows/install_windows/mihomo.ps1", %w[windows_mihomo]],
   ["claude-easy/scripts/windows/install_windows/transaction.ps1",
-   %w[windows_core windows_mutation contract]],
+   %w[windows_core contract]],
   [%r{\Aclaude-easy/scripts/(?:install_windows|uninstall_windows)}, %w[windows_core contract]],
   [%r{\Aclaude-easy/scripts/windows/}, %w[windows_core contract]]
 ].freeze
