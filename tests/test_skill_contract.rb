@@ -538,35 +538,330 @@ class SkillContractTest < Minitest::Test
                     "$flowLines += @($lines[($groupsNode.Start + 1)..($groupsNode.End - 1)])"
   end
 
-  CLASH_CLIENT_NAME = /ClashX(?:\s+Meta)?|Clash\s+Verge(?:\s+Rev)?|clash-verge(?:-rev)?|\bverge\b/i
-  CLASH_KILL_PRIMITIVE = /(?:^|[;\s|&$(`=])(?:Stop-Process|taskkill|killall|pkill|\bkill\b|Process\.kill|\$process\.Kill\(\)|(?<![A-Za-z])\.Kill\(\)|osascript[^\n]*(?:quit|terminate))/i
-  PROCESS_LOOKUP = /(?:pgrep|pkill|Get-Process|\bps\b)/i
   FORBIDDEN_CLASH_EXIT_PROSE = ["请先从托盘菜单完全退出", "退出客户端，再"].freeze
-  FORBIDDEN_ANTHROPIC_HOST = /\A(?:[\w-]+\.)*(?:claude\.ai|anthropic\.com)\z/i
-  URL_AUTHORITY = %r{https?://[^\s"'<>]+}i
-  CLASHX_BINARY_PATH = %r{(?:/Applications/)?ClashX Meta\.app/Contents/MacOS/ClashX Meta}
+  FORBIDDEN_ANTHROPIC_DOMAINS = %w[claude.ai anthropic.com].freeze
+  CLASHX_APP_MARKER = /ClashX Meta\.app|com\.metacubex\.ClashX\.meta|\bClashX Meta\b/i
+  KILL_PRIMITIVE = %r{
+    (?:^|[;\s|&]|`\s*)
+    (?:
+      (?:\/[\w.\/-]+/)?(?:pkill|killall|kill|taskkill)\b
+      |Stop-Process\b
+      |Process\.kill\b
+      |(?<![A-Za-z_])\.\s*Kill\s*\(
+    )
+  }ix
+  EXEC_OPEN = %r{
+    (?:^|[;\s|&]|`\s*)
+    (?:\/[\w.\/-]+/)?open\b
+  }ix
+  EXEC_LAUNCH_SERVICES = %r{
+    (?:^|[;\s|&]|`\s*)
+    (?:
+      (?:\/[\w.\/-]+/)?launchctl\b
+      |LSOpen\w*
+    )
+  }ix
+  EXEC_RUBY_JS = %r{
+    \b(?:system|exec|spawn|popen)\b
+    |Open3\.(?:popen3|capture2|capture3|pipeline)
+    |%x
+  }ix
+  EXEC_PS = %r{
+    (?:
+      (?:^|[;|]|`\s+)&\s+(?![&])
+      |Start-Process\b
+    )
+  }ix
+  CLASH_CLIENT_NAME_MATCHERS = [
+    /\AClashX Meta\z/i,
+    /\AClashX\z/i,
+    /\AClash Verge(?: Rev)?\z/i,
+    /\Aclash-verge(?:-rev)?\z/i,
+    /\Averge\z/i,
+    /\Acom\.metacubex\.ClashX\.meta\z/i
+  ].freeze
 
   def production_script_paths
     Dir.glob(File.join(SKILL, "scripts/**/*.{rb,sh,ps1,psm1,cmd,js}")).select { |path| File.file?(path) }.sort
   end
 
-  def anthropic_uri_host(url)
+  def normalize_endpoint_source(source)
+    source.gsub("\\/", "/")
+  end
+
+  def extract_http_urls(source)
+    urls = []
+    normalized = normalize_endpoint_source(source)
+    normalized.lines.each_with_index do |line, index|
+      line.scan(%r{https?://}i) do
+        rest = line[$~.begin(0)..]
+        next unless rest =~ /\A(https?:\/\/[^\s"'<>]+)/i
+
+        url = Regexp.last_match(1).sub(/[;,)\]}]+$/, "")
+        urls << [url, index]
+      end
+    end
+    urls
+  end
+
+  def parse_uri_host(url)
     authority = url.sub(%r{\Ahttps?://}i, "").split(%r{[/\?#]}, 2).first.to_s
+    authority = authority.sub(/[;,)\]}]+$/, "")
+    authority = authority.split("@").last if authority.include?("@")
     authority = authority.delete_prefix("[").delete_suffix("]")
-    authority.split(":", 2).first.to_s
+    host = authority.split(":", 2).first.to_s
+    host[/\A[\w.-]+/].to_s
   end
 
   def forbidden_anthropic_host?(host)
-    host.match?(FORBIDDEN_ANTHROPIC_HOST)
+    return false if host.empty?
+
+    normalized = host.downcase
+    FORBIDDEN_ANTHROPIC_DOMAINS.any? do |domain|
+      normalized == domain || normalized.end_with?(".#{domain}")
+    end
   end
 
-  def static_routing_rule_line?(line)
-    line.match?(/DOMAIN-SUFFIX|DOMAIN,|RULE-SET|rule-providers/i)
+  def anthropic_network_violations(source)
+    violations = []
+    extract_http_urls(source).each do |url, index|
+      host = parse_uri_host(url)
+      next unless forbidden_anthropic_host?(host)
+
+      line = source.lines[index].strip
+      violations << "Claude/Anthropic network probe near line #{index + 1}: #{line}"
+    end
+    violations.uniq
   end
 
-  def passive_clashx_path_reference?(line)
-    line.match?(CLASHX_BINARY_PATH) &&
-      line.match?(/end_with\?|include\?|match\?|\.match\(|IndexOf|Contains|endsWith|-eq\s|\s==\s|\[\s*"?\$\w+"?\s+=\s/i)
+  def clashx_reference?(text)
+    text.match?(CLASHX_APP_MARKER)
+  end
+
+  def open_launch_clash?(line)
+    return false unless line.match?(EXEC_OPEN) && clashx_reference?(line)
+
+    line.match?(/(?:-a\s+["']?ClashX Meta|-b\s+com\.metacubex\.ClashX\.meta|ClashX Meta\.app)/i)
+  end
+
+  def launch_services_clash?(line)
+    line.match?(EXEC_LAUNCH_SERVICES) && clashx_reference?(line)
+  end
+
+  def direct_exec_clash?(line)
+    return false unless clashx_reference?(line)
+    return false if passive_clashx_reference_line?(line)
+
+    line.match?(%r{(?:^|[;|&]|`\s+)\s*(?:/\S+\s+)?["'](?:/Applications/)?ClashX Meta\.app(?:/Contents/MacOS/ClashX Meta)?["']}) ||
+      line.match?(%r{(?:^|[;|&]|`\s+)\s*(?:/[\w./ -]+/)?ClashX Meta\.app/Contents/MacOS/ClashX Meta\b}) ||
+      (line.match?(EXEC_PS) && line.match?(CLASHX_APP_MARKER))
+  end
+
+  def passive_clashx_reference_line?(line)
+    return false if line.match?(%r{(?:^|[;|&]|`\s+)\s*(?:/\S+\s+)?["'](?:/Applications/)?ClashX Meta\.app})
+
+    line.match?(/\.(?:end_with\?|include\?|match\?|start_with\?|delete_suffix)\s*\([^)]*ClashX Meta/) ||
+      line.match?(/\[\s*!?\s*-[\dfxe]\s+["'][^"']*ClashX Meta/) ||
+      line.match?(/\$\w+\s*=\s*["'][^"']*ClashX Meta/) ||
+      line.match?(/\b(?:expected|actual)\b.*ClashX Meta/i) ||
+      (line.match?(/\s==\s/) && line.match?(/ClashX Meta/)) ||
+      line.match?(/\[\s*["']?\$\w+["']?\s+=\s*["']?\$\w+["']?\s*\]/)
+  end
+
+  def ruby_js_exec_clash?(line)
+    return false unless clashx_reference?(line)
+    return true if line.match?(EXEC_RUBY_JS)
+    return true if line.match?(/`[^`\n]*ClashX Meta[^`\n]*`/)
+
+    false
+  end
+
+  def line_has_clash_launch_execution?(line)
+    open_launch_clash?(line) ||
+      launch_services_clash?(line) ||
+      direct_exec_clash?(line) ||
+      ruby_js_exec_clash?(line)
+  end
+
+  def applescript_clash_launch_violations(lines)
+    violations = []
+    lines.each_with_index do |line, index|
+      next unless line.match?(/tell\s+application(?:\s+id)?\s+["'](?:ClashX Meta|com\.metacubex\.ClashX\.meta)["']/i)
+
+      block_lines = [line]
+      if line.match?(/end\s+tell/i)
+        block = line
+      else
+        ((index + 1)...lines.length).each do |block_index|
+          block_lines << lines[block_index]
+          break if lines[block_index].match?(/end\s+tell/i)
+        end
+        block = block_lines.join("\n")
+      end
+      next unless block.match?(/\b(?:activate|run|launch|open|reopen|quit|terminate)\b/i)
+
+      violations << "AppleScript ClashX Meta activation or termination near line #{index + 1}"
+    end
+    violations
+  end
+
+  def jxa_clash_launch_violations(lines)
+    violations = []
+    lines.each_with_index do |line, index|
+      next unless line.match?(/Application\s*\(\s*["'](?:ClashX Meta|com\.metacubex\.ClashX\.meta)["']\s*\)/i)
+
+      window = lines[[index - 5, 0].max..[index + 5, lines.length - 1].min].join("\n")
+      next unless window.match?(/\.(?:activate|launch|run|open)\s*\(/i)
+
+      violations << "JXA ClashX Meta activation near line #{index + 1}"
+    end
+    violations
+  end
+
+  def clashx_meta_launch_violations(source)
+    lines = source.lines
+    violations = []
+    lines.each_with_index do |line, index|
+      next unless line_has_clash_launch_execution?(line)
+
+      violations << "ClashX Meta launch near line #{index + 1}: #{line.strip}"
+    end
+    violations.concat(applescript_clash_launch_violations(lines))
+    violations.concat(jxa_clash_launch_violations(lines))
+    violations.uniq
+  end
+
+  def classify_process_target(name)
+    normalized = name.to_s.strip.sub(/\.exe\z/i, "")
+    return :mihomo if normalized.match?(/\Amihomo\z/i)
+    return :clash if CLASH_CLIENT_NAME_MATCHERS.any? { |matcher| normalized.match?(matcher) }
+
+    :unknown
+  end
+
+  def strip_shell_arg(arg)
+    arg.to_s.strip.sub(/\A(['"])(.*)\1\z/, '\2')
+  end
+
+  def resolve_pgrep_target(arg, name_bindings)
+    stripped = strip_shell_arg(arg)
+    if stripped.match?(/\A\$[\w]+\z/)
+      var = stripped
+      name_bindings[var] || name_bindings[var.delete_prefix("$")] || :unknown
+    else
+      classify_process_target(stripped)
+    end
+  end
+
+  def each_script_statement(line)
+    line.split(";").map(&:strip).reject(&:empty?)
+  end
+
+  def build_process_target_maps(lines)
+    name_bindings = {}
+    pid_bindings = {}
+
+    lines.each do |line|
+      each_script_statement(line).each do |stmt|
+        stmt.scan(/(?:^|[\s])([A-Za-z_][\w]*)=(["'])(.*?)\2/) do |var, _, value|
+          name_bindings[var] = classify_process_target(value)
+        end
+
+        stmt.scan(/\$([A-Za-z_][\w]*)\s*=\s*["']([^"']*)["']/) do |var, value|
+          name_bindings["$#{var}"] = classify_process_target(value)
+        end
+
+        stmt.scan(/\b([A-Za-z_][\w]*)\s*=\s*["']([^"']*)["']/) do |var, value|
+          name_bindings[var] ||= classify_process_target(value)
+        end
+
+        stmt.scan(%r{([A-Za-z_][\w]*)=\$\((?:\/[\w.\/-]+/)?pgrep(?:\s+-f)?\s+([^)]+)\)}) do |var, arg|
+          pid_bindings[var] = resolve_pgrep_target(arg, name_bindings)
+        end
+
+        if stmt.match?(/Get-Process/i)
+          if stmt =~ /\$([A-Za-z_][\w]*)\s*=\s*Get-Process\s+\$([A-Za-z_][\w]*)/i
+            target = name_bindings["$#{$2}"] || name_bindings[$2]
+            pid_bindings["$#{$1}"] = target if target
+          elsif stmt =~ /\$([A-Za-z_][\w]*)\s*=\s*Get-Process\s+-\s*Name\s+\$([A-Za-z_][\w]*)/i
+            target = name_bindings["$#{$2}"] || name_bindings[$2]
+            pid_bindings["$#{$1}"] = target if target
+          elsif stmt =~ /\$([A-Za-z_][\w]*)\s*=\s*Get-Process\s+-\s*Name\s+["']([^"']+)["']/i
+            pid_bindings["$#{$1}"] = classify_process_target($2)
+          elsif stmt =~ /\$([A-Za-z_][\w]*)\s*=\s*Get-Process\s+["']([^"']+)["']/i
+            pid_bindings["$#{$1}"] = classify_process_target($2)
+          end
+        end
+      end
+    end
+
+    [name_bindings, pid_bindings]
+  end
+
+  def resolve_variable_target(token, name_bindings, pid_bindings)
+    normalized = token.to_s.strip.sub(/\A-/, "")
+    bare = normalized.delete_prefix("$")
+    if normalized.start_with?("$")
+      pid_bindings[normalized] ||
+        pid_bindings[bare] ||
+        name_bindings[normalized] ||
+        name_bindings[bare] ||
+        :unknown
+    else
+      pid_bindings[normalized] || name_bindings[normalized] || classify_process_target(normalized)
+    end
+  end
+
+  def resolve_kill_target(line, name_bindings, pid_bindings)
+    if line.match?(/Get-Process/i) && line.match?(/Stop-Process/i)
+      if line =~ /Get-Process\s+\$([A-Za-z_][\w]*)/i
+        target = name_bindings["$#{$1}"] || name_bindings[$1]
+        return target if target
+      end
+      return classify_process_target(Regexp.last_match(1)) if line =~ /Get-Process\s+["']([^"']+)["']/i
+    end
+
+    if line =~ /Stop-Process\s+-InputObject\s+\$([A-Za-z_][\w]*)/i
+      return pid_bindings["$#{$1}"] || :unknown
+    end
+
+    if line =~ /Stop-Process(?:\s+-\w+)*\s+-Name\s+(\$[A-Za-z_]\w*|"[^"]+"|'[^']+'|[^;\s|&]+)/i
+      return resolve_variable_target(strip_shell_arg(Regexp.last_match(1)), name_bindings, pid_bindings)
+    end
+
+    if line =~ /Stop-Process\s+(\$[A-Za-z_]\w*|"[^"]+"|'[^']+'|[A-Za-z][\w.-]*)/i
+      return resolve_variable_target(strip_shell_arg(Regexp.last_match(1)), name_bindings, pid_bindings)
+    end
+
+    if line =~ %r{(?:^|[;\s|&]|`\s*)(?:\/[\w.\/-]+/)?pkill(?:\s+-[\w]+)*\s+-f\s+("[^"]+"|'[^']+'|[^;\s|&]+)}i
+      target = strip_shell_arg(Regexp.last_match(1))
+      return :mihomo if target.match?(/mihomo/i)
+      return :clash if classify_process_target(target) == :clash || target.match?(/ClashX|Clash Verge|clash-verge|verge/i)
+
+      return :unknown
+    end
+
+    if line =~ %r{(?:^|[;\s|&]|`\s*)(?:\/[\w.\/-]+/)?(pkill|killall)(?:\s+-[\w]+)*\s+("[^"]+"|'[^']+'|[^;\s|&]+)}i
+      return classify_process_target(strip_shell_arg(Regexp.last_match(2)))
+    end
+
+    if line =~ %r{(?:^|[;\s|&]|`\s*)(?:\/[\w.\/-]+/)?taskkill(?:\s+\/\w+)*\s+\/(?:PID|IM)\s+([^;\s|&]+)}i
+      return resolve_variable_target(strip_shell_arg(Regexp.last_match(1)), name_bindings, pid_bindings)
+    end
+
+    if line =~ /Process\.kill\s*\(\s*[^,]+,\s*(-?\$?[A-Za-z_][\w]*)\s*\)/
+      return resolve_variable_target(Regexp.last_match(1), name_bindings, pid_bindings)
+    end
+
+    if line =~ /\$([A-Za-z_][\w]*)\.Kill\s*\(\s*\)/
+      return pid_bindings["$#{$1}"] || :unknown
+    end
+
+    if line =~ %r{(?:^|[;\s|&]|`\s*)(?:\/[\w.\/-]+/)?kill(?:\s+-[\w]+)*\s+(-?\$?[A-Za-z_][\w]*|"[^"]+"|'[^']+')}i
+      return resolve_variable_target(strip_shell_arg(Regexp.last_match(1)), name_bindings, pid_bindings)
+    end
+
+    :unknown
   end
 
   def clash_client_termination_violations(source)
@@ -574,79 +869,18 @@ class SkillContractTest < Minitest::Test
     FORBIDDEN_CLASH_EXIT_PROSE.each do |phrase|
       violations << "forbidden exit prose: #{phrase}" if source.include?(phrase)
     end
+
     lines = source.lines
+    name_bindings, pid_bindings = build_process_target_maps(lines)
     lines.each_with_index do |line, index|
-      next unless line.match?(CLASH_KILL_PRIMITIVE)
+      each_script_statement(line).each do |stmt|
+        next unless stmt.match?(KILL_PRIMITIVE)
 
-      window_lines = lines[[index - 5, 0].max..[index + 5, lines.length - 1].min]
-      clash_context = window_lines.any? do |window_line|
-        window_line.match?(CLASH_CLIENT_NAME) &&
-          (window_line.match?(PROCESS_LOOKUP) || window_line.match?(CLASH_KILL_PRIMITIVE))
+        target = resolve_kill_target(stmt, name_bindings, pid_bindings)
+        next unless target == :clash
+
+        violations << "Clash-client termination near line #{index + 1}: #{stmt}"
       end
-      next unless clash_context
-
-      violations << "Clash-client termination near line #{index + 1}: #{line.strip}"
-    end
-    violations
-  end
-
-  def anthropic_network_violations(source)
-    violations = []
-    source.lines.each_with_index do |line, index|
-      next if static_routing_rule_line?(line)
-
-      line.scan(URL_AUTHORITY).each do |url|
-        next unless forbidden_anthropic_host?(anthropic_uri_host(url))
-
-        violations << "Claude/Anthropic network probe near line #{index + 1}: #{line.strip}"
-        break
-      end
-    end
-    violations
-  end
-
-  def clashx_meta_launch_violations(source)
-    violations = []
-    if source.match?(/\bopen\s+-a\s+["']?ClashX\s+Meta/i)
-      violations << "open -a ClashX Meta"
-    end
-    if source.match?(/system\s*\([^)]*["']open["'][^)]*ClashX\s+Meta/i)
-      violations << 'system("open", "-a", "ClashX Meta")'
-    end
-    source.lines.each_with_index do |line, index|
-      if line.match?(/LaunchServices/i) && line.match?(/ClashX\s+Meta/i)
-        violations << "LaunchServices ClashX Meta launch near line #{index + 1}"
-      end
-      if line.match?(/osascript[^\n]*tell\s+application\s+["']ClashX Meta["'][^\n]*(?:activate|run|launch|open|reopen)/i)
-        violations << "AppleScript ClashX Meta activation near line #{index + 1}"
-      end
-      next if passive_clashx_path_reference?(line)
-
-      if line.match?(CLASHX_BINARY_PATH)
-        violations << "direct ClashX Meta execution near line #{index + 1}: #{line.strip}"
-      end
-    end
-    source.lines.each_with_index do |line, index|
-      next unless line.match?(/tell\s+application\s+["']ClashX Meta["']/i)
-
-      block_lines = [line]
-      ((index + 1)...source.lines.length).each do |block_index|
-        block_lines << source.lines[block_index]
-        break if source.lines[block_index].match?(/end\s+tell/i)
-      end
-      block = block_lines.join
-      next unless block.match?(/\b(?:activate|run|launch|open|reopen)\b/i)
-
-      violations << "AppleScript ClashX Meta activation near line #{index + 1}"
-    end
-    lines = source.lines
-    lines.each_with_index do |line, index|
-      next unless line.match?(/Application\s*\(\s*["']ClashX Meta["']\s*\)/)
-
-      window = lines[[index - 5, 0].max..[index + 5, lines.length - 1].min].join
-      next unless window.match?(/\.(?:activate|launch|run)\s*\(/i)
-
-      violations << "JXA ClashX Meta activation near line #{index + 1}"
     end
     violations
   end
