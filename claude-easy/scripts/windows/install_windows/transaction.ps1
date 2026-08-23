@@ -284,6 +284,10 @@ function Backup-InitialOnce(
         -UseSourceBytes:$UseSourceBytes)
 }
 
+function ConvertTo-Utf8Bytes([string]$Content) {
+    return (New-Object System.Text.UTF8Encoding($false)).GetBytes($Content)
+}
+
 function Get-BytesSha256([byte[]]$Bytes) {
     # PowerShell binds an empty byte array as $null; empty input must still hash.
     if ($null -eq $Bytes) { $Bytes = [byte[]]@() }
