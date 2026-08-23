@@ -1,0 +1,17 @@
+{
+  "proxies": [
+
+  ],
+  "proxy-groups": [
+    {
+      "name": "Main",
+      "type": "select",
+      "proxies": [
+        "unresolved-node"
+      ]
+    }
+  ],
+  "rules": [
+    "MATCH,Main"
+  ]
+}

@@ -1,0 +1,357 @@
+{
+  "proxies": [
+    {
+      "name": "node-a",
+      "type": "ss",
+      "server": "node-a.example"
+    }
+  ],
+  "proxy-groups": [
+    {
+      "name": "Main",
+      "type": "select",
+      "proxies": [
+        "node-a"
+      ]
+    },
+    {
+      "name": "AI",
+      "type": "select",
+      "proxies": [
+        "node-a"
+      ],
+      "icon": "keep-me"
+    }
+  ],
+  "rules": [
+    "DOMAIN-SUFFIX,anthropic.com,AI",
+    "DOMAIN-SUFFIX,claude.ai,AI",
+    "DOMAIN-SUFFIX,claude.com,AI",
+    "DOMAIN-SUFFIX,claude.site,AI",
+    "DOMAIN-SUFFIX,claudeusercontent.com,AI",
+    "DOMAIN-SUFFIX,claudemcpclient.com,AI",
+    "DOMAIN-SUFFIX,claudemcpcontent.com,AI",
+    "DOMAIN,servd-anthropic-website.b-cdn.net,AI",
+    "DOMAIN-SUFFIX,openai.com,AI",
+    "DOMAIN-SUFFIX,chatgpt.com,AI",
+    "DOMAIN-SUFFIX,chatgpt.livekit.cloud,AI",
+    "DOMAIN-SUFFIX,oaistatic.com,AI",
+    "DOMAIN-SUFFIX,oaiusercontent.com,AI",
+    "DOMAIN-SUFFIX,oaistatsig.com,AI",
+    "DOMAIN-SUFFIX,cdn.openaimerge.com,AI",
+    "DOMAIN,openai-api.arkoselabs.com,AI",
+    "DOMAIN,chat.openai.com.cdn.cloudflare.net,AI",
+    "DOMAIN,openaiapi-site.azureedge.net,AI",
+    "DOMAIN,openaicom.imgix.net,AI",
+    "DOMAIN,openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net,AI",
+    "DOMAIN,openaicomproductionae4b.blob.core.windows.net,AI",
+    "DOMAIN,production-openaicom-storage.azureedge.net,AI",
+    "DOMAIN,ai.google.dev,AI",
+    "DOMAIN-SUFFIX,aistudio.google.com,AI",
+    "DOMAIN-SUFFIX,gemini.google.com,AI",
+    "DOMAIN-SUFFIX,gemini.google,AI",
+    "DOMAIN-SUFFIX,gemini.gstatic.com,AI",
+    "DOMAIN-SUFFIX,bard.google.com,AI",
+    "DOMAIN-SUFFIX,makersuite.google.com,AI",
+    "DOMAIN,alkalimakersuite-pa.clients6.google.com,AI",
+    "DOMAIN,webchannel-alkalimakersuite-pa.clients6.google.com,AI",
+    "DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI",
+    "DOMAIN,aiplatform.googleapis.com,AI",
+    "DOMAIN-SUFFIX,generativeai.google,AI",
+    "DOMAIN-KEYWORD,openai,AI",
+    "IP-CIDR,160.79.104.0/23,AI,no-resolve",
+    "IP-CIDR6,2607:6bc0::/48,AI,no-resolve",
+    "DOMAIN-SUFFIX,anthropic.com,REJECT",
+    "DOMAIN-SUFFIX,claude.ai,REJECT",
+    "DOMAIN-SUFFIX,claude.com,REJECT",
+    "DOMAIN-SUFFIX,claude.site,REJECT",
+    "DOMAIN-SUFFIX,claudeusercontent.com,REJECT",
+    "DOMAIN-SUFFIX,claudemcpclient.com,REJECT",
+    "DOMAIN-SUFFIX,claudemcpcontent.com,REJECT",
+    "DOMAIN,servd-anthropic-website.b-cdn.net,REJECT",
+    "DOMAIN-SUFFIX,openai.com,REJECT",
+    "DOMAIN-SUFFIX,chatgpt.com,REJECT",
+    "DOMAIN-SUFFIX,chatgpt.livekit.cloud,REJECT",
+    "DOMAIN-SUFFIX,oaistatic.com,REJECT",
+    "DOMAIN-SUFFIX,oaiusercontent.com,REJECT",
+    "DOMAIN-SUFFIX,oaistatsig.com,REJECT",
+    "DOMAIN-SUFFIX,cdn.openaimerge.com,REJECT",
+    "DOMAIN,openai-api.arkoselabs.com,REJECT",
+    "DOMAIN,chat.openai.com.cdn.cloudflare.net,REJECT",
+    "DOMAIN,openaiapi-site.azureedge.net,REJECT",
+    "DOMAIN,openaicom.imgix.net,REJECT",
+    "DOMAIN,openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net,REJECT",
+    "DOMAIN,openaicomproductionae4b.blob.core.windows.net,REJECT",
+    "DOMAIN,production-openaicom-storage.azureedge.net,REJECT",
+    "DOMAIN,ai.google.dev,REJECT",
+    "DOMAIN-SUFFIX,aistudio.google.com,REJECT",
+    "DOMAIN-SUFFIX,gemini.google.com,REJECT",
+    "DOMAIN-SUFFIX,gemini.google,REJECT",
+    "DOMAIN-SUFFIX,gemini.gstatic.com,REJECT",
+    "DOMAIN-SUFFIX,bard.google.com,REJECT",
+    "DOMAIN-SUFFIX,makersuite.google.com,REJECT",
+    "DOMAIN,alkalimakersuite-pa.clients6.google.com,REJECT",
+    "DOMAIN,webchannel-alkalimakersuite-pa.clients6.google.com,REJECT",
+    "DOMAIN-SUFFIX,generativelanguage.googleapis.com,REJECT",
+    "DOMAIN,aiplatform.googleapis.com,REJECT",
+    "DOMAIN-SUFFIX,generativeai.google,REJECT",
+    "DOMAIN-KEYWORD,openai,REJECT",
+    "IP-CIDR,160.79.104.0/23,REJECT,no-resolve",
+    "IP-CIDR6,2607:6bc0::/48,REJECT,no-resolve",
+    "AND,((NETWORK,UDP),(IP-CIDR,10.0.0.0/8,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,100.64.0.0/10,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,127.0.0.0/8,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,169.254.0.0/16,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,172.16.0.0/12,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,192.168.0.0/16,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,224.0.0.0/4,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR,255.255.255.255/32,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,::1/128,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,fc00::/7,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,fe80::/10,no-resolve)),DIRECT",
+    "AND,((NETWORK,UDP),(IP-CIDR6,ff00::/8,no-resolve)),DIRECT",
+    "RULE-SET,claude-easy-cn-domain,DIRECT",
+    "AND,((NETWORK,UDP),(RULE-SET,claude-easy-cn-ip)),DIRECT",
+    "NETWORK,UDP,AI",
+    "NETWORK,UDP,REJECT",
+    "MATCH,Main"
+  ],
+  "profile": {
+    "store-selected": true
+  },
+  "rule-providers": {
+    "claude-easy-cn-domain": {
+      "type": "http",
+      "behavior": "domain",
+      "format": "mrs",
+      "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs",
+      "path": "./ruleset/claude-easy-cn-domain.mrs",
+      "interval": 86400,
+      "proxy": "Main",
+      "size-limit": 2097152
+    },
+    "claude-easy-cn-ip": {
+      "type": "http",
+      "behavior": "ipcidr",
+      "format": "mrs",
+      "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs",
+      "path": "./ruleset/claude-easy-cn-ip.mrs",
+      "interval": 86400,
+      "proxy": "Main",
+      "size-limit": 2097152
+    }
+  },
+  "dns": {
+    "enable": true,
+    "respect-rules": true,
+    "proxy-server-nameserver": [
+      "https://223.5.5.5/dns-query#DIRECT",
+      "https://1.12.12.12/dns-query#DIRECT"
+    ],
+    "nameserver": [
+      "https://94.140.14.140/dns-query#Main",
+      "https://94.140.14.141/dns-query#Main",
+      "https://101.101.101.101/dns-query#Main"
+    ],
+    "direct-nameserver": [
+      "https://223.5.5.5/dns-query#DIRECT",
+      "https://1.12.12.12/dns-query#DIRECT"
+    ],
+    "direct-nameserver-follow-policy": false,
+    "nameserver-policy": {
+      "geosite:cn": [
+        "https://223.5.5.5/dns-query#DIRECT",
+        "https://1.12.12.12/dns-query#DIRECT"
+      ],
+      "rule-set:claude-easy-cn-domain": [
+        "https://223.5.5.5/dns-query#DIRECT",
+        "https://1.12.12.12/dns-query#DIRECT"
+      ],
+      "+.anthropic.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.claude.ai": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.claude.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.claude.site": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.claudeusercontent.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.claudemcpclient.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.claudemcpcontent.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "servd-anthropic-website.b-cdn.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.openai.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.chatgpt.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.chatgpt.livekit.cloud": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.oaistatic.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.oaiusercontent.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.oaistatsig.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.cdn.openaimerge.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "openai-api.arkoselabs.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "chat.openai.com.cdn.cloudflare.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "openaiapi-site.azureedge.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "openaicom.imgix.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "openaicomproductionae4b.blob.core.windows.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "production-openaicom-storage.azureedge.net": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "ai.google.dev": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.aistudio.google.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.gemini.google.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.gemini.google": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.gemini.gstatic.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.bard.google.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.makersuite.google.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "alkalimakersuite-pa.clients6.google.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "webchannel-alkalimakersuite-pa.clients6.google.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.generativelanguage.googleapis.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "aiplatform.googleapis.com": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ],
+      "+.generativeai.google": [
+        "https://94.140.14.140/dns-query#AI",
+        "https://94.140.14.141/dns-query#AI",
+        "https://101.101.101.101/dns-query#AI"
+      ]
+    },
+    "ipv6": false,
+    "use-hosts": true,
+    "use-system-hosts": true
+  },
+  "ipv6": false,
+  "tun": {
+    "enable": true,
+    "stack": "system",
+    "dns-hijack": [
+      "any:53",
+      "tcp://any:53"
+    ],
+    "auto-route": true,
+    "auto-detect-interface": true,
+    "strict-route": true
+  }
+}

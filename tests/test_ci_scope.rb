@@ -47,6 +47,13 @@ class CiScopeTest < Minitest::Test
     assert_does_not_select "tests/fixtures/main_group_cases.json", outputs: %w[windows_core]
   end
 
+  def test_transform_expected_includes_cross_platform_outputs
+    assert_selects "tests/fixtures/transform_expected/reuse-existing-ai-group.json",
+                   outputs: %w[contract macos_core windows_engine macos_mihomo windows_mihomo]
+    assert_does_not_select "tests/fixtures/transform_expected/reuse-existing-ai-group.json",
+                           outputs: %w[windows_core]
+  end
+
   def test_mihomo_ps1_includes_windows_core_and_contract
     assert_selects "claude-easy/scripts/windows/install_windows/mihomo.ps1",
                    outputs: %w[windows_core windows_mihomo contract]

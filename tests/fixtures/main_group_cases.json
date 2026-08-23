@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "comment": "Shared macOS/Windows conformance cases. transform_cases lock the reviewed full output with expected_config_sha256, then require both engines to produce the same configuration without mutating the input; all Mihomo proxy-group types are valid route-group candidates, dynamic sources are recognized, and groups without a real proxy source are rejected.",
+  "comment": "Shared macOS/Windows conformance cases. transform_cases lock the reviewed full output in tests/fixtures/transform_expected/, then require both engines to produce the same configuration without mutating the input; all Mihomo proxy-group types are valid route-group candidates, dynamic sources are recognized, and groups without a real proxy source are rejected.",
   "cases": [
     {
       "name": "match-target-wins",
@@ -508,7 +508,6 @@
   "transform_cases": [
     {
       "name": "automatic-main-group-receives-full-patch",
-      "expected_config_sha256": "1d0290d38f249d92bdaceaa5a27e8b5b8ac99c9133f1404ea1574fb4b2f72c79",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -527,7 +526,6 @@
     },
     {
       "name": "reuse-existing-ai-group",
-      "expected_config_sha256": "956017294a2113243861ccaf30d6464ed31673031bbe3facd22aa6c5c85feca2",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -543,7 +541,6 @@
     },
     {
       "name": "create-independent-ai-from-provider",
-      "expected_config_sha256": "e57cfcb488ec5744ef6d0f5b905239c78fda1b570b580781aaaaec69bb9974e1",
       "input": {
         "proxy-providers": {
           "provider-a": { "type": "http", "url": "https://fixture.invalid/sub", "interval": 3600 }
@@ -560,7 +557,6 @@
     },
     {
       "name": "normalize-dns-and-managed-rule-whitespace",
-      "expected_config_sha256": "132e09dfd7a76832dc84743c14631e52ee0d0b42898f14a03537efa598710c52",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -586,7 +582,6 @@
     },
     {
       "name": "normalize-owned-managed-groups",
-      "expected_config_sha256": "da457884d1c48bd204d2154a6ecb3c26f8e1575b05fb98c650adf75d7d9eab8c",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -632,7 +627,6 @@
     },
     {
       "name": "reuse-owned-cn-provider",
-      "expected_config_sha256": "f870869beabf367e641255c5465167c306809da04f89c9465a57301a131109a3",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -671,7 +665,6 @@
     },
     {
       "name": "ai-only-main-receives-full-patch",
-      "expected_config_sha256": "42909233734fc020576ea47e5cb8cedc63a50870980fb5fd36c71682b11c62b0",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -691,7 +684,6 @@
     },
     {
       "name": "owned-safe-group-remains-when-it-is-the-only-main",
-      "expected_config_sha256": "351b90aea4d68f4e9931f2c779bb9423847d979296ecb123b06a64f7eced9ab1",
       "input": {
         "proxies": [{ "name": "node-a", "type": "ss", "server": "node-a.example" }],
         "proxy-groups": [
@@ -727,7 +719,6 @@
     },
     {
       "name": "no-ai-sources-stays-unchanged",
-      "expected_config_sha256": "38309b94746aef44c537c0a0f0eb05ff40235d725ad63f31b0a6247ae42119e0",
       "input": {
         "proxies": [],
         "proxy-groups": [
@@ -743,7 +734,6 @@
     },
     {
       "name": "invalid-array-input-stays-unchanged",
-      "expected_config_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "input": [],
       "expected_changed": false,
       "expected_main_group": null,

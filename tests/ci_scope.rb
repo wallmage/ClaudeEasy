@@ -13,6 +13,9 @@ RULES = [
   ["tests/fixtures/main_group_cases.json",
    %w[contract macos_core windows_engine macos_mihomo windows_mihomo]],
 
+  [%r{\Atests/fixtures/transform_expected/},
+   %w[contract macos_core windows_engine macos_mihomo windows_mihomo]],
+
   ["claude-easy/references/policy.json",
    %w[contract macos_core macos_mihomo windows_engine windows_core windows_mihomo]],
   ["claude-easy/references/result-contract.json", %w[contract macos_core windows_core]],

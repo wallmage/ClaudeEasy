@@ -1033,9 +1033,10 @@ test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAv
     }
     assert.equal(aiGroup, fixture.expected_ai_group, fixture.name);
     assert.deepEqual(input, snapshot, `${fixture.name}: input mutated`);
+    const expectedPath = path.join(root, 'tests/fixtures/transform_expected', `${fixture.name}.json`);
+    const expected = JSON.parse(fs.readFileSync(expectedPath, 'utf8'));
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(patched)), expected, `${fixture.name}: output drift`);
     const serialized = JSON.stringify(patched);
-    const expectedDigest = fixture.expected_windows_config_sha256 || fixture.expected_config_sha256;
-    assert.equal(crypto.createHash('sha256').update(serialized).digest('hex'), expectedDigest, `${fixture.name}: output drift`);
     for (const value of fixture.expected_absent_strings || []) {
       assert.equal(serialized.includes(value), false, `${fixture.name}: retained ${value}`);
     }

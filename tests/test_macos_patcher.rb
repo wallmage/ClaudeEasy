@@ -7854,8 +7854,11 @@ class MacosPatcherTest < Minitest::Test
         assert_equal(expected_ai, result.fetch(:ai_group), fixture.fetch("name"))
       assert_equal fixture.fetch("expected_status").to_sym, result.fetch(:status), fixture.fetch("name")
       assert_equal snapshot, input, "#{fixture.fetch('name')}: input mutated"
+      expected_path = File.join(ROOT, "tests/fixtures/transform_expected/#{fixture.fetch('name')}.json")
+      expected = JSON.parse(File.read(expected_path))
+      actual = JSON.parse(JSON.generate(result.fetch(:config)))
+      assert_equal expected, actual, "#{fixture.fetch('name')}: output drift"
       serialized = JSON.generate(result.fetch(:config))
-      assert_equal fixture.fetch("expected_config_sha256"), Digest::SHA256.hexdigest(serialized), "#{fixture.fetch('name')}: output drift"
       Array(fixture["expected_absent_strings"]).each do |value|
         refute_includes serialized, value, "#{fixture.fetch('name')}: retained #{value}"
       end
@@ -7888,13 +7891,11 @@ class MacosPatcherTest < Minitest::Test
 
     fixtures.each_with_index do |fixture, index|
       ruby = ClaudeEasy.patch(fixture.fetch("input"), @policy).fetch(:config)
-      if fixture.key?("expected_windows_config_sha256")
-        refute_equal ruby, windows.fetch(index), "#{fixture.fetch('name')}: platform-specific security policy"
-      else
-        assert_equal ruby, windows.fetch(index), fixture.fetch("name")
-      end
-      expected_digest = fixture.fetch("expected_windows_config_sha256", fixture.fetch("expected_config_sha256"))
-      assert_equal expected_digest, Digest::SHA256.hexdigest(JSON.generate(windows.fetch(index))), "#{fixture.fetch('name')}: Windows output drift"
+      assert_equal ruby, windows.fetch(index), fixture.fetch("name")
+      expected_path = File.join(ROOT, "tests/fixtures/transform_expected/#{fixture.fetch('name')}.json")
+      expected = JSON.parse(File.read(expected_path))
+      actual = JSON.parse(JSON.generate(windows.fetch(index)))
+      assert_equal expected, actual, "#{fixture.fetch('name')}: Windows output drift"
     end
   end
 
