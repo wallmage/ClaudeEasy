@@ -2898,6 +2898,40 @@ rules:
         Assert-True $caseAliasRejected "case-alias remote subscriptions were allowed to share one file"
     }
     if ($onWindows) {
+        $fakeCurlDirectory = Join-Path $sandbox "fake-curl"
+        New-Item -ItemType Directory -Path $fakeCurlDirectory -Force | Out-Null
+        $fakeCurlPath = Join-Path $fakeCurlDirectory "curl.exe"
+        $fakeCurlSource = @'
+using System;
+public static class FakeCurl {
+    public static int Main(string[] args) {
+        if (Environment.GetEnvironmentVariable("CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS") == "1") {
+            return 0;
+        }
+        return 22;
+    }
+}
+'@
+        $fakeCurlSourcePath = Join-Path $fakeCurlDirectory "FakeCurl.cs"
+        [System.IO.File]::WriteAllText(
+            $fakeCurlSourcePath,
+            $fakeCurlSource,
+            (New-Object System.Text.UTF8Encoding($false))
+        )
+        $compilerCandidates = @(
+            (Join-Path $env:WINDIR "Microsoft.NET/Framework64/v4.0.30319/csc.exe"),
+            (Join-Path $env:WINDIR "Microsoft.NET/Framework/v4.0.30319/csc.exe")
+        )
+        $csharpCompiler = $compilerCandidates |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($csharpCompiler)) {
+            throw "Windows C# compiler was not found"
+        }
+        & $csharpCompiler /nologo /target:exe "/out:$fakeCurlPath" $fakeCurlSourcePath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $fakeCurlPath -PathType Leaf)) {
+            throw "failed to compile fake curl.exe"
+        }
         $safeUpdateControllerReady = Join-Path $sandbox "safe-update-controller-ready"
         $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
         $portProbe.Start()
@@ -3116,16 +3150,16 @@ rules:
     $slowCore = Join-Path $sandbox "mihomo-slow.cmd"
     [System.IO.File]::WriteAllText(
         $slowCore,
-        "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nping 127.0.0.1 -n 5 >nul`r`nexit /b 0`r`n",
+        "@echo off`r`nif `"%1`"==`"-v`" (`r`n  echo Mihomo Meta v1.19.27 windows amd64`r`n  exit /b 0`r`n)`r`nping 127.0.0.1 -n 120 >nul`r`nexit /b 0`r`n",
         [System.Text.Encoding]::ASCII
     )
     $timeoutUpdatedFirst = $firstSafeOriginal + "# refreshed before timeout`n"
     $timeoutUpdatedSecond = $secondSafeOriginal + "# refreshed before timeout`n"
     $timeoutScenarios = @(
         [pscustomobject]@{ Name = "expired"; Age = 190; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 175; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-runtime"; Age = 150; Core = $fakeCore; Delay = 30000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
-        [pscustomobject]@{ Name = "recovery-pending"; Age = 150; Core = $fakeCore; Delay = 30000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
+        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
+        [pscustomobject]@{ Name = "crossing-runtime"; Age = 178; Core = $fakeCore; Delay = 60000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
+        [pscustomobject]@{ Name = "recovery-pending"; Age = 178; Core = $fakeCore; Delay = 60000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
     )
     foreach ($timeoutScenario in $timeoutScenarios) {
         $timeoutSnapshot = Invoke-TestPowerShell $installer @(
