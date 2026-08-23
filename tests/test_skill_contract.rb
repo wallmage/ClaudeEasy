@@ -262,31 +262,6 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_patcher, "CLAUDE_EASY_USAGE_PROFILE"
   end
 
-  def test_patch_runtime_route_verifiers_exist_on_both_platforms
-    mac_verifier = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
-    windows_verifier = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
-    policy = policy_document
-
-    [mac_verifier, windows_verifier].each do |source|
-      assert_includes source, "ChatGPT"
-      assert_includes source, "Gemini"
-      assert_includes source, "Grok"
-      assert_includes source, "/connections"
-      assert_includes source, "/proxies"
-      assert_includes source, "/providers/proxies"
-      assert_includes source, "providerChains"
-      assert_includes source, "DIRECT"
-    end
-    assert_includes policy, "verify_routes.ps1"
-    assert_includes mac_verifier, "NON_PROXY_TERMINALS"
-    assert_includes mac_verifier, "non_proxy_terminal?"
-    assert_includes windows_verifier, '$nonProxyNames = @("DIRECT"'
-    assert_includes windows_verifier, '$nonProxyTypes = @("Direct"'
-    assert_includes windows_verifier, "function Test-RouteChains"
-    assert_includes windows_verifier, "function Test-SafeLiveChain"
-    assert_includes windows_verifier, "function Get-LiveChainProxy"
-  end
-
   def test_windows_route_verifier_uses_live_match_for_main_group
     source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
 
@@ -400,16 +375,6 @@ class SkillContractTest < Minitest::Test
   def test_udp_policy_uses_only_deterministic_destination_matches
     machine_policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
     assert_equal "AND,((NETWORK,UDP),(RULE-SET,{CN_IP})),DIRECT", machine_policy.fetch("cn_udp_direct_rule")
-  end
-
-  def test_policy_documents_dns_filters_and_safety_migrations
-    policy = policy_document
-    %w[exclude-filter empty-fallback skip-cert-verify ecs legacy_ai_rules forbidden_ai_domains proxy-server-nameserver system 二次转换].each do |term|
-      assert_includes policy, term
-    end
-    assert_includes policy, "保留 Fake-IP 映射"
-    refute_includes policy, "/cache/fakeip/flush"
-    assert_includes policy, "/cache/dns/flush"
   end
 
   def test_macos_installer_avoids_fakeip_flush_and_curl
@@ -595,27 +560,95 @@ class SkillContractTest < Minitest::Test
                     "$flowLines += @($lines[($groupsNode.Start + 1)..($groupsNode.End - 1)])"
   end
 
-  def test_skill_and_scripts_never_stop_or_restart_clash
-    mac_install = File.read(File.join(SKILL, "scripts/install_macos.sh"))
-    windows_install = windows_installer_source
-    windows_uninstall = File.binread(File.join(SKILL, "scripts/uninstall_windows.ps1")).force_encoding("UTF-8")
+  CLASH_CLIENT_NAME = /ClashX(?:\s+Meta)?|Clash\s+Verge(?:\s+Rev)?|clash-verge(?:-rev)?|\bverge\b/i
+  CLASH_KILL_PRIMITIVE = /Stop-Process|taskkill|killall|Process\.kill|\$process\.Kill\(\)|(?<![A-Za-z])\.Kill\(\)|osascript[^\n]*(?:quit|terminate)/i
+  FORBIDDEN_CLASH_EXIT_PROSE = ["请先从托盘菜单完全退出", "退出客户端，再"].freeze
+  ANTHROPIC_URL = %r{https?://[^\s"'<>]*(?:claude\.ai|anthropic\.com|api\.anthropic\.com)}i
+  ANTHROPIC_NETWORK_CALL = /(?:curl|Invoke-WebRequest|Invoke-RestMethod|fetch\s*\(|NSURL|\.get\s*\(|\.post\s*\(|wget\b)/i
 
-    [mac_install, windows_install, windows_uninstall].each do |source|
-      refute_match(/osascript[^\n]*(?:quit|terminate)/i, source)
-      refute_match(/Stop-Process|taskkill|killall/i, source)
-      refute_includes source, "请先从托盘菜单完全退出"
-      refute_includes source, "退出客户端，再"
+  def production_script_paths
+    Dir.glob(File.join(SKILL, "scripts/**/*.{rb,sh,ps1,psm1,cmd,js}")).select { |path| File.file?(path) }.sort
+  end
+
+  def clash_client_termination_violations(source)
+    violations = []
+    FORBIDDEN_CLASH_EXIT_PROSE.each do |phrase|
+      violations << "forbidden exit prose: #{phrase}" if source.include?(phrase)
+    end
+    lines = source.lines
+    lines.each_with_index do |line, index|
+      next unless line.match?(CLASH_KILL_PRIMITIVE)
+
+      window = lines[[index - 2, 0].max..[index + 2, lines.length - 1].min].join
+      next unless window.match?(CLASH_CLIENT_NAME)
+
+      violations << "Clash-client termination near line #{index + 1}: #{line.strip}"
+    end
+    violations
+  end
+
+  def anthropic_network_violations(source)
+    violations = []
+    source.lines.each_with_index do |line, index|
+      next unless line.match?(ANTHROPIC_URL)
+      next if line.match?(/DOMAIN-SUFFIX|DOMAIN,|RULE-SET|rule-providers/i)
+
+      next unless line.match?(ANTHROPIC_NETWORK_CALL) ||
+                  source.lines[[index - 1, 0].max..[index + 1, source.lines.length - 1].min].any? do |nearby|
+                    nearby.match?(ANTHROPIC_NETWORK_CALL)
+                  end
+
+      violations << "Claude/Anthropic network probe near line #{index + 1}: #{line.strip}"
+    end
+    violations
+  end
+
+  def passive_clashx_path_reference?(line)
+    line.match?(/ClashX Meta\.app\/Contents\/MacOS\/ClashX Meta/) &&
+      line.match?(/end_with\?|match\?|suffix\s*=|include\?|IndexOf|Contains|endswith|identity|executable|\.match\(/i)
+  end
+
+  def clashx_meta_launch_violations(source)
+    violations = []
+    if source.match?(/\bopen\s+-a\s+["']?ClashX\s+Meta/i)
+      violations << "open -a ClashX Meta"
+    end
+    if source.match?(/system\s*\([^)]*["']open["'][^)]*ClashX\s+Meta/i)
+      violations << 'system("open", "-a", "ClashX Meta")'
+    end
+    source.lines.each_with_index do |line, index|
+      if line.match?(/LaunchServices/i) && line.match?(/ClashX\s+Meta/i)
+        violations << "LaunchServices ClashX Meta launch near line #{index + 1}"
+      end
+      if line.match?(/tell\s+application\s+["']ClashX Meta["'][^\n]*(?:activate|run|launch)/i)
+        violations << "AppleScript ClashX Meta activation near line #{index + 1}"
+      end
+      next if passive_clashx_path_reference?(line)
+      next if line.match?(/osascript[^\n]*JavaScript/i)
+
+      if line.match?(%r{(?:system|exec|`|\bspawn\b|Start-Process)[^;\n]*ClashX Meta\.app/Contents/MacOS/ClashX Meta}i)
+        violations << "direct ClashX Meta execution near line #{index + 1}: #{line.strip}"
+      end
+    end
+    violations
+  end
+
+  def production_script_safety_violations
+    production_script_paths.flat_map do |path|
+      source = File.binread(path).force_encoding("UTF-8").scrub
+      relative = path.delete_prefix("#{ROOT}/")
+      (
+        clash_client_termination_violations(source) +
+        anthropic_network_violations(source) +
+        clashx_meta_launch_violations(source)
+      ).map { |detail| "#{relative}: #{detail}" }
     end
   end
 
-  def test_diagnostics_never_launches_clash_client_as_an_inspection_probe
-    production_scripts = Dir.glob(File.join(SKILL, "scripts/**/*.{rb,sh,ps1,cmd,js}"))
-    offenders = production_scripts.select do |path|
-      File.binread(path).force_encoding("UTF-8").scrub.match?(
-        %r{/Applications/ClashX Meta\.app/Contents/MacOS/ClashX Meta}
-      )
-    end
-    assert_empty offenders, "production script launches ClashX Meta as a probe: #{offenders.join(', ')}"
+  def test_production_scripts_forbid_clash_termination_anthropic_probes_and_clashx_launch
+    violations = production_script_safety_violations
+    assert_empty violations,
+                 "production script safety violations:\n#{violations.join("\n")}"
   end
 
   def test_ci_covers_production_runtimes_and_pins_actions

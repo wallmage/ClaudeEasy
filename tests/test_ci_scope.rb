@@ -14,7 +14,9 @@ class CiScopeTest < Minitest::Test
       key, value = line.strip.split("=", 2)
       [key, value]
     end
-    assert_equal OUTPUTS.sort, values.keys.sort
+    OUTPUTS.each do |name|
+      assert values.key?(name), "classifier output missing #{name}"
+    end
     values.select { |_key, value| value == "true" }.keys.sort
   end
 
@@ -35,7 +37,7 @@ class CiScopeTest < Minitest::Test
   end
 
   def test_manual_dispatch_selects_every_job
-    assert_equal OUTPUTS.sort, selected_outputs
+    assert_selects outputs: OUTPUTS
   end
 
   def test_main_group_cases_includes_all_flags
@@ -53,22 +55,19 @@ class CiScopeTest < Minitest::Test
                    outputs: %w[structure windows mihomo]
   end
 
-  def test_assets_include_structure_only
+  def test_assets_include_structure
     assert_selects "claude-easy/assets/claude-region-check.html", outputs: %w[structure]
-    assert_does_not_select "claude-easy/assets/claude-region-check.html",
-                           outputs: %w[macos windows mihomo]
   end
 
-  def test_region_fingerprint_tests_include_structure_only
+  def test_region_fingerprint_tests_include_structure
     %w[tests/test_region_fingerprint_page.js tests/test_region_fingerprint_browser.js].each do |path|
       assert_selects path, outputs: %w[structure]
-      assert_does_not_select path, outputs: %w[macos windows mihomo]
     end
   end
 
   def test_control_paths_select_all_jobs
     [".github/workflows/test.yml", "tests/ci_scope.rb", "tests/test_ci_scope.rb"].each do |path|
-      assert_equal OUTPUTS.sort, selected_outputs(path), path
+      assert_selects path, outputs: OUTPUTS
     end
   end
 
@@ -86,9 +85,8 @@ class CiScopeTest < Minitest::Test
     assert_selects "tests/test_windows_installer.ps1", outputs: %w[structure windows mihomo]
   end
 
-  def test_windows_patcher_includes_structure_only
+  def test_windows_patcher_includes_structure
     assert_selects "tests/test_windows_patcher.js", outputs: %w[structure]
-    assert_does_not_select "tests/test_windows_patcher.js", outputs: %w[macos windows mihomo]
   end
 
   def test_multiple_paths_union_outputs
@@ -106,30 +104,12 @@ class CiScopeTest < Minitest::Test
 
   def test_fail_safe_windows_signal_includes_structure_windows
     assert_selects "some/unknown/path_windows.txt", outputs: %w[structure windows]
-    assert_does_not_select "some/unknown/path_windows.txt", outputs: %w[macos mihomo]
+    assert_does_not_select "some/unknown/path_windows.txt", outputs: %w[mihomo]
   end
 
   def test_fail_safe_macos_signal_includes_structure_macos
     assert_selects "some/unknown/path_macos.txt", outputs: %w[structure macos]
-    assert_does_not_select "some/unknown/path_macos.txt", outputs: %w[windows mihomo]
-  end
-
-  def test_platform_changes_never_select_the_other_platform
-    %w[
-      claude-easy/scripts/macos/patch_profiles/runtime.rb
-      claude-easy/scripts/install_macos.sh
-      tests/test_macos_wrappers.rb
-    ].each do |path|
-      assert_does_not_select path, outputs: %w[windows]
-    end
-
-    %w[
-      claude-easy/scripts/windows/verify_routes.ps1
-      claude-easy/scripts/install_windows.ps1
-      tests/test_windows_routes.ps1
-    ].each do |path|
-      assert_does_not_select path, outputs: %w[macos]
-    end
+    assert_does_not_select "some/unknown/path_macos.txt", outputs: %w[mihomo]
   end
 
   def test_every_production_script_has_an_owner

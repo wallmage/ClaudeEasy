@@ -187,6 +187,8 @@ jobs:
               fi
               if [[ "$path" =~ ^claude-easy/scripts/macos/patch_profiles/(profile_writer|subscriptions|runtime)\.rb$ ]] || \
                  [[ "$path" == "tests/run_macos_production_probes.rb" ]] || \
+                 [[ "$path" == "tests/test_macos_patcher.rb" ]] || \
+                 [[ "$path" == "tests/test_macos_wrappers.rb" ]] || \
                  [[ "$path" =~ ^tests/support/ ]] || \
                  [[ "$path" =~ ^tests/fixtures/macos ]]; then
                 run_probes=true

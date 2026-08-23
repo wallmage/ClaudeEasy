@@ -47,6 +47,7 @@ description: Use when an agent needs to diagnose slow, intermittent, unavailable
 
 ```bash
 bash scripts/install_macos.sh --profile N
+bash scripts/install_macos.sh --show-profile
 bash scripts/uninstall_macos.sh
 ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json
 ruby scripts/macos/verify_routes.rb
@@ -56,6 +57,7 @@ ruby scripts/macos/verify_routes.rb
 
 ```powershell
 .\scripts\install_windows.cmd -UsageProfile N
+.\scripts\install_windows.cmd -ShowUsageProfile
 .\scripts\uninstall_windows.cmd
 powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1
 ```
