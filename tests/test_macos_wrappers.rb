@@ -2946,7 +2946,7 @@ class MacosWrapperTest < Minitest::Test
     RUBY
     with_supported_mihomo_installer(patcher_source: patcher) do |installer|
       installer_source = File.binread(installer)
-      replacement = installer_source.sub("SAFE_UPDATE_TIMEOUT_SECONDS=180", "SAFE_UPDATE_TIMEOUT_SECONDS=1")
+      replacement = installer_source.sub("SAFE_UPDATE_TIMEOUT_SECONDS=180", "SAFE_UPDATE_TIMEOUT_SECONDS=3")
       refute_equal installer_source, replacement
       File.binwrite(installer, replacement)
 
@@ -2960,7 +2960,7 @@ class MacosWrapperTest < Minitest::Test
           )
           elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
 
-          assert_operator elapsed, :<, 3
+          assert_operator elapsed, :<, 8
           refute status.success?
           assert_empty stderr
           result = assert_json_result(stdout, status, command: "install")

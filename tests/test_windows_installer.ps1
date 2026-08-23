@@ -4288,10 +4288,10 @@ rules:
     $timeoutUpdatedFirst = $firstSafeOriginal + "# refreshed before timeout`n"
     $timeoutUpdatedSecond = $secondSafeOriginal + "# refreshed before timeout`n"
     $timeoutScenarios = @(
-        [pscustomobject]@{ Name = "expired"; Age = 181; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
-        [pscustomobject]@{ Name = "crossing-runtime"; Age = 160; Core = $fakeCore; Delay = 25000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
-        [pscustomobject]@{ Name = "recovery-pending"; Age = 160; Core = $fakeCore; Delay = 25000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
+        [pscustomobject]@{ Name = "expired"; Age = 190; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
+        [pscustomobject]@{ Name = "crossing-mihomo"; Age = 175; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1" },
+        [pscustomobject]@{ Name = "crossing-runtime"; Age = 150; Core = $fakeCore; Delay = 30000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; Dispatches = "1,2" },
+        [pscustomobject]@{ Name = "recovery-pending"; Age = 150; Core = $fakeCore; Delay = 30000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; Dispatches = "1,2" }
     )
     foreach ($timeoutScenario in $timeoutScenarios) {
         $timeoutSnapshot = Invoke-TestPowerShell $installer @(
@@ -4339,7 +4339,7 @@ rules:
         Assert-True (
             $timeoutVerifyJson.status -eq [string]$timeoutScenario.Status -and
             $timeoutVerifyJson.code -eq [string]$timeoutScenario.Code
-        ) "Windows did not report timeout rollback for $($timeoutScenario.Name)"
+        ) "Windows did not report timeout rollback for $($timeoutScenario.Name) (status=$($timeoutVerifyJson.status), code=$($timeoutVerifyJson.code))"
         Assert-True (
             (Get-Content -LiteralPath (Join-Path $timeoutSafeUpdateProfiles "R-first.yaml") -Raw) -eq
                 $firstSafeOriginal -and
