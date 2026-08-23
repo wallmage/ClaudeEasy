@@ -35,6 +35,7 @@ $installWrapper = Join-Path (Join-Path $root "claude-easy/scripts") "install_win
 $uninstallWrapper = Join-Path (Join-Path $root "claude-easy/scripts") "uninstall_windows.cmd"
 $routeVerifier = Join-Path (Join-Path $root "claude-easy/scripts/windows") "verify_routes.ps1"
 $resultContract = Join-Path (Join-Path $root "claude-easy/scripts/windows") "result_contract.ps1"
+. $resultContract
 $installerModuleRoot = Join-Path (Join-Path $root "claude-easy/scripts/windows") "install_windows"
 $installerModules = @(
     "common.ps1", "yaml.ps1", "profiles.ps1", "mihomo.ps1",
