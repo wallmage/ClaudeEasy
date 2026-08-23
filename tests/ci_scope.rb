@@ -1,62 +1,48 @@
 #!/usr/bin/env ruby
 
-OUTPUTS = %w[
-  contract macos_routes macos_core macos_wrappers macos_probes macos_mihomo
-  windows_routes windows_engine windows_core windows_mihomo
-].freeze
+OUTPUTS = %w[structure macos windows mihomo].freeze
 
 RULES = [
   [%r{\A\.github/workflows/}, OUTPUTS],
   ["tests/ci_scope.rb", OUTPUTS],
   ["tests/test_ci_scope.rb", OUTPUTS],
 
-  ["tests/fixtures/main_group_cases.json",
-   %w[contract macos_core windows_engine macos_mihomo windows_mihomo]],
+  ["tests/fixtures/main_group_cases.json", %w[structure macos windows mihomo]],
+  [%r{\Atests/fixtures/transform_expected/}, %w[structure macos windows mihomo]],
 
-  [%r{\Atests/fixtures/transform_expected/},
-   %w[contract macos_core windows_engine macos_mihomo windows_mihomo]],
+  ["claude-easy/references/policy.json", %w[structure macos windows mihomo]],
+  ["claude-easy/references/result-contract.json", %w[structure macos windows]],
 
-  ["claude-easy/references/policy.json",
-   %w[contract macos_core macos_mihomo windows_engine windows_core windows_mihomo]],
-  ["claude-easy/references/result-contract.json", %w[contract macos_core windows_core]],
+  [%r{\Aclaude-easy/assets/}, %w[structure]],
+  [%r{\Aclaude-easy/(?:SKILL\.md|agents/|references/.*\.md\z)}, %w[structure]],
+  ["package.json", %w[structure]],
+  ["package-lock.json", %w[structure]],
+  ["tests/test_skill_contract.rb", %w[structure]],
+  ["tests/test_region_fingerprint_page.js", %w[structure]],
+  ["tests/test_region_fingerprint_browser.js", %w[structure]],
+  ["tests/generate_windows_policy.rb", %w[structure]],
 
-  [%r{\Aclaude-easy/assets/}, %w[contract]],
+  ["tests/test_macos_patcher.rb", %w[structure macos mihomo]],
+  ["tests/test_windows_installer.ps1", %w[structure windows mihomo]],
 
-  [%r{\Aclaude-easy/(?:SKILL\.md|agents/|references/.*\.md\z)}, %w[contract]],
-  ["package.json", %w[contract]],
-  ["package-lock.json", %w[contract]],
-  ["tests/test_skill_contract.rb", %w[contract]],
-  ["tests/test_region_fingerprint_page.js", %w[contract]],
-  ["tests/test_region_fingerprint_browser.js", %w[contract]],
-  ["tests/generate_windows_policy.rb", %w[contract]],
+  ["tests/test_macos_wrappers.rb", %w[structure macos]],
+  ["tests/run_macos_mihomo_validation.rb", %w[structure macos mihomo]],
+  [%r{\Atests/(?:fixtures/macos|support/)}, %w[structure macos]],
+  ["tests/run_macos_production_probes.rb", %w[structure macos]],
 
-  ["tests/test_macos_patcher.rb", %w[macos_core]],
-  ["tests/test_windows_installer.ps1", %w[windows_core]],
+  ["tests/test_windows_routes.ps1", %w[structure windows]],
+  ["tests/test_windows_patcher.js", %w[structure]],
 
-  ["tests/test_macos_wrappers.rb", %w[macos_wrappers]],
-  ["tests/run_macos_mihomo_validation.rb", %w[macos_mihomo]],
-  [%r{\Atests/(?:fixtures/macos|support/macos)}, %w[macos_probes]],
-  ["tests/run_macos_production_probes.rb", %w[macos_probes]],
-  ["tests/test_windows_routes.ps1", %w[windows_routes]],
-  ["tests/test_windows_patcher.js", %w[windows_engine windows_mihomo]],
-
-  [%r{\Aclaude-easy/scripts/(?:install_macos|uninstall_macos)\.sh\z}, %w[macos_wrappers contract]],
-  ["claude-easy/scripts/macos/verify_routes.rb", %w[macos_routes contract]],
-  ["claude-easy/scripts/macos/patch_profiles/runtime.rb",
-   %w[macos_core macos_probes contract]],
+  [%r{\Aclaude-easy/scripts/(?:install_macos|uninstall_macos)\.sh\z}, %w[structure macos]],
+  ["claude-easy/scripts/macos/verify_routes.rb", %w[structure macos]],
   [%r{\Aclaude-easy/scripts/macos/patch_profiles/(?:transform|mihomo)\.rb\z},
-   %w[macos_core macos_mihomo contract]],
-  [%r{\Aclaude-easy/scripts/macos/patch_profiles/(?:profile_writer|subscriptions)\.rb\z},
-   %w[macos_core macos_probes contract]],
-  [%r{\Aclaude-easy/scripts/macos/}, %w[macos_core contract]],
+   %w[structure macos mihomo]],
+  [%r{\Aclaude-easy/scripts/macos/}, %w[structure macos]],
 
-  ["claude-easy/scripts/windows/verify_routes.ps1", %w[windows_routes contract]],
-  ["claude-easy/scripts/windows/clash_verge_global.js", %w[windows_engine windows_mihomo contract]],
-  ["claude-easy/scripts/windows/install_windows/mihomo.ps1", %w[windows_mihomo]],
-  ["claude-easy/scripts/windows/install_windows/transaction.ps1",
-   %w[windows_core contract]],
-  [%r{\Aclaude-easy/scripts/(?:install_windows|uninstall_windows)}, %w[windows_core contract]],
-  [%r{\Aclaude-easy/scripts/windows/}, %w[windows_core contract]]
+  ["claude-easy/scripts/windows/clash_verge_global.js", %w[structure windows mihomo]],
+  ["claude-easy/scripts/windows/install_windows/mihomo.ps1", %w[structure windows mihomo]],
+  [%r{\Aclaude-easy/scripts/(?:install_windows|uninstall_windows)}, %w[structure windows]],
+  [%r{\Aclaude-easy/scripts/windows/}, %w[structure windows]]
 ].freeze
 
 def path_matches?(matcher, path)
@@ -80,14 +66,14 @@ def outputs_for_path(path)
   end
 
   unless matched
-    selected["contract"] = true
+    selected["structure"] = true
     if path.include?("macos")
-      selected["macos_core"] = true
+      selected["macos"] = true
     elsif path.include?("windows")
-      selected["windows_core"] = true
+      selected["windows"] = true
     else
-      selected["macos_core"] = true
-      selected["windows_core"] = true
+      selected["macos"] = true
+      selected["windows"] = true
     end
   end
 

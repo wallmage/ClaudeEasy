@@ -35,16 +35,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       base: ${{ steps.scope.outputs.base }}
-      contract: ${{ steps.scope.outputs.contract }}
-      macos_routes: ${{ steps.scope.outputs.macos_routes }}
-      macos_core: ${{ steps.scope.outputs.macos_core }}
-      macos_wrappers: ${{ steps.scope.outputs.macos_wrappers }}
-      macos_probes: ${{ steps.scope.outputs.macos_probes }}
-      macos_mihomo: ${{ steps.scope.outputs.macos_mihomo }}
-      windows_routes: ${{ steps.scope.outputs.windows_routes }}
-      windows_engine: ${{ steps.scope.outputs.windows_engine }}
-      windows_core: ${{ steps.scope.outputs.windows_core }}
-      windows_mihomo: ${{ steps.scope.outputs.windows_mihomo }}
+      structure: ${{ steps.scope.outputs.structure }}
+      macos: ${{ steps.scope.outputs.macos }}
+      windows: ${{ steps.scope.outputs.windows }}
+      mihomo: ${{ steps.scope.outputs.mihomo }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -99,9 +93,9 @@ jobs:
           done < <(git diff --no-renames --name-only -z "$base_sha" "$GITHUB_SHA")
           ruby tests/ci_scope.rb "${paths[@]}" >> "$GITHUB_OUTPUT"
 
-  contract:
+  structure:
     needs: scope
-    if: needs.scope.outputs.contract == 'true'
+    if: needs.scope.outputs.structure == 'true'
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -111,15 +105,10 @@ jobs:
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
         with:
           ruby-version: "3.3"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
       - name: CI routing contract
         run: ruby tests/test_ci_scope.rb
       - name: Skill and CI contract suite
         run: ruby tests/test_skill_contract.rb
-      - name: Region fingerprint page contract
-        run: node --test tests/test_region_fingerprint_page.js
       - name: Generated policy parity
         run: ruby tests/generate_windows_policy.rb --check
       - name: Syntax checks
@@ -127,7 +116,6 @@ jobs:
           ruby -c claude-easy/scripts/macos/patch_profiles.rb
           ruby -c claude-easy/scripts/macos/verify_routes.rb
           ruby -c tests/ci_scope.rb
-          node --check claude-easy/scripts/windows/clash_verge_global.js
           sh -n claude-easy/scripts/install_macos.sh
           sh -n claude-easy/scripts/uninstall_macos.sh
       - name: Source tree whitespace checks
@@ -141,158 +129,9 @@ jobs:
             git show --check --format= HEAD
           fi
 
-  macos-routes:
+  structure-node:
     needs: scope
-    if: needs.scope.outputs.macos_routes == 'true'
-    runs-on: macos-15
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - name: Focused route regressions
-        run: |
-          ruby tests/test_macos_patcher.rb --name '/route_verifier|route_observation/'
-          /usr/bin/ruby tests/test_macos_patcher.rb --name '/route_verifier|route_observation/'
-
-  macos-core:
-    needs: scope
-    if: needs.scope.outputs.macos_core == 'true'
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - name: Ruby regression suite
-        run: ruby tests/test_macos_patcher.rb
-
-  macos-wrappers:
-    needs: scope
-    if: needs.scope.outputs.macos_wrappers == 'true'
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - name: Ruby 3.3 command wrapper behavior
-        run: ruby tests/test_macos_wrappers.rb
-
-  macos-production-runtime:
-    needs: scope
-    if: needs.scope.outputs.macos_core == 'true'
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: Ruby regressions on the production runtime
-        run: /usr/bin/ruby tests/test_macos_patcher.rb
-
-  macos-production-probes:
-    needs: scope
-    if: needs.scope.outputs.macos_probes == 'true'
-    runs-on: macos-15
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - name: Fault-inject production commit, kill, alias, process, and uninstall boundaries
-        run: ruby tests/run_macos_production_probes.rb
-
-  mihomo:
-    needs: scope
-    if: needs.scope.outputs.macos_mihomo == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            architecture: arm64
-            minimum_sha256: "3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1"
-            current_sha256: "4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"
-          - runner: macos-15-intel
-            architecture: amd64
-            minimum_sha256: "5392bea435a1c4b0a496571daafa977f744207cfafac18fb78a9b7d0747585c2"
-            current_sha256: "b57fec2e38462532fe75252792b355b99db16b0b8ea2d6bdf0cd8bc7ddacb9d2"
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
-        with:
-          ruby-version: "3.3"
-      - name: Download and verify pinned Mihomo versions
-        env:
-          MIHOMO_ARCHITECTURE: ${{ matrix.architecture }}
-          MIHOMO_MINIMUM_SHA256: ${{ matrix.minimum_sha256 }}
-          MIHOMO_CURRENT_SHA256: ${{ matrix.current_sha256 }}
-        run: |
-          for entry in \
-            "v1.19.27:$MIHOMO_MINIMUM_SHA256:MINIMUM" \
-            "v1.19.29:$MIHOMO_CURRENT_SHA256:CURRENT"
-          do
-            IFS=: read -r version expected label <<EOF
-          $entry
-          EOF
-            archive="$RUNNER_TEMP/mihomo-$label.gz"
-            binary="$RUNNER_TEMP/mihomo-$label"
-            curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 300 \
-              --output "$archive" \
-              "https://github.com/MetaCubeX/mihomo/releases/download/$version/mihomo-darwin-$MIHOMO_ARCHITECTURE-$version.gz"
-            echo "$expected  $archive" | shasum -a 256 --check
-            gzip --decompress --stdout "$archive" > "$binary"
-            chmod 700 "$binary"
-            echo "MIHOMO_${label}_PATH=$binary" >> "$GITHUB_ENV"
-          done
-      - name: Validate all profiles with minimum Mihomo
-        env:
-          CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
-        run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby tests/run_macos_mihomo_validation.rb
-      - name: Validate all profiles with current Mihomo
-        env:
-          CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
-        run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
-
-  windows-routes-powershell-5:
-    needs: scope
-    if: needs.scope.outputs.windows_routes == 'true'
-    runs-on: windows-2022
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Focused route regressions on PowerShell 5.1
-        shell: powershell
-        run: |
-          $runtime = (Get-Command powershell.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5
-          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
-
-  windows-routes-powershell-7:
-    needs: scope
-    if: needs.scope.outputs.windows_routes == 'true'
-    runs-on: windows-2022
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Focused route regressions on PowerShell 7
-        shell: pwsh
-        run: |
-          $runtime = (Get-Command pwsh.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
-          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
-
-  windows-engine:
-    needs: scope
-    if: needs.scope.outputs.windows_engine == 'true'
+    if: needs.scope.outputs.structure == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -300,19 +139,153 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Windows engine suite
-        run: node --test tests/test_windows_patcher.js
+      - name: Node syntax and contract checks
+        run: |
+          node --check claude-easy/scripts/windows/clash_verge_global.js
+          node --test tests/test_windows_patcher.js
+          node --test tests/test_region_fingerprint_page.js
 
-  windows-installer-powershell-5:
+  macos:
     needs: scope
-    if: needs.scope.outputs.windows_core == 'true'
-    runs-on: windows-2022
-    timeout-minutes: 20
+    if: needs.scope.outputs.macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+      - name: Select macOS suite steps
+        id: paths
+        shell: bash
+        env:
+          CI_BASE_SHA: ${{ needs.scope.outputs.base }}
+        run: |
+          run_wrappers=false
+          run_probes=false
+          if [ -z "$CI_BASE_SHA" ]; then
+            run_wrappers=true
+            run_probes=true
+          else
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              if [[ "$path" =~ ^\.github/workflows/ ]] || \
+                 [[ "$path" == "tests/ci_scope.rb" ]] || \
+                 [[ "$path" == "tests/test_ci_scope.rb" ]]; then
+                run_wrappers=true
+                run_probes=true
+                break
+              fi
+              if [[ "$path" =~ ^claude-easy/scripts/(install|uninstall)_macos\.sh$ ]] || \
+                 [[ "$path" == "tests/test_macos_wrappers.rb" ]]; then
+                run_wrappers=true
+              fi
+              if [[ "$path" =~ ^claude-easy/scripts/macos/patch_profiles/(profile_writer|subscriptions|runtime)\.rb$ ]] || \
+                 [[ "$path" == "tests/run_macos_production_probes.rb" ]] || \
+                 [[ "$path" =~ ^tests/support/ ]] || \
+                 [[ "$path" =~ ^tests/fixtures/macos ]]; then
+                run_probes=true
+              fi
+            done < <(git diff --no-renames --name-only "$CI_BASE_SHA" "$GITHUB_SHA")
+          fi
+          echo "run_wrappers=$run_wrappers" >> "$GITHUB_OUTPUT"
+          echo "run_probes=$run_probes" >> "$GITHUB_OUTPUT"
+      - name: Ruby regression suite
+        run: ruby tests/test_macos_patcher.rb
+      - name: Ruby regressions on the production runtime
+        if: github.event_name == 'workflow_dispatch'
+        run: /usr/bin/ruby tests/test_macos_patcher.rb
+      - name: Ruby 3.3 command wrapper behavior
+        if: steps.paths.outputs.run_wrappers == 'true'
+        run: ruby tests/test_macos_wrappers.rb
+      - name: Fault-inject production commit, kill, alias, process, and uninstall boundaries
+        if: steps.paths.outputs.run_probes == 'true'
+        run: ruby tests/run_macos_production_probes.rb
+
+  windows:
+    needs: scope
+    if: needs.scope.outputs.windows == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, safe-update, recovery]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Select Windows suite steps
+        id: paths
+        shell: bash
+        env:
+          CI_BASE_SHA: ${{ needs.scope.outputs.base }}
+        run: |
+          run_installer=true
+          run_routes=false
+          if [ -z "$CI_BASE_SHA" ]; then
+            run_routes=true
+          else
+            installer_match=false
+            routes_match=false
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              if [[ "$path" =~ ^\.github/workflows/ ]] || \
+                 [[ "$path" == "tests/ci_scope.rb" ]] || \
+                 [[ "$path" == "tests/test_ci_scope.rb" ]]; then
+                installer_match=true
+                routes_match=true
+                break
+              fi
+              if [[ "$path" =~ ^claude-easy/scripts/windows/ ]] && \
+                 [[ "$path" != "claude-easy/scripts/windows/clash_verge_global.js" ]]; then
+                installer_match=true
+              fi
+              if [[ "$path" =~ ^claude-easy/scripts/(install_windows|uninstall_windows) ]]; then
+                installer_match=true
+              fi
+              if [[ "$path" == "tests/test_windows_installer.ps1" ]]; then
+                installer_match=true
+              fi
+              if [[ "$path" == "tests/test_windows_routes.ps1" ]]; then
+                installer_match=true
+                routes_match=true
+              fi
+              if [[ "$path" == "tests/fixtures/main_group_cases.json" ]]; then
+                installer_match=true
+                routes_match=true
+              fi
+              if [[ "$path" =~ ^tests/fixtures/transform_expected/ ]]; then
+                installer_match=true
+              fi
+              if [[ "$path" == "claude-easy/references/policy.json" ]] || \
+                 [[ "$path" == "claude-easy/references/result-contract.json" ]]; then
+                installer_match=true
+                routes_match=true
+              fi
+              if [[ "$path" == "claude-easy/scripts/windows/verify_routes.ps1" ]]; then
+                routes_match=true
+              fi
+            done < <(git diff --no-renames --name-only "$CI_BASE_SHA" "$GITHUB_SHA")
+            if [ "$installer_match" = true ]; then
+              run_installer=true
+            else
+              run_installer=false
+            fi
+            if [ "$routes_match" = true ]; then
+              run_routes=true
+            fi
+          fi
+          echo "run_installer=$run_installer" >> "$GITHUB_OUTPUT"
+          echo "run_routes=$run_routes" >> "$GITHUB_OUTPUT"
       - name: Parse shipped PowerShell sources
         shell: powershell
         run: |
@@ -344,15 +317,23 @@ jobs:
             if ($null -eq $result.PSObject.Properties[$field]) { throw "smoke JSON omitted $field" }
           }
       - name: PowerShell 5.1 installer, uninstaller, and route regressions
+        if: steps.paths.outputs.run_installer == 'true'
         shell: powershell
         run: |
           $runtime = (Get-Command powershell.exe).Source
-          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5 -TestGroup '${{ matrix.group }}'
           if ($LASTEXITCODE -ne 0) { throw "Windows full suite failed with exit code $LASTEXITCODE" }
+      - name: Focused route regressions on PowerShell 5.1
+        if: matrix.group == 'core' && steps.paths.outputs.run_routes == 'true'
+        shell: powershell
+        run: |
+          $runtime = (Get-Command powershell.exe).Source
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Desktop -ExpectedPSMajor 5
+          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
 
   windows-installer-powershell-7:
     needs: scope
-    if: needs.scope.outputs.windows_core == 'true'
+    if: needs.scope.outputs.windows == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -367,33 +348,80 @@ jobs:
           & $runtime -NoLogo -NoProfile -File ./tests/test_windows_installer.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
           if ($LASTEXITCODE -ne 0) { throw "Windows full suite failed with exit code $LASTEXITCODE" }
 
-  windows-mihomo:
+  windows-routes-powershell-7:
     needs: scope
-    if: needs.scope.outputs.windows_mihomo == 'true'
+    if: needs.scope.outputs.windows == 'true' && github.event_name == 'workflow_dispatch'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Focused route regressions on PowerShell 7
+        shell: pwsh
+        run: |
+          $runtime = (Get-Command pwsh.exe).Source
+          & $runtime -NoLogo -NoProfile -File ./tests/test_windows_routes.ps1 -PowerShellPath $runtime -ExpectedPSEdition Core -ExpectedPSMajor 7
+          if ($LASTEXITCODE -ne 0) { throw "Windows route suite failed" }
+
+  mihomo:
+    needs: scope
+    if: needs.scope.outputs.macos == 'true' && needs.scope.outputs.mihomo == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - version: v1.19.27
-            sha256: "34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee"
-            executable: powershell.exe
-            edition: Desktop
-            major: 5
-          - version: v1.19.29
-            sha256: "1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9"
-            executable: powershell.exe
-            edition: Desktop
-            major: 5
-          - version: v1.19.27
-            sha256: "34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee"
-            executable: pwsh.exe
-            edition: Core
-            major: 7
-          - version: v1.19.29
-            sha256: "1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9"
-            executable: pwsh.exe
-            edition: Core
-            major: 7
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"runner":"macos-15","architecture":"arm64","minimum_sha256":"3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1","current_sha256":"4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"},{"runner":"macos-15-intel","architecture":"amd64","minimum_sha256":"5392bea435a1c4b0a496571daafa977f744207cfafac18fb78a9b7d0747585c2","current_sha256":"b57fec2e38462532fe75252792b355b99db16b0b8ea2d6bdf0cd8bc7ddacb9d2"}]' || '[{"runner":"macos-15","architecture":"arm64","minimum_sha256":"3617c9d8a5a55aecfe1ebd0f55ff59f2706c8ad68fd65c6c4e5f7cf2b74263f1","current_sha256":"4dc25df9e899f14161911302a8ee5fc9e202ed9c976fc405bf82c50ff27466ca"}]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "3.3"
+      - name: Download current Mihomo
+        env:
+          MIHOMO_ARCHITECTURE: ${{ matrix.architecture }}
+          MIHOMO_CURRENT_SHA256: ${{ matrix.current_sha256 }}
+        run: |
+          archive="$RUNNER_TEMP/mihomo-CURRENT.gz"
+          binary="$RUNNER_TEMP/mihomo-CURRENT"
+          curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 300 \
+            --output "$archive" \
+            "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo-darwin-$MIHOMO_ARCHITECTURE-v1.19.29.gz"
+          echo "$MIHOMO_CURRENT_SHA256  $archive" | shasum -a 256 --check
+          gzip --decompress --stdout "$archive" > "$binary"
+          chmod 700 "$binary"
+          echo "MIHOMO_CURRENT_PATH=$binary" >> "$GITHUB_ENV"
+      - name: Download minimum Mihomo
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          MIHOMO_ARCHITECTURE: ${{ matrix.architecture }}
+          MIHOMO_MINIMUM_SHA256: ${{ matrix.minimum_sha256 }}
+        run: |
+          archive="$RUNNER_TEMP/mihomo-MINIMUM.gz"
+          binary="$RUNNER_TEMP/mihomo-MINIMUM"
+          curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 300 \
+            --output "$archive" \
+            "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.27/mihomo-darwin-$MIHOMO_ARCHITECTURE-v1.19.27.gz"
+          echo "$MIHOMO_MINIMUM_SHA256  $archive" | shasum -a 256 --check
+          gzip --decompress --stdout "$archive" > "$binary"
+          chmod 700 "$binary"
+          echo "MIHOMO_MINIMUM_PATH=$binary" >> "$GITHUB_ENV"
+      - name: Validate all profiles with current Mihomo
+        env:
+          CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
+        run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_CURRENT_PATH" ruby tests/run_macos_mihomo_validation.rb
+      - name: Validate all profiles with minimum Mihomo
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CLAUDE_EASY_REQUIRE_REAL_MIHOMO: "1"
+        run: CLAUDE_EASY_TEST_MIHOMO="$MIHOMO_MINIMUM_PATH" ruby tests/run_macos_mihomo_validation.rb
+
+  windows-mihomo:
+    needs: scope
+    if: needs.scope.outputs.windows == 'true' && needs.scope.outputs.mihomo == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"version":"v1.19.27","sha256":"34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee","executable":"powershell.exe","edition":"Desktop","major":5},{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"powershell.exe","edition":"Desktop","major":5},{"version":"v1.19.27","sha256":"34b4c5bc0c176eebd298f6624aa23ea41985a2c54efb04eb0e9c4542e45190ee","executable":"pwsh.exe","edition":"Core","major":7},{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"pwsh.exe","edition":"Core","major":7}]' || '[{"version":"v1.19.29","sha256":"1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9","executable":"powershell.exe","edition":"Desktop","major":5}]') }}
     runs-on: windows-2022
     timeout-minutes: 20
     steps:

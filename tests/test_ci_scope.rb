@@ -5,10 +5,7 @@ require "rbconfig"
 class CiScopeTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   CLASSIFIER = File.join(ROOT, "tests/ci_scope.rb")
-  OUTPUTS = %w[
-    contract macos_routes macos_core macos_wrappers macos_probes macos_mihomo
-    windows_routes windows_engine windows_core windows_mihomo
-  ].freeze
+  OUTPUTS = %w[structure macos windows mihomo].freeze
 
   def selected_outputs(*paths)
     stdout, stderr, status = Open3.capture3(RbConfig.ruby, CLASSIFIER, *paths)
@@ -41,35 +38,31 @@ class CiScopeTest < Minitest::Test
     assert_equal OUTPUTS.sort, selected_outputs
   end
 
-  def test_main_group_cases_includes_cross_platform_outputs
+  def test_main_group_cases_includes_all_flags
     assert_selects "tests/fixtures/main_group_cases.json",
-                   outputs: %w[contract macos_core windows_engine macos_mihomo windows_mihomo]
-    assert_does_not_select "tests/fixtures/main_group_cases.json", outputs: %w[windows_core]
+                   outputs: %w[structure macos windows mihomo]
   end
 
-  def test_transform_expected_includes_cross_platform_outputs
+  def test_transform_expected_includes_all_flags
     assert_selects "tests/fixtures/transform_expected/reuse-existing-ai-group.json",
-                   outputs: %w[contract macos_core windows_engine macos_mihomo windows_mihomo]
-    assert_does_not_select "tests/fixtures/transform_expected/reuse-existing-ai-group.json",
-                           outputs: %w[windows_core]
+                   outputs: %w[structure macos windows mihomo]
   end
 
-  def test_mihomo_ps1_includes_windows_core_and_contract
+  def test_mihomo_ps1_includes_structure_windows_mihomo
     assert_selects "claude-easy/scripts/windows/install_windows/mihomo.ps1",
-                   outputs: %w[windows_core windows_mihomo contract]
+                   outputs: %w[structure windows mihomo]
   end
 
-  def test_assets_include_contract_only
-    selected = assert_selects "claude-easy/assets/claude-region-check.html", outputs: %w[contract]
-    refute selected.grep(/\A(?:macos|windows)_/).any?,
-           "assets should not select platform outputs; got #{selected.join(", ")}"
+  def test_assets_include_structure_only
+    assert_selects "claude-easy/assets/claude-region-check.html", outputs: %w[structure]
+    assert_does_not_select "claude-easy/assets/claude-region-check.html",
+                           outputs: %w[macos windows mihomo]
   end
 
-  def test_region_fingerprint_tests_include_contract_only
+  def test_region_fingerprint_tests_include_structure_only
     %w[tests/test_region_fingerprint_page.js tests/test_region_fingerprint_browser.js].each do |path|
-      selected = assert_selects path, outputs: %w[contract]
-      refute selected.grep(/(?:mihomo|mutation)\z/).any?,
-             "#{path} should not select mihomo or mutation outputs; got #{selected.join(", ")}"
+      assert_selects path, outputs: %w[structure]
+      assert_does_not_select path, outputs: %w[macos windows mihomo]
     end
   end
 
@@ -79,61 +72,63 @@ class CiScopeTest < Minitest::Test
     end
   end
 
-  def test_macos_production_includes_contract_and_core_outputs
+  def test_macos_transform_includes_structure_macos_mihomo
     assert_selects "claude-easy/scripts/macos/patch_profiles/transform.rb",
-                   outputs: %w[contract macos_core macos_mihomo]
+                   outputs: %w[structure macos mihomo]
   end
 
-  def test_windows_production_includes_contract_and_core
-    assert_selects "claude-easy/scripts/install_windows.ps1", outputs: %w[contract windows_core]
+  def test_windows_production_includes_structure_and_windows
+    assert_selects "claude-easy/scripts/install_windows.ps1", outputs: %w[structure windows]
+  end
+
+  def test_god_suite_ownership
+    assert_selects "tests/test_macos_patcher.rb", outputs: %w[structure macos mihomo]
+    assert_selects "tests/test_windows_installer.ps1", outputs: %w[structure windows mihomo]
+  end
+
+  def test_windows_patcher_includes_structure_only
+    assert_selects "tests/test_windows_patcher.js", outputs: %w[structure]
+    assert_does_not_select "tests/test_windows_patcher.js", outputs: %w[macos windows mihomo]
   end
 
   def test_multiple_paths_union_outputs
-    selected = selected_outputs(
+    assert_selects(
       "claude-easy/scripts/macos/verify_routes.rb",
-      "claude-easy/scripts/windows/verify_routes.ps1"
+      "claude-easy/scripts/windows/verify_routes.ps1",
+      outputs: %w[structure macos windows]
     )
-    assert_includes selected, "macos_routes"
-    assert_includes selected, "windows_routes"
-    assert_includes selected, "contract"
   end
 
-  def test_fail_safe_unknown_path_includes_contract_and_both_cores
-    selected = assert_selects "claude-easy/newthing.txt", outputs: %w[contract macos_core windows_core]
-    refute selected.grep(/(?:mihomo|mutation)\z/).any?,
-           "fail-safe should not select mihomo or mutation outputs; got #{selected.join(", ")}"
+  def test_fail_safe_unknown_path_includes_structure_macos_windows
+    assert_selects "zzz.unknown", outputs: %w[structure macos windows]
+    assert_does_not_select "zzz.unknown", outputs: %w[mihomo]
   end
 
-  def test_fail_safe_windows_signal_includes_windows_core
-    assert_selects "some/unknown/path_windows.txt", outputs: %w[contract windows_core]
-    assert_does_not_select "some/unknown/path_windows.txt", outputs: %w[macos_core]
+  def test_fail_safe_windows_signal_includes_structure_windows
+    assert_selects "some/unknown/path_windows.txt", outputs: %w[structure windows]
+    assert_does_not_select "some/unknown/path_windows.txt", outputs: %w[macos mihomo]
   end
 
-  def test_fail_safe_macos_signal_includes_macos_core
-    assert_selects "some/unknown/path_macos.txt", outputs: %w[contract macos_core]
-    assert_does_not_select "some/unknown/path_macos.txt", outputs: %w[windows_core]
+  def test_fail_safe_macos_signal_includes_structure_macos
+    assert_selects "some/unknown/path_macos.txt", outputs: %w[structure macos]
+    assert_does_not_select "some/unknown/path_macos.txt", outputs: %w[windows mihomo]
   end
 
   def test_platform_changes_never_select_the_other_platform
-    windows_paths = [
-      "claude-easy/scripts/windows/verify_routes.ps1",
-      "claude-easy/scripts/install_windows.ps1",
-      "claude-easy/scripts/windows/clash_verge_global.js"
-    ]
-    macos_paths = [
-      "claude-easy/scripts/macos/verify_routes.rb",
-      "claude-easy/scripts/macos/patch_profiles/transform.rb",
-      "claude-easy/scripts/install_macos.sh"
-    ]
-
-    windows_paths.each do |path|
-      selected = selected_outputs(path)
-      assert_empty selected.grep(/\Amacos_/), path
+    %w[
+      claude-easy/scripts/macos/patch_profiles/runtime.rb
+      claude-easy/scripts/install_macos.sh
+      tests/test_macos_wrappers.rb
+    ].each do |path|
+      assert_does_not_select path, outputs: %w[windows]
     end
 
-    macos_paths.each do |path|
-      selected = selected_outputs(path)
-      assert_empty selected.grep(/\Awindows_/), path
+    %w[
+      claude-easy/scripts/windows/verify_routes.ps1
+      claude-easy/scripts/install_windows.ps1
+      tests/test_windows_routes.ps1
+    ].each do |path|
+      assert_does_not_select path, outputs: %w[macos]
     end
   end
 
