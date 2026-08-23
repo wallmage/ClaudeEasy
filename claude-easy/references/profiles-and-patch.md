@@ -40,15 +40,11 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 
 档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；除下述 AdGuard for Mac 已知兼容路径外，不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
 
-三个档位都包含共同国内域名直连基线。档位 3 的其余完整补丁包括：TUN、DNS 劫持、自动与严格路由、IPv6 关闭、普通国外与 AI DNS 分流、AI 分组与规则、局域网与国内 UDP 分流、其余 UDP/WebRTC 防护和完整验证。节点只给建议：台湾家宽优先，其次日本家宽；不得自动切换节点。无法确认目的地的 UDP 会经过 AI 分组，可能影响游戏、语音和视频，必须在选择界面说明。
+三个档位都包含共同国内域名直连基线。档位 3 的其余完整补丁包括：TUN、DNS 劫持、自动与严格路由、IPv6 关闭、普通国外与 AI DNS 分流、AI 分组与规则、局域网与国内 UDP 分流、其余 UDP/WebRTC 防护和完整验证。不得自动切换节点；节点建议见 [routing-and-security.md](routing-and-security.md)。无法确认目的地的 UDP 会经过 AI 分组，可能影响游戏、语音和视频，必须在选择界面说明。
 
 macOS 与 Windows 的三个档位都把 `profile.store-selected` 设为 `true`，并保留 `profile` 下的其他设置，使 Mihomo 重新加载订阅后继续使用原代理组选择。
 
 macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 不增加 TUN、IPv6、WebRTC 或 AI 分组补丁。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置由安装程序直接修改，不依赖 Computer Use：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读。任一平台无法安全识别、备份、写入或确认时，停止且不继续打补丁。
-
-### Claude/Anthropic 远程域名永久禁测
-
-Claude/Anthropic 的网站、API 和域名一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量；用户要求完整流程也不能突破。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不连接 Claude/Anthropic 域名，不受这项禁令限制；档位 3 必须运行。
 
 ## Patch 检查顺序
 
@@ -60,9 +56,8 @@ Claude/Anthropic 的网站、API 和域名一律不打开、不请求、不测�
 4. macOS 只枚举当前存储位置中客户端实际使用的顶层 `.yaml`、`.yml`；排除旧 iCloud 容器、缓存、备份、日志和临时文件。`config.yaml` 是 ClashX Meta 的默认基础配置，不得删除；当前订阅不是 `config` 时安静跳过，只有它本身被选中时才处理。
 5. 找到当前订阅和主代理组。
 6. 执行带已保存数字档位的平台安装程序；当前存储位置中的全部订阅必须使用同一共同基线。
-7. 检查是否移除了旧版危险持久化机制。
-8. 当前订阅修改后，通过 Mihomo 本地控制器自动刷新并完成运行检查；失败时恢复原文件和原运行配置。
-9. 验证国内目标实时命中受管规则并直连；档位 3 再完成其余分流与浏览器测试。
+7. 当前订阅修改后，通过 Mihomo 本地控制器自动刷新并完成运行检查；失败时恢复原文件和原运行配置。
+8. 验证国内目标实时命中受管规则并直连；档位 3 再完成其余分流与浏览器测试。
 
 任何时候都不能输出整份配置。公开 JSON、默认中文输出、聊天和诊断记录只显示脱敏后的订阅显示名称、处理状态、计数与哈希；不得显示代理组名称、节点名称、连接链节点、完整本机路径或敏感配置值。仅在本机临时分析且确有必要时可以读取这些值，但不得复制到公开输出。
 
@@ -70,9 +65,9 @@ Claude/Anthropic 的网站、API 和域名一律不打开、不请求、不测�
 
 档位 1 只验收系统代理、国内站、Google、Twitter、用户常用站点和速度；档位 2 验收 TUN、Clash 自己的系统代理开关、国内站、Google、Twitter、用户常用站点、速度、ChatGPT、Gemini 和一个命令行或 Agent 连接。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
 
-只生成 ChatGPT、Gemini 和 Grok 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`；Windows 控制器只允许本机回环地址，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。每个测试请求都通过当前 Mihomo 回环代理发出，并确认实际连接链包含当前 AI 分组；检测期间代理组或节点选择发生变化即失败。三项全部通过即为分流验证通过。Claude/Anthropic 不打开、不请求、不测试，只允许静态检查配置。
+只生成 ChatGPT、Gemini 和 Grok 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`；Windows 控制器只允许本机回环地址，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。每个测试请求都通过当前 Mihomo 回环代理发出，并确认实际连接链包含当前 AI 分组；检测期间代理组或节点选择发生变化即失败。三项全部通过即为分流验证通过。Claude/Anthropic 禁测见 [policy-core.md](policy-core.md)。
 
-任何 Patch、Diagnostics、复测或安全更新都必须遵守 Claude/Anthropic 远程域名永久禁测规则。档位 3 的浏览器验收只运行下列项目。
+档位 3 的浏览器验收只运行下列项目。
 
 然后必须测试：
 

@@ -31,7 +31,7 @@ dns:
 
 `policy.json` 的 `resolvers` 与 `direct_resolvers` 都直接连接解析器 IP，无需先解析解析器域名，避免引导解析错误引发证书失败。所有查询都使用 HTTPS，不加入广告拦截，不发送 ECS。
 
-`default-nameserver` 和 `proxy-server-nameserver` 属于网络启动边界，存在时必须是列表，安全用户值必须保留。`proxy-server-nameserver` 缺失、类型不对，或任一值使用 `system`、明文 DNS、旧版补丁写入的固定境外组合时，统一迁移到策略中的大陆 IP DoH，并带 `#DIRECT` 直接连接；这组解析器不依赖系统 DNS、明文 53 或解析器域名引导。已有 `default-nameserver` 类型不对或含同类危险值时也迁移，字段缺失时不新增。这样节点域名解析不会重进 AdGuard、TUN `dns-hijack` 和 Mihomo Fake-IP 链。
+`default-nameserver` 和 `proxy-server-nameserver` 属于网络启动边界，存在时必须是列表，安全用户值必须保留。`proxy-server-nameserver` 缺失、类型不对，或任一值使用 `system`、明文 DNS 或不安全的固定境外 DNS 组合时，统一迁移到策略中的大陆 IP DoH，并带 `#DIRECT` 直接连接；这组解析器不依赖系统 DNS、明文 53 或解析器域名引导。已有 `default-nameserver` 类型不对或含同类危险值时也迁移，字段缺失时不新增。这样节点域名解析不会重进 AdGuard、TUN `dns-hijack` 和 Mihomo Fake-IP 链。
 
 `direct-nameserver` 不保留原值，统一写成策略文件中的大陆 IP DoH；同时把 `direct-nameserver-follow-policy` 设为 `false`。`nameserver-policy` 中的 `geosite:cn` 也必须覆盖为同一组解析器，避免 Fake-IP 初次解析先落到代理侧。这样不会让用户原有的 `system`、明文 DNS 或代理 DNS 使国内域名继续泄露或获得境外 CDN。直连 DoH 会让阿里或 DNSPod 看到国内域名查询，但本地运营商只能看到加密的 HTTPS 连接；这属于受管的分流，不是意外泄露。
 
@@ -103,5 +103,3 @@ AI 分组当前选择必须是代理节点，不能是 `DIRECT`；不创建安�
 这套规则能明确判断 AI、局域网、国内域名、国内 IP 和剩余 UDP，但不能判断某条 UDP 是否是 WebRTC。目标在局域网或国内的 WebRTC 也会直连；无法确认目的地的 UDP 会走 AI 分组。HTTP/3/QUIC、游戏、语音和视频按同一规则分流，安装前后的说明必须写明这个边界。
 
 多个检测结果如果全是代理出口，不属于真实 IP 泄漏；单一结果更容易确认。
-
-Claude/Anthropic 远程域名不打开、不请求、不测试；只允许静态检查配置，AI 联网与分流只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不连接 Claude/Anthropic 域名；已保存档位为 3 时，任何配置任务收尾都必须按档位策略每轮运行一次，并以绿色低风险为通过条件。
