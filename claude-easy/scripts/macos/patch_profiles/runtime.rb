@@ -701,31 +701,6 @@ module ClaudeEasy
     RUNTIME_PROXY_GROUP_TYPES.any? { |group_type| group_type.casecmp(type.to_s).zero? }
   end
 
-  def runtime_proxy_path_safe?(proxies, name, seen = {})
-    return false unless proxies.is_a?(Hash) && name.is_a?(String) && !name.empty?
-    return false if runtime_non_proxy_name?(name) || seen[name]
-
-    proxy = proxies[name]
-    return false unless proxy.is_a?(Hash)
-
-    type = proxy["type"].to_s
-    return false if type.empty? || runtime_non_proxy_type?(type)
-    unless runtime_proxy_group_type?(type)
-      return false if proxy.key?("now") || proxy.key?("all")
-      return true
-    end
-
-    visited = seen.merge(name => true)
-    if type.casecmp("LoadBalance").zero?
-      members = proxy["all"]
-      return false unless members.is_a?(Array) && !members.empty?
-
-      members.all? { |member| runtime_proxy_path_safe?(proxies, member, visited) }
-    else
-      runtime_proxy_path_safe?(proxies, proxy["now"], visited)
-    end
-  end
-
   def runtime_proxy_candidate_safe?(proxies, provider_proxies, proxy, seen)
     return false unless proxy.is_a?(Hash)
 

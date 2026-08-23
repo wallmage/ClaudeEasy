@@ -61,15 +61,6 @@ module ClashRouteVerifier
     nil
   end
 
-  def active_profile
-    selected = ClaudeEasy.selected_profile_name
-    ClaudeEasy.default_profile_directories.each do |directory|
-      path = ClaudeEasy.profile_paths(directory).find { |candidate| ClaudeEasy.active_profile?(candidate, selected) }
-      return path if path
-    end
-    nil
-  end
-
   def reserve_local_port
     listener = TCPServer.new("127.0.0.1", 0)
     listener.local_address.ip_port

@@ -284,28 +284,6 @@ function Backup-InitialOnce(
         -UseSourceBytes:$UseSourceBytes)
 }
 
-function Write-BytesAtomic([string]$Path, [byte[]]$Bytes) {
-    $snapshot = Get-OptionalFileSnapshot $Path "写入目标"
-    Invoke-VerifiedFileTransaction @(
-        [pscustomobject]@{
-            Path = $Path
-            Bytes = $Bytes
-            Existed = [bool]$snapshot.Exists
-            OriginalBytes = $snapshot.Bytes
-            OriginalIdentity = $snapshot.Identity
-        }
-    )
-}
-
-function ConvertTo-Utf8Bytes([string]$Content) {
-    return (New-Object System.Text.UTF8Encoding($false)).GetBytes($Content)
-}
-
-function Write-Utf8Atomic([string]$Path, [string]$Content) {
-    Write-BytesAtomic $Path (ConvertTo-Utf8Bytes $Content)
-}
-
-
 function Get-BytesSha256([byte[]]$Bytes) {
     # PowerShell binds an empty byte array as $null; empty input must still hash.
     if ($null -eq $Bytes) { $Bytes = [byte[]]@() }

@@ -95,8 +95,3 @@ function Get-SavedUsageProfile([string]$Path, [object]$Snapshot = $null) {
     }
     return [int]$profile
 }
-
-function Save-UsageProfile([string]$Path, [int]$Profile) {
-    $state = [ordered]@{ Version = 1; Profile = $Profile }
-    Write-Utf8Atomic $Path (($state | ConvertTo-Json -Compress) + "`r`n")
-}

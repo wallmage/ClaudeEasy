@@ -104,7 +104,7 @@ module ClaudeEasyBootstrap
     "ClaudeEasyOperationLock" => [:acquire],
     "ClaudeEasy" => %i[
       patch profile_paths validate_with_mihomo transactional_compare_and_write_bytes
-      safe_update_all fetch_remote_subscription backup_remote_subscriptions controller_socket controller_request running_mihomo_config_paths
+      safe_update_all fetch_remote_subscription controller_socket controller_request running_mihomo_config_paths
       mihomo_core_paths repair_clashx_logs reconcile_clashx_client_switches cli saved_usage_profile
     ]
   }.freeze

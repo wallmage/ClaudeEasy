@@ -453,31 +453,6 @@ module ClaudeEasy
     operation_lock&.close if owns_operation_lock
   end
 
-  def enable_subscription_auto_update(domain: nil, runner: Open3.method(:capture3),
-                                      preference_domain: clashx_preference_domain)
-    exported = domain ? defaults_export_named_domain(domain, runner: runner) :
-      defaults_export_domain(runner: runner, domain: preference_domain)
-    raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
-
-    domain = exported.fetch(:domain)
-    current = plist_raw_value(exported.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-    state = subscription_auto_update_state(current)
-    return { status: :already_enabled, domain: domain } if state == :enabled
-    raise InvalidConfigError, "无法确认 ClashX Meta 订阅自动更新状态" unless state == :disabled
-
-    _output, error, write_status = runner.call(
-      "/usr/bin/defaults", "write", domain, "kAutoUpdateEnable", "-bool", "true"
-    )
-    raise IOError, "无法恢复 ClashX Meta 订阅自动更新：#{error.to_s.strip}" unless write_status.success?
-
-    verified_export = defaults_export_named_domain(domain, runner: runner)
-    verified_value = verified_export &&
-                     plist_raw_value(verified_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-    raise IOError, "ClashX Meta 订阅自动更新恢复后回读失败" unless subscription_auto_update_state(verified_value) == :enabled
-
-    { status: :enabled, domain: domain }
-  end
-
   def restore_owned_subscription_auto_update(backup_root:, runner: Open3.method(:capture3), operation_lock: nil)
     owns_operation_lock = operation_lock.nil?
     operation_lock ||= profile_operation_lock(backup_root)
@@ -579,10 +554,6 @@ module ClaudeEasy
     false
   end
 
-  def icloud_enabled?
-    storage_mode == :icloud
-  end
-
   def storage_mode(value = defaults_read("kUserEnableiCloud"))
     normalized = value.to_s.strip.downcase
     return :icloud if %w[1 true yes].include?(normalized)
@@ -654,32 +625,6 @@ module ClaudeEasy
   def mihomo_loopback_proxy_url?(value)
     value.is_a?(String) && value.match?(%r{\A(?:http|socks5h)://127\.0\.0\.1:(?:[1-9]\d{0,4})\z}) &&
       value.rpartition(":").last.to_i <= 65_535
-  end
-
-  def backup_remote_subscriptions(targets:, backup_root:)
-    raise InvalidConfigError, "没有可备份的远程订阅" unless targets.is_a?(Array) && !targets.empty?
-
-    operation_lock = profile_operation_lock(backup_root)
-    snapshots = targets.map do |target|
-      path = File.expand_path(target.fetch(:path))
-      snapshot = regular_file_snapshot_once(path, "远程订阅")
-      { name: target.fetch(:name).to_s, path: path, bytes: snapshot.fetch(:bytes) }
-    end
-    snapshots.each do |snapshot|
-      if backup_entries_for(snapshot.fetch(:path), backup_root, reason: "initial").empty?
-        create_versioned_backup(
-          snapshot.fetch(:path), backup_root,
-          content: snapshot.fetch(:bytes), reason: "initial"
-        )
-      end
-      create_versioned_backup(
-        snapshot.fetch(:path), backup_root,
-        content: snapshot.fetch(:bytes), reason: "pre-update"
-      )
-    end
-    { count: snapshots.length, profiles: snapshots.map { |snapshot| snapshot.fetch(:name) } }
-  ensure
-    operation_lock&.close
   end
 
   def build_update_candidate(target, source, policy, usage_profile, validator)
