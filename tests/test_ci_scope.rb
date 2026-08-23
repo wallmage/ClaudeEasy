@@ -65,6 +65,14 @@ class CiScopeTest < Minitest::Test
            "assets should not select platform outputs; got #{selected.join(", ")}"
   end
 
+  def test_region_fingerprint_tests_include_contract_only
+    %w[tests/test_region_fingerprint_page.js tests/test_region_fingerprint_browser.js].each do |path|
+      selected = assert_selects path, outputs: %w[contract]
+      refute selected.grep(/(?:mihomo|mutation)\z/).any?,
+             "#{path} should not select mihomo or mutation outputs; got #{selected.join(", ")}"
+    end
+  end
+
   def test_control_paths_select_all_jobs
     [".github/workflows/test.yml", "tests/ci_scope.rb", "tests/test_ci_scope.rb"].each do |path|
       assert_equal OUTPUTS.sort, selected_outputs(path), path

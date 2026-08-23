@@ -26,6 +26,8 @@ RULES = [
   ["package.json", %w[contract]],
   ["package-lock.json", %w[contract]],
   ["tests/test_skill_contract.rb", %w[contract]],
+  ["tests/test_region_fingerprint_page.js", %w[contract]],
+  ["tests/test_region_fingerprint_browser.js", %w[contract]],
   ["tests/generate_windows_policy.rb", %w[contract]],
 
   ["tests/test_macos_patcher.rb", %w[macos_core]],
