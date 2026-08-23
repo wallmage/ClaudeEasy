@@ -625,7 +625,32 @@ class SkillContractTest < Minitest::Test
   end
 
   def command_segments(line)
-    line.split(/&&|\|\||&|[;|]/).map(&:strip).reject(&:empty?)
+    segments = []
+    current = +""
+    in_single = false
+    in_double = false
+    line.each_char do |char|
+      if in_single
+        current << char
+        in_single = false if char == "'"
+      elsif in_double
+        current << char
+        in_double = false if char == '"'
+      elsif char == "'"
+        in_single = true
+        current << char
+      elsif char == '"'
+        in_double = true
+        current << char
+      elsif char == ";" || char == "|" || char == "&"
+        segments << current
+        current = +""
+      else
+        current << char
+      end
+    end
+    segments << current
+    segments.map(&:strip).reject(&:empty?)
   end
 
   def normalize_endpoint_source(source)
@@ -696,20 +721,21 @@ class SkillContractTest < Minitest::Test
     line.match?(%r{\A\s*["'](?:/Applications/)?ClashX Meta\.app(?:/Contents/MacOS/ClashX Meta)?["']\s*\z})
   end
 
-  def bare_quoted_clash_continuation?(previous_line, next_line)
+  def bare_quoted_clash_continuation?(previous_line)
     prev = previous_line.to_s.rstrip
-    return true if prev.match?(/(?:\|\||&&)\s*\z/)
-    return true if prev.match?(/[(\[{=+\\\.]\s*\z/)
-    return true if prev.match?(/,\s*\z/)
+    return false if prev.empty?
+    return false if prev.match?(EXEC_RUBY_JS)
 
-    next_line.to_s.strip.match?(/\A[),\]]/)
+    return prev.match?(/[\w?!]\(\z/) if prev.end_with?("(")
+
+    prev.match?(/[,\[{=]\z/)
   end
 
-  def direct_exec_clash?(line, previous_line: nil, next_line: nil)
+  def direct_exec_clash?(line, previous_line: nil)
     return false unless clashx_reference?(line)
 
     if bare_quoted_clash_path_line?(line)
-      return false if bare_quoted_clash_continuation?(previous_line, next_line)
+      return false if bare_quoted_clash_continuation?(previous_line)
 
       return true
     end
@@ -728,10 +754,10 @@ class SkillContractTest < Minitest::Test
     false
   end
 
-  def line_has_clash_launch_execution?(line, previous_line: nil, next_line: nil)
+  def line_has_clash_launch_execution?(line, previous_line: nil)
     open_launch_clash?(line) ||
       launch_services_clash?(line) ||
-      direct_exec_clash?(line, previous_line: previous_line, next_line: next_line) ||
+      direct_exec_clash?(line, previous_line: previous_line) ||
       ruby_js_exec_clash?(line)
   end
 
@@ -776,19 +802,11 @@ class SkillContractTest < Minitest::Test
     lines[0...index].reverse.find { |candidate| !candidate.strip.empty? }
   end
 
-  def next_nonempty_line(lines, index)
-    lines[(index + 1)..].find { |candidate| !candidate.strip.empty? }
-  end
-
   def clashx_meta_launch_violations(source)
     lines = comment_stripped_lines(source)
     violations = []
     lines.each_with_index do |line, index|
-      next unless line_has_clash_launch_execution?(
-        line,
-        previous_line: previous_nonempty_line(lines, index),
-        next_line: next_nonempty_line(lines, index)
-      )
+      next unless line_has_clash_launch_execution?(line, previous_line: previous_nonempty_line(lines, index))
 
       violations << "ClashX Meta launch near line #{index + 1}: #{line.strip}"
     end
