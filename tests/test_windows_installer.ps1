@@ -261,7 +261,8 @@ function Invoke-TestPowerShell(
     [switch]$SimulateRuntimeRefresh,
     [int]$FirstRuntimeRefreshDelayMilliseconds = 200,
     [switch]$FailRestoreRuntimeDispatch,
-    [string]$RuntimeDispatchLogPath = ""
+    [string]$RuntimeDispatchLogPath = "",
+    [int]$RefreshStartedAgeSeconds = 0
 ) {
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeBootstrap = $null
@@ -326,6 +327,7 @@ function Invoke-TestPowerShell(
                 FirstRuntimeRefreshDelayMilliseconds = $FirstRuntimeRefreshDelayMilliseconds
                 FailRestoreRuntimeDispatch = [bool]$FailRestoreRuntimeDispatch
                 RuntimeDispatchLogPath = $RuntimeDispatchLogPath
+                RefreshStartedAgeSeconds = $RefreshStartedAgeSeconds
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
@@ -338,6 +340,17 @@ Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNa
 [ClaudeEasy.SendInputNative]::DispatchLogPath = [string]$payload.RuntimeDispatchLogPath
 [ClaudeEasy.SendInputNative]::FirstDelayMilliseconds = [int]$payload.FirstRuntimeRefreshDelayMilliseconds
 [ClaudeEasy.SendInputNative]::FailRestoreDispatch = [bool]$payload.FailRestoreRuntimeDispatch
+if ($payload.RefreshStartedAgeSeconds -gt 0) {
+    $manifestPath = Join-Path ([string]$payload.AppHome) "claude-easy-safe-update.json"
+    $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    $manifest.RefreshStartedAt = [DateTimeOffset]::UtcNow.AddSeconds(
+        -[int]$payload.RefreshStartedAgeSeconds
+    ).ToString("o")
+    [System.IO.File]::WriteAllText(
+        $manifestPath,
+        (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
+    )
+}
 $arguments = @{
     AppHome = [string]$payload.AppHome
     MihomoPath = [string]$payload.MihomoPath
@@ -3202,7 +3215,7 @@ rules:
         [pscustomobject]@{ Name = "expired"; Age = 190; Core = $fakeCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; AllowedDispatches = @("1") },
         [pscustomobject]@{ Name = "crossing-mihomo"; Age = 178; Core = $slowCore; Delay = 200; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; AllowedDispatches = @("1") },
         [pscustomobject]@{ Name = "crossing-runtime"; Age = 155; Core = $fakeCore; Delay = 60000; FailRestore = $false; Status = "rolled_back"; Code = "safe_update_timeout_rolled_back"; AllowedDispatches = @("1,2", "1") },
-        [pscustomobject]@{ Name = "recovery-pending"; Age = 155; Core = $fakeCore; Delay = 60000; FailRestore = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; AllowedDispatches = @("1,2", "1") }
+        [pscustomobject]@{ Name = "recovery-pending"; Age = 155; Core = $fakeCore; Delay = 60000; FailRestore = $true; StampRefreshStartedAtInvoke = $true; Status = "partial"; Code = "safe_update_timeout_recovery_pending"; AllowedDispatches = @("1,2", "1") }
     )
     foreach ($timeoutScenario in $timeoutScenarios) {
         $timeoutSnapshot = Invoke-TestPowerShell $installer @(
@@ -3226,26 +3239,37 @@ rules:
             (Join-Path $timeoutSafeUpdateProfiles "R-second.yml"), $timeoutUpdatedSecond
         )
         $timeoutManifestPath = Join-Path $timeoutSafeUpdateCase "claude-easy-safe-update.json"
-        $timeoutManifest = [System.IO.File]::ReadAllText($timeoutManifestPath) | ConvertFrom-Json
-        $timeoutManifest.RefreshStartedAt = [DateTimeOffset]::Now.AddSeconds(
-            -[int]$timeoutScenario.Age
-        ).ToString("o")
-        [System.IO.File]::WriteAllText(
-            $timeoutManifestPath,
-            (($timeoutManifest | ConvertTo-Json -Depth 5) + "`r`n")
-        )
+        $stampRefreshStartedAtInvoke = [bool]$timeoutScenario.StampRefreshStartedAtInvoke
+        if (-not $stampRefreshStartedAtInvoke) {
+            $timeoutManifest = [System.IO.File]::ReadAllText($timeoutManifestPath) | ConvertFrom-Json
+            $timeoutManifest.RefreshStartedAt = [DateTimeOffset]::Now.AddSeconds(
+                -[int]$timeoutScenario.Age
+            ).ToString("o")
+            [System.IO.File]::WriteAllText(
+                $timeoutManifestPath,
+                (($timeoutManifest | ConvertTo-Json -Depth 5) + "`r`n")
+            )
+        }
         $dispatchLog = Join-Path $sandbox ("timeout-" + $timeoutScenario.Name + ".log")
         $failRestoreDispatch = [bool]$timeoutScenario.FailRestore
-        $timeoutVerify = Invoke-TestPowerShell $installer @(
-            "-AppHome", $timeoutSafeUpdateCase,
-            "-VerifySafeUpdate",
-            "-RefreshConfirmed",
-            "-MihomoPath", [string]$timeoutScenario.Core,
-            "-Json"
-        ) -SimulateRuntimeRefresh `
-            -FirstRuntimeRefreshDelayMilliseconds ([int]$timeoutScenario.Delay) `
-            -FailRestoreRuntimeDispatch:$failRestoreDispatch `
-            -RuntimeDispatchLogPath $dispatchLog
+        $timeoutVerifyParams = @{
+            ScriptPath = $installer
+            ScriptArguments = @(
+                "-AppHome", $timeoutSafeUpdateCase,
+                "-VerifySafeUpdate",
+                "-RefreshConfirmed",
+                "-MihomoPath", [string]$timeoutScenario.Core,
+                "-Json"
+            )
+            SimulateRuntimeRefresh = $true
+            FirstRuntimeRefreshDelayMilliseconds = [int]$timeoutScenario.Delay
+            FailRestoreRuntimeDispatch = $failRestoreDispatch
+            RuntimeDispatchLogPath = $dispatchLog
+        }
+        if ($stampRefreshStartedAtInvoke) {
+            $timeoutVerifyParams.RefreshStartedAgeSeconds = [int]$timeoutScenario.Age
+        }
+        $timeoutVerify = Invoke-TestPowerShell @timeoutVerifyParams
         $timeoutVerifyJson = Assert-JsonResult $timeoutVerify "install" 1
         Assert-True (
             $timeoutVerifyJson.status -eq [string]$timeoutScenario.Status -and
