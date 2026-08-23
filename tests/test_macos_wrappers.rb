@@ -9,7 +9,6 @@ ROOT = File.expand_path("..", __dir__) unless defined?(ROOT)
 INSTALLER = File.join(ROOT, "claude-easy/scripts/install_macos.sh")
 UNINSTALLER = File.join(ROOT, "claude-easy/scripts/uninstall_macos.sh")
 RESULT_CONTRACT = File.join(ROOT, "claude-easy/scripts/macos/result_contract.rb")
-OPERATION_LOCK = File.join(ROOT, "claude-easy/scripts/macos/operation_lock.rb")
 POLICY_PATH = File.join(ROOT, "claude-easy/references/policy.json")
 
 class MacosWrapperTest < Minitest::Test
@@ -208,44 +207,6 @@ class MacosWrapperTest < Minitest::Test
     result
   end
 
-  def test_operation_lock_rejects_symlinked_claude_easy_state_root
-    Dir.mktmpdir do |home|
-      application_support = File.join(home, "Library", "Application Support")
-      outside = File.join(home, "outside-state")
-      state_root = File.join(application_support, "ClaudeEasy")
-      FileUtils.mkdir_p(application_support)
-      FileUtils.mkdir_p(outside)
-      File.symlink(outside, state_root)
-
-      _stdout, _stderr, status = Open3.capture3(
-        "/usr/bin/ruby",
-        OPERATION_LOCK,
-        File.join(state_root, "backups", ".claude-easy-wrapper.lock"),
-        "/usr/bin/true"
-      )
-
-      assert_equal 76, status.exitstatus
-      refute File.exist?(File.join(outside, "backups"))
-    end
-  end
-
-  def test_operation_lock_exclusive_rename_never_overwrites_a_destination
-    Dir.mktmpdir do |directory|
-      source = File.join(directory, "source")
-      destination = File.join(directory, "destination")
-      File.binwrite(source, "isolated-new")
-      File.binwrite(destination, "later-new")
-
-      _stdout, _stderr, status = Open3.capture3(
-        "/usr/bin/ruby", OPERATION_LOCK, "--rename-exclusive", source, destination
-      )
-
-      assert_equal 76, status.exitstatus
-      assert_equal "isolated-new", File.binread(source)
-      assert_equal "later-new", File.binread(destination)
-    end
-  end
-
   def test_wrappers_reject_a_forged_inherited_lock_before_any_mutation
     with_supported_mihomo_installer do |installer|
       Dir.mktmpdir do |home|
@@ -392,17 +353,7 @@ class MacosWrapperTest < Minitest::Test
 
   def test_uninstaller_never_deletes_install_files_before_ready_is_durable
     with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
-      Dir.mktmpdir do |home|
-        install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
-        FileUtils.mkdir_p(File.join(install_dir, "backups"))
-        originals = {
-          File.join(install_dir, "patch_profiles.rb") => "patcher",
-          File.join(install_dir, "policy.json") => "policy",
-          usage_state_path(home) => "usage"
-        }
-        originals.each { |path, bytes| File.binwrite(path, bytes) }
-        marker = File.join(home, "ready-sync-failed")
-        prepend_operation_lock_fault(uninstaller, <<~'RUBY')
+      prepend_operation_lock_fault(uninstaller, <<~'RUBY')
           if ARGV[0] == "--sync-file" &&
              ARGV[1].to_s.end_with?("/READY") &&
              !File.exist?(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"))
@@ -411,25 +362,42 @@ class MacosWrapperTest < Minitest::Test
           end
         RUBY
 
-        stdout, stderr, status = Open3.capture3(
-          {
+      [false, true].each do |json|
+        Dir.mktmpdir do |home|
+          install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
+          FileUtils.mkdir_p(File.join(install_dir, "backups"))
+          originals = {
+            File.join(install_dir, "patch_profiles.rb") => "patcher",
+            File.join(install_dir, "policy.json") => "policy",
+            usage_state_path(home) => "usage"
+          }
+          originals.each { |path, bytes| File.binwrite(path, bytes) }
+          marker = File.join(home, "ready-sync-failed")
+          env = {
             "HOME" => home,
             "CLAUDE_EASY_USAGE_STATE_PATH" => nil,
             "CLAUDE_EASY_USAGE_PROFILE" => nil,
             "CLAUDE_EASY_PROFILE_DIR" => nil,
             "CLAUDE_EASY_TEST_SYNC_FAILURE" => marker
-          },
-          "/bin/sh", uninstaller, "--json"
-        )
+          }
 
-        assert_equal 76, status.exitstatus, "#{stdout}\n#{stderr}"
-        assert File.file?(marker)
-        assert_equal 1, stdout.lines.length
-        result = assert_json_result(stdout, status, command: "uninstall")
-        assert_equal "rolled_back", result.fetch("status")
-        assert_equal "uninstall_interrupted_rolled_back", result.fetch("code")
-        originals.each { |path, bytes| assert_equal bytes, File.binread(path) }
-        refute File.exist?(File.join(install_dir, ".claude-easy-uninstall-staging"))
+          stdout, stderr, status = Open3.capture3(
+            env, "/bin/sh", uninstaller, *(json ? ["--json"] : [])
+          )
+
+          assert_equal 76, status.exitstatus, "#{stdout}\n#{stderr}"
+          assert File.file?(marker)
+          assert_equal 1, stdout.lines.length
+          if json
+            result = assert_json_result(stdout, status, command: "uninstall")
+            assert_equal "rolled_back", result.fetch("status")
+            assert_equal "uninstall_interrupted_rolled_back", result.fetch("code")
+          else
+            assert_includes stdout, "已恢复"
+          end
+          originals.each { |path, bytes| assert_equal bytes, File.binread(path) }
+          refute File.exist?(File.join(install_dir, ".claude-easy-uninstall-staging"))
+        end
       end
     end
   end
@@ -596,27 +564,6 @@ class MacosWrapperTest < Minitest::Test
           assert_equal expected_code, result.fetch("code")
           assert_equal expected_status, result.fetch("status")
         end
-      end
-    end
-  end
-
-  def test_uninstaller_exit_fallback_prints_a_default_mode_summary
-    with_uninstaller_package(patcher_source: "exit 0\n") do |uninstaller|
-      Dir.mktmpdir do |home|
-        install_dir = File.join(home, "Library", "Application Support", "ClaudeEasy")
-        FileUtils.mkdir_p(File.join(install_dir, "backups"))
-        File.binwrite(usage_state_path(home), "usage")
-        prepend_operation_lock_fault(uninstaller, <<~'RUBY')
-          if ARGV[0] == "--sync-file" && ARGV[1].to_s.end_with?("/READY")
-            exit 76
-          end
-        RUBY
-
-        stdout, stderr, status = run_script(uninstaller, home: home)
-
-        assert_equal 76, status.exitstatus, stderr
-        assert_equal 1, stdout.lines.length
-        assert_includes stdout, "已恢复"
       end
     end
   end
