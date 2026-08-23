@@ -9,7 +9,8 @@
     [int]$ExpectedPSMajor,
     [string[]]$RealMihomoPaths = @(),
     [string]$RealMihomoGeoSitePath,
-    [switch]$RealMihomoOnly
+    [switch]$RealMihomoOnly,
+    [string]$TestGroup = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +24,9 @@ $childVersion = $childVersionOutput | ConvertFrom-Json
 if ([string]$childVersion.PSEdition -ne $ExpectedPSEdition -or
     [int]$childVersion.Major -ne $ExpectedPSMajor) {
     throw "PowerShellPath runtime mismatch: expected $ExpectedPSEdition $ExpectedPSMajor"
+}
+if ($TestGroup -and $TestGroup -notin @('core', 'safe-update', 'recovery')) {
+    throw "TestGroup must be empty or one of: core, safe-update, recovery (got '$TestGroup')"
 }
 $root = Split-Path -Parent $PSScriptRoot
 $installer = Join-Path (Join-Path $root "claude-easy/scripts") "install_windows.ps1"
@@ -83,6 +87,10 @@ $uninstallAst.FindAll({
 
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
+}
+
+function Test-GroupSelected([string]$Name) {
+    return (-not $TestGroup) -or ($TestGroup -eq $Name)
 }
 
 if ($onWindows) {
@@ -510,6 +518,8 @@ function Assert-InstallerRejectsScript([string]$Name, [string]$Script, [string]$
 }
 
 try {
+    New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+    if (Test-GroupSelected 'core') {
     $installerSource = [System.IO.File]::ReadAllText($installer)
     $runtimeSource = [System.IO.File]::ReadAllText((Join-Path $installerModuleRoot "runtime.ps1"))
     Assert-True (
@@ -891,6 +901,8 @@ rule-providers:
     )
     Assert-ClashRuntimePatch $providerCollisionRuntimeText $profileTwoRuntimeState $exactRuntimePolicy 2
 
+    }
+
     New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $failureDiagnosticCanary = "https://subscription.invalid/private?token=fixture-secret password=fixture-password 11111111-2222-3333-4444-555555555555"
     $failureDiagnostic = Get-TestOutputDiagnostic $failureDiagnosticCanary
@@ -1062,6 +1074,8 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
             Write-Host "Windows real Mihomo public-entry cases passed"
             return
         }
+
+        if (Test-GroupSelected 'core') {
 
         $ambiguousRoaming = Join-Path $sandbox "ambiguous-roaming"
         $ambiguousLocal = Join-Path $sandbox "ambiguous-local"
@@ -1305,7 +1319,10 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                 Exit-AppHomeMutationLock $newFileRecoveryLock
             }
         }
+
+        }
     }
+    if (Test-GroupSelected 'core') {
     if ($onWindows) {
         $hangingCoreText = "@echo off`r`nping 127.0.0.1 -n 6 >nul`r`nexit /b 0`r`n"
     } else {
@@ -2784,6 +2801,10 @@ items:
     $backupOnlyFiles = @(Get-ChildItem -LiteralPath (Join-Path $backupOnlyCase "claude-easy-backups") -Recurse -File)
     Assert-True ($backupOnlyFiles.Count -eq 4) "subscription backup did not create initial and pre-update backups for every remote subscription"
 
+    }
+
+    if (Test-GroupSelected 'safe-update') {
+
     $safeUpdateCase = Join-Path $sandbox "safe-update-case"
     $unprofiledSafeUpdateCase = Join-Path $sandbox "safe-update-without-profile"
     New-Item -ItemType Directory -Path $unprofiledSafeUpdateCase -Force | Out-Null
@@ -4146,6 +4167,10 @@ rules:
     $script:safeUpdateControllerPort = 0
     $script:safeUpdateClientPath = ""
 
+    }
+
+    if (Test-GroupSelected 'core') {
+
     if ($onWindows) {
         Invoke-DeferredProbe "public restore same-byte identity replacement" {
             $identityRestoreCase = Join-Path $sandbox "public-restore-identity-case"
@@ -4530,6 +4555,10 @@ rules:
     Assert-True $staleStateSnapshotRejected "transaction deleted a newer state file using an older parsed snapshot"
     Assert-True ((Get-Content -LiteralPath $stateSnapshotPath -Raw) -eq "changed-after-read") "stale state rejection changed the newer state file"
     Assert-True ((Get-Content -LiteralPath $stateSnapshotWritePath -Raw) -eq "state-write-original") "stale state rejection changed an unrelated write target"
+
+    }
+
+    if (Test-GroupSelected 'recovery') {
 
     if ($onWindows) {
         $preparationRecoveryDir = Join-Path $sandbox "preparation-recovery"
@@ -5921,6 +5950,10 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
             )) "handoff recovery retained a transaction record"
         }
     }
+
+    }
+
+    if (Test-GroupSelected 'core') {
 
     $verifiedTargetPath = Join-Path $transactionDir "verified-target.txt"
     $verifiedOriginal = [System.Text.Encoding]::UTF8.GetBytes("original")
@@ -7535,6 +7568,8 @@ function main(config) {
     $badMarkerResult = Invoke-TestPowerShell $uninstaller @("-AppHome", $badMarkerCase)
     Assert-True ($badMarkerResult.ExitCode -eq 1) "uninstaller accepted duplicate end markers"
     Assert-True ((Read-TestUtf8Text $badMarkerPath) -eq $badMarkerScript) "uninstaller modified an ambiguously marked script"
+
+    }
 
     if ($script:deferredProbeFailures.Count -gt 0) {
         throw ("deferred production probes failed:`n- " + ($script:deferredProbeFailures -join "`n- "))
