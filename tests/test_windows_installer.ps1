@@ -2803,6 +2803,26 @@ items:
 
     }
 
+    $profilesIndexInput = @'
+current: R-first
+items:
+- uid: R-first
+  type: remote
+  name: First
+  updated: null
+  option:
+    update_interval: 1440
+    allow_auto_update: true
+- uid: L-local
+  type: local
+  name: Local
+- uid: R-second
+  type: remote
+  name: Second
+  updated: 200
+  option: null
+'@
+
     if (Test-GroupSelected 'safe-update') {
 
     $safeUpdateCase = Join-Path $sandbox "safe-update-case"
@@ -4557,6 +4577,9 @@ rules:
     Assert-True ((Get-Content -LiteralPath $stateSnapshotWritePath -Raw) -eq "state-write-original") "stale state rejection changed an unrelated write target"
 
     }
+
+    $transactionDir = Join-Path $sandbox "transaction"
+    New-Item -ItemType Directory -Path $transactionDir -Force | Out-Null
 
     if (Test-GroupSelected 'recovery') {
 
