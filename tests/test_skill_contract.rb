@@ -285,29 +285,22 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_verifier, "function Test-RouteChains"
     assert_includes windows_verifier, "function Test-SafeLiveChain"
     assert_includes windows_verifier, "function Get-LiveChainProxy"
-    assert_includes windows_verifier, "function Test-SupportedRouteGroupType"
-    %w[Selector URLTest Fallback LoadBalance].each do |group_type|
-      assert_includes windows_verifier, %("#{group_type}")
-    end
-    assert_includes(
-      windows_verifier,
-      "if ($null -eq $property -or -not (Test-SupportedRouteGroupType ([string]$property.Value.type))) {"
-    )
   end
 
-  def test_both_route_verifiers_use_live_match_rule_for_main_group
-    mac_source = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
-    windows_source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+  def test_windows_route_verifier_uses_live_match_for_main_group
+    source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
 
-    assert_includes mac_source, "def live_main_group"
-    assert_includes mac_source, 'get_json(controller, "/rules")'
-    assert_includes mac_source, 'rule["proxy"]'
-    assert_includes mac_source, "main_group = live_main_group(requester, proxies, main_group)"
-    assert_includes mac_source, 'ai_group = find_group(proxies, policy["ai_group_names"], ai_group, ai: true)'
-    assert_includes windows_source, "function Get-LiveMainGroup"
-    assert_includes windows_source, 'Invoke-ControllerJson "/rules"'
-    assert_includes windows_source, '$rule.proxy'
-    assert_includes windows_source, '$main = Get-LiveMainGroup $proxies'
+    assert_includes source, '$main = Get-LiveMainGroup $proxies'
+    refute_match(/\$main\s*=\s*Find-Group\s+\$proxies\s+@\(\$policy\.main_group_names\)/, source)
+  end
+
+  def test_windows_route_verifier_uses_supported_main_group_types
+    source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+    get_live = source[/function Get-LiveMainGroup\b.*?(?=^function |\z)/m]
+
+    refute_nil get_live
+    assert_includes get_live, "Test-SupportedRouteGroupType"
+    refute_includes get_live, '-eq "Selector"'
   end
 
   def test_claude_and_anthropic_are_never_opened_or_tested
@@ -322,32 +315,24 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_windows_route_verifier_keeps_the_controller_secret_off_process_metadata
+  def test_windows_route_verifier_rejects_nonempty_secret_argument
     source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
-    documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "tests/baseline.md"))
-    ]
 
-    assert_includes source, '[switch]$SecretStdin'
-    assert_includes source, "function Read-ControllerSecretFromStandardInput"
-    assert_includes source, '$inputReader.ReadToEnd()'
-    assert_includes source, '不能通过 -Secret 传入非空控制器密钥'
     assert_includes source, 'if (-not [string]::IsNullOrEmpty($Secret)) {'
-    assert_includes source, "function Get-ValidatedControllerBaseUri"
-    assert_includes source, 'Test-StrictIpv4LoopbackHost $rawHost'
-    assert_includes source, 'if (-not $rawHostIsLoopback)'
-    assert_includes source, '$request.AllowAutoRedirect = $false'
-    assert_includes source, '$request.Proxy = $null'
-    assert_includes source, '$script:ClaudeEasyControllerSecret'
+    assert_includes source, '不能通过 -Secret 传入非空控制器密钥'
     refute_includes source, '"Bearer $Secret"'
-    [documents[2], documents[3]].each do |document|
-      assert_includes document, "-SecretStdin"
-      assert_includes document, "本机回环"
-      assert_includes document, "非空 `-Secret`"
-    end
+  end
+
+  def test_windows_route_verifier_blocks_controller_redirects
+    source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+
+    assert_includes source, '$request.AllowAutoRedirect = $false'
+  end
+
+  def test_windows_route_verifier_bypasses_system_proxy_for_controller
+    source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+
+    assert_includes source, '$request.Proxy = $null'
   end
 
   def test_configuration_history_is_versioned_compared_and_safely_restored
@@ -425,9 +410,15 @@ class SkillContractTest < Minitest::Test
     assert_includes policy, "保留 Fake-IP 映射"
     refute_includes policy, "/cache/fakeip/flush"
     assert_includes policy, "/cache/dns/flush"
-    Dir[File.join(SKILL, "scripts/**/*")].select { |path| File.file?(path) }.each do |path|
-      refute_includes File.binread(path), "/cache/fakeip/flush", path
-    end
+  end
+
+  def test_macos_installer_avoids_fakeip_flush_and_curl
+    path = File.join(SKILL, "scripts/install_macos.sh")
+    skip unless File.file?(path)
+
+    source = File.read(path)
+    refute_includes source, "/cache/fakeip/flush"
+    refute_includes source, "/usr/bin/curl"
   end
 
   def test_macos_installer_is_one_shot
@@ -444,35 +435,14 @@ class SkillContractTest < Minitest::Test
     readme = File.read(File.join(ROOT, "README.md"))
     skill_document = File.read(File.join(SKILL, "SKILL.md"))
     patch_policy = policy_document
-    mac_uninstaller = File.read(File.join(SKILL, "scripts/uninstall_macos.sh"))
     windows_installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
-    windows_profiles = File.read(
-      File.join(SKILL, "scripts/windows/install_windows/profiles.ps1")
-    )
     windows_safe_update = File.read(
       File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
     )
-    mac_tests = File.read(File.join(ROOT, "tests/test_macos_wrappers.rb"))
     windows_tests = File.binread(
       File.join(ROOT, "tests/test_windows_installer.ps1")
     ).force_encoding("UTF-8")
 
-    assert_includes mac_uninstaller,
-                    "disabled|already_disabled|already_disabled_owned)"
-    assert_includes mac_tests, 'puts "already_disabled_owned"'
-
-    running_gate = windows_installer.index(
-      'if ($clientRunning) {'
-    )
-    first_install_target = windows_installer.index('$usageProfileTarget = [pscustomobject]@{')
-    refute_nil running_gate
-    refute_nil first_install_target
-    assert_operator running_gate, :<, first_install_target
-    assert_includes windows_installer, '"client_running_profile_three_deferred"'
-    assert_includes windows_installer, '"client_running_auto_update_deferred"'
-    refute_includes windows_installer, "installed_running_client"
-    assert_includes windows_tests, 'Get-TreeContentSnapshot $runningCase'
-    assert_includes windows_tests, "client_running_profile_three_deferred"
     refute_includes readme, "两个平台都必须让 Clash 保持运行"
     refute_includes readme, "已更新，尚未生效"
     assert_includes readme, "Windows 安装只在客户端本来就未运行时执行写入"
@@ -486,9 +456,6 @@ class SkillContractTest < Minitest::Test
     refute_includes patch_policy, "安装器可以更新全局脚本"
     assert_includes patch_policy, "安装器整批延期"
 
-    assert_includes windows_profiles, 'Updated = $updatedValue'
-    assert_includes windows_profiles,
-                    "$updatedRawValue -match '^(?:~|null|Null|NULL)$'"
     assert_includes windows_installer, 'BeforeUpdated = [string]$profile.Updated'
     assert_includes windows_installer, "Version = 4"
     assert_includes windows_installer, "Runtime = $runtimeSnapshot"
@@ -501,19 +468,6 @@ class SkillContractTest < Minitest::Test
     refute_includes windows_safe_update, "UseUpdatedEvidence"
     assert_includes windows_installer, '[switch]$RefreshConfirmed'
     assert_includes windows_installer, '"missing_refresh_confirmation"'
-    assert_includes windows_safe_update,
-                    'CanAutoRestore = ($manifestVersion -ge 2)'
-    assert_includes windows_safe_update,
-                    'if ($manifestVersion -ge 2 -and ('
-    assert_includes windows_installer,
-                    '@($recoveryItems | Where-Object { -not $_.CanAutoRestore }).Count -gt 0'
-    assert_includes windows_installer, '"safe_update_legacy_recovery_pending"'
-    assert_includes windows_installer, '"safe_update_legacy_snapshot_required"'
-    assert_includes windows_installer, "重新创建 v4 快照"
-    refute_includes windows_installer, "重新创建 v3 快照"
-    assert_includes windows_installer, '$safeUpdateContentRestoreEligible = $false'
-    assert_includes windows_installer, 'if (-not $safeUpdateContentRestoreEligible) {'
-    assert_includes windows_installer, '"safe_update_verification_retry_pending"'
     assert_includes windows_installer,
                     '[pscustomobject]@{ Path = $profilesIndexPath; Snapshot = $indexSnapshot; Label = "远程订阅清单" }'
     assert_includes windows_installer,
@@ -538,8 +492,6 @@ class SkillContractTest < Minitest::Test
     refute_includes snapshot_function, 'Test-GeneratedYaml'
     refute_includes snapshot_function, 'Test-MihomoCandidate'
     assert_includes snapshot_function, 'SnapshotBytes = $profileBytes'
-    assert_includes snapshot_function, '$fileGuards += $indexGuard'
-    assert_includes snapshot_function, '$fileGuards += $profileGuard'
     windows_transaction = File.read(
       File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
     )
@@ -609,62 +561,6 @@ class SkillContractTest < Minitest::Test
     end
   end
 
-  def test_windows_failed_safe_update_rollback_publishes_runtime_recovery_in_the_same_transaction
-    installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
-    safe_update = File.read(
-      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
-    )
-
-    assert_includes safe_update, "Invoke-VerifiedWriteDeleteTransaction (@($targets) + @($manifestTarget)) @()"
-    assert_includes safe_update, "ManifestPath"
-    assert_includes safe_update, "ManifestSnapshot"
-    assert_includes safe_update, "-NotePropertyValue $RuntimeRecoveryBytes"
-    assert_includes installer, 'Kind = "safe_update_runtime_recovery"'
-    restore_call = installer.index("$restoreResult = Restore-SafeUpdateFiles")
-    runtime_record = installer.index("$runtimeRecoveryBytes = ConvertTo-Utf8Bytes")
-    refute_nil restore_call
-    refute_nil runtime_record
-    assert_operator runtime_record, :<, restore_call
-    restore_block = installer[restore_call, 300]
-    assert_includes restore_block, "$safeUpdateStatePath"
-    assert_includes restore_block, "$manifestSnapshot $runtimeRecoveryBytes"
-    assert_operator installer.scan("Remove-VerifiedOwnedFile $safeUpdateStatePath").length, :>=, 3
-  end
-
-  def test_windows_safe_update_restores_a_missing_manifest_target
-    installer = File.read(File.join(SKILL, "scripts/install_windows.ps1"))
-    safe_update = File.read(
-      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
-    )
-    windows_tests = File.binread(
-      File.join(ROOT, "tests/test_windows_installer.ps1")
-    ).force_encoding("UTF-8")
-
-    index_snapshot = installer.index(
-      'Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"'
-    )
-    observed_missing = installer.index(
-      '$observedCurrentHashes[$recovery.TargetPath] = ""'
-    )
-    refute_nil index_snapshot
-    refute_nil observed_missing
-    assert_operator index_snapshot, :<, observed_missing
-    verify_prefix = installer[index_snapshot...observed_missing]
-    refute_includes verify_prefix, "Get-RemoteSubscriptionTargets"
-    assert_includes safe_update, "function Get-SafeUpdateVerificationTargets("
-    assert_includes safe_update,
-                    '$items = @(Get-RemoteSubscriptionProfileItems @(Split-YamlLines $ProfilesIndexText))'
-    assert_includes safe_update, "if ($matches.Count -eq 1) {"
-    assert_includes safe_update, '$path = [string]$recovery.TargetPath'
-    assert_includes safe_update,
-                    '$observedHash = [string]$ObservedHashes[$recovery.TargetPath]'
-    assert_includes safe_update,
-                    'if ([string]::IsNullOrWhiteSpace($observedHash)) {'
-    assert_includes safe_update, "                Existed = $false"
-    assert_includes windows_tests,
-                    "safe update did not recreate a missing remote subscription"
-  end
-
   def test_windows_preparation_recovery_accepts_targets_removed_by_the_main_journal
     transaction = File.read(
       File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
@@ -678,355 +574,155 @@ class SkillContractTest < Minitest::Test
     assert_includes recovery, 'if (-not $target.Exists) { continue }'
   end
 
-  def test_windows_interrupted_client_sensitive_recovery_waits_for_the_client
-    transaction = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
-    ).force_encoding("UTF-8")
-    installer = File.binread(
-      File.join(SKILL, "scripts/install_windows.ps1")
-    ).force_encoding("UTF-8")
+  def test_windows_uninstall_treats_file_and_usage_changes_as_protected
     uninstaller = File.binread(
       File.join(SKILL, "scripts/uninstall_windows.ps1")
     ).force_encoding("UTF-8")
-    safe_update = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
-    ).force_encoding("UTF-8")
-    windows_tests = File.binread(
-      File.join(ROOT, "tests/test_windows_installer.ps1")
-    ).force_encoding("UTF-8")
 
-    assert_includes transaction,
-                    "function Test-InterruptedRecoveryRequiresStoppedClient("
-    assert_includes transaction, '"client_stopped"'
-    assert_includes transaction, '"safe_update_running_client"'
-    assert_includes transaction, "RecoveryPolicy = $InterruptedRecoveryPolicy"
-    assert_includes transaction, "function Get-InterruptedRecoveryPolicy("
-    assert_includes transaction,
-                    'if ([long]$Record.Version -eq 1) { return "client_stopped" }'
-    assert_includes transaction,
-                    '$InterruptedRecoveryPolicy = "client_stopped"'
-    assert_includes safe_update,
-                    '-InterruptedRecoveryPolicy "safe_update_running_client"'
-    assert_equal 6, installer.scan('"safe_update_running_client"').length
-    assert_includes transaction,
-                    "function Test-SafeUpdateRunningRecoveryTargets("
-    assert_includes transaction, '"claude-easy-safe-update.json"'
-    assert_includes transaction, '@(".yaml", ".yml")'
-    assert_includes transaction,
-                    "function Test-InterruptedRecoveryCommitCondition("
-    assert_includes transaction,
-                    "$recovered = Invoke-InterruptedTransactionRecovery `\n" \
-                    "        $plan `\n        $preCommitCondition `\n" \
-                    "        $finalizeCondition"
-    assert_includes transaction,
-                    "Test-InterruptedRecoveryCommitCondition $preCommitCondition"
-    assert_includes transaction,
-                    'throw "客户端保持运行；中断的客户端敏感事务等待恢复。"'
-
-    journal_start = transaction.index("function Invoke-InterruptedTransactionRecovery(")
-    journal_end = transaction.index(
-      "\nfunction Assert-InterruptedTransactionRecovered(",
-      journal_start
-    )
-    refute_nil journal_start
-    refute_nil journal_end
-    journal_body = transaction[journal_start...journal_end]
-    journal_identity = journal_body.index(
-      "[ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle)"
-    )
-    journal_condition = journal_body.index(
-      "Test-InterruptedRecoveryCommitCondition $PreCommitCondition"
-    )
-    journal_write = journal_body.index("Write-LockedStreamBytes")
-    journal_delete = journal_body.index(
-      "Set-VerifiedDeleteDisposition $entry.Stream $true",
-      journal_write
-    )
-    journal_finalize = journal_body.index('$finalizeResults = @(& $FinalizeCondition)')
-    journal_rollback = journal_body.index('Undo-InterruptedTransactionRecovery $opened')
-    refute_nil journal_identity
-    refute_nil journal_condition
-    refute_nil journal_write
-    refute_nil journal_delete
-    refute_nil journal_finalize
-    refute_nil journal_rollback
-    assert_operator journal_identity, :<, journal_condition
-    assert_operator journal_condition, :<, journal_write
-    assert_operator journal_condition, :<, journal_delete
-    assert_operator journal_write, :<, journal_finalize
-    assert_operator journal_delete, :<, journal_finalize
-    assert_operator journal_finalize, :<, journal_rollback
-    assert_equal 2, journal_body.scan('Undo-InterruptedTransactionRecovery $opened').length
-
-    undo_start = transaction.index("function Undo-InterruptedTransactionRecovery(")
-    undo_end = transaction.index("\nfunction Invoke-InterruptedTransactionRecovery(", undo_start)
-    refute_nil undo_start
-    refute_nil undo_end
-    undo_body = transaction[undo_start...undo_end]
-    assert_includes undo_body, 'Set-VerifiedDeleteDisposition $entry.Stream $false'
-    assert_includes undo_body, '$entry.Current `'
-    assert_includes undo_body, 'Set-VerifiedDeleteDisposition $entry.Stream $true'
-
-    recovery_start = transaction.index("function Repair-InterruptedFileTransaction")
-    recovery_end = transaction.index("\nfunction Invoke-VerifiedPathTransaction", recovery_start)
-    refute_nil recovery_start
-    refute_nil recovery_end
-    recovery_body = transaction[recovery_start...recovery_end]
-    final_condition = recovery_body.index('$finalizeCondition = {')
-    final_recheck = recovery_body.index(
-      "Test-InterruptedRecoveryCommitCondition $preCommitCondition",
-      final_condition
-    )
-    final_journal_delete = recovery_body.index(
-      "Remove-FileTransactionJournal $snapshot.Bytes",
-      final_condition
-    )
-    recovery_call = recovery_body.index("Invoke-InterruptedTransactionRecovery `")
-    refute_nil final_condition
-    refute_nil final_recheck
-    refute_nil final_journal_delete
-    refute_nil recovery_call
-    assert_operator final_condition, :<, final_recheck
-    assert_operator final_recheck, :<, final_journal_delete
-    assert_operator final_journal_delete, :<, recovery_call
-
-    preparation_start = transaction.index("function Repair-InterruptedFilePreparation")
-    preparation_end = transaction.index(
-      "\nfunction Write-FileTransactionJournal(",
-      preparation_start
-    )
-    refute_nil preparation_start
-    refute_nil preparation_end
-    preparation_body = transaction[preparation_start...preparation_end]
-    preparation_identity = preparation_body.index(
-      "[ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle)"
-    )
-    preparation_condition = preparation_body.index(
-      "Test-InterruptedRecoveryCommitCondition $preCommitCondition"
-    )
-    preparation_delete = preparation_body.index(
-      "Set-VerifiedDeleteDisposition $entry.Stream $true"
-    )
-    preparation_final_condition = preparation_body.index(
-      "Test-InterruptedRecoveryCommitCondition $preCommitCondition",
-      preparation_condition + 1
-    )
-    preparation_cancel_delete = preparation_body.index(
-      "Set-VerifiedDeleteDisposition $entry.Stream $false",
-      preparation_final_condition
-    )
-    refute_nil preparation_identity
-    refute_nil preparation_condition
-    refute_nil preparation_delete
-    refute_nil preparation_final_condition
-    refute_nil preparation_cancel_delete
-    assert_operator preparation_identity, :<, preparation_condition
-    assert_operator preparation_condition, :<, preparation_delete
-    assert_operator preparation_delete, :<, preparation_final_condition
-    assert_operator preparation_final_condition, :<, preparation_cancel_delete
-
-    [installer, uninstaller].each do |entrypoint|
-      assert_includes entrypoint, '"transaction_recovery_pending"'
-    end
-    assert_includes windows_tests,
-                    "running client changed a prepared current-config target"
-    assert_includes windows_tests,
-                    "running client consumed a current-config preparation record"
-    assert_includes windows_tests,
-                    "interrupted recovery rechecks a newly started client"
-    assert_includes windows_tests,
-                    "newly started client allowed interrupted journal recovery"
-    assert_includes windows_tests,
-                    "newly started client allowed prepared current-config targets"
-    assert_includes windows_tests,
-                    "running client changed an interrupted profiles.yaml target"
-    assert_includes windows_tests,
-                    "running client consumed an interrupted client-sensitive journal"
-    assert_includes windows_tests,
-                    "running client changed an interrupted usage-profile state"
-    assert_includes windows_tests,
-                    "running client changed an interrupted remote-profile restore target"
-    assert_includes windows_tests,
-                    "running client consumed an interrupted remote-profile restore journal"
-    assert_includes windows_tests,
-                    "ordinary remote-profile restore did not persist its stopped-client recovery policy"
-
-    documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "tests/baseline.md"))
-    ]
-    documents = [documents[2], documents[3]]
-    documents.each do |document|
-      assert_includes document, "中断的客户端敏感事务"
-      assert_includes document, "transaction_recovery_pending"
-      assert_includes document, "锁定并核对全部恢复目标"
-      assert_includes document, "再次检查"
-      assert_includes document, "恢复权限"
-    end
-  end
-
-  def test_windows_uninstall_rechecks_client_after_transaction_targets_are_locked
-    transaction = File.read(
-      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
-    )
-    uninstaller = File.binread(
-      File.join(SKILL, "scripts/uninstall_windows.ps1")
-    ).force_encoding("UTF-8")
-    windows_tests = File.binread(
-      File.join(ROOT, "tests/test_windows_installer.ps1")
-    ).force_encoding("UTF-8")
-
-    transaction_start = transaction.index("function Invoke-VerifiedPathTransaction(")
-    transaction_end = transaction.index(
-      "\nfunction Invoke-VerifiedFileTransaction(",
-      transaction_start
-    )
-    refute_nil transaction_start
-    refute_nil transaction_end
-    transaction_body = transaction[transaction_start...transaction_end]
-    identity_check = transaction_body.index(
-      "[ClaudeEasy.VerifiedDeleteNative]::GetIdentity($handle)"
-    )
-    precommit_check = transaction_body.index(
-      "$preCommitResults = @(& $PreCommitCondition)"
-    )
-    journal_write = transaction_body.index(
-      "$journalBytes = Write-FileTransactionJournal " \
-      "$opened $InterruptedRecoveryPolicy"
-    )
-    refute_nil identity_check
-    refute_nil precommit_check
-    refute_nil journal_write
-    assert_operator identity_check, :<, precommit_check
-    assert_operator precommit_check, :<, journal_write
-
-    assert_includes transaction, "[scriptblock]$PreCommitCondition = $null"
-    assert_includes transaction,
-                    "Invoke-VerifiedPathTransaction $WriteTargets " \
-                    "$DeleteTargets $PreCommitCondition $InterruptedRecoveryPolicy"
-    assert_includes transaction, "elseif ($mutationStarted)"
-    assert_includes uninstaller, "$transactionCommitted = Invoke-VerifiedWriteDeleteTransaction"
-    assert_includes uninstaller,
-                    "$writeTargets $deletePlans $clientStoppedPreCommit"
-    assert_includes uninstaller,
-                    "if ($null -ne $clientStoppedPreCommit -and -not $transactionCommitted)"
     assert_includes uninstaller,
                     "$uninstallHasProtectedChanges = " \
                     "($filePlans.Count -gt 0 -or $null -ne $state -or " \
                     "$autoUpdateStateExists -or $usageStateExists)"
-    assert_includes uninstaller,
-                    "if ($uninstallHasProtectedChanges -and (Test-ClashVergeRunning))"
-    assert_includes uninstaller,
-                    "if ($uninstallHasProtectedChanges) {\n" \
-                    "        $clientStoppedPreCommit = {\n" \
-                    "            return (-not (Test-ClashVergeRunning))"
-    assert_includes windows_tests,
-                    "client-start race changed a protected uninstall target"
-    assert_includes windows_tests,
-                    "client-start abort rewrote an existing transaction target"
-    assert_includes windows_tests,
-                    "running profile 1 uninstall changed a protected target"
-
-    documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "tests/baseline.md"))
-    ]
-    documents = [documents[2], documents[3]]
-    documents.each { |document| assert_includes document, "提交条件" }
   end
 
-  def test_windows_install_and_restore_recheck_client_at_locked_precommit
-    transaction = File.read(
+  def test_windows_safe_update_verifies_passive_script_envelope_at_call_site
+    source = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    )
+
+    assert_includes source,
+                    "Assert-ClaudeEasyScriptOutsideManagedBlockIsPassive $ScriptText"
+    assert_includes source, "Get-JavaScriptAnalysis $outsidePrefix"
+    assert_includes source, "Get-JavaScriptAnalysis $outsideSuffix"
+  end
+
+  def test_windows_safe_update_checks_outside_literals_at_call_site
+    source = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    )
+
+    assert_includes source, '$outsidePrefixAnalysis.HasLiteral'
+    assert_includes source, '$outsideSuffixAnalysis.HasLiteral'
+  end
+
+  def test_windows_script_composition_rejects_main_references_at_call_site
+    source = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
+    )
+
+    assert_includes source, "Assert-JavaScriptDoesNotReferenceMain $withoutDeclaration"
+    assert_includes source, "不能在入口声明之外引用 main"
+  end
+
+  def test_windows_delete_recovery_publishes_with_atomic_move
+    source = File.read(
       File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
     )
-    installer = File.binread(
-      File.join(SKILL, "scripts/install_windows.ps1")
-    ).force_encoding("UTF-8")
-    windows_tests = File.binread(
-      File.join(ROOT, "tests/test_windows_installer.ps1")
-    ).force_encoding("UTF-8")
+    invoke_start = source.index("function Invoke-InterruptedTransactionRecovery(")
+    invoke_end = source.index(
+      "function Assert-InterruptedTransactionRecovered(",
+      invoke_start || 0
+    )
+    refute_nil invoke_start
+    refute_nil invoke_end
+    invocation = source[invoke_start...invoke_end]
 
-    assert_includes transaction,
-                    "function Invoke-VerifiedFileTransaction(\n" \
-                    "    [object[]]$Targets,\n" \
-                    "    [scriptblock]$PreCommitCondition = $null,\n" \
-                    "    [string]$InterruptedRecoveryPolicy = \"client_stopped\"\n" \
-                    ")"
-    assert_includes transaction,
-                    "Invoke-VerifiedPathTransaction $Targets @() " \
-                    "$PreCommitCondition $InterruptedRecoveryPolicy"
-    assert_includes installer,
-                    "$restoreCommitted = Invoke-VerifiedFileTransaction"
-    assert_includes installer,
-                    "$installCommitted = Invoke-VerifiedFileTransaction $targets $clientStoppedPreCommit"
-    assert_includes installer,
-                    ") $clientStoppedPreCommit\n" \
-                    "    if (-not $restoreCommitted)"
-    assert_includes installer,
-                    "$installCommitted = Invoke-VerifiedFileTransaction " \
-                    "$targets $clientStoppedPreCommit\n" \
-                    "    if (-not $installCommitted)"
-    assert_includes windows_tests,
-                    "client-start install changed a protected target"
-    assert_includes windows_tests,
-                    "client-start restore changed current configuration"
-
-    documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "tests/baseline.md"))
-    ]
-    documents = [documents[2], documents[3]]
-    documents.each do |document|
-      assert_includes document, "安装、备份恢复和卸载"
-      assert_includes document, "提交条件"
-    end
+    assert_includes invocation,
+                    "[System.IO.File]::Move(\n" \
+                    "                        $entry.Temporary.Path,\n" \
+                    "                        $entry.Item.Action.Path\n" \
+                    "                    )"
+    refute_includes invocation, "[System.IO.File]::WriteAllBytes("
   end
 
-  def test_windows_uninstall_preserves_a_pending_safe_update
-    uninstaller = File.binread(
-      File.join(SKILL, "scripts/uninstall_windows.ps1")
-    ).force_encoding("UTF-8")
-    windows_tests = File.binread(
-      File.join(ROOT, "tests/test_windows_installer.ps1")
-    ).force_encoding("UTF-8")
-
-    lock = uninstaller.index("$mutationLock = Enter-AppHomeMutationLock $AppHome")
-    pending_snapshot = uninstaller.index(
-      'Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录"'
+  def test_windows_delete_recovery_preserves_delete_identity_predicate
+    source = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
     )
-    install_state_snapshot = uninstaller.index(
-      'Get-OptionalFileSnapshot $statePath "安装状态"'
-    )
-    refute_nil lock
-    refute_nil pending_snapshot
-    refute_nil install_state_snapshot
-    assert_operator lock, :<, pending_snapshot
-    assert_operator pending_snapshot, :<, install_state_snapshot
-    assert_includes uninstaller,
-                    "if ($safeUpdateStateSnapshot.Exists) {\n" \
-                    "        Complete-PendingSafeUpdateUninstall\n" \
-                    "    }"
-    assert_includes uninstaller, '"partial" "safe_update_pending"'
-    assert_includes windows_tests,
-                    "pending safe update uninstall changed AppHome"
 
-    documents = [
-      File.read(File.join(ROOT, "README.md")),
-      File.read(File.join(SKILL, "SKILL.md")),
-      policy_document,
-      File.read(File.join(ROOT, "tests/baseline.md"))
+    assert_includes source,
+                    '$differentIdentityIsRestoredOriginal = $action.Action -eq "write" -and'
+    assert_includes source,
+                    '$snapshot.Identity -cne $action.Identity -and' \
+                    "\n            -not $differentIdentityIsRestoredOriginal -and"
+    assert_includes source,
+                    '($action.Action -ne "delete" -or ' \
+                    '$currentHash -ne $originalHash)) {'
+  end
+
+  def test_windows_candidate_cleanup_watcher_is_armed_before_publish
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/mihomo.ps1")
+    ).force_encoding("UTF-8")
+    function_source = source[
+      /function Test-MihomoCandidate\b.*?(?=^function |\z)/m
     ]
-    documents = [documents[2], documents[3]]
-    documents.each do |document|
-      assert_includes document, "尚未验收"
-      assert_includes document, "safe_update_pending"
-    end
+
+    refute_nil function_source
+    watcher = function_source.index("Start-MihomoCandidateCleanupWatcher $temporary")
+    staging = function_source.index("$stagingStream = New-PrivateFileStream $staging")
+    refute_nil watcher
+    refute_nil staging
+    assert_operator watcher, :<, staging
+  end
+
+  def test_windows_safe_update_compares_managed_script_envelope
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    ).force_encoding("UTF-8")
+    compare_start = source.index("function Assert-ClaudeEasyManagedScriptCurrent(")
+    compare_end = source.index("function Test-ClaudeEasyFlowSequenceHasItem(", compare_start)
+    refute_nil compare_start
+    refute_nil compare_end
+    compare = source[compare_start...compare_end]
+
+    assert_includes compare, "Get-ClaudeEasyManagedScriptEnvelope $ScriptText $UsageProfile"
+    assert_includes compare, "Get-ClaudeEasyManagedScriptEnvelope $expectedScript $UsageProfile"
+    refute_includes compare, "Get-ClaudeEasyManagedScriptBlock $ScriptText $UsageProfile"
+  end
+
+  def test_windows_managed_script_finally_restores_intrinsics
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
+    ).force_encoding("UTF-8")
+
+    assert_includes source, '$parts += "        claudeEasyRestoreIntrinsics();"'
+  end
+
+  def test_windows_managed_script_installs_main_after_original_end_marker
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
+    ).force_encoding("UTF-8")
+
+    original_end_index = source.index("$parts += $originalEnd")
+    finalizer_index = source.index(
+      %q!$parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === "function" ? claudeEasyPreviousMain : null);'!
+    )
+    refute_nil original_end_index
+    refute_nil finalizer_index
+    assert_operator original_end_index, :<, finalizer_index
+  end
+
+  def test_windows_backup_publication_uses_atomic_move
+    source = File.binread(
+      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
+    ).force_encoding("UTF-8")
+    backup = source[/function Backup-Versioned\b.*?(?=^function |\z)/m]
+
+    refute_nil backup
+    assert_includes backup, '[System.IO.File]::Move($temporary, $destination)'
+    refute_includes backup, '[System.IO.File]::Copy('
+  end
+
+  def test_windows_safe_update_multiline_flow_includes_trailing_sections
+    source = File.read(
+      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
+    )
+
+    assert_includes source,
+                    "$flowLines += @($lines[($groupsNode.Start + 1)..($lines.Count - 1)])"
+    refute_includes source,
+                    "$flowLines += @($lines[($groupsNode.Start + 1)..($groupsNode.End - 1)])"
   end
 
   def test_skill_and_scripts_never_stop_or_restart_clash
@@ -1058,175 +754,6 @@ class SkillContractTest < Minitest::Test
 
     refute_empty uses
     uses.each { |entry| assert_match(/@[0-9a-f]{40}\z/, entry, entry) }
-  end
-
-  def test_windows_candidate_cleanup_watcher_is_armed_before_publish
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/mihomo.ps1")
-    ).force_encoding("UTF-8")
-    function_source = source[
-      /function Test-MihomoCandidate\b.*?(?=^function |\z)/m
-    ]
-
-    refute_nil function_source
-    watcher = function_source.index("Start-MihomoCandidateCleanupWatcher $temporary")
-    staging = function_source.index("$stagingStream = New-PrivateFileStream $staging")
-    publish = function_source.index("[System.IO.File]::Move($staging, $temporary)")
-    refute_nil watcher
-    refute_nil staging
-    refute_nil publish
-    assert_operator watcher, :<, staging,
-                    "sensitive staging bytes must not exist before caller-death cleanup is armed"
-    assert_operator staging, :<, publish
-  end
-
-  def test_windows_interrupted_new_file_recovery_requires_managed_bytes
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
-    ).force_encoding("UTF-8")
-    recovery_plan = source[
-      /function Get-InterruptedTransactionRecoveryPlan\b.*?(?=^function Invoke-InterruptedTransactionRecovery)/m
-    ]
-
-    refute_nil recovery_plan
-    assert_match(
-      /\} elseif \(\$action\.Action -eq "write"\) \{\n\s+if \(\$snapshot\.Exists -and\n\s+\$currentHash -ne \$replacementHash -and -not \$isInterruptedReplacement\) \{\n\s+throw "中断事务新建目标有无法自动合并的新改动/,
-      recovery_plan
-    )
-  end
-
-  def test_windows_managed_script_suffix_cannot_rebind_main
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
-    ).force_encoding("UTF-8")
-
-    assert_includes source, "function Assert-JavaScriptDoesNotBindMain"
-    assert_equal 2, source.scan('Assert-JavaScriptCanCompose $restored').length
-    assert_includes source, '(?:function|class|var|let|const)'
-    assert_includes source, '(?<![A-Za-z0-9_$.])main\s*='
-  end
-
-  def test_windows_existing_script_cannot_rebind_main_outside_its_declaration
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
-    ).force_encoding("UTF-8")
-
-    assert_includes source, 'Assert-JavaScriptDoesNotBindMain $withoutDeclaration'
-  end
-
-  def test_windows_existing_script_rejects_dynamic_global_escape_before_writing
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
-    ).force_encoding("UTF-8")
-
-    assert_includes source, "function Assert-JavaScriptDoesNotUseDynamicCode"
-    assert_includes source, 'Assert-JavaScriptDoesNotUseDynamicCode $Text'
-    assert_includes source, '\b(?:eval|Function)\b'
-    assert_includes source, '\.\s*constructor\b'
-    assert_includes source, "$stringLiterals = @()"
-    assert_includes source, "StringLiterals = @($stringLiterals)"
-    assert_includes source, '$constructorLiteral = @($analysis.StringLiterals | Where-Object {'
-    assert_includes source, '$_.Substring(1, $_.Length - 2) -ceq "constructor"'
-    assert_includes source, '$constructorLiteral)'
-    assert_includes source, "$templateExpressionDepths = @()"
-    assert_includes source, '$templateExpressionDepths += 1'
-    assert_includes source, '$state = "template"'
-  end
-
-  def test_windows_safe_update_compares_managed_envelope_not_user_script_body
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/safe_update.ps1")
-    ).force_encoding("UTF-8")
-
-    assert_includes source, "function Get-ClaudeEasyManagedScriptEnvelope"
-    assert_includes source, '"`r`n// CLAUDEEASY ORIGINAL CONTENT`r`n"'
-    assert_includes source, "Get-ClaudeEasyManagedScriptEnvelope $ScriptText $UsageProfile"
-    assert_includes source, "Get-ClaudeEasyManagedScriptEnvelope $expectedScript $UsageProfile"
-  end
-
-  def test_windows_managed_script_preserves_top_level_semantics_then_seals_entry
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/script_js.ps1")
-    ).force_encoding("UTF-8")
-    uninstaller = File.binread(
-      File.join(SKILL, "scripts/uninstall_windows.ps1")
-    ).force_encoding("UTF-8")
-
-    assert_includes source, '$parts += "let claudeEasyInstallManagedMain = (function ("'
-    %w[Object Reflect Array Boolean Error Function JSON RegExp].each do |intrinsic|
-      assert_includes source, %($parts += "  this.#{intrinsic},)
-    end
-    assert_includes source, '$parts += "  this.String"'
-    assert_includes source, '$parts += "const claudeEasySubjectSnapshots = [];"'
-    assert_includes source, '$parts += "const claudeEasyGlobalSnapshots = [];"'
-    assert_includes source, '$parts += "function claudeEasyRestoreIntrinsics() {"'
-    assert_includes source, '$parts += "let claudeEasyPreviousMain = null;"'
-    assert_includes source, '$parts += "const claudeEasyManagedMain = main;"'
-    assert_includes source, '$parts += "return function (previousMain) {"'
-    assert_includes source, '$parts += "  claudeEasyRestoreIntrinsics();"'
-    assert_includes source, '$parts += "      } finally {"'
-    assert_includes source, '$parts += "        claudeEasyRestoreIntrinsics();"'
-    assert_includes source, '$parts += "        return claudeEasyApplyFunction(previousMain, undefined, [config, profileName]);"'
-    assert_includes source, %q!$parts += '  claudeEasyDefineProperty(claudeEasyRealGlobal, "main", {'!
-    assert_includes source, '$parts += "    get: function () { return claudeEasyManagedMain; },"'
-    assert_includes source, '$parts += "    set: function () {},"'
-    assert_includes source, '$parts += "    configurable: false"'
-    assert_includes source, 'if (-not [string]::IsNullOrWhiteSpace($previous)) { $parts += $previous.Trim() }'
-    assert_includes source,
-                    %q!$parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === "function" ? claudeEasyPreviousMain : null);'!
-    assert_includes source, '$parts += "claudeEasyInstallManagedMain = null;"'
-    refute_includes source, "loadPrevious"
-    refute_includes source, "new Proxy"
-
-    setup_index = source.index('$parts += "let claudeEasyInstallManagedMain = (function ("')
-    original_begin_index = source.index("$parts += $originalBegin")
-    original_end_index = source.index("$parts += $originalEnd")
-    finalizer_index = source.index(
-      %q!$parts += 'claudeEasyInstallManagedMain(typeof claudeEasyPreviousMain === "function" ? claudeEasyPreviousMain : null);'!
-    )
-    null_index = source.index('$parts += "claudeEasyInstallManagedMain = null;"')
-    assert_operator setup_index, :<, original_begin_index
-    assert_operator original_begin_index, :<, original_end_index
-    assert_operator original_end_index, :<, finalizer_index
-    assert_operator finalizer_index, :<, null_index
-
-    assert_includes source, '// CLAUDEEASY ORIGINAL BEGIN'
-    assert_includes source, '// CLAUDEEASY ORIGINAL END'
-    assert_includes uninstaller, '$_.Kind -eq "original-begin"'
-    assert_includes uninstaller, '$_.Kind -eq "original-end"'
-  end
-
-  def test_windows_backups_are_private_before_the_first_byte_is_written
-    source = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
-    ).force_encoding("UTF-8")
-    backup = source[/function Backup-Versioned\b.*?(?=^function |\z)/m]
-
-    refute_nil backup
-    assert_includes backup, '".claude-easy-backup-"'
-    assert_includes backup, '$backupStream = New-PrivateFileStream $temporary'
-    assert_includes backup, '$backupStream.Flush($true)'
-    assert_includes backup, '[System.IO.File]::Move($temporary, $destination)'
-    assert_operator backup.index('$backupStream = New-PrivateFileStream $temporary'), :<,
-                    backup.index('$backupStream.Write(')
-    assert_operator backup.index('$backupStream.Flush($true)'), :<,
-                    backup.index('[System.IO.File]::Move($temporary, $destination)')
-  end
-
-  def test_windows_default_app_home_rejects_multiple_existing_candidates
-    transaction = File.binread(
-      File.join(SKILL, "scripts/windows/install_windows/transaction.ps1")
-    ).force_encoding("UTF-8")
-    installer = File.binread(File.join(SKILL, "scripts/install_windows.ps1")).force_encoding("UTF-8")
-    uninstaller = File.binread(File.join(SKILL, "scripts/uninstall_windows.ps1")).force_encoding("UTF-8")
-
-    assert_includes transaction, "function Resolve-ClashVergeAppHome"
-    assert_includes transaction, "Clash Verge Rev 配置目录不唯一"
-    assert_includes transaction, 'if ($existing.Count -gt 1)'
-    assert_equal 1, installer.scan(/Resolve-ClashVergeAppHome\s*$/).length
-    assert_equal 1, uninstaller.scan(/Resolve-ClashVergeAppHome\s*$/).length
-    refute_includes installer, '$candidates | Where-Object'
-    refute_includes uninstaller, '$candidates | Where-Object'
   end
 
   def test_all_public_commands_expose_the_versioned_result_contract

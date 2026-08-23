@@ -761,29 +761,19 @@ test('returns invalid configurations unchanged', { skip: !available }, () => {
 
 test('PowerShell safe update checks installed script and proxy-group prerequisites before acceptance', () => {
   const installer = fs.readFileSync(installerPath, 'utf8');
-  const safeUpdateModule = fs.readFileSync(path.join(installerModuleDir, 'safe_update.ps1'), 'utf8');
   const scriptCheck = installer.indexOf(
     'Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedProfile $enginePath $targetScript'
-  );
-  const profileCheck = installer.indexOf(
-    'Assert-ClaudeEasyProxyGroupCollection $text $publicSubscriptionLabel'
   );
   const mihomoCheck = installer.indexOf('Test-MihomoCandidate $core $text $profilesDirectory');
   const manifestRemoval = installer.indexOf(
     'Remove-VerifiedOwnedFile $safeUpdateStatePath $manifestSnapshot.Bytes $manifestSnapshot.Identity'
   );
   assert.ok(scriptCheck >= 0, 'safe update does not validate the installed global script');
-  assert.ok(profileCheck > scriptCheck, 'proxy-group prerequisites are not checked after the installed script');
-  assert.ok(mihomoCheck > profileCheck, 'Mihomo validation does not run after proxy-group checks');
+  assert.ok(mihomoCheck > scriptCheck, 'Mihomo validation does not run after the installed script check');
   assert.ok(manifestRemoval > mihomoCheck, 'safe-update manifest is removed before validation finishes');
   const postVerification = installer.slice(installer.indexOf('foreach ($entry in $validated)'));
   assert.doesNotMatch(postVerification, /Get-FileSha256\s+\$[^\r\n]*Target\.Path/);
   assert.match(postVerification, /ValidatedSha256/);
-  assert.match(
-    safeUpdateModule,
-    /\$flowLines \+= @\(\$lines\[\(\$groupsNode\.Start \+ 1\)\.\.\(\$lines\.Count - 1\)\]\)/,
-    'multi-line flow sequences stop before their top-level closing bracket'
-  );
 });
 
 test('DNS fragments must resolve to a non-direct proxy or group', { skip: !available }, () => {

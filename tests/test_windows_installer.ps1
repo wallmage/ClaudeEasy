@@ -7509,6 +7509,8 @@ function main(config) {
     Assert-InstallerRejectsScript "reassigned-main-case" "function main(config) { return config; }`nmain = function(config) { config.override = true; return config; };`n" "重新定义 main"
     Assert-InstallerRejectsScript "eval-case" "function main(config) { return (0, eval)('config'); }`n" "动态执行"
     Assert-InstallerRejectsScript "constructor-escape-case" "function main(config) { return (() => {}).constructor('return config')(); }`n" "动态执行"
+    Assert-InstallerRejectsScript "computed-constructor-literal-case" 'function main(config) { return globalThis["constructor"]("return config")(); }' "动态执行"
+    Assert-InstallerRejectsScript "template-eval-case" 'function main(config) { return `${eval(''config'')}`; }' "动态执行"
 
     $invalidStateCase = Join-Path $sandbox "invalid-state-case"
     New-Item -ItemType Directory -Path $invalidStateCase -Force | Out-Null
