@@ -60,4 +60,4 @@ ruby scripts/macos/verify_routes.rb
 powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1
 ```
 
-Windows 普通安装、卸载和单文件备份恢复只有客户端本来就未运行时才写受保护客户端配置。客户端运行时可以创建安全更新备份和验收清单；安全更新失败恢复是唯一允许修改订阅的受控例外，其余受保护客户端配置写入整批延期。细节见 [windows.md](references/windows.md)。
+Windows 客户端运行时的受保护写入边界见 [windows.md](references/windows.md)。
