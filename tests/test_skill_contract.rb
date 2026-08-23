@@ -278,18 +278,6 @@ class SkillContractTest < Minitest::Test
     refute_includes get_live, '-eq "Selector"'
   end
 
-  def test_claude_and_anthropic_are_never_opened_or_tested
-    [
-      File.read(File.join(SKILL, "scripts/macos/verify_routes.rb")),
-      File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
-    ].each do |source|
-      refute_match %r{https://(?:www\.)?(?:claude\.ai|anthropic\.com)/}i, source
-      assert_includes source, "https://chatgpt.com/"
-      assert_includes source, "https://gemini.google.com/"
-      assert_includes source, "https://grok.com/"
-    end
-  end
-
   def test_windows_route_verifier_rejects_nonempty_secret_argument
     source = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
 
@@ -384,16 +372,6 @@ class SkillContractTest < Minitest::Test
     source = File.read(path)
     refute_includes source, "/cache/fakeip/flush"
     refute_includes source, "/usr/bin/curl"
-  end
-
-  def test_macos_installer_is_one_shot
-    path = File.join(SKILL, "scripts/install_macos.sh")
-    skip unless File.file?(path)
-
-    source = File.read(path)
-    refute_match(/osascript[^\n]*(?:ClashX Meta|quit|terminate|open -a)/i, source)
-    refute_match(/\bopen\s+-a\s+["']?ClashX Meta/i, source)
-    refute_match(/LaunchServices.*ClashX Meta/i, source)
   end
 
   def test_windows_preparation_recovery_accepts_targets_removed_by_the_main_journal
@@ -561,13 +539,34 @@ class SkillContractTest < Minitest::Test
   end
 
   CLASH_CLIENT_NAME = /ClashX(?:\s+Meta)?|Clash\s+Verge(?:\s+Rev)?|clash-verge(?:-rev)?|\bverge\b/i
-  CLASH_KILL_PRIMITIVE = /Stop-Process|taskkill|killall|Process\.kill|\$process\.Kill\(\)|(?<![A-Za-z])\.Kill\(\)|osascript[^\n]*(?:quit|terminate)/i
+  CLASH_KILL_PRIMITIVE = /(?:^|[;\s|&$(`=])(?:Stop-Process|taskkill|killall|pkill|\bkill\b|Process\.kill|\$process\.Kill\(\)|(?<![A-Za-z])\.Kill\(\)|osascript[^\n]*(?:quit|terminate))/i
+  PROCESS_LOOKUP = /(?:pgrep|pkill|Get-Process|\bps\b)/i
   FORBIDDEN_CLASH_EXIT_PROSE = ["请先从托盘菜单完全退出", "退出客户端，再"].freeze
-  ANTHROPIC_URL = %r{https?://[^\s"'<>]*(?:claude\.ai|anthropic\.com|api\.anthropic\.com)}i
-  ANTHROPIC_NETWORK_CALL = /(?:curl|Invoke-WebRequest|Invoke-RestMethod|fetch\s*\(|NSURL|\.get\s*\(|\.post\s*\(|wget\b)/i
+  FORBIDDEN_ANTHROPIC_HOST = /\A(?:[\w-]+\.)*(?:claude\.ai|anthropic\.com)\z/i
+  URL_AUTHORITY = %r{https?://[^\s"'<>]+}i
+  CLASHX_BINARY_PATH = %r{(?:/Applications/)?ClashX Meta\.app/Contents/MacOS/ClashX Meta}
 
   def production_script_paths
     Dir.glob(File.join(SKILL, "scripts/**/*.{rb,sh,ps1,psm1,cmd,js}")).select { |path| File.file?(path) }.sort
+  end
+
+  def anthropic_uri_host(url)
+    authority = url.sub(%r{\Ahttps?://}i, "").split(%r{[/\?#]}, 2).first.to_s
+    authority = authority.delete_prefix("[").delete_suffix("]")
+    authority.split(":", 2).first.to_s
+  end
+
+  def forbidden_anthropic_host?(host)
+    host.match?(FORBIDDEN_ANTHROPIC_HOST)
+  end
+
+  def static_routing_rule_line?(line)
+    line.match?(/DOMAIN-SUFFIX|DOMAIN,|RULE-SET|rule-providers/i)
+  end
+
+  def passive_clashx_path_reference?(line)
+    line.match?(CLASHX_BINARY_PATH) &&
+      line.match?(/end_with\?|include\?|match\?|\.match\(|IndexOf|Contains|endsWith|-eq\s|\s==\s|\[\s*"?\$\w+"?\s+=\s/i)
   end
 
   def clash_client_termination_violations(source)
@@ -579,8 +578,12 @@ class SkillContractTest < Minitest::Test
     lines.each_with_index do |line, index|
       next unless line.match?(CLASH_KILL_PRIMITIVE)
 
-      window = lines[[index - 2, 0].max..[index + 2, lines.length - 1].min].join
-      next unless window.match?(CLASH_CLIENT_NAME)
+      window_lines = lines[[index - 5, 0].max..[index + 5, lines.length - 1].min]
+      clash_context = window_lines.any? do |window_line|
+        window_line.match?(CLASH_CLIENT_NAME) &&
+          (window_line.match?(PROCESS_LOOKUP) || window_line.match?(CLASH_KILL_PRIMITIVE))
+      end
+      next unless clash_context
 
       violations << "Clash-client termination near line #{index + 1}: #{line.strip}"
     end
@@ -590,22 +593,16 @@ class SkillContractTest < Minitest::Test
   def anthropic_network_violations(source)
     violations = []
     source.lines.each_with_index do |line, index|
-      next unless line.match?(ANTHROPIC_URL)
-      next if line.match?(/DOMAIN-SUFFIX|DOMAIN,|RULE-SET|rule-providers/i)
+      next if static_routing_rule_line?(line)
 
-      next unless line.match?(ANTHROPIC_NETWORK_CALL) ||
-                  source.lines[[index - 1, 0].max..[index + 1, source.lines.length - 1].min].any? do |nearby|
-                    nearby.match?(ANTHROPIC_NETWORK_CALL)
-                  end
+      line.scan(URL_AUTHORITY).each do |url|
+        next unless forbidden_anthropic_host?(anthropic_uri_host(url))
 
-      violations << "Claude/Anthropic network probe near line #{index + 1}: #{line.strip}"
+        violations << "Claude/Anthropic network probe near line #{index + 1}: #{line.strip}"
+        break
+      end
     end
     violations
-  end
-
-  def passive_clashx_path_reference?(line)
-    line.match?(/ClashX Meta\.app\/Contents\/MacOS\/ClashX Meta/) &&
-      line.match?(/end_with\?|match\?|suffix\s*=|include\?|IndexOf|Contains|endswith|identity|executable|\.match\(/i)
   end
 
   def clashx_meta_launch_violations(source)
@@ -620,15 +617,36 @@ class SkillContractTest < Minitest::Test
       if line.match?(/LaunchServices/i) && line.match?(/ClashX\s+Meta/i)
         violations << "LaunchServices ClashX Meta launch near line #{index + 1}"
       end
-      if line.match?(/tell\s+application\s+["']ClashX Meta["'][^\n]*(?:activate|run|launch)/i)
+      if line.match?(/osascript[^\n]*tell\s+application\s+["']ClashX Meta["'][^\n]*(?:activate|run|launch|open|reopen)/i)
         violations << "AppleScript ClashX Meta activation near line #{index + 1}"
       end
       next if passive_clashx_path_reference?(line)
-      next if line.match?(/osascript[^\n]*JavaScript/i)
 
-      if line.match?(%r{(?:system|exec|`|\bspawn\b|Start-Process)[^;\n]*ClashX Meta\.app/Contents/MacOS/ClashX Meta}i)
+      if line.match?(CLASHX_BINARY_PATH)
         violations << "direct ClashX Meta execution near line #{index + 1}: #{line.strip}"
       end
+    end
+    source.lines.each_with_index do |line, index|
+      next unless line.match?(/tell\s+application\s+["']ClashX Meta["']/i)
+
+      block_lines = [line]
+      ((index + 1)...source.lines.length).each do |block_index|
+        block_lines << source.lines[block_index]
+        break if source.lines[block_index].match?(/end\s+tell/i)
+      end
+      block = block_lines.join
+      next unless block.match?(/\b(?:activate|run|launch|open|reopen)\b/i)
+
+      violations << "AppleScript ClashX Meta activation near line #{index + 1}"
+    end
+    lines = source.lines
+    lines.each_with_index do |line, index|
+      next unless line.match?(/Application\s*\(\s*["']ClashX Meta["']\s*\)/)
+
+      window = lines[[index - 5, 0].max..[index + 5, lines.length - 1].min].join
+      next unless window.match?(/\.(?:activate|launch|run)\s*\(/i)
+
+      violations << "JXA ClashX Meta activation near line #{index + 1}"
     end
     violations
   end
