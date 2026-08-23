@@ -702,7 +702,7 @@ class SkillContractTest < Minitest::Test
     return true if prev.match?(/[(\[{=+\\\.]\s*\z/)
     return true if prev.match?(/,\s*\z/)
 
-    next_line.to_s.strip.match?(/\A[\),]\]/)
+    next_line.to_s.strip.match?(/\A[),\]]/)
   end
 
   def direct_exec_clash?(line, previous_line: nil, next_line: nil)
@@ -806,15 +806,17 @@ class SkillContractTest < Minitest::Test
     segment.scan(%r{pkill(?:\s+-[\w]+)*\s+(?!-f\b)(?:"([^"]+)"|'([^']+)'|(\S+))}i) do |a, b, c|
       targets << (a || b || c)
     end
-    segment.scan(/\bkillall\b(\s+-[\w]+)*\s+(.*)/im) do |_flags, rest|
+    segment.scan(/\bkillall\b((?:\s+-[\w]+)*)\s+(.*)/i) do |_flags, rest|
       remainder = rest
-      while (match = remainder.match(/\A\s+(?:"([^"]+)"|'([^']+)'|(\S+))/))
+      while (match = remainder.match(/\A\s*(?:"([^"]+)"|'([^']+)'|(\S+))/))
         targets << (match[1] || match[2] || match[3])
         remainder = remainder[match.end(0)..]
       end
     end
-    segment.scan(%r{taskkill(?:\s+/[\w]+)*\s+/(?:IM|PID)\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i) do |a, b, c|
-      targets << (a || b || c)
+    if segment.match?(/\btaskkill\b/i)
+      segment.scan(%r{/(?:IM|PID)\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i) do |a, b, c|
+        targets << (a || b || c)
+      end
     end
     segment.scan(/Stop-Process(?:\s+-\w+)*\s+-Name\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i) do |a, b, c|
       targets << (a || b || c)
@@ -840,11 +842,15 @@ class SkillContractTest < Minitest::Test
     targets = extract_literal_kill_targets(segment)
     return segment.match?(CLASH_CLIENT_LITERAL) if targets.empty?
 
-    targets.any? do |target|
+    flagged = targets.any? do |target|
       next false if mihomo_kill_target?(target)
 
       target.match?(CLASH_CLIENT_LITERAL)
     end
+    return true if flagged
+
+    residue = targets.uniq.reduce(segment) { |text, target| text.gsub(target) { "" } }
+    residue.match?(CLASH_CLIENT_LITERAL)
   end
 
   def clash_client_termination_violations(source)
