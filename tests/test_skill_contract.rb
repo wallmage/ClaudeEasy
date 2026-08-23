@@ -625,7 +625,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def command_segments(line)
-    line.split(/[;|]/).map(&:strip).reject(&:empty?)
+    line.split(/&&|\|\||&|[;|]/).map(&:strip).reject(&:empty?)
   end
 
   def normalize_endpoint_source(source)
@@ -692,8 +692,27 @@ class SkillContractTest < Minitest::Test
     line.match?(EXEC_LAUNCH_SERVICES) && clashx_reference?(line)
   end
 
-  def direct_exec_clash?(line)
+  def bare_quoted_clash_path_line?(line)
+    line.match?(%r{\A\s*["'](?:/Applications/)?ClashX Meta\.app(?:/Contents/MacOS/ClashX Meta)?["']\s*\z})
+  end
+
+  def bare_quoted_clash_continuation?(previous_line, next_line)
+    prev = previous_line.to_s.rstrip
+    return true if prev.match?(/(?:\|\||&&)\s*\z/)
+    return true if prev.match?(/[(\[{=+\\\.]\s*\z/)
+    return true if prev.match?(/,\s*\z/)
+
+    next_line.to_s.strip.match?(/\A[\),]\]/)
+  end
+
+  def direct_exec_clash?(line, previous_line: nil, next_line: nil)
     return false unless clashx_reference?(line)
+
+    if bare_quoted_clash_path_line?(line)
+      return false if bare_quoted_clash_continuation?(previous_line, next_line)
+
+      return true
+    end
 
     line.match?(%r{(?:[;|&]|`\s+)\s*(?:/\S+\s+)?["'](?:/Applications/)?ClashX Meta\.app(?:/Contents/MacOS/ClashX Meta)?["']}) ||
       line.match?(%r{(?:^|[;|&]|`\s+)\s*(?:/[\w./ -]+/)?ClashX Meta\.app/Contents/MacOS/ClashX Meta\b}) ||
@@ -709,10 +728,10 @@ class SkillContractTest < Minitest::Test
     false
   end
 
-  def line_has_clash_launch_execution?(line)
+  def line_has_clash_launch_execution?(line, previous_line: nil, next_line: nil)
     open_launch_clash?(line) ||
       launch_services_clash?(line) ||
-      direct_exec_clash?(line) ||
+      direct_exec_clash?(line, previous_line: previous_line, next_line: next_line) ||
       ruby_js_exec_clash?(line)
   end
 
@@ -751,11 +770,25 @@ class SkillContractTest < Minitest::Test
     violations
   end
 
+  def previous_nonempty_line(lines, index)
+    return nil if index <= 0
+
+    lines[0...index].reverse.find { |candidate| !candidate.strip.empty? }
+  end
+
+  def next_nonempty_line(lines, index)
+    lines[(index + 1)..].find { |candidate| !candidate.strip.empty? }
+  end
+
   def clashx_meta_launch_violations(source)
     lines = comment_stripped_lines(source)
     violations = []
     lines.each_with_index do |line, index|
-      next unless line_has_clash_launch_execution?(line)
+      next unless line_has_clash_launch_execution?(
+        line,
+        previous_line: previous_nonempty_line(lines, index),
+        next_line: next_nonempty_line(lines, index)
+      )
 
       violations << "ClashX Meta launch near line #{index + 1}: #{line.strip}"
     end
@@ -766,37 +799,52 @@ class SkillContractTest < Minitest::Test
 
   def extract_literal_kill_targets(segment)
     targets = []
-    patterns = [
-      %r{pkill(?:\s+-[\w]+)*\s+-f\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i,
-      %r{(?:pkill|killall)(?:\s+-[\w]+)*\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i,
-      %r{taskkill(?:\s+/[\w]+)*\s+/(?:IM|PID)\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i,
-      /Stop-Process(?:\s+-\w+)*\s+-Name\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i,
-      %r{(?:^|[;\s|&]|`\s*)(?:/[\w./-]+/)?kill(?:\s+-[\w]+)*\s+(?:"([^"]+)"|'([^']+)'|(-?\S+))}i
-    ]
-    patterns.each do |pattern|
-      next unless segment =~ pattern
 
-      targets << (Regexp.last_match(1) || Regexp.last_match(2) || Regexp.last_match(3))
+    segment.scan(%r{pkill(?:\s+-[\w]+)*\s+-f\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i) do |a, b, c|
+      targets << (a || b || c)
+    end
+    segment.scan(%r{pkill(?:\s+-[\w]+)*\s+(?!-f\b)(?:"([^"]+)"|'([^']+)'|(\S+))}i) do |a, b, c|
+      targets << (a || b || c)
+    end
+    segment.scan(/\bkillall\b(\s+-[\w]+)*\s+(.*)/im) do |_flags, rest|
+      remainder = rest
+      while (match = remainder.match(/\A\s+(?:"([^"]+)"|'([^']+)'|(\S+))/))
+        targets << (match[1] || match[2] || match[3])
+        remainder = remainder[match.end(0)..]
+      end
+    end
+    segment.scan(%r{taskkill(?:\s+/[\w]+)*\s+/(?:IM|PID)\s+(?:"([^"]+)"|'([^']+)'|(\S+))}i) do |a, b, c|
+      targets << (a || b || c)
+    end
+    segment.scan(/Stop-Process(?:\s+-\w+)*\s+-Name\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i) do |a, b, c|
+      targets << (a || b || c)
+    end
+    segment.scan(%r{(?:^|[;\s|&]|`\s*)(?:/[\w./-]+/)?kill(?:\s+-[\w]+)*\s+(?:"([^"]+)"|'([^']+)'|(-?\S+))}i) do |a, b, c|
+      targets << (a || b || c)
     end
     targets.compact
   end
 
-  def literal_mihomo_kill_target?(segment)
-    extract_literal_kill_targets(segment).any? do |target|
-      next false if target.match?(/\A\$/)
-      next false if target.match?(/\A-?\d+\z/)
+  def mihomo_kill_target?(target)
+    return false if target.match?(/\A\$/)
+    return false if target.match?(/\A-?\d+\z/)
 
-      target.sub(/\.exe\z/i, "").match?(/\Amihomo\z/i)
-    end
+    target.sub(/\.exe\z/i, "").match?(/\Amihomo\z/i)
   end
 
   def segment_forbidden_clash_kill?(segment)
     return false if segment.empty?
     return false if segment.match?(/\A(?:echo\b|puts\b|print\b|logger\b|Write-Host\b|Write-Output\b)/i)
     return false unless segment.match?(KILL_PRIMITIVE)
-    return false if literal_mihomo_kill_target?(segment)
 
-    segment.match?(CLASH_CLIENT_LITERAL)
+    targets = extract_literal_kill_targets(segment)
+    return segment.match?(CLASH_CLIENT_LITERAL) if targets.empty?
+
+    targets.any? do |target|
+      next false if mihomo_kill_target?(target)
+
+      target.match?(CLASH_CLIENT_LITERAL)
+    end
   end
 
   def clash_client_termination_violations(source)
