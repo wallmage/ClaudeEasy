@@ -9,10 +9,10 @@
 1. 本文件定义所有任务共同遵守的支持范围、冲突顺序、脚本接口、异常和输出边界。
 2. [diagnostics.md](diagnostics.md)、[profiles-and-patch.md](profiles-and-patch.md)、[routing-and-security.md](routing-and-security.md)、[safe-update-and-recovery.md](safe-update-and-recovery.md)、[macos.md](macos.md) 与 [windows.md](windows.md) 分别是对应模块和平台行为的唯一权威来源；读取组合只由 [SKILL.md](../SKILL.md) 的任务路由决定。
 3. [`policy.json`](policy.json) 定义解析器、规则集、分组候选和 AI 规则等配置常量；策略 Markdown 只解释用途，不复制常量清单。
-4. [`result-contract.json`](result-contract.json) 定义机器输出字段、类型和状态枚举；策略 Markdown 只定义脱敏与语义约束。
+4. [`result-contract.json`](result-contract.json) 定义机器输出字段、类型和状态枚举；策略 Markdown 只定义语义约束。
 5. `SKILL.md` 保留触发后必须立即可见的安全边界、代理入口、模块选择、执行顺序和读取路由；README 只解释用户可见行为，不重新定义执行规则；设计文档只定义产品目标、组件边界和规则归属；`tests/baseline.md` 只记录测试覆盖范围。
 
-冲突按以下顺序处理：用户当次明确授权和用途档位先限定可做范围；随后具体场景规则优先于通用规则，平台规则优先于跨平台摘要，事务安全规则优先于一般失败恢复规则，隐私规则优先于展示便利。仍无法唯一判断时停止对应写入并报告规则冲突，不自行挑选较宽松解释。
+冲突按以下顺序处理：用户当次明确授权和用途档位先限定可做范围；随后具体场景规则优先于通用规则，平台规则优先于跨平台摘要，事务安全规则优先于一般失败恢复规则。仍无法唯一判断时停止对应写入并报告规则冲突，不自行挑选较宽松解释。
 
 ## 支持范围
 
@@ -50,7 +50,7 @@ ClaudeEasy 有两个独立模块：
 
 所有公开命令都显式支持 JSON v1：macOS 使用 `--json`，Windows 使用 `-Json`。默认模式继续输出中文信息，失败分支也必须输出摘要，不能只返回退出码。JSON 模式的标准输出只能有一个对象，不能混入日志；对象中的 `exit_code` 必须与进程退出码一致。`code` 和 `operation` 是稳定的机器标识，`command` 只允许 `install`、`uninstall`、`patch`、`verify_routes`。所有必填字段、状态值和字段类型以 [result-contract.json](result-contract.json) 为准。安装包任一必需模块缺失时都在修改 AppHome 前返回退出码 `6` 和 `incomplete_package`。
 
-JSON 结果必须经过统一脱敏，不得含订阅 URL、密码、UUID、私钥、控制器密钥、完整本机路径或节点名称。Skill 调用脚本时优先使用 JSON 模式，并依据字段判断结果，不解析中文文案。面向用户的默认中文输出同样不得显示敏感值；分流验证只报告代理组已识别和各目标的检查状态，不显示代理组名称、当前节点或连接链节点。
+Skill 调用脚本时优先使用 JSON 模式，并依据字段判断结果，不解析中文文案。分流验证只报告代理组已识别和各目标的检查状态。
 
 ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持兼容。内部代码按配置转换、备份与事务、Mihomo 校验、订阅处理、运行状态和 CLI 组织；入口只负责参数、编排与结果输出。拆分不能改变事务顺序、安全边界或既有退出码。
 
