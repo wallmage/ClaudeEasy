@@ -27,7 +27,7 @@
 - 不得运行 ClashX Meta 主程序做诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端版本读取 `Info.plist`，实时状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo；客户端未运行时保持未运行。
 - 已保存用途档位同时约束 Patch 和 Diagnostics；故障报告不能自动升档，诊断、修复和复测不得超出当前档位。
 - 不实现订阅后台监听。三个档位都必须关闭订阅自动更新；订阅更新只能由用户显式触发“安全更新”，并覆盖当前存储位置中的全部远程订阅。
-- macOS 订阅下载必须使用 Foundation 原生请求，并从当前运行的 ClashX Meta 动态生成客户端身份；不得使用 curl，也不得固定或伪造 User-Agent，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 只通过 Clash Verge Rev 的“更新所有订阅”刷新：当前工具提供 Computer Use 时由代理操作，否则给出相同步骤并等待用户回复“我已经手动更新完了”；随后必须继续补丁验收和当前档位全部测试。两端在任一原代理组或节点选择无法恢复时都不得报告完成。
+- macOS 订阅下载必须使用 Foundation 原生请求，并从当前运行的 ClashX Meta 动态生成客户端身份；不得使用 curl，也不得固定或伪造 User-Agent，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 只通过 Clash Verge Rev 的“更新所有订阅”刷新：当前工具提供 Computer Use 时由代理操作，否则按 `claude-easy/references/safe-update-and-recovery.md` 给出相同步骤并等待该文件规定的确认口令；随后必须继续补丁验收和当前档位全部测试。两端在任一原代理组或节点选择无法恢复时都不得报告完成。
 - 文档、代码和测试必须描述同一套现行行为，不保留已经取消的方案。
 
 ## 测试与发布

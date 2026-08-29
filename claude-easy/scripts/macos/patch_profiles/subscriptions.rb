@@ -579,11 +579,9 @@ module ClaudeEasy
     value = elements[key_indexes.first + 1]
     return [:invalid, nil] unless value
 
-    raw = case value.name
-          when "true", "false" then value.name
-          when "integer", "string" then value.text.to_s.strip
-          end
-    raw.nil? || raw.empty? ? [:invalid, nil] : [:present, raw]
+    return [:present, value.name] if %w[true false].include?(value.name)
+
+    [:invalid, nil]
   rescue StandardError
     [:invalid, nil]
   end

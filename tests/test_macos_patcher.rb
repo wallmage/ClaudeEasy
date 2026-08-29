@@ -51,6 +51,28 @@ class MacosPatcherTest < Minitest::Test
     @policy = JSON.parse(File.read(POLICY_PATH)) if PATCHER_AVAILABLE
   end
 
+  def test_storage_preference_requires_a_boolean_plist_value
+    status = Struct.new(:success?).new(true)
+    preference_domain = ClaudeEasy::AUTO_UPDATE_DOMAINS.first
+    plist = "ignored"
+    xml = <<~XML
+      <?xml version="1.0" encoding="UTF-8"?>
+      <plist version="1.0"><dict>
+        <key>kUserEnableiCloud</key><string>false</string>
+      </dict></plist>
+    XML
+    runner = lambda do |*_args, **_kwargs|
+      [xml, "", status]
+    end
+
+    ClaudeEasy.stub(:defaults_export_domain, { domain: preference_domain, plist: plist }) do
+      assert_equal(
+        [:invalid, nil],
+        ClaudeEasy.storage_preference_state(runner: runner, preference_domain: preference_domain)
+      )
+    end
+  end
+
   def test_missing_storage_preference_uses_unique_local_active_profile
     Dir.mktmpdir do |home|
       local = File.join(home, ".config", "clash.meta")
