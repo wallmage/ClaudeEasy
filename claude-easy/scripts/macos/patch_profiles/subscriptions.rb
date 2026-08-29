@@ -14,6 +14,7 @@ module ClaudeEasy
   AUTO_UPDATE_OWNERSHIP_BASENAME = "clashx-meta-kAutoUpdateEnable.state.json".freeze
   AUTO_UPDATE_DOMAINS = %w[com.metacubex.ClashX.meta com.MetaCubeX.ClashX.meta].freeze
   MAX_REMOTE_SUBSCRIPTION_BYTES = 16 * 1024 * 1024
+  STORAGE_PREFERENCE_UNSET = Object.new.freeze
   CLASHX_NATIVE_FETCH_SCRIPT = <<~'JAVASCRIPT'.freeze
     ObjC.import("Foundation");
     ObjC.import("AppKit");
@@ -554,7 +555,46 @@ module ClaudeEasy
     false
   end
 
-  def storage_mode(value = defaults_read("kUserEnableiCloud"))
+  def storage_preference_state(runner: Open3.method(:capture3), preference_domain: clashx_preference_domain)
+    exported = defaults_export_domain(runner: runner, domain: preference_domain)
+    return [:invalid, nil] unless exported
+
+    xml, _error, status = runner.call(
+      "/usr/bin/plutil", "-convert", "xml1", "-o", "-", "-",
+      stdin_data: exported.fetch(:plist)
+    )
+    return [:invalid, nil] unless status.success?
+
+    document = REXML::Document.new(xml)
+    dictionary = document.elements["plist/dict"]
+    return [:invalid, nil] unless dictionary
+
+    elements = dictionary.elements.to_a
+    key_indexes = elements.each_index.select do |index|
+      elements[index].name == "key" && elements[index].text.to_s == "kUserEnableiCloud"
+    end
+    return [:missing, nil] if key_indexes.empty?
+    return [:invalid, nil] unless key_indexes.one?
+
+    value = elements[key_indexes.first + 1]
+    return [:invalid, nil] unless value
+
+    raw = case value.name
+          when "true", "false" then value.name
+          when "integer", "string" then value.text.to_s.strip
+          end
+    raw.nil? || raw.empty? ? [:invalid, nil] : [:present, raw]
+  rescue StandardError
+    [:invalid, nil]
+  end
+
+  def storage_mode(value = STORAGE_PREFERENCE_UNSET)
+    if value.equal?(STORAGE_PREFERENCE_UNSET)
+      state, value = storage_preference_state
+      return :local if state == :missing && unique_local_profile_directory
+      return :unknown unless state == :present
+    end
+
     normalized = value.to_s.strip.downcase
     return :icloud if %w[1 true yes].include?(normalized)
     return :local if %w[0 false no].include?(normalized)
@@ -1326,6 +1366,21 @@ module ClaudeEasy
     return [] unless matching.length == 1
 
     matching
+  end
+
+  def unique_local_profile_directory(home: Dir.home, app_paths: clashx_app_paths, selected: nil)
+    selected ||= selected_profile_name
+    return nil unless selected.is_a?(String)
+
+    local = File.join(home, ".config", "clash.meta")
+    return nil unless Dir.exist?(local)
+
+    clouds = icloud_container_roots(home: home, app_paths: app_paths).map { |root| File.join(root, "Documents") }
+    candidates = [local] + clouds.select { |path| Dir.exist?(path) }
+    matching = candidates.uniq.select do |root|
+      profile_paths(root).any? { |path| active_profile?(path, selected) }
+    end
+    matching == [local] ? local : nil
   end
 
   def active_profile?(path, selected)

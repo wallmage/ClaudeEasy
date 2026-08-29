@@ -51,6 +51,46 @@ class MacosPatcherTest < Minitest::Test
     @policy = JSON.parse(File.read(POLICY_PATH)) if PATCHER_AVAILABLE
   end
 
+  def test_missing_storage_preference_uses_unique_local_active_profile
+    Dir.mktmpdir do |home|
+      local = File.join(home, ".config", "clash.meta")
+      FileUtils.mkdir_p(local)
+      File.write(File.join(local, "active.yaml"), "proxies: []\n")
+
+      Dir.stub(:home, home) do
+        ClaudeEasy.stub(:clashx_app_paths, []) do
+          ClaudeEasy.stub(:selected_profile_name, "active") do
+            ClaudeEasy.stub(:storage_preference_state, [:missing, nil]) do
+              assert_equal :local, ClaudeEasy.storage_mode
+              assert_equal [local], ClaudeEasy.default_profile_directories(
+                home: home, app_paths: [], selected: "active"
+              )
+            end
+
+            ClaudeEasy.stub(:storage_preference_state, [:invalid, nil]) do
+              assert_equal :unknown, ClaudeEasy.storage_mode
+              assert_empty ClaudeEasy.default_profile_directories(
+                home: home, app_paths: [], selected: "active"
+              )
+            end
+
+            cloud = File.join(
+              home, "Library", "Mobile Documents", "iCloud~com~metacubex~ClashX", "Documents"
+            )
+            FileUtils.mkdir_p(cloud)
+            File.write(File.join(cloud, "active.yaml"), "proxies: []\n")
+            ClaudeEasy.stub(:storage_preference_state, [:missing, nil]) do
+              assert_equal :unknown, ClaudeEasy.storage_mode
+              assert_empty ClaudeEasy.default_profile_directories(
+                home: home, app_paths: [], selected: "active"
+              )
+            end
+          end
+        end
+      end
+    end
+  end
+
   def clashx_native_fetch_integration_script
     script = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT.dup
     identity_start = script.index("var primaryApplications =")

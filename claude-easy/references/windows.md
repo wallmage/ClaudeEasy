@@ -4,11 +4,11 @@
 
 ## Windows
 
-Clash Verge Rev 有正常主窗口。当前环境有 Computer Use 时可以操作已经运行的 Clash Verge Rev；没有该工具或首次调用失败时不重试，先使用本文件已有的安全脚本，否则给用户相同的准确界面步骤并等待确认。Computer Use 不能操作 UAC、管理员认证或系统安全授权窗口。
+Clash Verge Rev 有正常主窗口。当前会话有电脑操控时，由代理操作已经运行的 Clash Verge Rev；没有或首次调用失败时先使用本文件已有的安全脚本，再按主入口识别工作台并帮助启用电脑操控。只有确实没有自动入口时才给用户一个最短界面动作。电脑操控不能代替用户处理 UAC、管理员认证或系统安全授权窗口。
 
-当前订阅更新按 `safe-update-and-recovery.md` 运行：刷新前执行 `.\scripts\install_windows.cmd -SnapshotProfiles -Json`，创建全部远程订阅的更新前备份和验收记录，并只读记录更新前 TUN 与全部代理组选择；不运行订阅内容、Mihomo、站点、分流、DNS 或 WebRTC 测试。真正点击前立即运行 `.\scripts\install_windows.cmd -BeginSafeUpdateRefresh -Json`，180 秒从清单中持久保存的刷新开始时间算，不从备份开始；刷新后执行 `.\scripts\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json`。180 秒内未取得最终验收结果时停止继续验收，再执行一次不受该时限约束的安全恢复；恢复成功报告超时失败并已回滚，恢复未完成返回 `partial` 并保留恢复记录。没有 Computer Use 时，先让用户打开订阅页并回复“准备好了”，再开始计时并让用户点击。不得使用右键菜单中的“更新”或“通过代理更新”。
+当前订阅更新按 `safe-update-and-recovery.md` 运行：刷新前执行 `.\scripts\install_windows.cmd -SnapshotProfiles -Json`，创建全部远程订阅的更新前备份和验收记录，并只读记录更新前 TUN 与全部代理组选择；不运行订阅内容、Mihomo、站点、分流、DNS 或 WebRTC 测试。真正点击前立即运行 `.\scripts\install_windows.cmd -BeginSafeUpdateRefresh -Json`，180 秒从清单中持久保存的刷新开始时间算，不从备份开始；刷新后执行 `.\scripts\install_windows.cmd -VerifySafeUpdate -RefreshConfirmed -Json`。180 秒内未取得最终验收结果时停止继续验收，再执行一次不受该时限约束的安全恢复；恢复结果只在内部记录，随后继续诊断，不能把超时或 `partial` 当成对用户的收尾。当前没有电脑操控（Computer Use）时先帮助用户启用；工作台确实不支持或启用失败，才用一句话请用户完成订阅页里的必要点击。不得使用右键菜单中的“更新”或“通过代理更新”。
 
-Clash Verge Rev 刷新订阅时运行 `profiles/Script.js`，按已保存档位重新应用全局补丁。刷新后的验收逐份确认本轮更新凭据，核对受管全局脚本、严格 UTF-8、YAML、代理组、Mihomo、更新前 TUN 与代理选择，以及全部远程订阅的 `allow_auto_update: false`；随后通过已安装的重新激活快捷键加载当前订阅，等待运行配置重新生成并通过运行检查，不能只检查刷新前仍在内存中的旧配置。失败时按更新前备份恢复并重新加载原运行配置。验收成功仍只是中间状态，必须继续完成与 macOS 相同的当前档位 `required_followups`、客户端动作、站点与 Agent 验收、档位 3 分流、DNS、WebRTC、本地区域指纹测试和最终状态复核。没有 Computer Use 只改为让用户执行界面与浏览器动作，不能省略任何项目；任一原代理组或节点选择无法确认保留时不得报告完成。
+Clash Verge Rev 刷新订阅时运行 `profiles/Script.js`，按已保存档位重新应用全局补丁。刷新后的验收逐份确认本轮更新凭据，核对受管全局脚本、严格 UTF-8、YAML、代理组、Mihomo、更新前 TUN 与代理选择，以及全部远程订阅的 `allow_auto_update: false`；随后通过已安装的重新激活快捷键加载当前订阅，等待运行配置重新生成并通过运行检查，不能只检查刷新前仍在内存中的旧配置。失败时按更新前备份恢复并重新加载原运行配置。验收成功仍只是中间状态，必须继续完成与 macOS 相同的当前档位 `required_followups`、客户端动作、站点与 Agent 验收、档位 3 分流、DNS、WebRTC、本地区域指纹测试和最终状态复核。界面与浏览器动作优先由电脑操控完成；当前能力缺失时先帮助启用，确实不能使用才请用户完成最短的必要动作。任一原代理组或节点选择无法确认保留时不得报告完成。
 
 控制器返回的 JSON 只要同一对象含大小写冲突字段就拒绝；代理组、节点选择和显式 `-MainGroup`、`-AiGroup` 名称都按大小写精确匹配，不能把两个合法名称合并。
 

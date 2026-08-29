@@ -13,7 +13,7 @@
 | **scope** | 分类器误选/漏选 job 或 platform flag |
 | **structure**（macos-15） | CI scope 分类；Skill 路由合同；策略与代码 parity；Ruby/Shell 语法；空白与 diff 检查 |
 | **structure-node**（ubuntu） | Windows 引擎与 region 页 JS 语法 |
-| **macos** | macOS patcher 与包装器；dispatch 追加 system-ruby；base-scoped 包装器与生产探针；覆盖 `already_disabled_owned` |
+| **macos** | macOS patcher 与包装器；存储偏好缺失时识别唯一现行本地订阅；dispatch 追加 system-ruby；base-scoped 包装器与生产探针；覆盖 `already_disabled_owned` |
 | **windows** ×3 TestGroup | AST 解析；JSON smoke；installer 套件；base-scoped PS5 路由（core leg）；覆盖 `client_running_profile_three_deferred` |
 | **windows-installer-powershell-7**（dispatch） | PS7 完整 installer 套件 |
 | **windows-routes-powershell-7**（dispatch） | PS7 路由验证 |
