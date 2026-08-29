@@ -29,11 +29,11 @@
 
 **Claude/Anthropic 远程域名永久禁测：** 相关网站、API 和域名一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量；用户当次要求也不能覆盖。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。本地 `assets/claude-region-check.html` 不属于 Claude/Anthropic 域名；已保存档位为 3 时，任何配置任务都必须在收尾运行一次本地区域指纹测试，每轮调整后再运行一次，直到低风险通过。
 
-Clash Verge Rev 有正常主窗口，Windows 当前环境提供电脑操控（Computer Use）时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用电脑操控操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；电脑操控仍可用于有正常窗口的浏览器和 AdGuard。能力检测、启用和缺失时的处理以 `SKILL.md` 为准，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
+Clash Verge Rev 有正常主窗口，Windows 当前会话按 SKILL.md 确认可用的电脑操控时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用电脑操控操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；电脑操控仍可用于有正常窗口的浏览器和 AdGuard。能力检测、启用和缺失时的处理以 `SKILL.md` 为准，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
 
 绝对不要退出、停止或重启 Clash 客户端。不得执行、建议或要求用户执行这类操作。中国用户通常依赖客户端越过 GFW；关闭客户端会让 AI 助手断线，并可能让修复停在一半。
 
-任何 Patch、Diagnostics、代码审查、测试或环境探测都不得运行 ClashX Meta 主程序，包括直接执行应用包中的 `ClashX Meta`、传入 `--version` 或其他参数、使用 `open` 或 LaunchServices 打开应用，以及通过 Computer Use 启动未运行的客户端。这些动作可能创建第二个客户端并中断现有 Mihomo。客户端版本只从应用的 `Info.plist` 读取；进程、日志、偏好和本地控制器用于读取运行状态；内核版本只检查 Mihomo。客户端未运行时保持未运行，无法取得实时状态就写成未验证，不能为检查而启动。
+任何 Patch、Diagnostics、代码审查、测试或环境探测都不得运行 ClashX Meta 主程序，包括直接执行应用包中的 `ClashX Meta`、传入 `--version` 或其他参数、使用 `open` 或 LaunchServices 打开应用，以及通过 Computer Use 启动未运行的客户端。这些动作可能创建第二个客户端并中断现有 Mihomo。客户端版本只从应用的 `Info.plist` 读取；进程、日志、偏好和本地控制器用于读取运行状态；内核版本只检查 Mihomo。客户端未运行时保持未运行；无法取得实时状态时只在机器结果标记未验证，不能为检查而启动。
 
 ## 模块选择
 
