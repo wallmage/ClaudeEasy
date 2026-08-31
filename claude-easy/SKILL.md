@@ -31,7 +31,8 @@ description: Use when an agent needs to diagnose, analyze, fix, or monitor any m
 
 触发后、读取任何策略文件之前，按用户原话完成一次内部分流。内部路由名为 `legacy_network` 或 `general_computer`，只供代理使用：不向用户展示，也不询问属于哪类问题。
 
-- 用户明确描述网络访问、连接速度、DNS、代理、分流、泄漏、Clash、订阅、节点、TUN 或系统代理：内部路由为 `legacy_network`。
+- 用户明确描述网络访问、连接速度、DNS、代理、分流、网络泄漏、订阅、节点、TUN、系统代理，或要把 Clash 当网络/配置问题处理：内部路由为 `legacy_network`。
+- 只提到 Clash 客户端崩溃、卡住、占 CPU 或窗口打不开，且没有上一则网络症状：内部路由为 `general_computer`。
 - 其他请求，包括无法从原话确定的模糊问题：内部路由为 `general_computer`。
 
 若内部路由为 `general_computer`，且后续证据确认问题属于网络：停止通用分支写入，携带已取得事实转入 `legacy_network`。
@@ -40,9 +41,7 @@ description: Use when an agent needs to diagnose, analyze, fix, or monitor any m
 
 ## 通用流程
 
-内部路由为 `general_computer` 时，只完整阅读 [references/general-diagnostics.md](references/general-diagnostics.md)，再按当前平台完整阅读 [references/general-macos.md](references/general-macos.md) 或 [references/general-windows.md](references/general-windows.md)，不得读取另一平台后混用规则。不得读取 [references/policy-core.md](references/policy-core.md)、[references/diagnostics.md](references/diagnostics.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)、[references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/macos.md](references/macos.md)、[references/windows.md](references/windows.md)、[references/policy.json](references/policy.json) 或 [references/result-contract.json](references/result-contract.json)。不套用网络用途档位、Patch、订阅、DNS、WebRTC 或 Mihomo 完成闸门。
-
-按 `general-diagnostics.md` 自动执行低风险、可恢复且属于用户请求的修复。不继承网络用途档位或当前档位完成闸门。判断、取证、修复和复测以通用策略与当前平台文件为准。
+内部路由为 `general_computer` 时，只完整阅读 [references/general-diagnostics.md](references/general-diagnostics.md)，再按当前平台完整阅读 [references/general-macos.md](references/general-macos.md) 或 [references/general-windows.md](references/general-windows.md)，不得读取另一平台后混用规则。不得读取 [references/policy-core.md](references/policy-core.md)、[references/diagnostics.md](references/diagnostics.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)、[references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/macos.md](references/macos.md)、[references/windows.md](references/windows.md)、[references/policy.json](references/policy.json) 或 [references/result-contract.json](references/result-contract.json)。不套用网络用途档位、Patch、订阅、DNS、WebRTC 或 Mihomo 完成闸门。判断、取证、修复和复测以通用策略与当前平台文件为准。按 `general-diagnostics.md` 自动执行低风险、可恢复且属于用户请求的修复。
 
 ## 网络流程
 
@@ -68,7 +67,7 @@ description: Use when an agent needs to diagnose, analyze, fix, or monitor any m
 
 每次配置或修复先检查当前会话的工具清单，只有实际可调用、且能操作该目标窗口的电脑操控工具才算这项动作已启用。只会控制浏览器标签页时，不能用来改系统设置或点 Clash。没有工具时，从运行环境读取当前工作台；能够识别时只查询该产品的最新官方说明，不凭产品名猜测能力。Codex 与 ZCode by Z.ai 已知支持电脑操控，但仍以当前会话是否提供工具为准；支持而未启用时，给出当前平台的官方启用步骤并等待用户完成。当前工作台不支持时，建议改用支持电脑操控的工作台；若本档位后续不需要任何界面动作，继续自动流程，不为能力检测单独阻塞。
 
-Codex 未启用时，按当前官方界面引导用户进入“设置 → 插件 → 电脑操控（Computer Use）”，安装并启用页面中的电脑操控插件；macOS 再开启系统要求的“屏幕录制”和“辅助功能”权限，Windows 只按当前应用显示的权限提示操作。界面名称变化时先查官方说明。其他工作台只给该产品当前平台的官方步骤。第一次即将执行本轮明确的系统或浏览器设置前，用一句话说明将修改哪些设置并请求一次即时授权；授权后连续完成这一批操作，不重复询问相同权限。首次准备操作本轮系统或浏览器设置时统一问：“接下来我会替你调整需要的系统和浏览器设置，过程都能看到。是否同意我使用电脑操控完成？请回复‘同意’。”
+Codex 未启用时，按当前官方界面引导用户进入“设置 → 插件 → 电脑操控（Computer Use）”，安装并启用页面中的电脑操控插件；macOS 再开启系统要求的“屏幕录制”和“辅助功能”权限，Windows 只按当前应用显示的权限提示操作。界面名称变化时先查官方说明。其他工作台只给该产品当前平台的官方步骤。首次准备操作本轮系统或浏览器设置时，只问一次：“接下来我会替你调整需要的系统和浏览器设置，过程都能看到。是否同意我使用电脑操控完成？请回复‘同意’。”授权后连续完成这一批操作，不重复询问相同权限。
 
 - **Windows：** 有电脑操控时操作已经运行的 Clash Verge Rev、浏览器和其他正常窗口；没有时先用安全脚本，只有确实不存在自动入口的界面动作才交给用户。
 - **macOS：** 不用电脑操控附加 ClashX Meta；客户端开关走 [macos.md](references/macos.md) 原生命令。Safari、Chrome、AdGuard、系统设置等正常窗口由电脑操控完成。

@@ -23,7 +23,7 @@
 
 ## 项目边界
 
-- 只支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev；要求受支持版本的 Mihomo。
+- 网络能力只支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev，要求受支持版本的 Mihomo。通用电脑诊断覆盖这两端电脑本身的问题，不依赖用途档位或 Mihomo 完成闸门。
 - 绝不退出、停止或重启 Clash。只有用户已选用途档位明确要求时，才通过客户端界面切换 TUN 或 Clash 自己的系统代理；AdGuard for Mac 只允许按已验证的兼容规则通过它自己的界面切换过滤模式，绝不改写第三方 PAC，也不切换订阅、代理组或节点。
 - 不得运行 ClashX Meta 主程序做诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端版本读取 `Info.plist`，实时状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo；客户端未运行时保持未运行。
 - 已保存用途档位同时约束 Patch 和 Diagnostics；故障报告不能自动升档，诊断、修复和复测不得超出当前档位。

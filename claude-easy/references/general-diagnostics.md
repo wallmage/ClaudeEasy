@@ -1,6 +1,6 @@
 # ClaudeEasy 通用电脑诊断策略
 
-> 读取路由：内部路由为 `general_computer` 时读取本文件，再读当前平台的 `general-macos.md` 或 `general-windows.md`。不读取网络用途档位、Patch、订阅、DNS、WebRTC、Mihomo 完成闸门或七个网络策略文件。本文件是通用判断、证据选择、自动修复、复测、内部状态和经验沉淀的唯一权威来源；平台文件只回答如何取证和如何安全执行。
+> 读取路由：内部路由为 `general_computer` 时读取本文件，再读当前平台的 `general-macos.md` 或 `general-windows.md`。本文件是通用判断、证据选择、自动修复、复测、内部状态和经验沉淀的唯一权威来源。不读取哪些网络文件，以 `SKILL.md` 通用流程为准。
 
 ## 工作目标与完成状态
 

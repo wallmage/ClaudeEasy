@@ -18,7 +18,7 @@ PowerShell、Event Viewer、Reliability Monitor、性能计数器、进程和文
 
 ## 按问题选择系统证据
 
-只响应 `general-diagnostics.md` 提出的一个明确问题，或一组不可分割的同源读取。下列名称是可用手段，不是启动清单。不要把 `log show`、`mdfind`、`pmset`、`diskutil` 或 `~/Library/Logs/DiagnosticReports` 搬到 Windows。
+只响应 `general-diagnostics.md` 提出的当前取证请求。下列名称是可用手段，不是启动清单。不要把 `log show`、`mdfind`、`pmset`、`diskutil` 或 `~/Library/Logs/DiagnosticReports` 搬到 Windows。
 
 - 进程：PowerShell `Get-Process`、`Get-CimInstance Win32_Process`；需要窗口时只读 Task Manager 对应行。只取与当前问题直接相关的进程名、PID、CPU、内存或打开句柄。
 - 文件系统：只在与当前问题有直接关系的路径上用 `Get-Item`、`Get-ChildItem` 或限定该路径树的搜索。不无边界扫描用户配置目录或全盘。
