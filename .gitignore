@@ -1,13 +1,16 @@
 .DS_Store
+.worktrees/
 docs/*
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/specs/
 docs/superpowers/specs/*
 !docs/superpowers/specs/2026-08-16-safe-update-workflow-completion-design.md
+!docs/superpowers/specs/2026-09-01-general-computer-diagnostics-design.md
 !docs/superpowers/plans/
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-08-16-safe-update-workflow-completion.md
+!docs/superpowers/plans/2026-09-01-general-computer-diagnostics.md
 dist/
 node_modules/
 *.zip
