@@ -1,4 +1,4 @@
 interface:
   display_name: "ClaudeEasy 电脑诊断与网络配置"
   short_description: "自动诊断并修复 macOS、Windows 和 Clash 网络问题"
-  default_prompt: "使用 $claude-easy 自动分析、诊断、修复或监测用户的电脑问题；明显网络问题继续使用现有网络流程，其他问题使用通用判断流程。"
+  default_prompt: "使用 $claude-easy 自动分析、诊断、修复用户的电脑问题，间歇问题只用有范围的观察窗口；明显网络问题继续使用现有网络流程，其他问题使用通用判断流程。"

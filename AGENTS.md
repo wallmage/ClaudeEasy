@@ -25,12 +25,12 @@
 
 - 网络能力只支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev，要求受支持版本的 Mihomo。通用电脑诊断覆盖这两端电脑本身的问题，不依赖用途档位或 Mihomo 完成闸门。
 - 绝不退出、停止或重启 Clash。只有用户已选用途档位明确要求时，才通过客户端界面切换 TUN 或 Clash 自己的系统代理；AdGuard for Mac 只允许按已验证的兼容规则通过它自己的界面切换过滤模式，绝不改写第三方 PAC，也不切换订阅、代理组或节点。
-- 不得运行 ClashX Meta 主程序做诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端版本读取 `Info.plist`，实时状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo；客户端未运行时保持未运行。
-- 已保存用途档位同时约束 Patch 和 Diagnostics；故障报告不能自动升档，诊断、修复和复测不得超出当前档位。
-- 不实现订阅后台监听。三个档位都必须关闭订阅自动更新；订阅更新只能由用户显式触发“安全更新”，并覆盖当前存储位置中的全部远程订阅。
-- macOS 订阅下载必须使用 Foundation 原生请求，并从当前运行的 ClashX Meta 动态生成客户端身份；不得使用 curl，也不得固定或伪造 User-Agent，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 只通过 Clash Verge Rev 的“更新所有订阅”刷新：当前会话实际提供、且能操作 Clash Verge Rev 窗口的电脑操控时由代理操作，否则按 `claude-easy/references/safe-update-and-recovery.md` 给出相同步骤并等待该文件规定的确认口令；随后必须继续补丁验收和当前档位全部测试。两端在任一原代理组或节点选择无法恢复时都不得报告完成。
+- 网络流程中，不得运行 ClashX Meta 主程序做诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端版本读取 `Info.plist`，实时状态读取进程、日志、偏好或本地控制器，内核版本检查 Mihomo；客户端未运行时保持未运行。Clash 当应用的取证见 `general-*.md`。
+- 网络流程中，已保存用途档位同时约束 Patch 和 Diagnostics；故障报告不能自动升档，诊断、修复和复测不得超出当前档位。
+- 网络流程中，不实现订阅后台监听。三个档位都必须关闭订阅自动更新；订阅更新只能由用户显式触发“安全更新”，并覆盖当前存储位置中的全部远程订阅。
+- 网络流程中，macOS 订阅下载必须使用 Foundation 原生请求，并从当前运行的 ClashX Meta 动态生成客户端身份；不得使用 curl，也不得固定或伪造 User-Agent，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 只通过 Clash Verge Rev 的“更新所有订阅”刷新：当前会话实际提供、且能操作 Clash Verge Rev 窗口的电脑操控时由代理操作，否则按 `claude-easy/references/safe-update-and-recovery.md` 给出相同步骤并等待该文件规定的确认口令；随后必须继续补丁验收和当前档位全部测试。两端在任一原代理组或节点选择无法恢复时都不得报告完成。
 - 文档、代码和测试必须描述同一套现行行为，不保留已经取消的方案。
-- 第一阶段隔离：明显网络问题继续走原网络流程；其他电脑问题走通用判断流程。通用流程不读取或套用网络用途档位、Patch、订阅、DNS、WebRTC 或 Mihomo 完成闸门。通用流程取得证据后确认问题属于网络时，停止通用写入并转入原网络流程。
+- 第一阶段隔离：明显网络问题继续走原网络流程；其他电脑问题走通用判断流程。通用流程不读取或套用网络用途档位、Patch、订阅、DNS、WebRTC 或 Mihomo 完成闸门。转入网络流程只按 `claude-easy/SKILL.md` 内部路由的转入条件。
 
 ## 测试与发布
 

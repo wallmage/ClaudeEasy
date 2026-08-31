@@ -14,7 +14,7 @@ PowerShell、Event Viewer、Reliability Monitor、性能计数器、进程和文
 
 原场景落在有正常窗口的应用时，Computer Use 可用则按用户实际动作操作一次，并回读窗口标题、对话框和界面状态。
 
-可以安全启动或操作用户要求诊断的普通应用：用该应用的快捷方式、Start 菜单或已安装可执行文件打开。不要套用 macOS 的 `open`、LaunchServices、Apple Event 或“活动监视器”。Clash 启停禁令见 `SKILL.md` 共同安全边界：Clash Verge Rev 不是普通应用，不得启动、退出、停止或重启它，也不得用 Computer Use 改它的网络设置、订阅、代理组、节点、TUN 或系统代理。现场问题就是这个客户端本身（崩溃、高 CPU、窗口卡住）时，继续用允许的证据：日志、崩溃报告、进程快照。
+可以安全启动或操作用户要求诊断的普通应用：用该应用的快捷方式、Start 菜单或已安装可执行文件打开。不要套用 macOS 的 `open`、LaunchServices、Apple Event 或“活动监视器”。Clash 当应用的禁令见 `SKILL.md` 共同安全边界：Clash Verge Rev 不是普通应用，不得启动、退出、停止、重启或 Computer Use 操作它。现场问题就是这个客户端本身（崩溃、卡住、占 CPU、窗口打不开）时，只取日志、崩溃报告、进程快照。
 
 ## 按问题选择系统证据
 

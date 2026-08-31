@@ -25,7 +25,7 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 ## 共同安全边界
 
 1. **绝对不要退出、停止或重启 Clash 客户端。** 适用于 ClashX Meta 与 Clash Verge Rev。不得执行、建议或要求用户这样做。
-2. **不得运行 ClashX Meta 主程序，也不得用 Computer Use 操作它。** 不得用于诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端未运行时保持未运行。通用流程也不得把 Clash Verge Rev 当作普通应用启动、退出、停止或重启。
+2. **不得运行 ClashX Meta 主程序，也不得用 Computer Use 操作任一 Clash 客户端。** 不得用于诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端未运行时保持未运行。通用流程也不得把 Clash Verge Rev 当作普通应用启动、退出、停止或重启。Clash 当应用的取证只走日志、崩溃报告、进程快照。
 
 ## 内部路由
 
@@ -35,7 +35,7 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 - 只提到 Clash 客户端崩溃、卡住、占 CPU 或窗口打不开，且没有上一则网络症状：内部路由为 `general_computer`。
 - 其他请求，包括无法从原话确定的模糊问题：内部路由为 `general_computer`。
 
-若内部路由为 `general_computer`，且后续证据确认问题属于网络：停止通用分支写入，携带已取得事实转入 `legacy_network`。
+若内部路由为 `general_computer`，只有原始问题随后被证明符合上文 `legacy_network` 条件时才转入，并停止通用分支写入、携带已取得事实。Clash 崩溃、卡住、占 CPU 或窗口打不开不得转入，即使日志出现代理端口、TUN 或监听地址。发现 Clash 进程不等于属于网络。
 
 本文件保留代理入口、内部分流、共同边界、执行顺序和不可突破的安全边界。网络模块选择只属于网络流程。
 

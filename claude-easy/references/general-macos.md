@@ -14,7 +14,7 @@ shell、统一日志、进程、文件系统、性能和电源工具都是可用
 
 原场景落在有正常窗口的应用时，Computer Use 可用则按用户实际动作操作一次，并回读窗口标题、对话框和界面状态。
 
-可以安全启动或操作用户要求诊断的普通应用：用 Launchpad、该应用的快捷方式或 `open`。不要套用 Windows 的 Start 菜单、`Get-Process` 或 Event Viewer。Clash 启停禁令见 `SKILL.md` 共同安全边界：本文件不得启动、退出、停止、重启或 Computer Use 操作 ClashX Meta。现场问题就是这个客户端本身（崩溃、高 CPU）时，继续用允许的证据：日志、崩溃报告、进程快照。
+可以安全启动或操作用户要求诊断的普通应用：用 Launchpad、该应用的快捷方式或 `open`。不要套用 Windows 的 Start 菜单、`Get-Process` 或 Event Viewer。Clash 当应用的禁令见 `SKILL.md` 共同安全边界：本文件不得启动、退出、停止、重启或 Computer Use 操作 ClashX Meta。现场问题就是这个客户端本身（崩溃、卡住、占 CPU、窗口打不开）时，只取日志、崩溃报告、进程快照。
 
 ## 按问题选择系统证据
 
