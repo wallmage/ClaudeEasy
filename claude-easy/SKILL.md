@@ -1,6 +1,6 @@
 ---
 name: claude-easy
-description: Use when an agent needs to diagnose, analyze, fix, or monitor any macOS or Windows computer problem; diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; safely update all Clash subscriptions or restore backups; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
+description: Use when an agent needs to diagnose, analyze, or fix any macOS or Windows computer problem, or run a bounded observation window for an intermittent one; diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; safely update all Clash subscriptions or restore backups; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
 ---
 
 # ClaudeEasy 电脑诊断与网络配置
@@ -17,7 +17,7 @@ description: Use when an agent needs to diagnose, analyze, fix, or monitor any m
 
 ### 执行原则
 
-1. **一句话触发完整闭环。** 代理自行读取配置、偏好、日志、系统状态和机器结果，连续完成检查、诊断、修复、复测；能自行取得的信息不得反问用户。
+1. **一句话触发完整闭环。** 代理按当前流程策略自行读取本机能取得的证据，连续完成检查、诊断、修复、复测；能自行取得的信息不得反问用户。
 2. **没完成就继续做。** 一次方法失败时，先确认没有破坏原状态，再换用安全证据或受支持入口继续；不得把未完成状态当作收尾，也不得让用户替代理分析技术问题。
 3. **界面操作由代理完成。** 可靠脚本或结构化接口优先；必须点击正常应用窗口时使用当前会话实际提供的电脑操控（Computer Use）。工作台、操作系统或高风险动作强制要求的确认仍照常执行。
 4. **只有真实阻塞才暂停。** 仅限密码、验证码、MFA、实体操作、系统权限弹窗、工具策略要求的即时确认、不可恢复风险、外部服务确实不可用，或无法从本机证据消除的安全歧义。暂停时只说用户现在要做的一个动作；收到回复立即继续原流程。
@@ -37,7 +37,7 @@ description: Use when an agent needs to diagnose, analyze, fix, or monitor any m
 
 若内部路由为 `general_computer`，且后续证据确认问题属于网络：停止通用分支写入，携带已取得事实转入 `legacy_network`。
 
-本文件保留代理入口、内部分流、共同边界、模块选择、执行顺序和不可突破的安全边界。
+本文件保留代理入口、内部分流、共同边界、执行顺序和不可突破的安全边界。网络模块选择只属于网络流程。
 
 ## 通用流程
 
@@ -74,8 +74,8 @@ Codex 未启用时，按当前官方界面引导用户进入“设置 → 插件
 
 ### 不可突破的边界
 
-1. **绝对不要退出、停止或重启 Clash 客户端。** 不得执行、建议或要求用户这样做。
-2. **不得运行 ClashX Meta 主程序做检查。** 细节见 [policy-core.md](references/policy-core.md)。
+1. **Clash 启停禁令见上文共同安全边界。** 不得执行、建议或要求用户退出、停止或重启客户端。
+2. **不得运行 ClashX Meta 主程序做检查。** 细节见共同安全边界与 [policy-core.md](references/policy-core.md)。
 3. **Claude/Anthropic 远程域名永久禁测；** AI 联网与分流验收只测 ChatGPT、Gemini 和 Grok。细节见 [policy-core.md](references/policy-core.md) 与 [profiles-and-patch.md](references/profiles-and-patch.md) 本地区域指纹闭环。
 4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按 [windows.md](references/windows.md) 操作 Clash Verge Rev；AdGuard for Mac 只通过它自己的正常窗口调整兼容设置。
 5. 安全更新必须保留热加载，且只能走已经运行的客户端原生入口；180 秒窗口与失败处理见 [safe-update-and-recovery.md](references/safe-update-and-recovery.md)。

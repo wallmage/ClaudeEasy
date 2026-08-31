@@ -1,6 +1,6 @@
 # ClaudeEasy
 
-ClaudeEasy 是一个给 AI 助手用的 macOS 与 Windows 通用电脑诊断和修复 Skill，同时保留 Clash 网络配置能力。它支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev，可以用 Patch 按用途配置网络，也能排查连接问题、安全更新全部订阅、比较和恢复备份。
+ClaudeEasy 是一个给 AI 助手用的 macOS 与 Windows 通用电脑诊断和修复 Skill，同时保留 Clash 网络配置能力。网络配置支持 macOS 的 ClashX Meta 和 Windows 的 Clash Verge Rev，可以用 Patch 按用途配置网络，也能排查连接问题、安全更新全部订阅、比较和恢复备份。
 
 ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关系。
 
