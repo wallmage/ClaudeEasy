@@ -6,6 +6,7 @@
 - 每次项目改动需要 commit 和 push 时，无论改动是否直接位于 `claude-easy/`，都必须在同一流程中把仓库里的 `claude-easy/` 安装到 `~/.codex/skills/claude-easy/`。只维护这一份 Codex 副本，不创建或同步 `~/.agents/skills/claude-easy/`。新副本必须逐文件校验一致；安装或校验失败时不得把任务报告为完成，也不得要求用户另行手动处理。
 - `README.md` 只解释用户可见行为，`claude-easy/SKILL.md` 规定触发后必须立即可见的安全边界、代理入口、执行顺序和策略读取路由；设计文档只保存产品目标与组件边界，`tests/baseline.md` 只记录现行自动化测试范围。较低层文档不得复制后重新定义上层规则。
 - 策略按职责拆分：`policy-core.md` 保存所有任务共同边界；`diagnostics.md` 保存诊断与证据规则；`profiles-and-patch.md` 保存用途档位与 Patch；`routing-and-security.md` 保存 DNS、TUN、代理组、AI 与 WebRTC；`safe-update-and-recovery.md` 保存安全更新、备份与恢复；`macos.md` 和 `windows.md` 分别保存平台事务。`policy.json` 保存配置常量，`result-contract.json` 保存机器输出合同。
+- 第一阶段网络旧流程与通用新流程并行，各自独立读取策略。`general-diagnostics.md` 只保存通用判断、证据选择、自动修复、复测、内部状态和经验沉淀；`general-macos.md` 与 `general-windows.md` 只保存各自平台的按需取证、Computer Use、权限、修改和恢复。现有七个网络策略文件和全部网络脚本不得因通用分支改变行为。新通用能力默认双端同步，明确的平台差异分别写入对应平台文件。真实案例未证明需要前，不新增通用采集器、后台监测或辅助脚本。
 
 ## 开发规则
 
@@ -29,6 +30,7 @@
 - 不实现订阅后台监听。三个档位都必须关闭订阅自动更新；订阅更新只能由用户显式触发“安全更新”，并覆盖当前存储位置中的全部远程订阅。
 - macOS 订阅下载必须使用 Foundation 原生请求，并从当前运行的 ClashX Meta 动态生成客户端身份；不得使用 curl，也不得固定或伪造 User-Agent，并发送 `Accept-Language: zh-CN,zh;q=0.9`。Windows 只通过 Clash Verge Rev 的“更新所有订阅”刷新：当前会话实际提供、且能操作 Clash Verge Rev 窗口的电脑操控时由代理操作，否则按 `claude-easy/references/safe-update-and-recovery.md` 给出相同步骤并等待该文件规定的确认口令；随后必须继续补丁验收和当前档位全部测试。两端在任一原代理组或节点选择无法恢复时都不得报告完成。
 - 文档、代码和测试必须描述同一套现行行为，不保留已经取消的方案。
+- 第一阶段隔离：明显网络问题继续走原网络流程；其他电脑问题走通用判断流程。通用流程不读取或套用网络用途档位、Patch、订阅、DNS、WebRTC 或 Mihomo 完成闸门。通用流程取得证据后确认问题属于网络时，停止通用写入并转入原网络流程。
 
 ## 测试与发布
 
