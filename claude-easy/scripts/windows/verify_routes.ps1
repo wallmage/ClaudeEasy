@@ -6,7 +6,9 @@
     [string]$MainGroup = "",
     [string]$AiGroup = "",
     [string]$ObservationSeconds = "15",
-    [switch]$Json
+    [switch]$Json,
+    [string]$ProbeTarget = "",
+    [switch]$ProbeContextExplicit
 )
 
 $unboundArguments = @($args)
@@ -83,6 +85,16 @@ if ($unboundArguments.Count -gt 0) {
         Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "参数错误；未执行任何修改。")
     } else {
         Write-ClaudeEasyVerificationText "[ClaudeEasy] 参数错误；未执行任何修改。" -ErrorStream
+    }
+    exit 64
+}
+
+if (-not [string]::IsNullOrEmpty($ProbeTarget) -and
+    $ProbeTarget -notin @("ChatGPT", "Gemini", "Grok")) {
+    if ($Json) {
+        Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "invalid_request" -Code "invalid_arguments" -ExitCode 64 -SummaryZh "分流探测目标无效。")
+    } else {
+        Write-ClaudeEasyVerificationText "[ClaudeEasy] 分流探测目标无效。" -ErrorStream
     }
     exit 64
 }
@@ -589,8 +601,100 @@ function Observe-Route(
     }
 }
 
+function Invoke-ParallelRouteProbes(
+    [object[]]$Probes,
+    [string]$ProbeAppHome,
+    [string]$ProbeControllerUrl,
+    [string]$ProbeSecret,
+    [bool]$UseExplicitContext,
+    [int]$ProbeObservationSeconds
+) {
+    $powerShellPath = Join-Path $PSHOME $(if ($PSVersionTable.PSEdition -eq "Core") { "pwsh.exe" } else { "powershell.exe" })
+    $verifierPath = $PSCommandPath
+    $jobs = @()
+    foreach ($probe in $Probes) {
+        $jobs += Start-Job -ScriptBlock {
+            param(
+                [string]$PowerShellPath,
+                [string]$VerifierPath,
+                [string]$Label,
+                [string]$AppHome,
+                [string]$ControllerUrl,
+                [string]$Secret,
+                [bool]$ExplicitContext,
+                [int]$ObservationSeconds
+            )
+            $quote = { param([string]$Value) "'" + $Value.Replace("'", "''") + "'" }
+            $command = "& " + (& $quote $VerifierPath) +
+                " -ProbeTarget " + (& $quote $Label) +
+                " -ObservationSeconds " + [string]$ObservationSeconds +
+                " -Json"
+            if ($ExplicitContext) {
+                $command += " -ProbeContextExplicit -ControllerUrl " + (& $quote $ControllerUrl) + " -SecretStdin"
+            } else {
+                $command += " -AppHome " + (& $quote $AppHome)
+            }
+            $encodedCommand = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($command)
+            )
+            $arguments = @("-NoLogo", "-NoProfile", "-EncodedCommand", $encodedCommand)
+            $output = if ($ExplicitContext) {
+                ($Secret + "`n") | & $PowerShellPath @arguments 2>&1
+            } else {
+                & $PowerShellPath @arguments 2>&1
+            }
+            [pscustomobject]@{
+                Label = $Label
+                ExitCode = [int]$LASTEXITCODE
+                Output = (@($output) -join "`n")
+            }
+        } -ArgumentList @(
+            $powerShellPath, $verifierPath, [string]$probe.Label, $ProbeAppHome,
+            $ProbeControllerUrl, $ProbeSecret, $UseExplicitContext, $ProbeObservationSeconds
+        )
+    }
+    try {
+        $jobResults = @(Wait-Job -Job $jobs | Receive-Job)
+    } finally {
+        foreach ($job in $jobs) {
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $parsedResults = @{}
+    foreach ($result in $jobResults) {
+        $label = [string]$result.Label
+        try {
+            $payload = ([string]$result.Output | ConvertFrom-Json)
+            $check = @($payload.checks)[0]
+            if ($null -eq $check) { throw "探测结果缺少检查项。" }
+            $parsedResults[$label] = [pscustomobject]@{
+                Label = $label
+                Passed = [bool]$check.ok
+                Status = [string]$check.status
+            }
+        } catch {
+            $parsedResults[$label] = [pscustomobject]@{
+                Label = $label
+                Passed = $false
+                Status = "failed"
+            }
+        }
+    }
+    foreach ($probe in $Probes) {
+        $label = [string]$probe.Label
+        if ($parsedResults.ContainsKey($label)) {
+            $parsedResults[$label]
+        } else {
+            [pscustomobject]@{ Label = $label; Passed = $false; Status = "not_observed" }
+        }
+    }
+}
+
 try {
-    if (-not $controllerUrlSpecified -and -not $secretSpecified -and -not $secretStdinSpecified) {
+    if ($ProbeContextExplicit) {
+        $script:ClaudeEasyControllerSecret = Read-ControllerSecretFromStandardInput
+        $script:ClaudeEasyControllerBaseUrl = Get-ValidatedControllerBaseUri $ControllerUrl
+    } elseif (-not $controllerUrlSpecified -and -not $secretSpecified -and -not $secretStdinSpecified) {
         if ([string]::IsNullOrWhiteSpace($AppHome)) {
             throw "找不到 Clash Verge Rev 配置目录，无法读取本地控制器。"
         }
@@ -637,12 +741,25 @@ try {
         Write-ClaudeEasyVerificationText "主代理组：已识别；当前选择已隐藏"
         Write-ClaudeEasyVerificationText "AI 分组：已识别；当前选择已隐藏"
     }
-    $checks = @(
-        (Observe-Route "ChatGPT" "https://chatgpt.com/" '(?i)(^|\.)chatgpt\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
-        (Observe-Route "Gemini" "https://gemini.google.com/" '(?i)^gemini\.google\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl),
-        (Observe-Route "Grok" "https://grok.com/" '(?i)(^|\.)grok\.com$' $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl)
+    $probes = @(
+        [pscustomobject]@{ Label = "ChatGPT"; Url = "https://chatgpt.com/"; HostPattern = '(?i)(^|\.)chatgpt\.com$' },
+        [pscustomobject]@{ Label = "Gemini"; Url = "https://gemini.google.com/"; HostPattern = '(?i)^gemini\.google\.com$' },
+        [pscustomobject]@{ Label = "Grok"; Url = "https://grok.com/"; HostPattern = '(?i)(^|\.)grok\.com$' }
     )
-    if (@($checks | Where-Object { -not $_ }).Count -gt 0) {
+    if (-not [string]::IsNullOrEmpty($ProbeTarget)) {
+        $probe = @($probes | Where-Object { $_.Label -ceq $ProbeTarget })[0]
+        $passed = Observe-Route $probe.Label $probe.Url $probe.HostPattern $ai $aiSelection $ai $false $routeSnapshot $routeProxyUrl
+        if ($Json) {
+            Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $passed -Status $(if ($passed) { "ok" } else { "failed" }) -Code $(if ($passed) { "routes_verified" } else { "route_verification_failed" }) -ExitCode $(if ($passed) { 0 } else { 1 }) -SummaryZh $(if ($passed) { "Windows 分流验证通过。" } else { "Windows 分流验证未通过。" }) -Profile $savedUsageProfile -Checks @($script:ClaudeEasyChecks))
+        }
+        exit $(if ($passed) { 0 } else { 1 })
+    }
+    $checks = @(Invoke-ParallelRouteProbes $probes $AppHome $ControllerUrl $script:ClaudeEasyControllerSecret ($controllerUrlSpecified -or $secretSpecified -or $secretStdinSpecified) $ObservationSeconds)
+    foreach ($check in $checks) {
+        [void]$script:ClaudeEasyChecks.Add([ordered]@{ name = $check.Label.ToLowerInvariant(); ok = [bool]$check.Passed; status = [string]$check.Status })
+        if (-not $Json) { Write-ClaudeEasyVerificationText ("{0}：{1}" -f $check.Label, $(if ($check.Passed) { "通过" } else { "失败" })) }
+    }
+    if (@($checks | Where-Object { -not $_.Passed }).Count -gt 0) {
         if ($Json) { Write-ClaudeEasyResult (New-ClaudeEasyResult -Command "verify_routes" -Operation "verify_routes" -Ok $false -Status "failed" -Code "route_verification_failed" -ExitCode 1 -SummaryZh "Windows 分流验证未通过。" -Profile $savedUsageProfile -Checks @($script:ClaudeEasyChecks)) }
         exit 1
     }

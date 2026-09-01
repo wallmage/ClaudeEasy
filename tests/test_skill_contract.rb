@@ -182,6 +182,17 @@ class SkillContractTest < Minitest::Test
     refute_match(/checks\.map\s+do\s+\|_label, ok, _status\|\s+ok\s+end\s+checks\.all\?/, verifier)
   end
 
+  def test_windows_route_targets_are_observed_concurrently
+    verifier = File.read(File.join(SKILL, "scripts/windows/verify_routes.ps1"))
+
+    assert_includes verifier, "Invoke-ParallelRouteProbes"
+    assert_includes verifier, "Start-Job"
+    assert_includes verifier, "Wait-Job"
+    assert_includes verifier, "SecretStdin"
+    refute_includes verifier, "ProbeControllerSecret"
+    refute_match(/\$checks\s*=\s*@\(\s*\(Observe-Route/m, verifier)
+  end
+
   def test_managed_dns_policy_uses_bootstrap_free_ip_doh_without_site_exceptions
     policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
     assert_equal [
