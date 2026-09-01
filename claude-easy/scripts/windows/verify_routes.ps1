@@ -624,24 +624,14 @@ function Invoke-ParallelRouteProbes(
                 [bool]$ExplicitContext,
                 [int]$ObservationSeconds
             )
-            $quote = { param([string]$Value) "'" + $Value.Replace("'", "''") + "'" }
-            $command = "& " + (& $quote $VerifierPath) +
-                " -ProbeTarget " + (& $quote $Label) +
-                " -ObservationSeconds " + [string]$ObservationSeconds +
-                " -Json"
             if ($ExplicitContext) {
-                $command += " -ProbeContextExplicit -ControllerUrl " + (& $quote $ControllerUrl) + " -SecretStdin"
+                $output = ($Secret + "`n") | & $PowerShellPath -NoLogo -NoProfile -File $VerifierPath `
+                    -ProbeTarget $Label -ObservationSeconds ([string]$ObservationSeconds) -Json `
+                    -ProbeContextExplicit -ControllerUrl $ControllerUrl -SecretStdin 2>&1
             } else {
-                $command += " -AppHome " + (& $quote $AppHome)
-            }
-            $encodedCommand = [Convert]::ToBase64String(
-                [Text.Encoding]::Unicode.GetBytes($command)
-            )
-            $arguments = @("-NoLogo", "-NoProfile", "-EncodedCommand", $encodedCommand)
-            $output = if ($ExplicitContext) {
-                ($Secret + "`n") | & $PowerShellPath @arguments 2>&1
-            } else {
-                & $PowerShellPath @arguments 2>&1
+                $output = & $PowerShellPath -NoLogo -NoProfile -File $VerifierPath `
+                    -ProbeTarget $Label -ObservationSeconds ([string]$ObservationSeconds) -Json `
+                    -AppHome $AppHome 2>&1
             }
             [pscustomobject]@{
                 Label = $Label
