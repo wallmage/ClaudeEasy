@@ -438,7 +438,7 @@ function Resolve-RemoteSubscriptionTargetPath {
         $fileName = ConvertFrom-SubscriptionScalar ([string]$Item.FileRaw) "file"
         if ($fileName -cne [System.IO.Path]::GetFileName($fileName) -or
             $fileName -notmatch '^[A-Za-z0-9._-]+\.ya?ml$') {
-            throw "profiles.yaml 的 file 不是安全的配置文件名。"
+            throw "profiles.yaml 的 file 不是安全的配置文件名：[$fileName]。"
         }
         $path = Join-Path $Directory $fileName
         if (Test-Path -LiteralPath $path -PathType Leaf) {
