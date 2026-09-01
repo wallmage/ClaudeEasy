@@ -15,12 +15,17 @@
 适用于用户明确要求把 AdGuard 与 ClashX Meta 共存配置好时：
 
 - Filtering mode：`Automatic Proxy`；禁止切换为 `Network Extension`。
+- General：开启 Launch at Login 和 Activate language-specific filters automatically；Do not block search ads、Hide menu bar icon、Send anonymized app usage data 保持关闭。
+- Filters：只启用 AdGuard Base filter、AdGuard Tracking Protection filter、AdGuard Social Media filter、AdGuard Chinese filter；User rules、URL Tracking filter 和其他过滤器保持关闭，除非导入备份明确包含用户规则。
 - Automatically filter applications：开启。
 - Filter HTTPS protocol：开启；EV certificate filtering：开启。
 - AdGuard outbound proxy：开启，协议 HTTP，主机 `127.0.0.1`，端口必须先从当前 Mihomo 的监听进程、控制器运行配置和一次代理请求三重确认；用户名和密码留空。
 - Trust any certificate：关闭；SOCKS5 UDP：关闭。
 - DNS protection：关闭，让 Clash TUN/DNS 保持唯一的 DNS 接管职责。
 - Stealth Mode：关闭；HTTP proxy server（让其他设备使用本机 AdGuard）：关闭。
+- Security：开启 Phishing and malware protection；关闭匿名安全过滤器开发数据共享。
+- Assistant：不调整；已有 Safari Assistant 扩展保持原状态。
+- Extensions：总开关关闭；尤其关闭 AdGuard Extra，不手动启用其他 userscript。
 - Advanced Settings：不改，保留默认值。
 - 过滤器、用户规则、已启用的 userscript 和应用范围以导入备份为准；没有备份时不擅自新增复杂规则。
 
@@ -30,6 +35,7 @@
 
 - 仅在用户明确请求时操作已运行的 AdGuard Windows 窗口。
 - 有 `.adguardsettings` 备份时优先导入；没有备份时只在当前 UI 明确对应的字段中恢复用户确认过的广告过滤目标，保留平台默认的底层过滤模式。
+- 手动回退时沿用用户确认的通用偏好：自动启动、按语言启用过滤器；只启用 Base、Tracking Protection、Social Media、Chinese 四类（若当前版本提供）；DNS protection、Stealth、userscript/Extensions 总开关关闭；Phishing and malware protection 开启；Assistant 不调整。
 - 不把 macOS 的 `Automatic Proxy`、`127.0.0.1:7890` 或 TUN 规则直接套到 Windows；先依据当前 Clash Verge Rev 和 AdGuard 版本的实际 UI/运行状态确定端口与兼容方式。
 - 不直接编辑注册表、配置文件或系统代理；修改后回读开关并做当前档位允许的连通性复测。
 
