@@ -1015,6 +1015,44 @@ items:
 
     if (Test-GroupSelected 'safe-update') {
 
+    $fileFieldCase = Join-Path $sandbox "remote-target-file-field"
+    $fileFieldProfiles = Join-Path $fileFieldCase "profiles"
+    New-Item -ItemType Directory -Path $fileFieldProfiles -Force | Out-Null
+    $fileFieldIndex = @"
+items:
+- uid: R-custom
+  type: remote
+  name: Custom
+  file: custom.yaml
+"@
+    [System.IO.File]::WriteAllText((Join-Path $fileFieldProfiles "R-custom.yaml"), "leftover: true`n")
+    [System.IO.File]::WriteAllText((Join-Path $fileFieldProfiles "custom.yaml"), "live: true`n")
+    $fileFieldTargets = @(Get-RemoteSubscriptionTargets $fileFieldIndex $fileFieldProfiles)
+    Assert-True ($fileFieldTargets.Count -eq 1) "file: remote subscription was not mapped"
+    Assert-True (
+        [string]::Equals(
+            (Split-Path -Leaf $fileFieldTargets[0].Path),
+            "custom.yaml",
+            [StringComparison]::Ordinal
+        )
+    ) "file: remote subscription targeted leftover {uid}.yaml instead of custom.yaml"
+    $escapedFileIndex = @"
+items:
+- uid: R-escape
+  type: remote
+  name: Escape
+  file: ../escape.yaml
+"@
+    $escapedRejected = $false
+    try { Get-RemoteSubscriptionTargets $escapedFileIndex $fileFieldProfiles | Out-Null } catch { $escapedRejected = $true }
+    Assert-True $escapedRejected "file: path escape was accepted"
+    Assert-True (Test-YamlTunEnabled "tun:`n  enable: true`n") "block tun.enable true was not detected"
+    Assert-True (Test-YamlTunEnabled "tun: {enable: true}`n") "flow tun.enable true was not detected"
+    Assert-True (Test-YamlTunEnabled "tun: {`n  enable: true`n}`n") "multiline flow tun.enable true was not detected"
+    Assert-True (Test-YamlTunEnabled "tun:`n  enable: TRUE`n") "TRUE tun.enable was not detected"
+    Assert-True (-not (Test-YamlTunEnabled "tun:`n  enable: false`n")) "tun.enable false was treated as enabled"
+    Assert-True (-not (Test-YamlTunEnabled "mode: rule`n")) "missing tun was treated as enabled"
+
     $safeUpdateCase = Join-Path $sandbox "safe-update-case"
     $unprofiledSafeUpdateCase = Join-Path $sandbox "safe-update-without-profile"
     New-Item -ItemType Directory -Path $unprofiledSafeUpdateCase -Force | Out-Null

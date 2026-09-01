@@ -541,27 +541,58 @@ class MacosPatcherTest < Minitest::Test
     assert_equal "primary\n", stdout
   end
 
-  def test_clashx_native_request_accepts_an_objective_c_nil_error
+  def clashx_native_request_error_check
     error_check = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT.lines.find do |line|
-      line.include?("redirectRejected || !finished")
+      line.include?("requestError && !requestError.isNil()")
     end
+    refute_nil error_check, "native fetch script lost the requestError gate"
+    error_check
+  end
+
+  def evaluate_clashx_native_request_error_check(request_error_is_nil:)
     script = <<~JAVASCRIPT
       function fail(message) { throw new Error(message); }
       var redirectRejected = false;
+      var responseTooLarge = false;
       var finished = true;
-      var requestError = {isNil: function() { return true; }};
+      var requestError = {isNil: function() { return #{request_error_is_nil}; }};
       var data = {};
       var response = {};
-      #{error_check}
+      #{clashx_native_request_error_check}
       "accepted";
     JAVASCRIPT
 
-    stdout, stderr, status = Open3.capture3(
-      "/usr/bin/osascript", "-l", "JavaScript", "-e", script
-    )
+    Open3.capture3("/usr/bin/osascript", "-l", "JavaScript", "-e", script)
+  end
+
+  def test_clashx_native_request_accepts_an_objective_c_nil_error
+    stdout, stderr, status = evaluate_clashx_native_request_error_check(request_error_is_nil: true)
 
     assert status.success?, stderr
     assert_equal "accepted\n", stdout
+  end
+
+  def test_clashx_native_request_rejects_a_non_nil_error
+    _stdout, stderr, status = evaluate_clashx_native_request_error_check(request_error_is_nil: false)
+
+    refute status.success?, "non-nil requestError must fail the native fetch gate"
+    assert_match(/subscription request failed/, stderr)
+  end
+
+  def test_profile_one_restore_rejects_enabled_tun
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "friend.yaml")
+      patched = ClaudeEasy.patch(base_config, @policy, usage_profile: 1)
+      config = patched.fetch(:config).merge("tun" => { "enable" => true })
+      again = ClaudeEasy.patch(config, @policy, usage_profile: 1)
+      assert_equal :unchanged, again[:status]
+      assert_equal({ "enable" => true }, again[:config]["tun"])
+
+      File.write(path, YAML.dump(config))
+      refute ClaudeEasy.restore_candidate_valid?(
+        path, 1, policy: @policy, validator: ->(_candidate) { true }
+      )
+    end
   end
 
   def test_update_candidate_rejects_encoding_transform_and_validation_failures

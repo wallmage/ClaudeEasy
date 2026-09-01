@@ -26,6 +26,9 @@ class SkillContractTest < Minitest::Test
   REQUIRED_PUBLIC_FILES = (POLICY_REFERENCE_FILES + %w[
     README.md
     claude-easy/SKILL.md
+    claude-easy/references/general-diagnostics.md
+    claude-easy/references/general-macos.md
+    claude-easy/references/general-windows.md
     claude-easy/agents/openai.yaml
     claude-easy/assets/claude-region-check.html
     claude-easy/references/policy.json

@@ -1,6 +1,6 @@
 # ClaudeEasy 分流与安全策略
 
-> 读取路由：任务涉及共同国内直连、DNS、TUN、代理组、AI 规则或 WebRTC 时读取本文件。所有任务先读取 [policy-core.md](policy-core.md)；本文件不重复共同边界。
+> 读取路由：网络任务涉及共同国内直连、DNS、TUN、代理组、AI 规则或 WebRTC 时读取本文件。所有网络任务先读取 [policy-core.md](policy-core.md)；本文件不重复共同边界。
 
 ## DNS 与 TUN
 

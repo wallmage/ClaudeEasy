@@ -424,6 +424,39 @@ function Merge-RemoteSubscriptionAutoUpdateOwnership([object[]]$Existing, [objec
     })
 }
 
+function Resolve-RemoteSubscriptionTargetPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Item,
+        [Parameter(Mandatory = $true)]
+        [string]$Directory,
+        [switch]$AllowMissing
+    )
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { throw "找不到订阅目录。" }
+    if ([int]$Item.FileCount -gt 1) { throw "profiles.yaml 的远程订阅存在重复 file。" }
+    if ([int]$Item.FileCount -eq 1) {
+        $fileName = ConvertFrom-SubscriptionScalar ([string]$Item.FileRaw) "file"
+        if ($fileName -cne [System.IO.Path]::GetFileName($fileName) -or
+            $fileName -notmatch '^[A-Za-z0-9._-]+\.ya?ml$') {
+            throw "profiles.yaml 的 file 不是安全的配置文件名。"
+        }
+        $path = Join-Path $Directory $fileName
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $path).Path
+        }
+        if ($AllowMissing) { return $path }
+        throw "远程订阅无法对应到唯一配置文件。"
+    }
+    $candidates = @(
+        (Join-Path $Directory ($Item.Uid + ".yaml")),
+        (Join-Path $Directory ($Item.Uid + ".yml"))
+    )
+    $matches = @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+    if ($matches.Count -eq 1) { return (Resolve-Path -LiteralPath $matches[0]).Path }
+    if ($AllowMissing -and $matches.Count -eq 0) { return $null }
+    throw "远程订阅无法对应到唯一配置文件。"
+}
+
 function Get-RemoteSubscriptionTargets([string]$ProfilesIndexText, [string]$Directory) {
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { throw "找不到订阅目录。" }
     $items = @(Get-RemoteSubscriptionProfileItems @(Split-YamlLines $ProfilesIndexText) | Where-Object { $_.Type -eq "remote" })
@@ -431,13 +464,7 @@ function Get-RemoteSubscriptionTargets([string]$ProfilesIndexText, [string]$Dire
     $targets = @()
     $targetPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($item in $items) {
-        $candidates = @(
-            (Join-Path $Directory ($item.Uid + ".yaml")),
-            (Join-Path $Directory ($item.Uid + ".yml"))
-        )
-        $matches = @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        if ($matches.Count -ne 1) { throw "远程订阅无法对应到唯一配置文件。" }
-        $path = (Resolve-Path -LiteralPath $matches[0]).Path
+        $path = Resolve-RemoteSubscriptionTargetPath -Item $item -Directory $Directory
         if (-not $targetPaths.Add($path)) { throw "多个远程订阅对应到同一配置文件。" }
         $targets += [pscustomobject]@{
             Uid = $item.Uid

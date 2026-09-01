@@ -1,6 +1,6 @@
 # ClaudeEasy Windows 平台策略
 
-> 读取路由：当前设备是 Windows，或维护 Clash Verge Rev、PowerShell 文件事务与运行恢复时读取本文件。所有任务先读取 [policy-core.md](policy-core.md)；本文件不重复共同边界。
+> 读取路由：网络流程且当前设备是 Windows，或维护 Clash Verge Rev、PowerShell 文件事务与运行恢复时读取本文件。所有网络任务先读取 [policy-core.md](policy-core.md)；本文件不重复共同边界。
 
 ## Windows
 

@@ -362,3 +362,30 @@ function Set-ClaudeEasyReactivationHotkey([string]$Text) {
     $replacement = @((" " * $itemIndent) + "- reactivate_profiles,$managedShortcut")
     return (Join-YamlLines -Lines (Replace-YamlRange -Lines $lines -Start $node.End -End $node.End -Replacement $replacement))
 }
+
+function Test-YamlTunEnabled([string]$Text) {
+    $lines = @(Split-YamlLines $Text)
+    $tun = Find-YamlMappingNode $lines "tun" 0 0 $lines.Count
+    if ($null -eq $tun) { return $false }
+
+    $enabledValue = $null
+    $inline = (($tun.Value -replace '\s+#.*$', '').Trim())
+    if ($inline -match '^\{' -and $inline.Contains('}')) {
+        if ($inline -match '(?:^|[,{])\s*enable\s*:\s*(.+?)(?:\s*[,}]|$)') {
+            $enabledValue = $Matches[1].Trim()
+        }
+    } else {
+        $childIndents = @()
+        if ($tun.End -gt ($tun.Start + 1)) {
+            $childIndents = @($lines[($tun.Start + 1)..($tun.End - 1)] | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and -not $_.TrimStart().StartsWith("#")
+            } | ForEach-Object { Get-YamlIndent $_ })
+        }
+        $enabled = if ($childIndents.Count -gt 0) {
+            Find-YamlMappingNode $lines "enable" (($childIndents | Measure-Object -Minimum).Minimum) ($tun.Start + 1) $tun.End
+        } else { $null }
+        if ($null -ne $enabled) { $enabledValue = [string]$enabled.Value }
+    }
+    if ($null -eq $enabledValue) { return $false }
+    return ((ConvertFrom-SubscriptionScalar $enabledValue "tun.enable") -ieq "true")
+}

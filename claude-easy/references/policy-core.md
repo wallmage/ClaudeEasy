@@ -1,12 +1,12 @@
 # ClaudeEasy 共同策略
 
-> 读取路由：所有任务必须先完整读取本文件，再按 [SKILL.md](../SKILL.md) 的任务路由读取相关模块。只有跨模块维护、权威归属审查或整体一致性检查才读取全部策略文件。
+> 读取路由：网络任务必须先完整读取本文件，再按 [SKILL.md](../SKILL.md) 的任务路由读取相关模块。只有跨模块维护、权威归属审查或整体一致性检查才读取全部网络策略文件。
 
 ## 规则归属与冲突处理
 
 每类规则只有一个权威来源，较低层文档不得重新定义、扩展或覆盖较高层规则：
 
-1. 本文件定义所有任务共同遵守的支持范围、冲突顺序、脚本接口、异常和输出边界。
+1. 本文件定义所有网络任务共同遵守的支持范围、冲突顺序、脚本接口、异常和输出边界。
 2. [diagnostics.md](diagnostics.md)、[profiles-and-patch.md](profiles-and-patch.md)、[routing-and-security.md](routing-and-security.md)、[safe-update-and-recovery.md](safe-update-and-recovery.md)、[macos.md](macos.md) 与 [windows.md](windows.md) 分别是对应模块和平台行为的唯一权威来源；读取组合只由 [SKILL.md](../SKILL.md) 的任务路由决定。
 3. [`policy.json`](policy.json) 定义解析器、规则集、分组候选和 AI 规则等配置常量；策略 Markdown 只解释用途，不复制常量清单。
 4. [`result-contract.json`](result-contract.json) 定义机器输出字段、类型和状态枚举；策略 Markdown 只定义语义约束。
@@ -31,9 +31,9 @@
 
 Clash Verge Rev 有正常主窗口，Windows 当前会话按 SKILL.md 确认可用的电脑操控时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用电脑操控操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；电脑操控仍可用于有正常窗口的浏览器和 AdGuard。能力检测、启用和缺失时的处理以 `SKILL.md` 为准，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
 
-绝对不要退出、停止或重启 Clash 客户端。不得执行、建议或要求用户执行这类操作。中国用户通常依赖客户端越过 GFW；关闭客户端会让 AI 助手断线，并可能让修复停在一半。
+Clash 启停禁令以 `SKILL.md` 共同安全边界为准，本文件不缩小。中国用户通常依赖客户端越过 GFW；关闭客户端或内核会让 AI 助手断线，并可能让修复停在一半。
 
-任何 Patch、Diagnostics、代码审查、测试或环境探测都不得运行 ClashX Meta 主程序，包括直接执行应用包中的 `ClashX Meta`、传入 `--version` 或其他参数、使用 `open` 或 LaunchServices 打开应用，以及通过 Computer Use 启动未运行的客户端。这些动作可能创建第二个客户端并中断现有 Mihomo。客户端版本只从应用的 `Info.plist` 读取；进程、日志、偏好和本地控制器用于读取运行状态；内核版本只检查 Mihomo。客户端未运行时保持未运行；无法取得实时状态时只在机器结果标记未验证，不能为检查而启动。
+不得运行 Clash 客户端主程序做检查。禁令范围以 `SKILL.md` 共同安全边界为准，不因模块名称缩小。
 
 ## 模块选择
 

@@ -24,8 +24,8 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 
 ## 共同安全边界
 
-1. **绝对不要退出、停止或重启 Clash 客户端。** 适用于 ClashX Meta 与 Clash Verge Rev。不得执行、建议或要求用户这样做。
-2. **不得运行 ClashX Meta 主程序，也不得用 Computer Use 操作任一 Clash 客户端。** 不得用于诊断、审查、测试、版本查询或只读探测；禁止直接执行应用包主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。客户端未运行时保持未运行。通用流程也不得把 Clash Verge Rev 当作普通应用启动、退出、停止或重启。Clash 当应用的取证只走日志、崩溃报告、进程快照。
+1. **绝对不要退出、停止或重启 Clash 客户端或其内核。** 适用于 ClashX Meta、Clash Verge Rev，以及 Mihomo 与辅助进程。不得执行、建议或要求用户这样做。
+2. **不得运行 Clash 客户端主程序做检查。** 禁止直接执行 ClashX Meta 或 Clash Verge Rev 主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。不得用于诊断、审查、测试、版本查询或只读探测。这些动作可能创建第二个客户端并中断现有 Mihomo。macOS 客户端版本只从 `Info.plist` 读取；实时状态读取进程、日志、偏好或本地控制器；内核版本只检查 Mihomo。客户端未运行时保持未运行；无法取得实时状态时只在机器结果标记未验证，不能为检查而启动。通用流程不得把任一 Clash 客户端当作普通应用启动、退出、停止、重启或 Computer Use 操作。Clash 当应用的取证只走日志、崩溃报告、进程快照。Windows 网络流程操作已经运行的 Clash Verge Rev 见下文平台界面能力。
 
 ## 内部路由
 
@@ -74,8 +74,8 @@ Codex 未启用时，按当前官方界面引导用户进入“设置 → 插件
 
 ### 不可突破的边界
 
-1. **Clash 启停禁令见上文共同安全边界。** 不得执行、建议或要求用户退出、停止或重启客户端。
-2. **不得运行 ClashX Meta 主程序做检查。** 细节见共同安全边界与 [policy-core.md](references/policy-core.md)。
+1. **Clash 启停禁令见上文共同安全边界。**
+2. **不得运行 Clash 客户端主程序做检查。** 细节见共同安全边界。
 3. **Claude/Anthropic 远程域名永久禁测；** AI 联网与分流验收只测 ChatGPT、Gemini 和 Grok。细节见 [policy-core.md](references/policy-core.md) 与 [profiles-and-patch.md](references/profiles-and-patch.md) 本地区域指纹闭环。
 4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按 [windows.md](references/windows.md) 操作 Clash Verge Rev；AdGuard for Mac 只通过它自己的正常窗口调整兼容设置。
 5. 安全更新必须保留热加载，且只能走已经运行的客户端原生入口；180 秒窗口与失败处理见 [safe-update-and-recovery.md](references/safe-update-and-recovery.md)。

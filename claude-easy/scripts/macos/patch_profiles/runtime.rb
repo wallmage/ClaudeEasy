@@ -856,7 +856,7 @@ module ClaudeEasy
     else
       tun = config["tun"]
       return false if !profile_ai_runtime_group(path, policy: policy).nil? ||
-                      (tun.is_a?(Hash) && TUN_POLICY.all? { |key, value| tun[key] == value })
+                      (tun.is_a?(Hash) && tun["enable"] == true)
     end
     true
   rescue StandardError

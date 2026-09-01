@@ -1,6 +1,6 @@
 # ClaudeEasy 用途档位与 Patch 策略
 
-> 读取路由：首次安装、改变用途档位、执行 Patch，或维护档位与 Patch 验收时读取本文件。所有任务先读取 [policy-core.md](policy-core.md)；本文件不重复共同边界。
+> 读取路由：首次安装、改变用途档位、执行 Patch，或维护档位与 Patch 验收时读取本文件。所有网络任务先读取 [policy-core.md](policy-core.md)；本文件不重复共同边界。
 
 ## 用途档位
 

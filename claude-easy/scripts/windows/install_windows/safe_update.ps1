@@ -580,23 +580,8 @@ function Test-RestoreCandidate([string]$TargetPath, [byte[]]$Bytes, [int]$UsageP
     Test-GeneratedYaml $text $leaf | Out-Null
     if ($TargetPath -eq $profilesIndexPath -or $TargetPath -eq $vergePath) { return }
     if ($UsageProfile -notin @(1, 2, 3)) { throw "没有可用于恢复备份的用途档位。" }
-    if ($UsageProfile -lt 3) {
-        $lines = @(Split-YamlLines $text)
-        $tun = Find-YamlMappingNode $lines "tun" 0 0 $lines.Count
-        if ($null -ne $tun) {
-            $childIndents = @()
-            if ($tun.End -gt ($tun.Start + 1)) {
-                $childIndents = @($lines[($tun.Start + 1)..($tun.End - 1)] | Where-Object {
-                    -not [string]::IsNullOrWhiteSpace($_) -and -not $_.TrimStart().StartsWith("#")
-                } | ForEach-Object { Get-YamlIndent $_ })
-            }
-            $enabled = if ($childIndents.Count -gt 0) {
-                Find-YamlMappingNode $lines "enable" (($childIndents | Measure-Object -Minimum).Minimum) ($tun.Start + 1) $tun.End
-            } else { $null }
-            if ($null -ne $enabled -and (ConvertFrom-SubscriptionScalar ([string]$enabled.Value) "tun.enable") -ceq "true") {
-                throw "备份与已保存用途档位不一致。"
-            }
-        }
+    if ($UsageProfile -lt 3 -and (Test-YamlTunEnabled $text)) {
+        throw "备份与已保存用途档位不一致。"
     }
     $core = Find-MihomoCore $MihomoPath
     Test-MihomoCandidate $core $text (Split-Path -Parent $TargetPath)
@@ -707,7 +692,7 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
         $backup = [string]$item.Backup
         $beforeSha = ([string]$item.BeforeSha256).ToLowerInvariant()
         $beforeUpdated = if ($manifestVersion -ge 2) { [string]$item.BeforeUpdated } else { "" }
-        if ($uid -notmatch '^[A-Za-z0-9._-]+$' -or $file -notin @("$uid.yaml", "$uid.yml")) {
+        if ($uid -notmatch '^[A-Za-z0-9._-]+$' -or $file -notmatch '^[A-Za-z0-9._-]+\.ya?ml$') {
             throw "安全更新准备记录包含无效订阅标识。"
         }
         $beforeUpdatedTimestamp = 0L
@@ -768,23 +753,21 @@ function Get-SafeUpdateVerificationTargets(
             )
         })
         if ($item.Count -ne 1) { throw "远程订阅清单在更新期间发生变化。" }
-        $candidates = @(
-            (Join-Path $Directory ($item[0].Uid + ".yaml")),
-            (Join-Path $Directory ($item[0].Uid + ".yml"))
-        )
-        $matches = @($candidates | Where-Object {
-            Test-Path -LiteralPath $_ -PathType Leaf
-        })
-        if ($matches.Count -gt 1) { throw "远程订阅清单在更新期间发生变化。" }
-        if ($matches.Count -eq 1) {
-            $path = (Resolve-Path -LiteralPath $matches[0]).Path
-            if (-not [string]::Equals(
-                (Split-Path -Leaf $path),
-                [string]$recovery.File,
-                [StringComparison]::Ordinal
-            )) {
-                throw "远程订阅清单在更新期间发生变化。"
-            }
+        try {
+            $resolved = Resolve-RemoteSubscriptionTargetPath -Item $item[0] -Directory $Directory -AllowMissing
+        } catch {
+            throw "远程订阅清单在更新期间发生变化。"
+        }
+        if ([string]::IsNullOrEmpty($resolved)) {
+            $path = [string]$recovery.TargetPath
+        } elseif (-not [string]::Equals(
+            (Split-Path -Leaf $resolved),
+            [string]$recovery.File,
+            [StringComparison]::Ordinal
+        )) {
+            throw "远程订阅清单在更新期间发生变化。"
+        } elseif (Test-Path -LiteralPath $resolved -PathType Leaf) {
+            $path = (Resolve-Path -LiteralPath $resolved).Path
         } else {
             $path = [string]$recovery.TargetPath
         }
