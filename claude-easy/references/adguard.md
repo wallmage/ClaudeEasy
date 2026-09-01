@@ -10,7 +10,9 @@
 - 先在用户的 `Documents` 根目录查找 `.adguardsettings` 备份。找到用户保存的备份时，优先通过 AdGuard 的 Import Settings 导入；导入后回读关键开关。
 - 没有备份时，按当前平台 UI 手动恢复下面的兼容基线，并保留未列出的项目为默认值。
 
-## macOS + Clash TUN 基线
+## 配置表
+
+### macOS（用户确认基线）
 
 适用于用户明确要求把 AdGuard 与 ClashX Meta 共存配置好时：
 
@@ -31,12 +33,14 @@
 
 完成后通过 UI 回读设置；网络复测遵守当前用途档位，不能访问或测试 Claude/Anthropic 远程域名。
 
-## Windows
+### Windows（平台专属基线）
 
 - 仅在用户明确请求时操作已运行的 AdGuard Windows 窗口。
 - 有 `.adguardsettings` 备份时优先导入；没有备份时只在当前 UI 明确对应的字段中恢复用户确认过的广告过滤目标，保留平台默认的底层过滤模式。
-- 手动回退时沿用用户确认的通用偏好：自动启动、按语言启用过滤器；只启用 Base、Tracking Protection、Social Media、Chinese 四类（若当前版本提供）；DNS protection、Stealth、userscript/Extensions 总开关关闭；Phishing and malware protection 开启；Assistant 不调整。
-- 不把 macOS 的 `Automatic Proxy`、`127.0.0.1:7890` 或 TUN 规则直接套到 Windows；先依据当前 Clash Verge Rev 和 AdGuard 版本的实际 UI/运行状态确定端口与兼容方式。
+- 通用开关：开启自动启动、按语言启用过滤器、HTTPS 过滤、Phishing and malware protection；只启用 Base、Tracking Protection、Social Media、Chinese 四类（若当前版本提供）；DNS protection、Stealth、userscript/Extensions 总开关关闭；Assistant 不调整。
+- DNS：Clash Verge Rev 已接管 TUN/DNS 时关闭 AdGuard DNS protection；未接管时保留原值，不擅自改变两个 DNS 所有者。
+- 网络驱动：不设置 macOS 的 `Network Extension` 或 `Automatic Proxy`。保留 Windows 默认 WFP/SockFilter；只有实测兼容性问题且用户明确要求修复时，才调整 `Use redirect driver mode` 或 `Filter localhost`。
+- 代理：不把 macOS 的 `127.0.0.1:7890` 直接套到 Windows。`Use AdGuard as an HTTP proxy` 保持关闭；只有 Windows 当前 UI 明确提供上游/出站代理、且已从运行中的 Clash Verge Rev 读取实际端口时，才填写并验证。
 - 不直接编辑注册表、配置文件或系统代理；修改后回读开关并做当前档位允许的连通性复测。
 
 ## 停止条件
