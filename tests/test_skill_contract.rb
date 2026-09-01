@@ -146,6 +146,7 @@ class SkillContractTest < Minitest::Test
   end
 
   def test_subscription_followups_use_parallel_three_site_connectivity
+    readme = File.read(File.join(ROOT, "README.md"))
     safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
     profiles = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
     macos = File.read(File.join(SKILL, "references/macos.md"))
@@ -153,6 +154,8 @@ class SkillContractTest < Minitest::Test
     assert_match(/并行/, safe_update)
     assert_match(/百度.*Google.*ChatGPT/m, safe_update)
     refute_match(/百度、Google、Twitter|Google、Twitter/, safe_update)
+    assert_match(/百度、Google、ChatGPT/, readme)
+    refute_match(/国内站、Google、Twitter|命令行或 Agent/, readme)
     assert_match(/同一浏览器会话/, profiles)
     assert_match(/只有实际状态仍不明.*才.*用户/, macos)
   end

@@ -49,7 +49,7 @@ macOS 与 Windows 都支持。
 
 | 档位 | 适合谁 | 会做什么 | 不会做什么 |
 | --- | --- | --- | --- |
-| **1｜普通浏览** | 国内网站、Google、Twitter、YouTube 等 | 安装共同国内域名直连基线，保护节点启动解析，关闭订阅自动更新，开启 Clash 系统代理 | 不改 TUN、IPv6、WebRTC、AI 分组或节点 |
+| **1｜普通浏览** | 百度、Google、ChatGPT 等 | 安装共同国内域名直连基线，保护节点启动解析，关闭订阅自动更新，开启 Clash 系统代理 | 不改 TUN、IPv6、WebRTC、AI 分组或节点 |
 | **2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等 | 继承共同补丁，开启 TUN，关闭 Clash 自己的系统代理，检查常用网站和 AI 工具 | 不增加 WebRTC 或 AI 分组补丁 |
 | **3｜Claude/Claude Code** | Claude、Claude Code，或需要更完整的泄漏防护 | 继承档位 2，再增加 DNS 分流、AI 分组与规则和 UDP/WebRTC 防护 | 不替你选择订阅、代理组或节点 |
 
@@ -117,9 +117,11 @@ Windows 有电脑操控（Computer Use）时，会自动操作已经运行的 Cl
 
 ## 怎么判断配置真的生效了
 
-- 档位 1：检查国内站、Google、Twitter、一个常用网站和 Clash 系统代理。
-- 档位 2：再检查 TUN、ChatGPT、Gemini 和命令行或 Agent 联网。
+- 档位 1：检查百度、Google、ChatGPT 和 Clash 系统代理。
+- 档位 2：再检查 TUN，并复核百度、Google、ChatGPT。
 - 档位 3：再检查 ChatGPT、Gemini、Grok、DNS、WebRTC 和本地区域风险。需要调整时，代理会在一次明确授权后替你完成本轮系统和浏览器设置，再复测到低风险通过。
+
+浏览器验收在同一会话中并行打开页面，不因单页等待阻塞其他页面；连通性只以百度、Google、ChatGPT 三页正常打开为准。
 
 ## AdGuard for Mac
 
