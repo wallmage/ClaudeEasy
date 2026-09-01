@@ -122,9 +122,9 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
             Uid = $uidValue
             Name = $nameValue
             Updated = $updatedValue
-            FileRaw = $(if ($fileValues.Count -eq 1) { [string]$fileValues[0] } else { $null })
+            FileRaw = $(if ($fileValues.Count -eq 1) { [string](@($fileValues)[0]) } else { $null })
             FileCount = $fileValues.Count
-            UrlRaw = $(if ($urlValues.Count -eq 1) { [string]$urlValues[0] } else { $null })
+            UrlRaw = $(if ($urlValues.Count -eq 1) { [string](@($urlValues)[0]) } else { $null })
             UrlCount = $urlValues.Count
             OptionIndex = $(if ($optionIndexes.Count -eq 1) { [int]$optionIndexes[0] } else { -1 })
             OptionIsInline = ($optionIndexes.Count -eq 1 -and [int]$optionIndexes[0] -eq [int]$start.Index)
@@ -438,7 +438,7 @@ function Resolve-RemoteSubscriptionTargetPath {
         $fileName = ConvertFrom-SubscriptionScalar ([string]$Item.FileRaw) "file"
         if ($fileName -cne [System.IO.Path]::GetFileName($fileName) -or
             $fileName -notmatch '^[A-Za-z0-9._-]+\.ya?ml$') {
-            throw "profiles.yaml 的 file 不是安全的配置文件名：[$fileName]。"
+            throw "profiles.yaml 的 file 不是安全的配置文件名。"
         }
         $path = Join-Path $Directory $fileName
         if (Test-Path -LiteralPath $path -PathType Leaf) {
