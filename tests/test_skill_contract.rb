@@ -150,6 +150,7 @@ class SkillContractTest < Minitest::Test
     safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
     profiles = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
     macos = File.read(File.join(SKILL, "references/macos.md"))
+    diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
 
     assert_match(/并行/, safe_update)
     assert_match(/百度.*Google.*ChatGPT/m, safe_update)
@@ -160,6 +161,8 @@ class SkillContractTest < Minitest::Test
     assert_match(/开启 TUN，关闭 Clash 自己的系统代理，检查百度、Google、ChatGPT/, readme)
     assert_match(/同一浏览器会话/, profiles)
     assert_match(/只有实际状态仍不明.*才.*用户/, macos)
+    refute_match(/Agent 联网|Agent 连接|至少三个无关目标/, diagnostics)
+    assert_match(/连通性仅复测百度、Google、ChatGPT 三页/, diagnostics)
   end
 
   def test_safe_update_followups_do_not_require_separate_agent_connectivity
