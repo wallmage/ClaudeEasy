@@ -42,10 +42,10 @@ function Complete-InstallResult(
 function Get-SafeUpdateRequiredFollowups([int]$Profile) {
     switch ($Profile) {
         1 { return @("client_switch_verification", "site_verification", "final_state_audit") }
-        2 { return @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit") }
+        2 { return @("client_switch_verification", "site_verification", "final_state_audit") }
         3 {
             return @(
-                "client_switch_verification", "site_verification", "agent_connectivity_verification",
+                "client_switch_verification", "site_verification",
                 "route_verification", "dns_deep_test",
                 "webrtc_test", "local_region_fingerprint_test", "final_state_audit"
             )

@@ -855,13 +855,11 @@ module ClaudeEasy
                                %w[macos_client_switch_reconciliation site_verification final_state_audit]
                              when 2
                                %w[
-                                 macos_client_switch_reconciliation site_verification
-                                 agent_connectivity_verification final_state_audit
+                                 macos_client_switch_reconciliation site_verification final_state_audit
                                ]
                              else
                                %w[
                                  macos_client_switch_reconciliation site_verification
-                                 agent_connectivity_verification
                                  route_verification dns_deep_test webrtc_test local_region_fingerprint_test
                                  final_state_audit
                                ]

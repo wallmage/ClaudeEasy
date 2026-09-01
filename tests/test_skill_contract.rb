@@ -145,6 +145,34 @@ class SkillContractTest < Minitest::Test
     refute policy.key?("default_bootstrap_resolvers")
   end
 
+  def test_subscription_followups_use_parallel_three_site_connectivity
+    safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
+    profiles = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
+    macos = File.read(File.join(SKILL, "references/macos.md"))
+
+    assert_match(/并行/, safe_update)
+    assert_match(/百度.*Google.*ChatGPT/m, safe_update)
+    refute_match(/百度、Google、Twitter|Google、Twitter/, safe_update)
+    assert_match(/同一浏览器会话/, profiles)
+    assert_match(/只有实际状态仍不明.*才.*用户/, macos)
+  end
+
+  def test_safe_update_followups_do_not_require_separate_agent_connectivity
+    mac_cli = File.read(File.join(SKILL, "scripts/macos/patch_profiles/cli.rb"))
+    windows_common = File.read(File.join(SKILL, "scripts/windows/install_windows/common.ps1"))
+
+    refute_includes mac_cli, "agent_connectivity_verification"
+    refute_includes windows_common, "agent_connectivity_verification"
+  end
+
+  def test_route_targets_are_observed_concurrently
+    verifier = File.read(File.join(SKILL, "scripts/macos/verify_routes.rb"))
+
+    assert_includes verifier, "Thread.new"
+    assert_match(/TARGETS\.map\s+do.*Thread\.new/m, verifier)
+    assert_includes verifier, "checks.all? { |_label, ok, _status| ok }"
+  end
+
   def test_managed_dns_policy_uses_bootstrap_free_ip_doh_without_site_exceptions
     policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
     assert_equal [

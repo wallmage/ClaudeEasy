@@ -126,12 +126,12 @@ $safeUpdateFollowupCases = @(
     },
     [pscustomobject]@{
         Profile = 2
-        Expected = @("client_switch_verification", "site_verification", "agent_connectivity_verification", "final_state_audit")
+        Expected = @("client_switch_verification", "site_verification", "final_state_audit")
     },
     [pscustomobject]@{
         Profile = 3
         Expected = @(
-            "client_switch_verification", "site_verification", "agent_connectivity_verification",
+            "client_switch_verification", "site_verification",
             "route_verification", "dns_deep_test",
             "webrtc_test", "local_region_fingerprint_test", "final_state_audit"
         )
@@ -1534,7 +1534,7 @@ rules:
             @(
                 "subscription_refresh", "safe_update_verification",
                 "client_switch_verification", "site_verification",
-                "agent_connectivity_verification", "route_verification", "dns_deep_test",
+                "route_verification", "dns_deep_test",
                 "webrtc_test", "local_region_fingerprint_test",
                 "final_state_audit"
             ) -join ","

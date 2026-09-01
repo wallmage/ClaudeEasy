@@ -8,7 +8,7 @@ ClashX Meta 是纯菜单栏应用，没有可供 Computer Use 附加的主窗口
 
 档位客户端开关运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`。命令先从偏好、本地控制器和 `scutil --proxy` 同时读取用户意图、TUN 实际状态、Mihomo 端口和系统代理归属；只有意图与实际状态一致且需要改变时，才向同一 PID 最多发送一次 ClashX Meta 内置的 `clashtun` 或 `clashtog` Apple Event，随后重新读取状态并检查实际连接。它不使用 `osascript`、System Events、`open` 或 LaunchServices，也不运行应用包主程序。档位 1 只协调 Clash 系统代理且不改 TUN；档位 2、3 先开启并验收 TUN，再关闭 Clash 系统代理并复验连接。第三方 PAC、自动发现或其他代理存在时不得自动开启 Clash 系统代理；第三方代理存在且 Clash 意图仍为开启时也不得盲目切换。
 
-状态不明、内置命令缺失、PID 变化、事件失败、验收超时或连接失败时，不发送第二次事件，返回 `client_switch_manual_required`，代理继续检查日志、偏好、控制器与连接；只有确认原生入口无法完成后才请求一次菜单栏操作。档位 1 只说：“请点 ClashX Meta 菜单栏图标，打开‘设置为系统代理’，完成后回复我。”档位 2、3 只说：“请点 ClashX Meta 菜单栏图标，打开‘TUN 模式’并关闭‘设置为系统代理’，完成后回复我。”收到回复后再次运行同一命令结构化验收，不能只凭回复报告完成。检测到第三方代理归属冲突时，只用日常语言说明会影响哪个现有工具，并等待用户决定。
+状态不明、内置命令缺失、PID 变化、事件失败、验收超时或连接失败时，不发送第二次事件，返回 `client_switch_manual_required`；代理先继续并行完成浏览器、分流和安全验收，只有实际状态仍不明且它是完成闸门唯一阻塞项时才请求用户操作菜单栏。档位 1 只说：“请点 ClashX Meta 菜单栏图标，打开‘设置为系统代理’，完成后回复我。”档位 2、3 只说：“请点 ClashX Meta 菜单栏图标，打开‘TUN 模式’并关闭‘设置为系统代理’，完成后回复我。”收到回复后再次运行同一命令结构化验收，不能只凭回复报告完成。检测到第三方代理归属冲突时，只用日常语言说明会影响哪个现有工具，并等待用户决定。
 
 当前订阅更新按 `safe-update-and-recovery.md` 运行 `bash scripts/install_macos.sh --safe-update --json`；更新前不运行测试，只先备份。下载使用 Foundation 原生网络请求，请求身份从当前运行的 ClashX Meta 应用信息动态生成，并发送 `Accept-Language: zh-CN,zh;q=0.9`；不得使用 curl 或固定 User-Agent。下载结果不是直接覆盖：必须按已保存用途档位解析并应用现行 Patch，完成 YAML 重读、二次转换一致性检查和 Mihomo 校验后才整批写入；任一原代理组或节点选择无法恢复时拒绝更新。更新目标中的当前订阅由已运行客户端的原生事件加载，本地控制器只用于观察和验收；加载后保留更新前 TUN、代理组选择和运行状态，失败时按本文件事务规则恢复。成功后再次确认订阅自动更新关闭；该回执仍是中间状态，必须继续按已保存档位完成客户端动作、全部验收和最终状态复核。
 
