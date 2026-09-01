@@ -174,6 +174,7 @@ class SkillContractTest < Minitest::Test
     assert_includes verifier, "Thread.new"
     assert_match(/TARGETS\.map\s+do.*Thread\.new/m, verifier)
     assert_includes verifier, "checks.all? { |_label, ok, _status| ok }"
+    refute_match(/checks\.map\s+do\s+\|_label, ok, _status\|\s+ok\s+end\s+checks\.all\?/, verifier)
   end
 
   def test_managed_dns_policy_uses_bootstrap_free_ip_doh_without_site_exceptions

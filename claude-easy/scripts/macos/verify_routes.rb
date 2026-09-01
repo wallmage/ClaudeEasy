@@ -285,9 +285,6 @@ module ClashRouteVerifier
         "status" => status
       } if details
     end
-    checks.map do |_label, ok, _status|
-      ok
-    end
     checks.all? { |_label, ok, _status| ok }
   rescue StandardError
     false
