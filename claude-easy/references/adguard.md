@@ -6,6 +6,7 @@
 
 - 没有明确 AdGuard 请求时：忽略本文件；不扫描是否安装，不修改任何 AdGuard、系统代理或第三方 PAC。
 - 用户明确请求时：用 Computer Use 操作 AdGuard 自己的正常窗口，不直接改 plist、注册表、PAC 或系统代理。
+- 用户原话已明确要求使用 Computer Use 时，视为本轮 AdGuard 操作授权；不重复询问相同授权。系统权限弹窗、密码、验证码和其他工具强制确认仍按平台规则处理。
 - 先在用户的 `Documents` 根目录查找 `.adguardsettings` 备份。找到用户保存的备份时，优先通过 AdGuard 的 Import Settings 导入；导入后回读关键开关。
 - 没有备份时，按当前平台 UI 手动恢复下面的兼容基线，并保留未列出的项目为默认值。
 
