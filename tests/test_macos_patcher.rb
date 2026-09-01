@@ -98,6 +98,50 @@ class MacosPatcherTest < Minitest::Test
     assert_operator max_active, :>=, 2
   end
 
+  def test_route_verification_waits_for_all_target_threads_when_one_raises
+    requester = lambda do |_method, endpoint, _body = nil|
+      payload = case endpoint
+                when "/proxies"
+                  { "proxies" => {
+                    "Proxy" => { "type" => "Selector", "now" => "node-main" },
+                    "AI" => { "type" => "Selector", "now" => "node-ai" },
+                    "node-main" => { "type" => "Shadowsocks" },
+                    "node-ai" => { "type" => "Shadowsocks" }
+                  } }
+                when "/rules"
+                  { "rules" => [{ "type" => "MATCH", "proxy" => "Proxy" }] }
+                when "/providers/proxies"
+                  { "providers" => {} }
+                when "/connections"
+                  { "connections" => [] }
+                end
+      [200, JSON.generate(payload)]
+    end
+    completed = 0
+    mutex = Mutex.new
+    observer = lambda do |_controller, url, _pattern, *_options|
+      raise "simulated observer failure" if url.include?("chatgpt.com")
+
+      sleep 0.1
+      { "chains" => ["node-ai", "AI"], "providerChains" => [] }
+    ensure
+      mutex.synchronize { completed += 1 }
+    end
+
+    original_requester = ClaudeEasy.method(:controller_requester)
+    original_proxy = ClaudeEasy.method(:runtime_loopback_proxy)
+    original_observer = ClashRouteVerifier.method(:observe_connection)
+    ClaudeEasy.define_singleton_method(:controller_requester) { requester }
+    ClaudeEasy.define_singleton_method(:runtime_loopback_proxy) { "http://127.0.0.1:7890" }
+    ClashRouteVerifier.define_singleton_method(:observe_connection, observer)
+    refute ClashRouteVerifier.run(details: { checks: [] }, observation_seconds: 1)
+    assert_equal 3, mutex.synchronize { completed }
+  ensure
+    ClaudeEasy.define_singleton_method(:controller_requester, original_requester) if original_requester
+    ClaudeEasy.define_singleton_method(:runtime_loopback_proxy, original_proxy) if original_proxy
+    ClashRouteVerifier.define_singleton_method(:observe_connection, original_observer) if original_observer
+  end
+
   def test_storage_preference_requires_a_boolean_plist_value
     status = Struct.new(:success?).new(true)
     preference_domain = ClaudeEasy::AUTO_UPDATE_DOMAINS.first

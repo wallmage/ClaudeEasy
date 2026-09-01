@@ -249,33 +249,37 @@ module ClashRouteVerifier
 
     checks = TARGETS.map do |label, url, kind, host_pattern|
       Thread.new do
-        connection = observe_connection(
-          requester, url, host_pattern, observation_seconds: observation_seconds
-        )
-        current_proxies = get_json(requester, "/proxies")&.fetch("proxies", {})
-        current_provider_payload = get_json(requester, "/providers/proxies")
-        current_main = current_proxies.is_a?(Hash) ? live_main_group(requester, current_proxies) : nil
-        current_ai = current_proxies.is_a?(Hash) ? find_group(
-          current_proxies, policy["ai_group_names"], nil, ai: true
-        ) : nil
-        snapshot_stable = current_provider_payload.is_a?(Hash) &&
-                          current_main == main_group && current_ai == ai_group &&
-                          current_proxies.dig(main_group, "now").to_s == selections[:main] &&
-                          current_proxies.dig(ai_group, "now").to_s == selections[:ai]
-        chains = Array(connection && connection["chains"])
-        provider_chains = Array(connection && connection["providerChains"])
-        ok = snapshot_stable && route_passes?(
-          chains, provider_chains: provider_chains, proxies: current_proxies,
-          providers: current_provider_payload.fetch("providers", {}),
-          kind: kind, expected_group: expected.fetch(kind),
-          expected_selection: selections.fetch(kind), ai_group: ai_group
-        )
-        status = if connection.nil?
-                   "not_observed"
-                 else
-                   ok ? "passed" : "failed"
-                 end
-        [label, ok, status]
+        begin
+          connection = observe_connection(
+            requester, url, host_pattern, observation_seconds: observation_seconds
+          )
+          current_proxies = get_json(requester, "/proxies")&.fetch("proxies", {})
+          current_provider_payload = get_json(requester, "/providers/proxies")
+          current_main = current_proxies.is_a?(Hash) ? live_main_group(requester, current_proxies) : nil
+          current_ai = current_proxies.is_a?(Hash) ? find_group(
+            current_proxies, policy["ai_group_names"], nil, ai: true
+          ) : nil
+          snapshot_stable = current_provider_payload.is_a?(Hash) &&
+                            current_main == main_group && current_ai == ai_group &&
+                            current_proxies.dig(main_group, "now").to_s == selections[:main] &&
+                            current_proxies.dig(ai_group, "now").to_s == selections[:ai]
+          chains = Array(connection && connection["chains"])
+          provider_chains = Array(connection && connection["providerChains"])
+          ok = snapshot_stable && route_passes?(
+            chains, provider_chains: provider_chains, proxies: current_proxies,
+            providers: current_provider_payload.fetch("providers", {}),
+            kind: kind, expected_group: expected.fetch(kind),
+            expected_selection: selections.fetch(kind), ai_group: ai_group
+          )
+          status = if connection.nil?
+                     "not_observed"
+                   else
+                     ok ? "passed" : "failed"
+                   end
+          [label, ok, status]
+        rescue StandardError
+          [label, false, "failed"]
+        end
       end
     end.map(&:value)
     checks.each do |label, ok, status|
