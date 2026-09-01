@@ -156,6 +156,8 @@ class SkillContractTest < Minitest::Test
     refute_match(/百度、Google、Twitter|Google、Twitter/, safe_update)
     assert_match(/百度、Google、ChatGPT/, readme)
     refute_match(/国内站、Google、Twitter|命令行或 Agent/, readme)
+    refute_match(/检查常用网站和 AI 工具/, readme)
+    assert_match(/开启 TUN，关闭 Clash 自己的系统代理，检查百度、Google、ChatGPT/, readme)
     assert_match(/同一浏览器会话/, profiles)
     assert_match(/只有实际状态仍不明.*才.*用户/, macos)
   end
