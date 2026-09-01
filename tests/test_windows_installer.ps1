@@ -1036,6 +1036,24 @@ items:
             [StringComparison]::Ordinal
         )
     ) "file: remote subscription targeted leftover {uid}.yaml instead of custom.yaml"
+    $uidFileProfiles = Join-Path $fileFieldCase "uid-default"
+    New-Item -ItemType Directory -Path $uidFileProfiles -Force | Out-Null
+    $uidFileIndex = @"
+items:
+- uid: R-uid
+  type: remote
+  name: Uid
+"@
+    [System.IO.File]::WriteAllText((Join-Path $uidFileProfiles "R-uid.yaml"), "live: true`n")
+    $uidFileTargets = @(Get-RemoteSubscriptionTargets $uidFileIndex $uidFileProfiles)
+    Assert-True ($uidFileTargets.Count -eq 1) "remote subscription without file: was rejected"
+    Assert-True (
+        [string]::Equals(
+            (Split-Path -Leaf $uidFileTargets[0].Path),
+            "R-uid.yaml",
+            [StringComparison]::Ordinal
+        )
+    ) "remote subscription without file: did not use uid.yaml"
     $escapedFileIndex = @"
 items:
 - uid: R-escape

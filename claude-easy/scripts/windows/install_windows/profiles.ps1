@@ -96,8 +96,8 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
         $uidValues = @($fieldValues["uid"])
         $nameValues = @($fieldValues["name"])
         $updatedValues = @($fieldValues["updated"])
-        $fileValues = @($fieldValues["file"])
-        $urlValues = @($fieldValues["url"])
+        $fileValues = if ($fieldValues.ContainsKey("file")) { @($fieldValues["file"]) } else { @() }
+        $urlValues = if ($fieldValues.ContainsKey("url")) { @($fieldValues["url"]) } else { @() }
         $uidValue = if ($uidValues.Count -eq 1) { (($uidValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"") } else { "" }
         $nameValue = if ($nameValues.Count -eq 1) { (($nameValues[0] -replace '\s+#.*$', '').Trim()).Trim("'`"") } else { "" }
         $updatedRawValue = if ($updatedValues.Count -eq 1) { (($updatedValues[0] -replace '\s+#.*$', '').Trim()) } else { "" }
