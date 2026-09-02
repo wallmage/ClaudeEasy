@@ -17,7 +17,9 @@
 
 ### macOS（用户确认基线）
 
-适用于用户明确要求把 AdGuard 与 ClashX Meta 共存配置好时：
+适用于用户明确要求把 AdGuard 与 ClashX Meta 共存配置好、且当前用途档位为 2 或 3 时：
+
+档位 1 依赖 Clash 系统代理，不适用这套 `Automatic Proxy` 基线；保持原过滤模式并报告冲突。
 
 - Filtering mode：`Automatic Proxy`；禁止切换为 `Network Extension`。
 - General：开启 Launch at Login 和 Activate language-specific filters automatically；Do not block search ads、Hide menu bar icon、Send anonymized app usage data 保持关闭。
