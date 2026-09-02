@@ -182,6 +182,21 @@ proxies:
 Assert-True ($remoteComparePlan.Count -eq 2) "remote comparison did not inspect every subscription"
 Assert-True (-not [bool]$remoteComparePlan[0].Changed) "semantic-only YAML formatting change was reported as an update"
 Assert-True ([bool]$remoteComparePlan[1].Changed) "remote subscription content change was not detected"
+$flatLocalPath = Join-Path $remoteCompareRoot "flat.yaml"
+[System.IO.File]::WriteAllText($flatLocalPath, @'
+proxies:
+- name: node-a
+  server: example.com
+'@)
+$flatRemoteTarget = [pscustomobject]@{ Uid = "flat"; Name = "Flat"; Path = $flatLocalPath; Url = "https://flat.invalid/sub" }
+$flatRemotePlan = @(Get-RemoteSubscriptionUpdatePlan @($flatRemoteTarget) {
+    return @'
+proxies:
+- name: node-b
+  server: example.com
+'@
+})
+Assert-True ([bool]$flatRemotePlan[0].Changed) "top-level YAML sequence item change was not detected"
 
 function Get-TreeContentSnapshot([string]$Path) {
     $rootPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
