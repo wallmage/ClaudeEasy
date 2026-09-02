@@ -52,11 +52,14 @@ function Get-YamlPathFingerprints([string]$Text) {
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
         if ($line -match "`t") { throw "YAML 使用了制表符缩进，无法安全比较。" }
         $indent = Get-YamlIndent $line
-        while ($stack.Count -gt 0 -and [int]$stack[$stack.Count - 1].Indent -ge $indent) {
+        $trimmed = $line.TrimStart()
+        $sequenceItem = $trimmed.StartsWith("- ")
+        while ($stack.Count -gt 0 -and
+               [int]$stack[$stack.Count - 1].Indent -ge $indent -and
+               -not ($sequenceItem -and [int]$stack[$stack.Count - 1].Indent -eq $indent)) {
             $stack.RemoveAt($stack.Count - 1)
         }
-        $trimmed = $line.TrimStart()
-        if ($trimmed.StartsWith("- ")) {
+        if ($sequenceItem) {
             if ($stack.Count -eq 0) { continue }
             $path = [string]$stack[$stack.Count - 1].Path
             $values[$path].Add((($trimmed -replace '\s+#.*$', '').Trim()))
