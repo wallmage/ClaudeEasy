@@ -579,7 +579,7 @@ try {
     $installerSource = [System.IO.File]::ReadAllText($installer)
     $runtimeSource = [System.IO.File]::ReadAllText((Join-Path $installerModuleRoot "runtime.ps1"))
     Assert-True (
-        -not $installerSource.Contains('[switch]$SafeUpdate') -and
+        -not [regex]::IsMatch($installerSource, '(?m)^\s*\[switch\]\$SafeUpdate\s*$') -and
         -not $installerSource.Contains('Invoke-SubscriptionCurlDownload')
     ) "Windows still exposed the cancelled direct-download update path"
     Assert-True (
