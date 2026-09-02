@@ -1,4 +1,4 @@
-function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds = 30) {
+﻿function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds = 30) {
     if ([string]::IsNullOrWhiteSpace($Url)) { throw "远程订阅缺少 url。" }
     try {
         $uri = [Uri]$Url

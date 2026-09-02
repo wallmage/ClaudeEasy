@@ -59,12 +59,12 @@ function Get-YamlPathFingerprints([string]$Text) {
         if ($trimmed.StartsWith("- ")) {
             if ($stack.Count -eq 0) { continue }
             $path = [string]$stack[$stack.Count - 1].Path
-            $values[$path].Add($trimmed)
+            $values[$path].Add((($trimmed -replace '\s+#.*$', '').Trim()))
             [void]$stack.Add([pscustomobject]@{ Indent = $indent; Path = $path; Sequence = $true })
             continue
         }
         if ($stack.Count -gt 0 -and $stack[$stack.Count - 1].Sequence) {
-            $values[[string]$stack[$stack.Count - 1].Path].Add($trimmed)
+            $values[[string]$stack[$stack.Count - 1].Path].Add((($trimmed -replace '\s+#.*$', '').Trim()))
             continue
         }
         $entry = Get-YamlMappingEntry $trimmed

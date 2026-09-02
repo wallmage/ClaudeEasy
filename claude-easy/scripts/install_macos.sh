@@ -112,7 +112,7 @@ valid_safe_update_child_json() {
   /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -rjson -e '
     value = JSON.parse(STDIN.read)
     valid = if value["code"] == "subscriptions_unchanged"
-              value["status"] == "no_change"
+              value["ok"] == true && value["status"] == "no_change" && value["exit_code"] == 0
             else
               value["code"] == "safe_update_completed" &&
                 value["workflow_complete"] == false &&

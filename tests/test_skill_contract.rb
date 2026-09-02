@@ -87,6 +87,11 @@ class SkillContractTest < Minitest::Test
     assert_empty missing, "missing public files: #{missing.join(', ')}"
   end
 
+  def test_windows_remote_preflight_uses_utf8_bom_for_windows_powershell
+    path = File.join(SKILL, "scripts/windows/install_windows/remote_preflight.ps1")
+    assert_equal "\xEF\xBB\xBF".b, File.binread(path)[0, 3]
+  end
+
   def test_all_profiles_share_one_managed_china_domain_baseline
     policy = JSON.parse(File.read(File.join(SKILL, "references/policy.json")))
     mac_patcher = mac_patcher_source
