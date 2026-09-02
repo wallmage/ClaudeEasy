@@ -190,25 +190,25 @@ ClashX Meta 统一日志出现 `DDFileLogManagerDefault` 的 Cocoa 257/513 或 P
 
 应用偶发服务器身份验证失败时，不套用国内分流修复。若统一日志显示 CFNetwork 路径 `uses proxy`、连接到本机 AdGuard 监听端口并出现 TLS 信任错误（如 `-9802` 或 `CERTIFICATE_VERIFY_FAILED`），而当前同一主机的证书链与主机名校验正常，随后同一路径重试成功，先按系统代理所有权冲突、PAC 查询中断或 Fake-IP 重用调查。单独看到 AdGuard、Fake-IP、某个订阅节点或 Clash `ProxyConfigHelper` 活动都不是结论；必须把 PAC 查询、端口所有者、代理配置变更、AdGuard 连接目标和 TLS 失败放进同一时间线。
 
-先读取系统 PAC 地址并确认回环端口由哪个进程监听，再读取 Clash 客户端自己的系统代理状态。档位 2、3 的基础组合是“Clash TUN 开、Clash 系统代理关、AdGuard 自动代理开、AdGuard 出站代理关”。若故障窗口显示 Clash 的 `ProxyConfigHelper` 正在改动或争用系统代理，且 Clash 自己的系统代理确实开启，macOS 运行原生开关协调命令关闭 Clash 系统代理，Windows 按平台界面规则处理；保留 Clash TUN、AdGuard 自动代理和 HTTPS 过滤。
+只有本轮用户明确要求配置、恢复或导入 AdGuard 时，才读取系统 PAC 地址、归属并确认回环端口由哪个进程监听，再读取 Clash 客户端自己的系统代理状态；档位 2、3 的基础组合是“Clash TUN 开、Clash 系统代理关、AdGuard 自动代理开、AdGuard 出站代理关”。普通 Patch 或未获此类请求时只记录当前状态，不检查或修改 AdGuard。PAC 非 AdGuard 或归属不明时停止 AdGuard 动作并报告，不覆盖第三方 PAC。若故障窗口显示 Clash 的 `ProxyConfigHelper` 正在改动或争用系统代理，且 Clash 自己的系统代理确实开启，macOS 运行原生开关协调命令关闭 Clash 系统代理，Windows 按平台界面规则处理；保留 Clash TUN、AdGuard 自动代理和 HTTPS 过滤。
 
-Mihomo 使用 Fake-IP 时，再从 AdGuard 日志读取故障连接的应用、目标域名和 `198.18.0.0/15` 目标地址，只输出时间、域名和假地址；同时从 Mihomo 持久 Fake-IP 数据库的只读快照读取该地址当前的反向映射。只有两项同时成立才确认 **Fake-IP 被重新分配**：AdGuard 在失败时把目标域名连接到某个 Fake-IP；同一个 Fake-IP 现在映射到另一个域名。错误域名与证书域名一致是第二项独立证据。不能只凭地址落在 Fake-IP 网段、当前证书已经恢复或刷新成功下结论。
+Mihomo 使用 Fake-IP 时，再从 AdGuard 日志读取故障连接的应用、目标域名和 `198.18.0.0/15` 目标地址，只输出时间、域名和假地址；同时从 Mihomo 持久 Fake-IP 数据库读取带时间戳的故障前后反向映射。只有两项在同一故障窗口同时成立才确认 **Fake-IP 被重新分配**：AdGuard 在失败时把目标域名连接到某个 Fake-IP；同一个 Fake-IP 在该窗口内改为映射另一个域名。没有故障前后映射时间证据时只能记为支持证据，不能确认。如需证书旁证，原始目标域名必须与证书域名不一致，且证书域名与该地址在同一窗口的错误映射域名一致。不能只凭地址落在 Fake-IP 网段、当前证书已经恢复或刷新成功下结论。
 
 确认后记录 AdGuard 出站代理的开关、协议、主机、端口、用户名、证书信任和 UDP 选项。档位 2、3 的自动配置不启用 AdGuard 出站代理，也不读取或写入 Mihomo 入站代理端口；过滤后的流量交给 Clash TUN。只有用户明确要求使用指定的非 Clash 上游代理时，才通过 AdGuard 界面单独配置并验证；不能把当前节点端口写入这里。
 
-修改后用原应用连续复测原目标三次；连通性仅复测百度、Google、ChatGPT 三页。从 AdGuard 日志确认没有新的 Fake-IP 重分配或证书、域名错配，从 Mihomo `/connections` 确认目标域名、规则和连接链正确；不能把 `198.18.0.0/15` 作为单独失败条件。再确认 Safari 和 Chrome 的广告过滤、HTTPS 证书处理以及当前档位可能受影响的能力。任一项目失败就通过 AdGuard 界面恢复 AdGuard 原状态；恢复后回读全部记录字段。恢复失败时停止，不继续叠加修改。
+修改后用原应用连续复测原目标三次；连通性仅复测百度、Google、ChatGPT 三页。从 AdGuard 日志确认原始目标及本次复测窗口没有新的 Fake-IP 重分配或证书、域名错配，从 Mihomo `/connections` 确认目标域名、规则和连接链正确；不能把 `198.18.0.0/15` 作为单独失败条件，缺少对应证据时标记为未验证。再确认 Safari 和 Chrome 的广告过滤、HTTPS 证书处理以及当前档位可能受影响的能力。只有本轮有用户明确 AdGuard 授权时，任一项目失败才通过 AdGuard 界面恢复原状态并回读全部记录；没有该授权时只记录失败，不修改 AdGuard。恢复失败时停止，不继续叠加修改。
 
 禁止按应用调整 AdGuard 过滤范围；应用名单不可穷举，也不能作为产品级修复。Clash TUN 存在时不得把 AdGuard 改为 `Network Extension`。不得点击忽略证书的“继续”，不添加 Apple、iCloud 或单站规则，不得全局关闭 HTTPS 过滤，也不得把当时使用的订阅节点当成原因。不得直接编辑 AdGuard Plist、第三方 PAC 或系统代理。当前无法复现或没有 Fake-IP 重新分配证据时不因猜测改出站代理，写“暂未复现，观察中”，不能把当前证书正常写成历史故障已经消失。
 
 ### AdGuard for Mac 已知兼容路径
 
-这是 macOS 上 Clash TUN 与 AdGuard for Mac 共存的产品规则，同时用于 Patch 和 Diagnostics。[AdGuard 官方兼容说明](https://adguard.com/kb/adguard-for-mac/solving-problems/big-sur-issues/)也把从 `Network Extension` 改为 `Automatic Proxy` 作为与部分 VPN 或透明代理冲突时的处理方式。该规则只适用于档位 2、3，因为这两档由 Clash TUN 负责最终分流；它不是升档，不增加当前档位之外的 DNS、WebRTC、AI 分组或订阅改动。Clash TUN 存在时不得把 AdGuard 改为 `Network Extension`，禁止按应用调整 AdGuard 过滤范围。档位 1 依赖 Clash 的系统代理，不能让 AdGuard 自动代理再占用同一个位置；Windows 的过滤机制也不同，两者都不能照搬。
+本节仅在本轮用户明确要求检查、配置、恢复或导入 AdGuard 时适用；其他 Diagnostics 跳过本节，不检测 AdGuard。
 
-Patch 在切换档位 2、3 的客户端开关时同时检查 AdGuard for Mac。保持 Clash TUN 开启、Clash 自己的系统代理关闭；检测到 AdGuard 正在使用 `Network Extension` 时，记录当前模式和保护状态，再通过 Computer Use 只通过 AdGuard 界面切换到“自动代理”。在 TUN 基线中，无条件确认并关闭 AdGuard 出站代理；只有用户明确要求指定的非 Clash 上游代理时才保留并报告。自动配置不读取或写入 Mihomo 入站代理端口。不得用 `networksetup`、defaults、Plist 编辑或脚本改写 AdGuard 与系统 PAC，不得退出、停用、卸载或重启 AdGuard，也不得添加逐站例外。
+这是 macOS 上 Clash TUN 与 AdGuard for Mac 共存的 Diagnostics 参考。[AdGuard 官方兼容说明](https://adguard.com/kb/adguard-for-mac/solving-problems/big-sur-issues/)也把从 `Network Extension` 改为 `Automatic Proxy` 作为与部分 VPN 或透明代理冲突时的处理方式。该参考只适用于档位 2、3，因为这两档由 Clash TUN 负责最终分流；普通 Patch 或未获明确 AdGuard 请求时，不读取或修改 AdGuard。AdGuard 的具体配置和界面动作以 [adguard.md](adguard.md) 为准。Clash TUN 存在时不得把 AdGuard 改为 `Network Extension`，禁止按应用调整 AdGuard 过滤范围。档位 1 依赖 Clash 的系统代理，不能让 AdGuard 自动代理再占用同一个位置；Windows 的过滤机制也不同，两者都不能照搬。
 
-Diagnostics 遇到多个无关网站都先空白或转圈约 10–30 秒、随后很快显示，并且现场存在 Clash TUN 与 AdGuard `Network Extension` 时，直接把这条已知兼容路径作为第一项单变量对照，不再从零试一串站点规则。仍要在切换前用原应用复现并记录等待时间；不能仅凭检测到 AdGuard 就宣布故障原因。切换后用同一应用和动作连续复测原目标，并仅复测百度、Google、ChatGPT 三页连通性；确认 Safari 和 Chrome 的广告过滤仍符合用户需要。档位 2 再复测 ChatGPT；档位 3 只复测本次共同网络路径可能影响的分流、DNS 与 WebRTC 能力。
+Diagnostics 遇到多个无关网站都先空白或转圈约 10–30 秒、随后很快显示，并且现场存在 Clash TUN 与 AdGuard `Network Extension` 或仍启用的出站代理时，先把这条已知兼容路径作为候选并记录原场景；不能仅凭检测到 AdGuard 就宣布故障原因或切换设置。只有用户本轮明确要求配置、恢复或导入 AdGuard 时，才按 [adguard.md](adguard.md) 的界面规则处理；操作后回读 Filtering mode、AdGuard outbound proxy、HTTPS 过滤和 PAC 归属状态，再用同一应用和动作连续复测原目标，并仅复测百度、Google、ChatGPT 三页连通性。Computer Use 不可用时按 `SKILL.md` 的界面能力规则处理，不把 AdGuard 可选动作变成普通 Patch 的阻塞条件。档位 2 再复测 ChatGPT；档位 3 只复测本次共同网络路径可能影响的分流、DNS 与 WebRTC 能力。
 
-自动代理只覆盖遵守系统代理的程序，Safari 和 Chrome 等浏览器通常仍会被过滤；非浏览器应用可能不再经过 AdGuard，必须在修改前向用户说明。只有用户明确配置非 Clash 上游时，AdGuard 出站代理才改变过滤后流量的交接方式，不扩大 AdGuard 的应用覆盖范围。任何原始等待无改善、广告过滤失效、档位能力变坏或覆盖范围不符合用户需要的情况，都要无改善立即恢复 AdGuard 原状态，并继续通用诊断。不能把这个 AdGuard 专用兼容路径写成其他过滤器或 VPN 的通用答案。
+自动代理只覆盖遵守系统代理的程序，Safari 和 Chrome 等浏览器通常仍会被过滤；非浏览器应用可能不再经过 AdGuard，必须在修改前向用户说明。只有用户明确配置非 Clash 上游时，AdGuard 出站代理才改变过滤后流量的交接方式，不扩大 AdGuard 的应用覆盖范围。任何原始等待无改善、广告过滤失效、档位能力变坏或覆盖范围不符合用户需要的情况，只有本轮有用户明确 AdGuard 授权时才通过界面恢复原状态；没有该授权时只记录并继续通用诊断。不能把这个 AdGuard 专用兼容路径写成其他过滤器或 VPN 的通用答案。
 
 macOS 当前流量优先使用 `nettop` 的按进程/连接 CSV、活动监视器的网络计数、`netstat -ib`、系统 DNS/路由状态和 Mihomo 连接记录。macOS 不保证保存一份可直接按应用回放的长期流量历史；历史不足时建立观察窗口，并用相关应用日志补充，不能假装已取得过去的逐应用字节。
 

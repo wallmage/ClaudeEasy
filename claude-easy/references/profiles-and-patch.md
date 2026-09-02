@@ -36,7 +36,7 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 | **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，macOS 原生开关协调命令或 Windows 平台界面先开启 TUN，再关闭 Clash 自己的系统代理 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 百度、Google、ChatGPT 能稳定打开，速度无明显异常 |
 | **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、分流、DNS 深度测试、WebRTC 测试和本地区域指纹测试 |
 
-档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；除下述 AdGuard for Mac 已知兼容路径外，不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
+档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。AdGuard for Mac 的可选配置只在用户明确要求配置、恢复或导入时读取 [adguard.md](adguard.md)，不属于普通 Patch。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
 
 三个档位都包含共同国内域名直连基线。档位 3 的其余完整补丁包括：TUN、DNS 劫持、自动与严格路由、IPv6 关闭、普通国外与 AI DNS 分流、AI 分组与规则、局域网与国内 UDP 分流、其余 UDP/WebRTC 防护和完整验证。不得自动切换节点；节点建议见 [routing-and-security.md](routing-and-security.md)。无法确认目的地的 UDP 会经过 AI 分组，可能影响游戏、语音和视频，必须在选择界面说明。
 
