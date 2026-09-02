@@ -848,6 +848,21 @@ module ClaudeEasy
           )
         end
       )
+      if result[:status] == :no_change
+        items = result.fetch(:profiles).map do |item|
+          {
+            "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(item.fetch(:name).to_s)}",
+            "label" => safe_label(item.fetch(:name)), "status" => "unchanged"
+          }
+        end
+        return emit_cli_result(
+          operation: "safe_update", exit_code: 0, status: "no_change", code: "subscriptions_unchanged",
+          summary_zh: "远端和本地的远程订阅配置完全一样，不需要更新。",
+          profile: options[:usage_profile], checks: [{ "name" => "remote_subscription_compare" }], items: items
+        ) if options[:json]
+        puts "远端和本地的远程订阅配置完全一样，不需要更新。"
+        return 0
+      end
       if result[:status] == :updated
         mark_wrapper_commit_receipt(options)
         required_followups = case options[:usage_profile]

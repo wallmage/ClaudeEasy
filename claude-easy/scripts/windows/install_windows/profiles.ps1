@@ -470,6 +470,9 @@ function Get-RemoteSubscriptionTargets([string]$ProfilesIndexText, [string]$Dire
             Uid = $item.Uid
             Name = $item.Name
             Path = $path
+            Url = $(if ($item.UrlCount -eq 1) {
+                ConvertFrom-SubscriptionScalar ([string]$item.UrlRaw) "url"
+            } else { "" })
             Updated = $item.Updated
         }
     }

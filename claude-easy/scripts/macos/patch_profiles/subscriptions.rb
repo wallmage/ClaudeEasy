@@ -660,6 +660,20 @@ module ClaudeEasy
     raise InvalidConfigError, "远程订阅下载失败"
   end
 
+  def remote_subscription_semantically_equal?(target, original, source, policy, usage_profile)
+    current = load_yaml(original.dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
+    remote = load_yaml(source.to_s.b.dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
+    patched = patch(remote, policy, usage_profile: usage_profile)
+    return false unless %i[updated unchanged].include?(patched.fetch(:status))
+    dump_config(current) == dump_config(patched.fetch(:config))
+  end
+
+  def validate_remote_subscription_source!(target, source)
+    config = load_yaml(source.to_s.b.dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
+    raise InvalidConfigError, "远程订阅内容无效" unless usable_config?(config)
+    true
+  end
+
   def mihomo_loopback_proxy_url?(value)
     value.is_a?(String) && value.match?(%r{\A(?:http|socks5h)://127\.0\.0\.1:(?:[1-9]\d{0,4})\z}) &&
       value.rpartition(":").last.to_i <= 65_535
@@ -1047,6 +1061,39 @@ module ClaudeEasy
         reason: :download_or_validation_failed, items: item_results
       }
     end
+    preflight_results = []
+    items.each do |item|
+      begin
+        item[:source] = fetcher.call(item.fetch(:target))
+        validate_remote_subscription_source!(item.fetch(:target), item.fetch(:source))
+        if remote_subscription_semantically_equal?(
+             item.fetch(:target), item.fetch(:original), item.fetch(:source), policy, usage_profile
+           )
+          item[:unchanged] = true
+          preflight_results << { name: item.fetch(:name), status: :unchanged }
+        else
+          preflight_results << { name: item.fetch(:name), status: :ready }
+        end
+      rescue StandardError
+        item_results << {
+          name: item.fetch(:name), status: :failed, reason: :download_failed,
+          subscription_switch_possible: true
+        }
+      end
+    end
+    if item_results.any? { |item| item.fetch(:status) == :failed }
+      failed = item_results.find { |item| item.fetch(:status) == :failed }
+      return {
+        status: :aborted, failed_profile: failed.fetch(:name),
+        reason: :download_or_validation_failed, items: item_results
+      }
+    end
+    items = items.reject { |item| item[:unchanged] }
+    if items.empty?
+      return {
+        status: :no_change, count: 0, profiles: preflight_results
+      }
+    end
     operation_lock ||= profile_operation_lock(backup_root)
     recover_profile_transaction(backup_root, roots: roots)
 
@@ -1079,17 +1126,8 @@ module ClaudeEasy
     items.each do |item|
       name = item.fetch(:name)
       begin
-        source = fetcher.call(item.fetch(:target))
-      rescue StandardError
-        item_results << {
-          name: name, status: :failed, reason: :download_failed,
-          subscription_switch_possible: true
-        }
-        next
-      end
-      begin
         item[:candidate] = build_update_candidate(
-          item.fetch(:target), source, policy, usage_profile, validator
+          item.fetch(:target), item.fetch(:source), policy, usage_profile, validator
         )
       rescue SafeUpdateCandidateError => error
         failure = { name: name, status: :failed, reason: error.reason }

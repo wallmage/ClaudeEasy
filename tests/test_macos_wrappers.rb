@@ -891,6 +891,7 @@ class MacosWrapperTest < Minitest::Test
 
   def test_strong_kill_after_profile_application_keeps_new_profile_as_recovery_intent
     patcher = <<~'RUBY'
+      require "json"
       profile_index = ARGV.index("--usage-profile")
       profile = ARGV.fetch(profile_index + 1) if profile_index
       if ARGV.include?("--print-core-status")
@@ -904,6 +905,18 @@ class MacosWrapperTest < Minitest::Test
       exit 0 if ARGV.include?("--snapshot-initial")
       if ARGV.include?("--safe-update-all")
         File.write(File.join(ENV.fetch("HOME"), "subscription-backup"), "created")
+        if ARGV.include?("--json")
+          puts JSON.generate(
+            "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+            "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
+            "ok" => true, "status" => "ok", "code" => "safe_update_completed",
+            "exit_code" => 0, "summary_zh" => "订阅事务完成，后续验收尚未完成。",
+            "profile" => 1, "changes" => ["remote_subscriptions"], "checks" => [],
+            "items" => [], "messages" => [], "warnings" => [],
+            "workflow_complete" => false, "completed_scope" => "subscription_update",
+            "required_followups" => ["final_state_audit"]
+          )
+        end
         exit 0
       end
       File.write(File.join(ENV.fetch("HOME"), "applied-profile"), profile)
@@ -1095,6 +1108,47 @@ class MacosWrapperTest < Minitest::Test
           assert_equal "safe_update_completed", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
           assert_equal ["remote_subscriptions"], result.fetch("changes")
+        end
+      end
+    end
+  end
+
+  def test_non_json_safe_update_stops_after_no_change
+    patcher = <<~RUBY
+      require "json"
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        File.write(File.join(ENV.fetch("HOME"), "auto-update-changed"), "yes")
+        puts "disabled"
+        exit 0
+      end
+      if ARGV.include?("--safe-update-all")
+        puts JSON.generate(
+          "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
+          "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
+          "ok" => true, "status" => "no_change", "code" => "subscriptions_unchanged",
+          "exit_code" => 0, "summary_zh" => "远端和本地的远程订阅配置完全一样，不需要更新。",
+          "profile" => 1, "changes" => [], "checks" => [], "items" => [],
+          "messages" => [], "warnings" => []
+        )
+        exit 0
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          write_usage_profile(home, 1)
+          stdout, stderr, status = run_script(installer, "--safe-update", home: home)
+
+          assert status.success?, "#{stdout}\n#{stderr}"
+          assert_empty stderr
+          assert_includes stdout, "远端和本地的远程订阅配置完全一样，不需要更新。"
+          refute File.exist?(File.join(home, "auto-update-changed"))
         end
       end
     end

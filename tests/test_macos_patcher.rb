@@ -832,8 +832,58 @@ class MacosPatcherTest < Minitest::Test
       assert_equal :aborted, result.fetch(:status)
       assert_equal "second", result.fetch(:failed_profile)
       targets.each { |target| assert_equal originals.fetch(target.fetch(:path)), File.binread(target.fetch(:path)) }
-      assert_equal 3, Dir.children(backup_root).count { |name| name.include?("--pre-update--") }
+      assert_equal 0, Dir.exist?(backup_root) ? Dir.children(backup_root).count { |name| name.include?("--pre-update--") } : 0
       refute_includes JSON.generate(result), "subscriptions.invalid"
+    end
+  end
+
+  def test_safe_update_all_compares_first_and_writes_only_changed_profiles
+    Dir.mktmpdir do |directory|
+      backup_root = File.join(directory, "backups")
+      targets = %w[same changed].map do |name|
+        path = File.join(directory, "#{name}.yaml")
+        marker = name == "same" ? "same-local" : "old-local"
+        config = base_config.merge("subscription-marker" => marker)
+        config = ClaudeEasy.patch(config, @policy, usage_profile: 1).fetch(:config) if name == "same"
+        File.write(path, ClaudeEasy.dump_config(config))
+        { name: name, path: path, url: "https://subscriptions.invalid/#{name}" }
+      end
+      originals = targets.to_h { |target| [target.fetch(:path), File.binread(target.fetch(:path))] }
+      fetcher = lambda do |target|
+        marker = target.fetch(:name) == "same" ? "same-local" : "new-remote"
+        YAML.dump(base_config.merge("subscription-marker" => marker))
+      end
+
+      result = ClaudeEasy.safe_update_all(
+        targets: targets, policy: @policy, backup_root: backup_root, usage_profile: 1,
+        fetcher: fetcher, validator: ->(_path) { true },
+        activation: ->(_items) { true }, selected_name: "none"
+      )
+
+      assert_equal :updated, result.fetch(:status)
+      assert_equal ["changed"], result.fetch(:profiles)
+      assert_equal originals.fetch(targets[0].fetch(:path)), File.binread(targets[0].fetch(:path))
+      refute_equal originals.fetch(targets[1].fetch(:path)), File.binread(targets[1].fetch(:path))
+      assert_equal 1, Dir.children(backup_root).count { |name| name.include?("--pre-update--") }
+    end
+  end
+
+  def test_safe_update_all_returns_no_change_without_backups_or_activation
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "same.yaml")
+      content = ClaudeEasy.dump_config(ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config))
+      File.write(path, content)
+      target = { name: "same", path: path, url: "https://subscriptions.invalid/same" }
+      result = ClaudeEasy.safe_update_all(
+        targets: [target], policy: @policy, backup_root: File.join(directory, "backups"), usage_profile: 1,
+        fetcher: ->(_item) { content }, validator: ->(_path) { flunk "must not validate unchanged content" },
+        activation: ->(_items) { flunk "must not activate unchanged content" }, selected_name: "none"
+      )
+
+      assert_equal :no_change, result.fetch(:status)
+      assert_equal "same", result.fetch(:profiles).first.fetch(:name)
+      refute Dir.exist?(File.join(directory, "backups"))
+      assert_equal content.b, File.binread(path)
     end
   end
 
@@ -845,7 +895,7 @@ class MacosPatcherTest < Minitest::Test
 
       result = ClaudeEasy.safe_update_all(
         targets: [target], policy: @policy, backup_root: File.join(directory, "backups"),
-        usage_profile: 1, fetcher: ->(_item) { YAML.dump(base_config) },
+        usage_profile: 1, fetcher: ->(_item) { YAML.dump(base_config.merge("subscription-marker" => "new")) },
         validator: ->(_path) { true }, selected_name: "active",
         client_identity_reader: -> { nil }
       )
@@ -860,7 +910,7 @@ class MacosPatcherTest < Minitest::Test
       result = ClaudeEasy.stub(:capture_runtime_checkpoint, nil) do
         ClaudeEasy.safe_update_all(
           targets: [target], policy: @policy, backup_root: File.join(directory, "backups"),
-          usage_profile: 1, fetcher: ->(_item) { YAML.dump(base_config) },
+          usage_profile: 1, fetcher: ->(_item) { YAML.dump(base_config.merge("subscription-marker" => "new")) },
           validator: ->(_path) { true }, selected_name: "active",
           client_identity_reader: -> { identity }
         )

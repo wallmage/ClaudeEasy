@@ -7,6 +7,7 @@
     [switch]$SnapshotProfiles,
     [switch]$BeginSafeUpdateRefresh,
     [switch]$VerifySafeUpdate,
+    [switch]$SafeUpdateChangedOnly,
     [switch]$RefreshConfirmed,
     [switch]$ListBackups,
     [string]$CompareBackup = "",
@@ -48,7 +49,7 @@ if (-not $resultContractLoaded) {
     exit 6
 }
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
-$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($BeginSafeUpdateRefresh) { "begin_safe_update_refresh" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
+$script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($BeginSafeUpdateRefresh) { "begin_safe_update_refresh" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($SafeUpdateChangedOnly) { "safe_update_changed_only" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
@@ -61,7 +62,8 @@ $installerModules = @(
     "transaction.ps1",
     "script_js.ps1",
     "runtime.ps1",
-    "safe_update.ps1"
+    "safe_update.ps1",
+    "remote_preflight.ps1"
 )
 try {
     if (-not (Test-Path -LiteralPath $enginePath -PathType Leaf)) {
@@ -82,6 +84,7 @@ try {
         "Get-InstallStateEntry", "Assert-InstallState", "Assert-StateSnapshotUnchanged", "New-InstallStateEntry",
         "Split-YamlLines", "Set-YamlTopLevelScalar", "Set-YamlTunMapping", "Test-GeneratedYaml", "Get-RedactedYamlChangedPaths",
         "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionTargets", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionLabel", "Get-PublicSubscriptionResult",
+        "Get-RemoteSubscriptionHttpBytes", "Get-RemoteSubscriptionUpdatePlan",
         "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Merge-RemoteSubscriptionAutoUpdateOwnership", "Assert-ClaudeEasyProxyGroupCollection",
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning", "Get-ClashVergeProcessIdentity", "Test-ClashVergeProcessIdentity",
@@ -144,6 +147,7 @@ $requestedOperations = @(
     [bool]$SnapshotProfiles,
     [bool]$BeginSafeUpdateRefresh,
     [bool]$VerifySafeUpdate,
+    [bool]$SafeUpdateChangedOnly,
     [bool]$ListBackups,
     (-not [string]::IsNullOrWhiteSpace($CompareBackup)),
     (-not [string]::IsNullOrWhiteSpace($RestoreBackup)),
@@ -195,7 +199,7 @@ try {
 
 try {
 try {
-if ($script:ClaudeEasyOperation -eq "install" -or $script:ClaudeEasyOperation -eq "restore_backup") {
+if ($script:ClaudeEasyOperation -in @("install", "restore_backup", "safe_update_changed_only")) {
     $pendingSafeUpdate = $false
     try {
         $pendingSafeUpdate = (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists
@@ -213,7 +217,7 @@ $clientStoppedPreCommit = {
 
 $usageProfileSnapshot = $null
 $savedUsageProfile = 0
-$needsUsageProfile = $SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate -or $ShowUsageProfile -or (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) -or (-not $BackupSubscriptions -and (
+$needsUsageProfile = $SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate -or $SafeUpdateChangedOnly -or $ShowUsageProfile -or (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) -or (-not $BackupSubscriptions -and (
     -not $ListBackups -and
     [string]::IsNullOrWhiteSpace($CompareBackup) -and
     [string]::IsNullOrWhiteSpace($RestoreBackup)
@@ -252,6 +256,122 @@ if ($BackupSubscriptions) {
     Complete-InstallResult 0 "ok" "subscription_backups_created" `
         "已为全部远程订阅创建更新前备份。" `
         @("profile_backups") @() $backupItems
+}
+
+if ($SafeUpdateChangedOnly) {
+    if ($savedUsageProfile -eq 0) {
+        Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
+    }
+    if ($UsageProfile -ne 0 -and $UsageProfile -ne $savedUsageProfile) {
+        Complete-InstallResult 64 "invalid_request" "usage_profile_mismatch" "请求档位与已保存档位不一致；未执行安全更新。"
+    }
+    $script:ClaudeEasyProfile = $savedUsageProfile
+    if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
+    $safeUpdateDeadline = [DateTime]::UtcNow.AddSeconds(180)
+    $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    try {
+        $indexText = $strictUtf8.GetString($indexSnapshot.Bytes)
+    } catch {
+        throw "远程订阅清单不是有效 UTF-8。"
+    }
+    $profiles = @(Get-RemoteSubscriptionTargets $indexText $profilesDirectory)
+    $plan = @(Get-RemoteSubscriptionUpdatePlan $profiles -AbsoluteDeadline $safeUpdateDeadline)
+    $changed = @($plan | Where-Object { $_.Changed })
+    $compareItems = @($plan | ForEach-Object {
+        Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) $(if ($_.Changed) { "pending" } else { "unchanged" })
+    })
+    if ($changed.Count -eq 0) {
+        Complete-InstallResult 0 "no_change" "subscriptions_unchanged" "远端和本地的远程订阅配置完全一样，不需要更新。" @("remote_compare") @("remote_subscription_compare") $compareItems
+    }
+    if ([DateTime]::UtcNow -ge $safeUpdateDeadline) { throw "safe_update_timeout" }
+    if (-not (Test-ClashVergeRunning)) { throw "Clash Verge Rev 没有运行，无法安全加载更新后的订阅。" }
+
+    $runtimeContext = Get-ClashControllerContext $runtimeConfigPath
+    $runtimeState = Get-ClashRuntimeState $runtimeContext
+    $runtimeSelections = $runtimeState.Selections
+    $runtimeTunEnabled = [bool]$runtimeState.TunEnabled
+    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
+    if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
+    $vergeText = $strictUtf8.GetString($vergeSnapshot.Bytes)
+    $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
+    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
+    if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
+    $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
+    Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedUsageProfile $enginePath $targetScript
+    Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
+    $core = Find-MihomoCore $MihomoPath
+    $runtimePolicyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+    $runtimePolicy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($runtimePolicyPath)) | ConvertFrom-Json
+    $runtimeCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    foreach ($entry in $changed) {
+        Assert-SubscriptionProtocolPreserved ([string]$entry.LocalText) ([string]$entry.RemoteText)
+        Test-MihomoCandidate $core ([string]$entry.RemoteText) $profilesDirectory $safeUpdateDeadline | Out-Null
+    }
+    foreach ($entry in $changed) {
+        Backup-InitialOnce $entry.Path $backupRoot -SourceBytes $entry.LocalBytes -UseSourceBytes | Out-Null
+        Backup-Versioned $entry.Path $backupRoot "pre-update" -SourceBytes $entry.LocalBytes -UseSourceBytes | Out-Null
+    }
+    $writeTargets = @($changed | ForEach-Object {
+        [pscustomobject]@{
+            Path = [string]$_.Path
+            Bytes = [byte[]]$_.RemoteBytes
+            Existed = $true
+            OriginalBytes = [byte[]]$_.LocalBytes
+            OriginalIdentity = [string]$_.LocalIdentity
+        }
+    })
+    Invoke-VerifiedFileTransaction $writeTargets -InterruptedRecoveryPolicy "client_stopped"
+    try {
+        Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+        $null = Wait-ClashVergeRuntimeHealthy `
+            $runtimeConfigPath $runtimeContext $runtimeSelections $runtimeTunEnabled `
+            $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy $safeUpdateDeadline
+        foreach ($entry in $changed) {
+            $current = Get-OptionalFileSnapshot $entry.Path "更新后的远程订阅"
+            if (-not $current.Exists -or (Get-BytesSha256 $current.Bytes) -cne [string]$entry.RemoteSha256) {
+                throw "更新后的远程订阅与已读取的远端内容不一致。"
+            }
+        }
+        $updatedItems = @($plan | ForEach-Object {
+            Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) $(if ($_.Changed) { "updated" } else { "unchanged" })
+        })
+        Complete-InstallResult 0 "ok" "subscriptions_updated" "已只更新发生变化的远程订阅，并完成客户端重载和运行状态验收。" @("remote_compare", "subscription_update", "runtime_verification") @("remote_subscription_compare", "mihomo_candidate", "runtime_health") $updatedItems
+    } catch {
+        $failureMessage = $_.Exception.Message
+        $rollbackTargets = @()
+        $rollbackPossible = $true
+        foreach ($entry in $changed) {
+            $current = Get-OptionalFileSnapshot $entry.Path "待恢复的远程订阅"
+            if (-not $current.Exists -or (Get-BytesSha256 $current.Bytes) -cne [string]$entry.RemoteSha256) {
+                $rollbackPossible = $false
+                break
+            }
+            $rollbackTargets += [pscustomobject]@{
+                Path = [string]$entry.Path
+                Bytes = [byte[]]$entry.LocalBytes
+                Existed = $true
+                OriginalBytes = [byte[]]$current.Bytes
+                OriginalIdentity = [string]$current.Identity
+            }
+        }
+        if ($rollbackPossible) {
+            try {
+                Invoke-VerifiedFileTransaction $rollbackTargets -InterruptedRecoveryPolicy "client_stopped"
+                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
+                $null = Wait-ClashVergeRuntimeHealthy `
+                    $runtimeConfigPath $runtimeContext $runtimeSelections $runtimeTunEnabled `
+                    $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy
+                $rolledBackItems = @($plan | ForEach-Object {
+                    Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) $(if ($_.Changed) { "rolled_back" } else { "unchanged" })
+                })
+                Complete-InstallResult 1 "rolled_back" "subscriptions_update_rolled_back" "订阅更新验收失败，已恢复更新前的变化订阅和运行状态。" @() @("runtime_unverified") $rolledBackItems @($failureMessage)
+            } catch {
+                $failureMessage = "$failureMessage；恢复失败：$($_.Exception.Message)"
+            }
+        }
+        Complete-InstallResult 1 "partial" "subscriptions_update_recovery_pending" "订阅更新验收失败，无法确认全部变化订阅和运行状态已恢复。" @() @("runtime_unverified") $compareItems @($failureMessage)
+    }
 }
 
 if ($SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate) {

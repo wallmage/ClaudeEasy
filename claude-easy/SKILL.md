@@ -81,7 +81,7 @@ Codex 未启用时，按当前官方界面引导用户进入“设置 → 插件
 2. **不得运行 Clash 客户端主程序做检查。** 细节见共同安全边界。
 3. **Claude/Anthropic 远程域名永久禁测；** AI 联网与分流验收只测 ChatGPT、Gemini 和 Grok。细节见 [policy-core.md](references/policy-core.md) 与 [profiles-and-patch.md](references/profiles-and-patch.md) 本地区域指纹闭环。
 4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按 [windows.md](references/windows.md) 操作 Clash Verge Rev；AdGuard for Mac 只通过它自己的正常窗口调整兼容设置。
-5. 安全更新必须保留热加载，且只能走已经运行的客户端原生入口；180 秒窗口与失败处理见 [safe-update-and-recovery.md](references/safe-update-and-recovery.md)。
+5. 安全更新第一步必须读取并比对全部远程订阅；全部相同时返回 `no_change` 且不修改，有变化时只更新变化目标并通过已经运行的客户端重新加载。流程与失败处理见 [safe-update-and-recovery.md](references/safe-update-and-recovery.md)。
 6. 只处理 Clash 当前存储位置中的订阅；macOS 存储偏好缺失、且当前订阅只在本地目录唯一出现时自动按本地处理。仍存在多个匹配位置时才停止对应写入。见 [macos.md](references/macos.md)。
 7. 写入候选必须通过 YAML 重读、二次转换一致性检查和 Mihomo 1.19.27 以上版本的 30 秒校验；失败时保持原文件。见 [policy-core.md](references/policy-core.md)。
 8. 用户可见沟通遵守本文件开头的简体中文与小白表达规则。
@@ -91,6 +91,8 @@ Codex 未启用时，按当前官方界面引导用户进入“设置 → 插件
 - **Patch 模块**：首次安装、改变用途档位，或用户明确要求配置网络时使用；只应用该档位的最少能力。
 - **Diagnostics 模块**：慢、间歇失败、打不开、全红、分流异常或泄漏时使用。不能因为用户提到 Clash 就先运行补丁。
 - **订阅更新**：用户明确要求更新全部订阅时使用；它不是 Patch 或 Diagnostics 的隐含步骤。
+
+如果本次由 schedule task 触发，第一步运行 `scripts/check_skill_update.sh`（macOS）或 `scripts/check_skill_update.ps1`（Windows）检查 GitHub 版本；返回 `skill_updated` 时重新读取已安装的 `SKILL.md`，再按新版本继续。随后仍按订阅比对流程执行：先逐份读取远端配置，全部相同就结束，有变化只更新变化目标。
 
 ### 平台入口
 
@@ -109,6 +111,7 @@ ruby scripts/macos/verify_routes.rb
 ```powershell
 .\scripts\install_windows.cmd -UsageProfile N
 .\scripts\install_windows.cmd -ShowUsageProfile
+.\scripts\install_windows.cmd -SafeUpdateChangedOnly -Json
 .\scripts\uninstall_windows.cmd
 powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1
 ```

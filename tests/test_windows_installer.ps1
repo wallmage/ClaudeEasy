@@ -39,7 +39,7 @@ $resultContract = Join-Path (Join-Path $root "claude-easy/scripts/windows") "res
 $installerModuleRoot = Join-Path (Join-Path $root "claude-easy/scripts/windows") "install_windows"
 $installerModules = @(
     "common.ps1", "yaml.ps1", "profiles.ps1", "mihomo.ps1",
-    "transaction.ps1", "script_js.ps1", "runtime.ps1", "safe_update.ps1"
+    "transaction.ps1", "script_js.ps1", "runtime.ps1", "safe_update.ps1", "remote_preflight.ps1"
 ) | ForEach-Object { Join-Path $installerModuleRoot $_ }
 $uninstallerModules = @(
     "yaml.ps1", "profiles.ps1", "transaction.ps1", "script_js.ps1", "safe_update.ps1"
@@ -143,6 +143,45 @@ foreach ($followupCase in $safeUpdateFollowupCases) {
         ($actualFollowups -join ",") -ceq (@($followupCase.Expected) -join ",")
     ) "Windows safe-update follow-ups differ from the shared profile workflow for profile $($followupCase.Profile)"
 }
+
+$remoteCompareRoot = Join-Path $sandbox "remote-compare"
+New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+New-Item -ItemType Directory -Path $remoteCompareRoot -Force | Out-Null
+$sameLocalPath = Join-Path $remoteCompareRoot "same.yaml"
+$changedLocalPath = Join-Path $remoteCompareRoot "changed.yaml"
+[System.IO.File]::WriteAllText($sameLocalPath, @'
+# local formatting differs only
+proxies:
+  - name: node-a
+    server: example.com
+'@)
+[System.IO.File]::WriteAllText($changedLocalPath, @'
+proxies:
+  - name: node-b
+    server: old.example.com
+'@)
+$remoteCompareTargets = @(
+    [pscustomobject]@{ Uid = "same"; Name = "Same"; Path = $sameLocalPath; Url = "https://same.invalid/sub" },
+    [pscustomobject]@{ Uid = "changed"; Name = "Changed"; Path = $changedLocalPath; Url = "https://changed.invalid/sub" }
+)
+$remoteComparePlan = @(Get-RemoteSubscriptionUpdatePlan $remoteCompareTargets {
+    param($target)
+    if ($target.Uid -eq "same") {
+        return @'
+proxies:
+    - name: node-a # remote comment
+      server: example.com
+'@
+    }
+    return @'
+proxies:
+  - name: node-b
+    server: new.example.com
+'@
+})
+Assert-True ($remoteComparePlan.Count -eq 2) "remote comparison did not inspect every subscription"
+Assert-True (-not [bool]$remoteComparePlan[0].Changed) "semantic-only YAML formatting change was reported as an update"
+Assert-True ([bool]$remoteComparePlan[1].Changed) "remote subscription content change was not detected"
 
 function Get-TreeContentSnapshot([string]$Path) {
     $rootPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(

@@ -111,10 +111,14 @@ run_with_update_deadline() {
 valid_safe_update_child_json() {
   /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -rjson -e '
     value = JSON.parse(STDIN.read)
-    valid = value["code"] == "safe_update_completed" &&
-      value["workflow_complete"] == false &&
-      value["completed_scope"] == "subscription_update" &&
-      value["required_followups"].is_a?(Array) && !value["required_followups"].empty?
+    valid = if value["code"] == "subscriptions_unchanged"
+              value["status"] == "no_change"
+            else
+              value["code"] == "safe_update_completed" &&
+                value["workflow_complete"] == false &&
+                value["completed_scope"] == "subscription_update" &&
+                value["required_followups"].is_a?(Array) && !value["required_followups"].empty?
+            end
     exit(valid ? 0 : 1)
   ' 2>/dev/null
 }
@@ -679,6 +683,18 @@ run_committing_profile_operation() {
   return "$PROFILE_OPERATION_CHILD_STATUS"
 }
 
+run_safe_update_profile_operation() {
+  safe_update_previous_json_output=$JSON_OUTPUT
+  JSON_OUTPUT=1
+  if run_committing_profile_operation "$@"; then
+    safe_update_operation_status=0
+  else
+    safe_update_operation_status=$?
+  fi
+  JSON_OUTPUT=$safe_update_previous_json_output
+  return "$safe_update_operation_status"
+}
+
 finish_profile_operation_result_failure() {
   if [ "$PROFILE_OPERATION_RESULT_FAILED" -eq 1 ]; then
     finish 1 partial operation_committed_result_failed \
@@ -988,7 +1004,7 @@ fi
 
 if [ "$SAFE_UPDATE" -eq 1 ]; then
   if [ -n "$CUSTOM_PROFILE_DIR" ]; then
-    if ! run_committing_profile_operation \
+    if ! run_safe_update_profile_operation \
         --profile-dir "$CUSTOM_PROFILE_DIR" \
         --policy "$POLICY_SOURCE" \
         --backup-dir "$BACKUP_DIR" \
@@ -1002,7 +1018,7 @@ if [ "$SAFE_UPDATE" -eq 1 ]; then
       fi
     fi
   else
-    if ! run_committing_profile_operation \
+    if ! run_safe_update_profile_operation \
         --policy "$POLICY_SOURCE" \
         --backup-dir "$BACKUP_DIR" \
         --safe-update-all --usage-profile "$USAGE_PROFILE"; then
@@ -1015,9 +1031,14 @@ if [ "$SAFE_UPDATE" -eq 1 ]; then
       fi
     fi
   fi
-  if [ "$JSON_OUTPUT" -eq 1 ] && ! valid_safe_update_child_json; then
+  if ! valid_safe_update_child_json; then
     PROFILE_OPERATION_RESULT_FAILED=1
     finish_profile_operation_result_failure
+  fi
+  child_code=$(/usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -rjson -e 'v=JSON.parse(STDIN.read); print v["code"].to_s' 2>/dev/null || true)
+  if [ "$child_code" = "subscriptions_unchanged" ]; then
+    finish 0 no_change subscriptions_unchanged \
+      "远端和本地的远程订阅配置完全一样，不需要更新。" safe_update
   fi
   if ! run_subscription_auto_update_disable; then
     AUTO_UPDATE_RECOVERY_PENDING=1

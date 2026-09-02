@@ -34,6 +34,8 @@ class SkillContractTest < Minitest::Test
     claude-easy/references/policy.json
     claude-easy/references/result-contract.json
     claude-easy/scripts/install_macos.sh
+    claude-easy/scripts/check_skill_update.sh
+    claude-easy/scripts/check_skill_update.ps1
     claude-easy/scripts/install_windows.ps1
     claude-easy/scripts/install_windows.cmd
     claude-easy/scripts/uninstall_macos.sh
@@ -64,6 +66,7 @@ class SkillContractTest < Minitest::Test
     claude-easy/scripts/windows/install_windows/script_js.ps1
     claude-easy/scripts/windows/install_windows/runtime.ps1
     claude-easy/scripts/windows/install_windows/safe_update.ps1
+    claude-easy/scripts/windows/install_windows/remote_preflight.ps1
     LICENSE
   ]).freeze
 
@@ -115,6 +118,8 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, "claude-easy-backups"
     assert_includes windows_installer, "yyyy-MM-dd_HH-mm-ss"
     assert_includes windows_installer, "changed_fields"
+    assert_includes windows_installer, "SafeUpdateChangedOnly"
+    assert_includes windows_installer, "Get-RemoteSubscriptionUpdatePlan"
     %w[id same backup_sha256 current_sha256].each do |field|
       assert_match(/^\s+#{field} = /, windows_installer)
     end

@@ -89,7 +89,7 @@ Windows PowerShell 5.1：
 | 功能 | macOS | Windows |
 | --- | --- | --- |
 | 查看档位 | `bash claude-easy/scripts/install_macos.sh --show-profile` | `.\claude-easy\scripts\install_windows.cmd -ShowUsageProfile` |
-| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json` | 先用 `-SnapshotProfiles -Json`，点击前用 `-BeginSafeUpdateRefresh -Json`，刷新后用 `-VerifySafeUpdate -RefreshConfirmed -Json` |
+| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json`（先比对） | `powershell.exe -NoProfile -File claude-easy/scripts/install_windows.ps1 -SafeUpdateChangedOnly -Json`（先比对） |
 | 列出备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups --json` | `.\claude-easy\scripts\install_windows.cmd -ListBackups -Json` |
 | 比较备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --compare-backup ID --json` | `.\claude-easy\scripts\install_windows.cmd -CompareBackup ID -Json` |
 | 恢复备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH --json` | `.\claude-easy\scripts\install_windows.cmd -RestoreBackup ID -ExpectedCurrentSha256 HASH -Json` |
@@ -99,13 +99,13 @@ Windows PowerShell 5.1：
 
 ## 更新全部订阅
 
-ClaudeEasy 只有在你明确要求“更新节点”或“更新订阅”时才会更新，不会在后台自动刷新。macOS 与 Windows 执行的是同一套安全步骤，只是刷新订阅的方式不同。
+ClaudeEasy 只有在你明确要求“更新节点”或“更新订阅”时才会更新，不会在后台自动刷新。macOS 与 Windows 都先读取远端配置并逐份和本地比对；全部相同就返回 `no_change`，只要有变化就只更新变化的订阅。
 
-1. 先提醒你自行登录服务商管理后台，打开每份远程订阅的订阅开关；你确认后才会继续。
-2. 更新前不做站点或浏览器测试。两端都先为全部远程订阅创建更新前备份。
+1. 直接读取远端订阅并和本地逐份比对，不额外打断你确认订阅开关。
+2. 更新前不做站点或浏览器测试。比对确认有变化后，只为变化的远程订阅创建更新前备份。
 3. 更新后按已保存档位完成客户端开关与验收，并确认原 TUN、代理组和节点选择都已恢复。任一无法恢复时拒绝更新。
 
-Windows 有电脑操控（Computer Use）时，会自动操作已经运行的 Clash Verge Rev。没有时先帮助你启用；确实无法启用才会请你完成一个最短的点击动作。macOS 的 ClashX Meta 开关优先由原生命令自动处理，浏览器和系统设置由电脑操控完成。
+Windows 先在后台读取远端订阅并完成比对；确有变化时，再通过已经运行的 Clash Verge Rev 重新加载。后续客户端动作和浏览器验收有电脑操控时由代理完成；确实无法启用才会请你完成最短的必要点击。macOS 的 ClashX Meta 开关优先由原生命令自动处理，浏览器和系统设置由电脑操控完成。
 
 ## 备份与恢复
 
