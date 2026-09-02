@@ -169,14 +169,20 @@ class SkillContractTest < Minitest::Test
     adguard = File.read(File.join(SKILL, "references/adguard.md"))
     diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
     readme = File.read(File.join(ROOT, "README.md"))
+    macos_adguard = adguard[/### macOS.*?(?=\n### Windows|\z)/m]
+    adguard_path = diagnostics[/### AdGuard for Mac 已知兼容路径.*?(?=\n###|\z)/m]
+    readme_adguard = readme[/## AdGuard for Mac.*?(?=\n## |\z)/m]
 
-    assert_match(/Filtering mode：`Automatic Proxy`/, adguard)
-    assert_match(/AdGuard outbound proxy：关闭/, adguard)
-    refute_match(/AdGuard outbound proxy：开启/, adguard)
-    assert_match(/不启用 AdGuard 出站代理/, diagnostics)
-    refute_match(/原状态为关闭时，只通过 AdGuard 界面设置.*AdGuard 出站代理/, diagnostics)
-    assert_match(/关闭 AdGuard outbound proxy/, readme)
-    assert_match(/不启用 `Network Extension`/, readme)
+    assert_match(/Filtering mode：`Automatic Proxy`/, macos_adguard)
+    assert_match(/AdGuard outbound proxy：关闭/, macos_adguard)
+    refute_match(/AdGuard outbound proxy：开启/, macos_adguard)
+    refute_match(/7890|7893|HTTP\/mixed/, macos_adguard)
+    assert_match(/关闭 AdGuard 出站代理/, adguard_path)
+    assert_match(/无条件.*关闭 AdGuard 出站代理/, adguard_path)
+    refute_match(/7890|7893|HTTP\/mixed/, adguard_path)
+    assert_match(/明确要求配置 AdGuard/, readme_adguard)
+    assert_match(/关闭 AdGuard outbound proxy/, readme_adguard)
+    assert_match(/不启用 `Network Extension`/, readme_adguard)
   end
 
   def test_safe_update_followups_do_not_require_separate_agent_connectivity
