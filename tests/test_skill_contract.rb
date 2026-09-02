@@ -165,6 +165,20 @@ class SkillContractTest < Minitest::Test
     assert_match(/连通性仅复测百度、Google、ChatGPT 三页/, diagnostics)
   end
 
+  def test_adguard_tun_baseline_disables_outbound_proxy
+    adguard = File.read(File.join(SKILL, "references/adguard.md"))
+    diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
+    readme = File.read(File.join(ROOT, "README.md"))
+
+    assert_match(/Filtering mode：`Automatic Proxy`/, adguard)
+    assert_match(/AdGuard outbound proxy：关闭/, adguard)
+    refute_match(/AdGuard outbound proxy：开启/, adguard)
+    assert_match(/不启用 AdGuard 出站代理/, diagnostics)
+    refute_match(/原状态为关闭时，只通过 AdGuard 界面设置.*AdGuard 出站代理/, diagnostics)
+    assert_match(/关闭 AdGuard outbound proxy/, readme)
+    assert_match(/不启用 `Network Extension`/, readme)
+  end
+
   def test_safe_update_followups_do_not_require_separate_agent_connectivity
     mac_cli = File.read(File.join(SKILL, "scripts/macos/patch_profiles/cli.rb"))
     windows_common = File.read(File.join(SKILL, "scripts/windows/install_windows/common.ps1"))

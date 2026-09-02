@@ -21,7 +21,7 @@
 - Filters：只启用 AdGuard Base filter、AdGuard Tracking Protection filter、AdGuard Social Media filter、AdGuard Chinese filter；User rules、URL Tracking filter 和其他过滤器保持关闭，除非导入备份明确包含用户规则。
 - Automatically filter applications：开启。
 - Filter HTTPS protocol：开启；EV certificate filtering：开启。
-- AdGuard outbound proxy：开启，协议 HTTP，主机 `127.0.0.1`，端口必须先从当前 Mihomo 的监听进程、控制器运行配置和一次代理请求三重确认；用户名和密码留空。
+- AdGuard outbound proxy：关闭；不填写或管理主机、端口、用户名和密码。过滤后的流量由 Clash TUN 接管，避免切换订阅或节点时产生端口耦合。
 - Trust any certificate：关闭；SOCKS5 UDP：关闭。
 - DNS protection：关闭，让 Clash TUN/DNS 保持唯一的 DNS 接管职责。
 - Stealth Mode：关闭；HTTP proxy server（让其他设备使用本机 AdGuard）：关闭。

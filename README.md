@@ -125,7 +125,7 @@ Windows 有电脑操控（Computer Use）时，会自动操作已经运行的 Cl
 
 ## AdGuard for Mac
 
-档位 2、3 使用 Clash TUN 时，AdGuard for Mac 的 `Network Extension` 可能发生冲突。只有实际现象和单变量对照都指向这个问题时，ClaudeEasy 才会通过 AdGuard 自己的界面调整设置。它不会改第三方 PAC，也不会为了省事全局关闭 HTTPS 过滤。
+档位 2、3 使用 Clash TUN 时，AdGuard for Mac 的基础组合是 `Automatic Proxy`，并关闭 AdGuard outbound proxy，让 Clash TUN 负责出站；不启用 `Network Extension`。它不会改第三方 PAC，也不会为了省事全局关闭 HTTPS 过滤。
 
 ## 卸载
 
