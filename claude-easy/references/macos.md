@@ -4,7 +4,7 @@
 
 ## macOS
 
-ClashX Meta 是纯菜单栏应用，没有可供 Computer Use 附加的主窗口。任何任务都不得用 Computer Use 操作、读取或验证 ClashX Meta，也不得为 ClashX Meta 尝试一次 Computer Use。Computer Use 仍可用于 Safari、Chrome、AdGuard 等有正常窗口的应用。
+ClashX Meta 是纯菜单栏应用，没有可供 Computer Use 附加的主窗口。任何任务都不得用 Computer Use 操作、读取或验证 ClashX Meta，也不得为 ClashX Meta 尝试一次 Computer Use。网页和其他正常窗口统一由 Computer Use 操作用户的默认浏览器或对应应用。
 
 档位客户端开关运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`。命令先从偏好、本地控制器和 `scutil --proxy` 同时读取用户意图、TUN 实际状态、Mihomo 端口和系统代理归属；只有意图与实际状态一致且需要改变时，才向同一 PID 最多发送一次 ClashX Meta 内置的 `clashtun` 或 `clashtog` Apple Event，随后重新读取状态并检查实际连接。它不使用 `osascript`、System Events、`open` 或 LaunchServices，也不运行应用包主程序。档位 1 只协调 Clash 系统代理且不改 TUN；档位 2、3 先开启并验收 TUN，再关闭 Clash 系统代理并复验连接。第三方 PAC、自动发现或其他代理存在时不得自动开启 Clash 系统代理；第三方代理存在且 Clash 意图仍为开启时也不得盲目切换。
 
