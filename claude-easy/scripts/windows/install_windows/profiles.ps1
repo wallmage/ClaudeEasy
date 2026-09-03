@@ -70,11 +70,17 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
         if ($null -eq $inlineEntry) { throw "profiles.yaml 的订阅项目首字段包含复杂或转义键。" }
         $fieldValues[[string]$inlineEntry.Key] = @([string]$inlineEntry.Value)
         if ($inlineEntry.Key -eq "option") { $optionIndexes += $start.Index }
+        $previousEntry = $inlineEntry
         for ($i = $start.Index + 1; $i -lt $finish; $i++) {
             if ([string]::IsNullOrWhiteSpace($Lines[$i]) -or $Lines[$i].TrimStart().StartsWith("#")) { continue }
             if ((Get-YamlIndent $Lines[$i]) -ne $fieldIndent) { continue }
+            # Clash serializes selected with list markers at the field's indent.
+            if ($previousEntry.Key -eq "selected" -and
+                [string]::IsNullOrWhiteSpace(($previousEntry.Value -replace '#.*$', '')) -and
+                $Lines[$i] -match '^\s*-(?:\s|$)') { continue }
             $entry = Get-YamlMappingEntry $Lines[$i]
             if ($null -eq $entry) { throw "profiles.yaml 的订阅项目包含复杂或转义键。" }
+            $previousEntry = $entry
             if (-not $fieldValues.ContainsKey([string]$entry.Key)) { $fieldValues[[string]$entry.Key] = @() }
             $fieldValues[[string]$entry.Key] += [string]$entry.Value
             if ($entry.Key -eq "option") { $optionIndexes += $i }

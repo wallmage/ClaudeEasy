@@ -846,7 +846,7 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                 $liveOriginal = @{
                     "config.yaml" = "ipv6: true`ntun: null`n"
                     "verge.yaml" = "enable_tun_mode: false`n"
-                    "profiles.yaml" = "items:`r`n- uid: R-test`r`n  type: remote`r`n  option:`r`n    allow_auto_update: true`r`n"
+                    "profiles.yaml" = "current: R-test`r`nitems:`r`n- uid: R-test`r`n  type: remote`r`n  selected: # saved selections`r`n  - name: Main`r`n    now: DIRECT`r`n  - name: Auto`r`n    now: Node`r`n  updated: null`r`n  option:`r`n    allow_auto_update: true`r`n"
                 }
                 foreach ($name in $liveOriginal.Keys) {
                     Write-TestUtf8Text (Join-Path $liveHome $name) $liveOriginal[$name]
