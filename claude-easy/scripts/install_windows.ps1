@@ -188,9 +188,6 @@ try {
     $mutationLock = Enter-AppHomeMutationLock $AppHome
 } catch {
     $lockMessage = $_.Exception.Message
-    if ($lockMessage -eq "客户端保持运行；中断的客户端敏感事务等待恢复。") {
-        Complete-InstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的客户端敏感事务仍在等待安全恢复，请稍后重试。"
-    }
     if ($lockMessage -eq "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。") {
         Complete-InstallResult 1 "failed" "operation_in_progress" $lockMessage
     }
@@ -209,10 +206,6 @@ if ($script:ClaudeEasyOperation -in @("install", "restore_backup", "safe_update_
     if ($pendingSafeUpdate) {
         Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次操作未修改任何文件。"
     }
-}
-
-$clientStoppedPreCommit = {
-    return (-not (Test-ClashVergeRunning))
 }
 
 $usageProfileSnapshot = $null
@@ -321,7 +314,7 @@ if ($SafeUpdateChangedOnly) {
             OriginalIdentity = [string]$_.LocalIdentity
         }
     })
-    Invoke-VerifiedFileTransaction $writeTargets -InterruptedRecoveryPolicy "client_stopped"
+    Invoke-VerifiedFileTransaction $writeTargets
     try {
         Invoke-ClashVergeReactivationShortcut $reactivationShortcut
         $null = Wait-ClashVergeRuntimeHealthy `
@@ -357,7 +350,7 @@ if ($SafeUpdateChangedOnly) {
         }
         if ($rollbackPossible) {
             try {
-                Invoke-VerifiedFileTransaction $rollbackTargets -InterruptedRecoveryPolicy "client_stopped"
+                Invoke-VerifiedFileTransaction $rollbackTargets
                 Invoke-ClashVergeReactivationShortcut $reactivationShortcut
                 $null = Wait-ClashVergeRuntimeHealthy `
                     $runtimeConfigPath $runtimeContext $runtimeSelections $runtimeTunEnabled `
@@ -1098,7 +1091,6 @@ if (-not [string]::IsNullOrWhiteSpace($CompareBackup)) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
-    if (Test-ClashVergeRunning) { throw "Clash Verge Rev 正在运行，不能安全恢复配置；未修改任何文件。" }
     if ($ExpectedCurrentSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "恢复时必须提供预期 SHA-256。" }
     $resolved = Get-BackupTarget $RestoreBackup
     $currentSnapshot = Get-OptionalFileSnapshot $resolved.TargetPath "当前配置"
@@ -1114,7 +1106,7 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
         throw "当前配置在检查期间发生变化，拒绝覆盖。"
     }
     Backup-Versioned $resolved.TargetPath $backupRoot "pre-restore" -SourceBytes $currentSnapshot.Bytes -UseSourceBytes | Out-Null
-    $restoreCommitted = Invoke-VerifiedFileTransaction @(
+    Invoke-VerifiedFileTransaction @(
         [pscustomobject]@{
             Path = $resolved.TargetPath
             Bytes = $restoreBytes
@@ -1122,10 +1114,7 @@ if (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) {
             OriginalBytes = $currentSnapshot.Bytes
             OriginalIdentity = $currentSnapshot.Identity
         }
-    ) $clientStoppedPreCommit
-    if (-not $restoreCommitted) {
-        throw "检测到 Clash Verge Rev 在备份恢复期间启动；本次没有修改当前配置。"
-    }
+    )
     Write-Info "备份已恢复；恢复前版本已经另行备份。"
     Complete-InstallResult 0 "ok" "backup_restored" "备份已恢复；恢复前版本已经另行备份。" @("configuration")
 }
@@ -1168,7 +1157,6 @@ $script:ClaudeEasyProfile = $resolvedUsageProfile
 
 try {
     $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    $clientRunning = Test-ClashVergeRunning
     $corePath = Find-MihomoCore $MihomoPath
     Test-MihomoVersion $corePath | Out-Null
     $installState = $null
@@ -1182,14 +1170,6 @@ try {
     if (($savedUsageProfile -eq 3 -or ($stateExisted -and $savedUsageProfile -eq 0)) -and
         $resolvedUsageProfile -ne 3) {
         throw "从档位 3 改为轻量档位前，必须先运行安全卸载。"
-    }
-    if ($clientRunning) {
-        $runningCode = if ($resolvedUsageProfile -eq 3) {
-            "client_running_profile_three_deferred"
-        } else {
-            "client_running_auto_update_deferred"
-        }
-        Complete-InstallResult 1 "partial" $runningCode "客户端保持运行；普通安装按安全边界延期，本次未修改用途档位、自动更新所有权、脚本或客户端配置。"
     }
     $profilesIndexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"
     if (-not $profilesIndexSnapshot.Exists) {
@@ -1316,10 +1296,7 @@ try {
             Backup-InitialOnce $target.Path $backupRoot | Out-Null
             Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
         }
-        $lightCommitted = Invoke-VerifiedFileTransaction $lightTargets $clientStoppedPreCommit
-        if (-not $lightCommitted) {
-            throw "检测到 Clash Verge Rev 在安装期间启动；已撤销本次文件修改。"
-        }
+        Invoke-VerifiedFileTransaction $lightTargets
         if ($profileSource -ne "saved") { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
         Write-Info "已为全部订阅安装共享国内域名直连规则、自动重新加载入口，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
         Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。" @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update")
@@ -1357,16 +1334,12 @@ try {
         Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
     }
 
-    if (Test-ClashVergeRunning) { throw "检测到 Clash Verge Rev 在安装期间启动；已撤销本次文件修改。" }
-    $installCommitted = Invoke-VerifiedFileTransaction $targets $clientStoppedPreCommit
-    if (-not $installCommitted) {
-        throw "检测到 Clash Verge Rev 在安装期间启动；已撤销本次文件修改。"
-    }
+    Invoke-VerifiedFileTransaction $targets
 
     if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
     Write-Info "已安装全局扩展脚本，之后每次加载或刷新订阅都会自动应用补丁。"
     Write-Info "已自动关闭全部远程订阅的自动更新，并回读确认 profiles.yaml。"
-    Write-Info "已开启 TUN，并让全局脚本接管 DNS 配置。下次订阅刷新时应用补丁。"
+    Write-Info "已写入 TUN 与 DNS 设置；代理仍需通过客户端加载并验收实际运行配置。"
     Write-Info "安装程序从未退出、停止或重启 Clash Verge Rev。"
     Write-Info "已有 AI 分组只补全规则；没有时创建包含全部可用节点和代理提供者的独立选择器。安装程序不会替你选择节点。"
     Complete-InstallResult 0 "ok" "installed" "Windows ClaudeEasy 已安装。" @("global_script", "subscription_reactivation", "auto_update", "tun", "dns", "ipv6")

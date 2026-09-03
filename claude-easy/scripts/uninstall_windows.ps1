@@ -116,11 +116,6 @@ if ($unboundArguments.Count -gt 0) {
     Complete-UninstallResult 64 "invalid_request" "invalid_arguments" "参数错误；未执行任何修改。"
 }
 
-function Complete-RunningClientUninstall {
-    Write-Info "客户端保持运行；安全卸载按安全边界延期，本次没有修改任何受保护文件或状态，已生成的安全备份继续保留。"
-    Complete-UninstallResult 1 "partial" "client_running" "客户端保持运行；安全卸载按安全边界延期，本次未修改受保护文件或状态。"
-}
-
 function Complete-PendingSafeUpdateUninstall {
     Write-Info "发现尚未验收的安全更新；本次没有修改任何文件。请先完成安全更新验收或恢复，再重试卸载。"
     Complete-UninstallResult 1 "partial" "safe_update_pending" "发现尚未验收的安全更新，本次卸载未修改任何文件。" @() @("请先运行安全更新验收，完成或恢复整批订阅后再重试卸载。")
@@ -189,13 +184,6 @@ function Assert-UsageProfileState([object]$State) {
     }
 }
 
-function Test-ClashVergeRunning {
-    foreach ($name in @("clash-verge", "clash-verge-rev", "Clash Verge", "Clash Verge Rev")) {
-        if ($null -ne (Get-Process -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1)) { return $true }
-    }
-    return $false
-}
-
 if ([string]::IsNullOrWhiteSpace($AppHome)) {
     try {
         $AppHome = Resolve-ClashVergeAppHome
@@ -231,9 +219,6 @@ try {
     $mutationLock = Enter-AppHomeMutationLock $AppHome
 } catch {
     $lockMessage = $_.Exception.Message
-    if ($lockMessage -eq "客户端保持运行；中断的客户端敏感事务等待恢复。") {
-        Complete-UninstallResult 1 "partial" "transaction_recovery_pending" "客户端保持运行；中断的客户端敏感事务仍在等待安全恢复，请稍后重试。"
-    }
     if ($lockMessage -eq "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。") {
         Complete-UninstallResult 1 "failed" "operation_in_progress" $lockMessage
     }
@@ -246,7 +231,6 @@ try {
     if ($safeUpdateStateSnapshot.Exists) {
         Complete-PendingSafeUpdateUninstall
     }
-    $clientRunning = Test-ClashVergeRunning
     $stateSnapshot = Get-OptionalFileSnapshot $statePath "安装状态"
     $autoUpdateStateSnapshot = Get-OptionalFileSnapshot $autoUpdateStatePath "订阅自动更新所有权状态"
     $usageStateSnapshot = Get-OptionalFileSnapshot $usageStatePath "用途档位状态"
@@ -289,14 +273,6 @@ try {
         }
         Assert-UsageProfileState $usageState
     }
-    if ($clientRunning -and (
-        $null -ne $state -or
-        $autoUpdateStateExists -or
-        [bool]$usageStateSnapshot.Exists
-    )) {
-        Complete-RunningClientUninstall
-    }
-
     if ($autoUpdateStateExists) {
         $profilesIndexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "profiles.yaml"
         if (-not $profilesIndexSnapshot.Exists) {
@@ -415,7 +391,7 @@ try {
     }
 
     $settingPlans = @()
-    if ($null -ne $state -and -not $clientRunning) {
+    if ($null -ne $state) {
         $settingEntries = @(
             [pscustomobject]@{ Entry = $state.ConfigYaml; Path = $configPath; Label = "config.yaml" },
             [pscustomobject]@{ Entry = $state.VergeYaml; Path = $vergePath; Label = "verge.yaml" }
@@ -423,8 +399,6 @@ try {
         foreach ($settingEntry in $settingEntries) {
             $settingPlans += Get-InstalledSettingRestorePlan $settingEntry.Entry $settingEntry.Path $settingEntry.Label
         }
-    } elseif ($null -ne $state) {
-        Write-Info "Clash Verge Rev 保持运行；config.yaml 与 verge.yaml 未改动，安装状态文件继续保留。"
     }
 
     $usageStateExists = [bool]$usageStateSnapshot.Exists
@@ -441,10 +415,6 @@ try {
     if ($null -ne $autoUpdatePlan) { $filePlans += $autoUpdatePlan }
     if ($null -ne $scriptPlan) { $filePlans += $scriptPlan }
     $filePlans += @($settingPlans | Where-Object { $_.Changed })
-    $uninstallHasProtectedChanges = ($filePlans.Count -gt 0 -or $null -ne $state -or $autoUpdateStateExists -or $usageStateExists)
-    if ($uninstallHasProtectedChanges -and (Test-ClashVergeRunning)) {
-        Complete-RunningClientUninstall
-    }
     foreach ($filePlan in $filePlans) {
         if ([bool]$filePlan.Existed) { New-UninstallBackup $filePlan.Path | Out-Null }
     }
@@ -457,7 +427,7 @@ try {
             OriginalIdentity = $_.OriginalIdentity
         }
     })
-    if ($null -ne $state -and -not $clientRunning) {
+    if ($null -ne $state) {
         $deletePlans += [pscustomobject]@{
             Path = $statePath
             Existed = $true
@@ -491,17 +461,7 @@ try {
             OriginalIdentity = $_.OriginalIdentity
         }
     })
-    $clientStoppedPreCommit = $null
-    if ($uninstallHasProtectedChanges) {
-        $clientStoppedPreCommit = {
-            return (-not (Test-ClashVergeRunning))
-        }
-    }
-    $transactionCommitted = Invoke-VerifiedWriteDeleteTransaction `
-        $writeTargets $deletePlans $clientStoppedPreCommit
-    if ($null -ne $clientStoppedPreCommit -and -not $transactionCommitted) {
-        Complete-RunningClientUninstall
-    }
+    Invoke-VerifiedWriteDeleteTransaction $writeTargets $deletePlans
 
     $changes = @()
     if ($null -ne $scriptPlan) { $changes += "global_script" }

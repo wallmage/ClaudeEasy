@@ -116,4 +116,4 @@ ruby scripts/macos/verify_routes.rb
 powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1
 ```
 
-Windows 客户端运行时的受保护写入边界见 [windows.md](references/windows.md)。
+Windows 运行中配置修改、恢复与加载验收见 [windows.md](references/windows.md)。

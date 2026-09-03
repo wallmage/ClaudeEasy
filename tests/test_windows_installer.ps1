@@ -834,6 +834,48 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         }
 
     }
+    if ((Test-GroupSelected 'core') -and $onWindows) {
+        $liveClientPath = Join-Path $sandbox "clash-verge.exe"
+        Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $liveClientPath
+        $liveClient = Start-Process -FilePath $liveClientPath -ArgumentList @("-n", "180", "127.0.0.1") -PassThru
+        try {
+            foreach ($liveProfile in @(1, 2, 3)) {
+                Assert-True (Test-ClashVergeRunning) "live configuration fixture has no running client"
+                $liveHome = Join-Path $sandbox "live-profile-$liveProfile"
+                New-Item -ItemType Directory -Path (Join-Path $liveHome "profiles") -Force | Out-Null
+                $liveOriginal = @{
+                    "config.yaml" = "ipv6: true`ntun: null`n"
+                    "verge.yaml" = "enable_tun_mode: false`n"
+                    "profiles.yaml" = "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
+                }
+                foreach ($name in $liveOriginal.Keys) {
+                    Write-TestUtf8Text (Join-Path $liveHome $name) $liveOriginal[$name]
+                }
+                $liveInstall = Invoke-TestPowerShell $installer @(
+                    "-AppHome", $liveHome, "-UsageProfile", $liveProfile.ToString(), "-MihomoPath", $fakeCore, "-Json"
+                )
+                Assert-JsonResult $liveInstall "install" 0 | Out-Null
+                $liveUsage = Get-Content -LiteralPath (Join-Path $liveHome "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
+                Assert-True ([int]$liveUsage.Profile -eq $liveProfile) "live install did not save the requested profile"
+                Assert-True (Test-Path -LiteralPath (Join-Path $liveHome "profiles/Script.js")) "live install omitted the global script"
+                Assert-RemoteSubscriptionAutoUpdateDisabled (Read-TestUtf8Text (Join-Path $liveHome "profiles.yaml")) | Out-Null
+                if ($liveProfile -eq 3) {
+                    Assert-True ((Read-TestUtf8Text (Join-Path $liveHome "config.yaml")) -match 'ipv6: false') "live profile 3 did not write application settings"
+                }
+                $liveUninstall = Invoke-TestPowerShell $uninstaller @("-AppHome", $liveHome, "-Json")
+                Assert-JsonResult $liveUninstall "uninstall" 0 | Out-Null
+                foreach ($name in $liveOriginal.Keys) {
+                    Assert-True ((Read-TestUtf8Text (Join-Path $liveHome $name)) -ceq $liveOriginal[$name]) "live uninstall did not restore $name"
+                }
+                Assert-True (-not (Test-Path -LiteralPath (Join-Path $liveHome "claude-easy-usage-profile.json"))) "live uninstall retained the profile state"
+                Assert-True (-not $liveClient.HasExited) "configuration commands stopped the client"
+            }
+        } finally {
+            if (-not $liveClient.HasExited) { Stop-Process -Id $liveClient.Id -Force }
+            $liveClient.WaitForExit()
+        }
+    }
+
     if (Test-GroupSelected 'core') {
     $activationAttemptHome = Join-Path $sandbox "safe-update-activation-attempt"
     New-Item -ItemType Directory -Path $activationAttemptHome -Force | Out-Null
@@ -3089,68 +3131,6 @@ try {
         Assert-True (
             $publicUninstallMissingBeforeRecovery.Count -gt 0
         ) "public uninstall crash fixture did not leave a missing target"
-        $publicUninstallInterruptedProfiles = Join-Path $publicUninstallCrashHome "profiles.yaml"
-        $publicUninstallInterruptedUsage = Join-Path $publicUninstallCrashHome "claude-easy-usage-profile.json"
-        $publicUninstallJournal = Join-Path $publicUninstallCrashHome ".claude-easy-transaction.json"
-        $publicUninstallInterruptedProfilesBytes = [System.IO.File]::ReadAllBytes(
-            $publicUninstallInterruptedProfiles
-        )
-        Assert-True (
-            Test-Path -LiteralPath $publicUninstallInterruptedUsage -PathType Leaf
-        ) "public uninstall crash fixture removed usage state before the recovery guard probe"
-        $publicUninstallInterruptedUsageBytes = [System.IO.File]::ReadAllBytes(
-            $publicUninstallInterruptedUsage
-        )
-        $publicUninstallJournalBytes = [System.IO.File]::ReadAllBytes(
-            $publicUninstallJournal
-        )
-        $publicUninstallRunningClientPath = Join-Path $publicUninstallCrashHome "clash-verge.exe"
-        Copy-Item -LiteralPath (
-            Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe"
-        ) -Destination $publicUninstallRunningClientPath
-        $publicUninstallRunningClient = Start-Process `
-            -FilePath $publicUninstallRunningClientPath `
-            -ArgumentList @("-n", "20", "127.0.0.1") `
-            -PassThru
-        try {
-            Start-Sleep -Milliseconds 100
-            $blockedPublicUninstallRecovery = Invoke-TestPowerShell $publicCrashInstaller @(
-                "-AppHome", $publicUninstallCrashHome,
-                "-ShowUsageProfile",
-                "-Json"
-            )
-            $blockedPublicUninstallJson = Assert-JsonResult `
-                $blockedPublicUninstallRecovery "install" 1
-            Assert-True (
-                $blockedPublicUninstallJson.status -eq "partial" -and
-                $blockedPublicUninstallJson.code -eq "transaction_recovery_pending"
-            ) "running client did not defer interrupted client-sensitive recovery"
-            Assert-True (
-                [Convert]::ToBase64String(
-                    [System.IO.File]::ReadAllBytes($publicUninstallInterruptedProfiles)
-                ) -eq [Convert]::ToBase64String(
-                    $publicUninstallInterruptedProfilesBytes
-                )
-            ) "running client changed an interrupted profiles.yaml target"
-            Assert-True (
-                (Test-Path -LiteralPath $publicUninstallInterruptedUsage -PathType Leaf) -and
-                [Convert]::ToBase64String(
-                    [System.IO.File]::ReadAllBytes($publicUninstallInterruptedUsage)
-                ) -eq [Convert]::ToBase64String(
-                    $publicUninstallInterruptedUsageBytes
-                )
-            ) "running client changed an interrupted usage-profile state"
-            Assert-True (
-                [Convert]::ToBase64String(
-                    [System.IO.File]::ReadAllBytes($publicUninstallJournal)
-                ) -eq [Convert]::ToBase64String($publicUninstallJournalBytes)
-            ) "running client consumed an interrupted client-sensitive journal"
-        } finally {
-            if (-not $publicUninstallRunningClient.HasExited) {
-                Stop-Process -Id $publicUninstallRunningClient.Id -Force
-            }
-            $publicUninstallRunningClient.WaitForExit()
-        }
         $env:CLAUDE_EASY_TEST_RECOVERY_CRASH_READY = $publicUninstallRecoveryCrashReady
         $publicUninstallRecoveryCrashChild = Start-Process -FilePath $PowerShellPath -ArgumentList @(
             "-NoLogo", "-NoProfile", "-File", $publicCrashInstaller,
@@ -3194,6 +3174,11 @@ try {
                 Test-Path -LiteralPath $publicUninstallStillMissing
             )) "interrupted recovery exposed an empty or partial target instead of a private temporary file"
         }
+        $publicUninstallClientPath = Join-Path $publicUninstallCrashHome "clash-verge.exe"
+        Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $publicUninstallClientPath
+        $publicUninstallClient = Start-Process -FilePath $publicUninstallClientPath -ArgumentList @("-n", "60", "127.0.0.1") -PassThru
+        try {
+        Assert-True (Test-ClashVergeRunning) "uninstall recovery fixture has no running client"
         $publicUninstallRecovery = Invoke-TestPowerShell $publicCrashInstaller @(
             "-AppHome", $publicUninstallCrashHome,
             "-ShowUsageProfile",
@@ -3214,6 +3199,11 @@ try {
             "-Json"
         )
         Assert-JsonResult $publicUninstallCompletion "uninstall" 0 | Out-Null
+        Assert-True (-not $publicUninstallClient.HasExited) "uninstall recovery stopped the client"
+        } finally {
+            if (-not $publicUninstallClient.HasExited) { Stop-Process -Id $publicUninstallClient.Id -Force }
+            $publicUninstallClient.WaitForExit()
+        }
 
         Invoke-DeferredProbe "public restore strong-kill atomicity" {
             $publicRestorePackageParent = Join-Path $sandbox "public-restore-crash-package"
@@ -3303,9 +3293,8 @@ try {
                 ConvertFrom-Json
             Assert-True (
                 [int]$publicRestoreJournalRecord.Version -eq 2 -and
-                [string]$publicRestoreJournalRecord.RecoveryPolicy -eq "client_stopped"
-            ) "ordinary remote-profile restore did not persist its stopped-client recovery policy"
-            $publicRestoreInterruptedBytes = [System.IO.File]::ReadAllBytes($publicRestoreTarget)
+                [string]$publicRestoreJournalRecord.RecoveryPolicy -eq "live_client"
+            ) "ordinary remote-profile restore did not persist its live-client recovery policy"
             $publicRestoreRunningClientPath = Join-Path $publicRestoreHome "clash-verge.exe"
             Copy-Item -LiteralPath (
                 Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe"
@@ -3316,42 +3305,27 @@ try {
                 -PassThru
             try {
                 Start-Sleep -Milliseconds 100
-                $blockedPublicRestoreRecovery = Invoke-TestPowerShell $publicRestoreInstaller @(
-                    "-AppHome", $publicRestoreHome,
-                    "-ShowUsageProfile",
-                    "-Json"
+                Assert-True (Test-ClashVergeRunning) "restore fixture has no running client"
+                $publicRestoreRecovery = Invoke-TestPowerShell $publicRestoreInstaller @(
+                    "-AppHome", $publicRestoreHome, "-ShowUsageProfile", "-Json"
                 )
-                $blockedPublicRestoreJson = Assert-JsonResult `
-                    $blockedPublicRestoreRecovery "install" 1
-                Assert-True (
-                    $blockedPublicRestoreJson.status -eq "partial" -and
-                    $blockedPublicRestoreJson.code -eq "transaction_recovery_pending"
-                ) "running client did not defer interrupted current-config recovery"
-                Assert-True (
-                    [Convert]::ToBase64String(
-                        [System.IO.File]::ReadAllBytes($publicRestoreTarget)
-                    ) -eq [Convert]::ToBase64String($publicRestoreInterruptedBytes)
-                ) "running client changed an interrupted remote-profile restore target"
-                Assert-True (
-                    Test-Path -LiteralPath $publicRestoreJournal -PathType Leaf
-                ) "running client consumed an interrupted remote-profile restore journal"
+                Assert-JsonResult $publicRestoreRecovery "install" 0 | Out-Null
+                Assert-True ((Get-FileSha256 $publicRestoreTarget) -eq (Get-BytesSha256 $publicRestoreCurrentBytes)) "live recovery did not restore the interrupted bytes"
+                Assert-True (-not (Test-Path -LiteralPath $publicRestoreJournal)) "live recovery retained its journal"
+                $liveRestore = Invoke-TestPowerShell $publicRestoreInstaller @(
+                    "-AppHome", $publicRestoreHome, "-RestoreBackup", (Split-Path -Leaf $publicRestoreBackup),
+                    "-ExpectedCurrentSha256", $publicRestoreExpectedHash, "-MihomoPath", $fakeCore, "-Json"
+                )
+                Assert-JsonResult $liveRestore "install" 0 | Out-Null
+                Assert-True ((Get-FileSha256 $publicRestoreTarget) -eq (Get-BytesSha256 $publicRestoreBackupBytes)) "live backup restore did not write the backup"
+                Assert-True (-not $publicRestoreRunningClient.HasExited) "backup restore stopped the client"
             } finally {
                 if (-not $publicRestoreRunningClient.HasExited) {
                     Stop-Process -Id $publicRestoreRunningClient.Id -Force
                 }
                 $publicRestoreRunningClient.WaitForExit()
             }
-            $publicRestoreRecovery = Invoke-TestPowerShell $publicRestoreInstaller @(
-                "-AppHome", $publicRestoreHome,
-                "-ShowUsageProfile",
-                "-Json"
-            )
-            Assert-JsonResult $publicRestoreRecovery "install" 0 | Out-Null
-            Assert-True (
-                (Get-BytesSha256 ([System.IO.File]::ReadAllBytes($publicRestoreTarget))) -eq
-                (Get-BytesSha256 $publicRestoreCurrentBytes)
-            ) "next public operation did not recover an interrupted restore"
-            Assert-True (-not (Test-Path -LiteralPath $publicRestoreJournal)) "recovered public restore retained its transaction journal"
+
         }
 
         Invoke-DeferredProbe "public new-target pre-journal strong-kill recovery" {
@@ -3445,9 +3419,6 @@ try {
                 Test-Path -LiteralPath $publicPreJournalPreparation -PathType Leaf
             ) "public pre-journal crash did not leave a preparation record"
 
-            $publicPreJournalPreparationBytes = [System.IO.File]::ReadAllBytes(
-                $publicPreJournalPreparation
-            )
             $publicPreJournalRunningClientPath = Join-Path $publicPreJournalHome "clash-verge.exe"
             Copy-Item -LiteralPath (
                 Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe"
@@ -3458,26 +3429,15 @@ try {
                 -PassThru
             try {
                 Start-Sleep -Milliseconds 100
-                $blockedPreJournalRecovery = Invoke-TestPowerShell $publicPreJournalInstaller @(
-                    "-AppHome", $publicPreJournalHome,
-                    "-ShowUsageProfile",
-                    "-Json"
+                Assert-True (Test-ClashVergeRunning) "preparation fixture has no running client"
+                $livePreparationRecovery = Invoke-TestPowerShell $publicPreJournalInstaller @(
+                    "-AppHome", $publicPreJournalHome, "-ShowUsageProfile", "-Json"
                 )
-                $blockedPreJournalJson = Assert-JsonResult `
-                    $blockedPreJournalRecovery "install" 1
-                Assert-True (
-                    $blockedPreJournalJson.status -eq "partial" -and
-                    $blockedPreJournalJson.code -eq "transaction_recovery_pending"
-                ) "running client did not defer prepared current-config recovery"
-                Assert-True (
-                    (Get-Item -LiteralPath $publicPreJournalConfig).Length -eq 0 -and
-                    (Get-Item -LiteralPath $publicPreJournalVerge).Length -eq 0
-                ) "running client changed a prepared current-config target"
-                Assert-True (
-                    [Convert]::ToBase64String(
-                        [System.IO.File]::ReadAllBytes($publicPreJournalPreparation)
-                    ) -eq [Convert]::ToBase64String($publicPreJournalPreparationBytes)
-                ) "running client consumed a current-config preparation record"
+                Assert-JsonResult $livePreparationRecovery "install" 0 | Out-Null
+                Assert-True (-not (Test-Path -LiteralPath $publicPreJournalConfig)) "live preparation recovery retained an empty config"
+                Assert-True (-not (Test-Path -LiteralPath $publicPreJournalVerge)) "live preparation recovery retained an empty verge file"
+                Assert-True (-not (Test-Path -LiteralPath $publicPreJournalPreparation)) "live preparation recovery retained its record"
+                Assert-True (-not $publicPreJournalRunningClient.HasExited) "preparation recovery stopped the client"
             } finally {
                 if (-not $publicPreJournalRunningClient.HasExited) {
                     Stop-Process -Id $publicPreJournalRunningClient.Id -Force
@@ -3501,123 +3461,14 @@ try {
             )) "recovered install retained the preparation record"
         }
 
-        Invoke-DeferredProbe "interrupted recovery rechecks a newly started client" {
-            $recoveryRacePackageParent = Join-Path $sandbox "recovery-client-race-package"
-            New-Item -ItemType Directory -Path $recoveryRacePackageParent -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $recoveryRacePackageParent -Recurse
-            $recoveryRacePackage = Join-Path $recoveryRacePackageParent "claude-easy"
-            $recoveryRaceInstaller = Join-Path (
-                Join-Path $recoveryRacePackage "scripts"
-            ) "install_windows.ps1"
-            $recoveryRaceTransaction = Join-Path (
-                Join-Path (Join-Path $recoveryRacePackage "scripts") "windows/install_windows"
-            ) "transaction.ps1"
-            $recoveryRaceText = [System.IO.File]::ReadAllText($recoveryRaceTransaction)
-            $recoveryRacePreparationFunction = $recoveryRaceText.IndexOf(
-                "function Repair-InterruptedFilePreparation"
-            )
-            $recoveryRaceJournalFunction = $recoveryRaceText.IndexOf(
-                "function Repair-InterruptedFileTransaction"
-            )
-            $recoveryRacePreparationNeedle = '                $finalizeRejected = -not ('
-            $recoveryRaceJournalNeedle = '        if (-not (Test-InterruptedRecoveryCommitCondition $preCommitCondition)) {'
-            $recoveryRacePreparationOffset = $recoveryRaceText.IndexOf(
-                $recoveryRacePreparationNeedle,
-                $recoveryRacePreparationFunction
-            )
-            $recoveryRaceJournalCallOffset = $recoveryRaceText.IndexOf(
-                $recoveryRaceJournalNeedle,
-                $recoveryRaceJournalFunction
-            )
-            $recoveryRaceJournalLineBreak = if ($recoveryRaceJournalCallOffset -ge 0) {
-                $recoveryRaceText.LastIndexOf(
-                    [char]10,
-                    $recoveryRaceJournalCallOffset
-                )
-            } else {
-                -1
-            }
-            $recoveryRaceJournalOffset = $recoveryRaceJournalLineBreak + 1
-            Assert-True (
-                $recoveryRacePreparationFunction -ge 0 -and
-                $recoveryRaceJournalFunction -ge 0 -and
-                $recoveryRacePreparationOffset -ge 0 -and
-                $recoveryRaceJournalCallOffset -ge 0 -and
-                $recoveryRaceJournalLineBreak -ge 0
-            ) "recovery client race fixture could not find both recovery commit boundaries"
-            $recoveryRaceHelper = @'
-function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
-    if ($env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE -cne $ExpectedMode) { return }
-    if ([string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE) -or
-        [string]::IsNullOrWhiteSpace($env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID)) {
-        throw "recovery client race fixture is incomplete"
-    }
-    $injected = Start-Process `
-        -FilePath $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE `
-        -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
-    [void]$injected.Handle
-    [System.IO.File]::WriteAllText(
-        $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID,
-        [string]$injected.Id
-    )
-    $seen = $false
-    $deadline = [DateTime]::UtcNow.AddSeconds(5)
-    while (-not $injected.HasExited -and -not $seen -and [DateTime]::UtcNow -lt $deadline) {
-        $seen = $null -ne (
-            Get-Process -Name "clash-verge" -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-        )
-        if (-not $seen) { Start-Sleep -Milliseconds 25 }
-    }
-    if (-not $seen) { throw "injected recovery client was not visible" }
-}
-
-'@
-            $recoveryRaceText = $recoveryRaceText.Insert(
-                $recoveryRacePreparationFunction,
-                $recoveryRaceHelper
-            )
-            $recoveryRacePreparationOffset += $recoveryRaceHelper.Length
-            $recoveryRaceJournalOffset += $recoveryRaceHelper.Length
-            $recoveryRacePreparationHook = '            Start-ClaudeEasyRecoveryRaceClient "preparation"' + [Environment]::NewLine
-            $recoveryRaceText = $recoveryRaceText.Insert(
-                $recoveryRacePreparationOffset,
-                $recoveryRacePreparationHook
-            )
-            $recoveryRaceJournalOffset += $recoveryRacePreparationHook.Length
-            $recoveryRaceJournalHook = '        Start-ClaudeEasyRecoveryRaceClient "journal"' + [Environment]::NewLine
-            $recoveryRaceText = $recoveryRaceText.Insert(
-                $recoveryRaceJournalOffset,
-                $recoveryRaceJournalHook
-            )
-            [System.IO.File]::WriteAllText(
-                $recoveryRaceTransaction,
-                $recoveryRaceText,
-                (New-Object System.Text.UTF8Encoding($true))
-            )
-
-            $recoveryRaceClient = Join-Path $sandbox "clash-verge.exe"
-            Copy-Item -LiteralPath (
-                Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe"
-            ) -Destination $recoveryRaceClient
-            $stopRecoveryRaceClient = {
-                param([string]$PidPath)
-                if (-not (Test-Path -LiteralPath $PidPath -PathType Leaf)) { return }
-                $injectedId = 0
-                if ([int]::TryParse(
-                    [System.IO.File]::ReadAllText($PidPath),
-                    [ref]$injectedId
-                )) {
-                    $injectedProcess = Get-Process -Id $injectedId -ErrorAction SilentlyContinue
-                    if ($null -ne $injectedProcess) {
-                        Stop-Process -Id $injectedId -Force
-                        $injectedProcess.WaitForExit()
-                    }
-                }
-            }
-
+        Invoke-DeferredProbe "legacy recovery while the client runs" {
+            $recoveryRaceClient = Join-Path $sandbox "legacy-clash-verge/clash-verge.exe"
+            New-Item -ItemType Directory -Path (Split-Path -Parent $recoveryRaceClient) -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $recoveryRaceClient
+            $legacyClient = Start-Process -FilePath $recoveryRaceClient -ArgumentList @("-n", "60", "127.0.0.1") -PassThru
+            try {
+            Assert-True (Test-ClashVergeRunning) "legacy recovery fixture has no running client"
             $journalRaceHome = Join-Path $sandbox "recovery-journal-client-race-home"
-            $journalRacePid = Join-Path $sandbox "recovery-journal-client-race.pid"
             New-Item -ItemType Directory -Path $journalRaceHome -Force | Out-Null
             $journalRaceTarget = Join-Path $journalRaceHome "config.yaml"
             $journalRaceMissingTarget = Join-Path $journalRaceHome "verge.yaml"
@@ -3672,43 +3523,13 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
                 ($journalRaceRecord | ConvertTo-Json -Depth 5 -Compress),
                 (New-Object System.Text.UTF8Encoding($false))
             )
-            $journalRaceRecordBytes = [System.IO.File]::ReadAllBytes($journalRacePath)
-            try {
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = "journal"
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $recoveryRaceClient
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $journalRacePid
-                $journalRaceResult = Invoke-TestPowerShell $recoveryRaceInstaller @(
-                    "-AppHome", $journalRaceHome,
-                    "-ShowUsageProfile",
-                    "-Json"
-                )
-                $journalRaceJson = Assert-JsonResult $journalRaceResult "install" 1
-                Assert-True (
-                    $journalRaceJson.status -eq "partial" -and
-                    $journalRaceJson.code -eq "transaction_recovery_pending"
-                ) "newly started client did not defer interrupted journal recovery"
-                Assert-True (
-                    [Convert]::ToBase64String(
-                        [System.IO.File]::ReadAllBytes($journalRaceTarget)
-                    ) -eq [Convert]::ToBase64String($journalRaceReplacement)
-                ) "newly started client allowed interrupted journal recovery to rewrite config.yaml"
-                Assert-True (-not (
-                    Test-Path -LiteralPath $journalRaceMissingTarget
-                )) "rejected journal recovery retained a newly created placeholder"
-                Assert-True (
-                    [Convert]::ToBase64String(
-                        [System.IO.File]::ReadAllBytes($journalRacePath)
-                    ) -eq [Convert]::ToBase64String($journalRaceRecordBytes)
-                ) "newly started client allowed interrupted journal recovery to consume its record"
-            } finally {
-                & $stopRecoveryRaceClient $journalRacePid
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = $null
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $null
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $null
-            }
+            $journalRaceResult = Invoke-TestPowerShell $installer @("-AppHome", $journalRaceHome, "-ShowUsageProfile", "-Json")
+            Assert-JsonResult $journalRaceResult "install" 0 | Out-Null
+            Assert-True ((Get-FileSha256 $journalRaceTarget) -eq (Get-BytesSha256 $journalRaceOriginal)) "legacy live recovery did not restore config"
+            Assert-True ((Get-FileSha256 $journalRaceMissingTarget) -eq (Get-BytesSha256 $journalRaceMissingOriginal)) "legacy live recovery did not restore the deleted file"
+            Assert-True (-not (Test-Path -LiteralPath $journalRacePath)) "legacy live recovery retained its journal"
 
             $preparationRaceHome = Join-Path $sandbox "recovery-preparation-client-race-home"
-            $preparationRacePid = Join-Path $sandbox "recovery-preparation-client-race.pid"
             New-Item -ItemType Directory -Path $preparationRaceHome -Force | Out-Null
             $preparationRaceConfig = Join-Path $preparationRaceHome "config.yaml"
             $preparationRaceVerge = Join-Path $preparationRaceHome "verge.yaml"
@@ -3726,39 +3547,15 @@ function Start-ClaudeEasyRecoveryRaceClient([string]$ExpectedMode) {
                 ($preparationRaceRecord | ConvertTo-Json -Depth 3 -Compress),
                 (New-Object System.Text.UTF8Encoding($false))
             )
-            $preparationRaceRecordBytes = [System.IO.File]::ReadAllBytes(
-                $preparationRacePath
-            )
-            try {
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = "preparation"
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $recoveryRaceClient
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $preparationRacePid
-                $preparationRaceResult = Invoke-TestPowerShell $recoveryRaceInstaller @(
-                    "-AppHome", $preparationRaceHome,
-                    "-ShowUsageProfile",
-                    "-Json"
-                )
-                $preparationRaceJson = Assert-JsonResult $preparationRaceResult "install" 1
-                Assert-True (
-                    $preparationRaceJson.status -eq "partial" -and
-                    $preparationRaceJson.code -eq "transaction_recovery_pending"
-                ) "newly started client did not defer interrupted preparation recovery"
-                Assert-True (
-                    (Test-Path -LiteralPath $preparationRaceConfig -PathType Leaf) -and
-                    (Get-Item -LiteralPath $preparationRaceConfig).Length -eq 0 -and
-                    (Test-Path -LiteralPath $preparationRaceVerge -PathType Leaf) -and
-                    (Get-Item -LiteralPath $preparationRaceVerge).Length -eq 0
-                ) "newly started client allowed prepared current-config targets to be deleted"
-                Assert-True (
-                    [Convert]::ToBase64String(
-                        [System.IO.File]::ReadAllBytes($preparationRacePath)
-                    ) -eq [Convert]::ToBase64String($preparationRaceRecordBytes)
-                ) "newly started client allowed preparation recovery to consume its record"
+            $preparationRaceResult = Invoke-TestPowerShell $installer @("-AppHome", $preparationRaceHome, "-ShowUsageProfile", "-Json")
+            Assert-JsonResult $preparationRaceResult "install" 0 | Out-Null
+            foreach ($legacyPath in @($preparationRaceConfig, $preparationRaceVerge, $preparationRacePath)) {
+                Assert-True (-not (Test-Path -LiteralPath $legacyPath)) "legacy live preparation recovery retained a target or record"
+            }
+            Assert-True (-not $legacyClient.HasExited) "legacy recovery stopped the client"
             } finally {
-                & $stopRecoveryRaceClient $preparationRacePid
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_MODE = $null
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_EXECUTABLE = $null
-                $env:CLAUDE_EASY_TEST_RECOVERY_RACE_PID = $null
+                if (-not $legacyClient.HasExited) { Stop-Process -Id $legacyClient.Id -Force }
+                $legacyClient.WaitForExit()
             }
         }
 

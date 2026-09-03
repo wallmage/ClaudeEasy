@@ -363,7 +363,7 @@ function Remove-VerifiedOwnedFile(
     [string]$Path,
     [byte[]]$ExpectedBytes,
     [string]$ExpectedIdentity = "",
-    [string]$InterruptedRecoveryPolicy = "client_stopped"
+    [string]$InterruptedRecoveryPolicy = "live_client"
 ) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $snapshot = Get-OptionalFileSnapshot $Path "待删除文件"
@@ -785,7 +785,7 @@ function New-PrivateFileStream([string]$Path) {
 
 function Write-FileTransactionPreparation(
     [object[]]$Actions,
-    [string]$InterruptedRecoveryPolicy = "client_stopped"
+    [string]$InterruptedRecoveryPolicy = "live_client"
 ) {
     $path = [string]$script:ClaudeEasyTransactionPreparationPath
     $createdActions = @($Actions | Where-Object { $_.CreateNew })
@@ -862,7 +862,7 @@ function Get-InterruptedRecoveryPolicy([object]$Record) {
     if ([long]$Record.Version -eq 1) { return "client_stopped" }
     $policy = $Record.RecoveryPolicy
     if (-not ($policy -is [string]) -or
-        [string]$policy -notin @("client_stopped", "safe_update_running_client")) {
+        [string]$policy -notin @("live_client", "client_stopped", "safe_update_running_client")) {
         throw "事务恢复权限无效。"
     }
     return [string]$policy
@@ -975,14 +975,14 @@ function Test-SafeUpdateRunningRecoveryTargets([string[]]$Paths) {
     return $manifestSeen
 }
 
-function Test-InterruptedRecoveryRequiresStoppedClient(
+function Assert-InterruptedRecoveryTargets(
     [string]$InterruptedRecoveryPolicy,
     [string[]]$Paths
 ) {
-    if ($InterruptedRecoveryPolicy -eq "client_stopped") { return $true }
+    if ($InterruptedRecoveryPolicy -in @("live_client", "client_stopped")) { return }
     if ($InterruptedRecoveryPolicy -eq "safe_update_running_client" -and
         (Test-SafeUpdateRunningRecoveryTargets $Paths)) {
-        return $false
+        return
     }
     throw "事务恢复权限与目标不匹配。"
 }
@@ -1027,20 +1027,11 @@ function Repair-InterruptedFilePreparation {
         }
         $targets += $target
     }
-    $preCommitCondition = $null
-    if (Test-InterruptedRecoveryRequiresStoppedClient `
-        $recoveryPolicy $recoveryTargets) {
-        if (Test-ClashVergeRunning) {
-            throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
-        }
-        $preCommitCondition = { -not (Test-ClashVergeRunning) }
-    }
+    Assert-InterruptedRecoveryTargets $recoveryPolicy $recoveryTargets
     Initialize-VerifiedFileNative
     $opened = @()
     $directoryHandles = @()
     $operationFailure = $null
-    $preCommitRejected = $false
-    $finalizeRejected = $false
     $deleteMarked = $false
     foreach ($target in $targets) {
         $targetPath = [string]$target.Path
@@ -1070,24 +1061,10 @@ function Repair-InterruptedFilePreparation {
     }
     if ($null -eq $operationFailure) {
         try {
-            $preCommitRejected = -not (
-                Test-InterruptedRecoveryCommitCondition $preCommitCondition
-            )
-            if (-not $preCommitRejected) {
-                foreach ($entry in $opened) {
-                    Set-VerifiedDeleteDisposition $entry.Stream $true
-                }
-                $deleteMarked = $true
-                $finalizeRejected = -not (
-                    Test-InterruptedRecoveryCommitCondition $preCommitCondition
-                )
-                if ($finalizeRejected) {
-                    foreach ($entry in $opened) {
-                        Set-VerifiedDeleteDisposition $entry.Stream $false
-                    }
-                    $deleteMarked = $false
-                }
+            foreach ($entry in $opened) {
+                Set-VerifiedDeleteDisposition $entry.Stream $true
             }
+            $deleteMarked = $true
         } catch {
             $operationFailure = $_
             if ($deleteMarked) {
@@ -1117,15 +1094,12 @@ function Repair-InterruptedFilePreparation {
         }
     }
     if ($null -ne $operationFailure) { throw $operationFailure }
-    if ($preCommitRejected -or $finalizeRejected) {
-        throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
-    }
     Remove-FileTransactionPreparation $snapshot.Bytes
 }
 
 function Write-FileTransactionJournal(
     [object[]]$Entries,
-    [string]$InterruptedRecoveryPolicy = "client_stopped"
+    [string]$InterruptedRecoveryPolicy = "live_client"
 ) {
     if ([string]::IsNullOrWhiteSpace([string]$script:ClaudeEasyTransactionJournalPath) -or
         @($Entries).Count -eq 0) {
@@ -1744,35 +1718,19 @@ function Repair-InterruptedFileTransaction {
     $plan = @(Get-InterruptedTransactionRecoveryPlan $actions)
     $actionPaths = @()
     foreach ($action in $actions) { $actionPaths += [string]$action.Path }
-    $preCommitCondition = $null
-    if (Test-InterruptedRecoveryRequiresStoppedClient `
-        $recoveryPolicy $actionPaths) {
-        if (Test-ClashVergeRunning) {
-            throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
-        }
-        $preCommitCondition = { -not (Test-ClashVergeRunning) }
-    }
+    Assert-InterruptedRecoveryTargets $recoveryPolicy $actionPaths
     $finalizeCondition = {
-        if (-not (Test-InterruptedRecoveryCommitCondition $preCommitCondition)) {
-            return $false
-        }
         Remove-FileTransactionJournal $snapshot.Bytes
         return $true
     }
-    $recovered = Invoke-InterruptedTransactionRecovery `
-        $plan `
-        $preCommitCondition `
-        $finalizeCondition
-    if (-not $recovered) {
-        throw "客户端保持运行；中断的客户端敏感事务等待恢复。"
-    }
+    $null = Invoke-InterruptedTransactionRecovery $plan $null $finalizeCondition
 }
 
 function Invoke-VerifiedPathTransaction(
     [object[]]$WriteTargets,
     [object[]]$DeleteTargets,
     [scriptblock]$PreCommitCondition = $null,
-    [string]$InterruptedRecoveryPolicy = "client_stopped"
+    [string]$InterruptedRecoveryPolicy = "live_client"
 ) {
     $writePathKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $actions = @()
@@ -1809,8 +1767,7 @@ function Invoke-VerifiedPathTransaction(
     }
     $actionPaths = @()
     foreach ($action in $actions) { $actionPaths += [string]$action.Path }
-    Test-InterruptedRecoveryRequiresStoppedClient `
-        $InterruptedRecoveryPolicy $actionPaths | Out-Null
+    Assert-InterruptedRecoveryTargets $InterruptedRecoveryPolicy $actionPaths
     Initialize-VerifiedFileNative
     $opened = @()
     $directoryHandles = @()
@@ -1996,7 +1953,7 @@ function Invoke-VerifiedPathTransaction(
 function Invoke-VerifiedFileTransaction(
     [object[]]$Targets,
     [scriptblock]$PreCommitCondition = $null,
-    [string]$InterruptedRecoveryPolicy = "client_stopped"
+    [string]$InterruptedRecoveryPolicy = "live_client"
 ) {
     $committed = Invoke-VerifiedPathTransaction $Targets @() $PreCommitCondition $InterruptedRecoveryPolicy
     if ($null -ne $PreCommitCondition) {
@@ -2008,7 +1965,7 @@ function Invoke-VerifiedWriteDeleteTransaction(
     [object[]]$WriteTargets,
     [object[]]$DeleteTargets,
     [scriptblock]$PreCommitCondition = $null,
-    [string]$InterruptedRecoveryPolicy = "client_stopped"
+    [string]$InterruptedRecoveryPolicy = "live_client"
 ) {
     $committed = Invoke-VerifiedPathTransaction $WriteTargets $DeleteTargets $PreCommitCondition $InterruptedRecoveryPolicy
     if ($null -ne $PreCommitCondition) {
