@@ -969,18 +969,100 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         }
 
         $customCoreDirectory = Join-Path $sandbox "D-clash-verge"
-        $customCorePath = Join-Path $customCoreDirectory "verge-mihomo.exe"
         New-Item -ItemType Directory -Path $customCoreDirectory -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $customCorePath
-        $customCoreProcess = Start-Process -FilePath $customCorePath -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
+        foreach ($customCoreName in @("verge-mihomo.exe", "verge-mihomo-alpha.exe")) {
+            $customCorePath = Join-Path $customCoreDirectory $customCoreName
+            Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $customCorePath
+            $customCoreProcess = Start-Process -FilePath $customCorePath -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
+            try {
+                Start-Sleep -Milliseconds 100
+                Assert-True (
+                    (Find-MihomoCore "") -ceq $customCorePath
+                ) "running custom-directory $customCoreName was not discovered"
+            } finally {
+                if (-not $customCoreProcess.HasExited) { Stop-Process -Id $customCoreProcess.Id -Force }
+                $customCoreProcess.WaitForExit()
+            }
+        }
+
+        $installerTokens = $null
+        $installerParseErrors = $null
+        $installerAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $installer,
+            [ref]$installerTokens,
+            [ref]$installerParseErrors
+        )
+        if ($installerParseErrors.Count -gt 0) { throw ($installerParseErrors | Out-String) }
+        $completeInstallFunction = @($installerAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq "Complete-InstallAfterTransaction"
+        }, $true))
+        Assert-True ($completeInstallFunction.Count -eq 1) "install completion function was unavailable"
+        . ([scriptblock]::Create($completeInstallFunction[0].Extent.Text))
+
+        $profile3StubbedFunctions = @(
+            "Get-ClashVergeProcessIdentity", "Test-ClashVergeProcessIdentity",
+            "Get-ClashControllerContext", "Get-ClashRuntimeState",
+            "Invoke-ClashVergeReactivationShortcut", "Wait-ClashVergeRuntimeHealthy",
+            "Write-Info", "Complete-InstallResult"
+        )
+        $profile3OriginalFunctions = @{}
+        foreach ($functionName in $profile3StubbedFunctions) {
+            $profile3OriginalFunctions[$functionName] = (Get-Command $functionName -CommandType Function).ScriptBlock
+        }
         try {
-            Start-Sleep -Milliseconds 100
+            Set-Item Function:\Get-ClashVergeProcessIdentity { return [pscustomobject]@{ Id = 1 } }
+            Set-Item Function:\Test-ClashVergeProcessIdentity { return $true }
+            Set-Item Function:\Get-ClashControllerContext { return [pscustomobject]@{ RuntimeText = "before" } }
+            Set-Item Function:\Get-ClashRuntimeState {
+                return [pscustomobject]@{ TunEnabled = $false; Selections = (New-OrdinalStringDictionary) }
+            }
+            Set-Item Function:\Test-InstallRuntimeStateUnchanged { return $true }
+            Set-Item Function:\Invoke-ClashVergeReactivationShortcut { }
+            Set-Item Function:\Wait-ClashVergeRuntimeHealthy {
+                param(
+                    [string]$RuntimePath, [object]$PreviousContext,
+                    [object]$Selections, [bool]$TunEnabled, [int]$Profile
+                )
+                if ($Profile -ne 3 -or -not $TunEnabled) {
+                    throw "profile 3 runtime was not required to enable TUN"
+                }
+                return [pscustomobject]@{}
+            }
+            Set-Item Function:\Restore-InstallTransactionFiles { }
+            Set-Item Function:\Test-InstallRuntimeRestored { return $true }
+            $script:profile3InstallResults = @()
+            Set-Item Function:\Write-Info { }
+            Set-Item Function:\Complete-InstallResult {
+                param([int]$ExitCode, [string]$Status, [string]$Code)
+                $script:profile3InstallResults += $Code
+            }
+            $profile3Activation = [pscustomobject]@{
+                ClientIdentity = [pscustomobject]@{ Id = 1 }
+                RuntimePath = "runtime.yaml"
+                RuntimeContext = [pscustomobject]@{ RuntimeText = "before" }
+                Selections = (New-OrdinalStringDictionary)
+                TunEnabled = $false
+                Shortcut = "CTRL+ALT+SHIFT+F24"
+                CurlPath = "curl.exe"
+                Policy = [pscustomobject]@{}
+            }
+            Complete-InstallAfterTransaction `
+                $profile3Activation 3 @("tun") @("file_transaction") `
+                "installed" "installed" @()
             Assert-True (
-                (Find-MihomoCore "") -ceq $customCorePath
-            ) "running custom-directory verge-mihomo.exe was not discovered"
+                $script:profile3InstallResults.Count -gt 0 -and
+                $script:profile3InstallResults[0] -ceq "installed"
+            ) "profile 3 install rejected the required TUN transition"
         } finally {
-            if (-not $customCoreProcess.HasExited) { Stop-Process -Id $customCoreProcess.Id -Force }
-            $customCoreProcess.WaitForExit()
+            foreach ($functionName in $profile3OriginalFunctions.Keys) {
+                Set-Item ("Function:\" + $functionName) $profile3OriginalFunctions[$functionName]
+            }
+            Remove-Item Function:\Test-InstallRuntimeStateUnchanged -ErrorAction SilentlyContinue
+            Remove-Item Function:\Restore-InstallTransactionFiles -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-InstallRuntimeRestored -ErrorAction SilentlyContinue
+            Remove-Item Function:\Complete-InstallAfterTransaction -ErrorAction SilentlyContinue
         }
 
         $accessDeniedLockError = New-Object System.ComponentModel.Win32Exception 5
@@ -1656,6 +1738,19 @@ rules:
             @([System.IO.File]::ReadAllLines($runtimeInstallDispatchLog)).Count -eq 1 -and
             [System.IO.File]::ReadAllLines($runtimeInstallDispatchLog)[0] -ceq "1"
         ) "install did not activate and verify the captured client runtime exactly once"
+
+        $runtimeReinstallDispatchLog = Join-Path $sandbox "install-runtime-reinstall.log"
+        $runtimeReinstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runtimeInstallHome,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        ) -SimulateRuntimeRefresh -RuntimeDispatchLogPath $runtimeReinstallDispatchLog
+        $runtimeReinstallJson = Assert-JsonResult $runtimeReinstall "install" 0
+        Assert-True (
+            $runtimeReinstallJson.code -eq "installed_common_baseline" -and
+            -not (Test-Path -LiteralPath $runtimeReinstallDispatchLog)
+        ) "unchanged reinstall dispatched and rejected an already healthy managed runtime"
 
         $runtimeRaceHome = Join-Path $sandbox "install-runtime-attribution-race"
         & $initializeRuntimeFixture $runtimeRaceHome
