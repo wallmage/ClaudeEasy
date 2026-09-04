@@ -800,7 +800,21 @@ function Get-ClashRuntimeAiGroupName([object[]]$Rules, [object]$Policy) {
         $expectedType = ([string]$parts[0]).Replace("-", "")
         $actual = $Rules[$index]
         $actualType = ([string]$actual.type).Replace("-", "")
-        if ($actualType -ine $expectedType -or [string]$actual.payload -ine [string]$parts[1]) {
+        $actualPayload = [string]$actual.payload
+        $typeMatches = $actualType -ieq $expectedType
+        if (-not $typeMatches -and $actualType -ieq "IPCIDR" -and $expectedType -ieq "IPCIDR6") {
+            $cidr = @($actualPayload.Split("/"))
+            $address = $null
+            $prefixLength = 0
+            $typeMatches = (
+                $cidr.Count -eq 2 -and
+                [Net.IPAddress]::TryParse($cidr[0], [ref]$address) -and
+                $address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6 -and
+                [int]::TryParse($cidr[1], [ref]$prefixLength) -and
+                $prefixLength -ge 0 -and $prefixLength -le 128
+            )
+        }
+        if (-not $typeMatches -or $actualPayload -ine [string]$parts[1]) {
             throw "档位 3 的受管 AI 规则不完整。"
         }
         $target = [string]$actual.proxy
