@@ -83,6 +83,21 @@
       "workflow_complete": false,
       "completed_scope": "configuration_written",
       "required_followups": "non_empty_array"
+    },
+    "runtime_activation_recovery_required": {
+      "workflow_complete": false,
+      "completed_scope": "configuration_restored",
+      "required_followups": "non_empty_array"
+    },
+    "runtime_activation_configuration_recovery_required": {
+      "workflow_complete": false,
+      "completed_scope": "runtime_restored",
+      "required_followups": "non_empty_array"
+    },
+    "runtime_activation_recovery_failed": {
+      "workflow_complete": false,
+      "completed_scope": "recovery_attempted",
+      "required_followups": "non_empty_array"
     }
   },
   "required_workflow_metadata_by_operation_and_code": {

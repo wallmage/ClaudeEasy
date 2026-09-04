@@ -140,14 +140,98 @@ function Get-InstallRuntimeActivationContext(
     }
 }
 
+function Test-InstallRuntimeStateUnchanged(
+    [object]$ActivationContext,
+    [object]$CurrentState
+) {
+    if ([bool]$CurrentState.TunEnabled -ne [bool]$ActivationContext.TunEnabled) {
+        return $false
+    }
+    $expectedSelections = $ActivationContext.Selections
+    $currentSelections = $CurrentState.Selections
+    if ($expectedSelections.Count -ne $currentSelections.Count) { return $false }
+    foreach ($name in @($expectedSelections.Keys)) {
+        if (-not $currentSelections.ContainsKey([string]$name) -or
+            [string]$currentSelections[[string]$name] -cne [string]$expectedSelections[[string]$name]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-InstallRuntimeSemanticFingerprint([string]$Text) {
+    $semanticLines = @()
+    foreach ($line in @(Split-YamlLines $Text)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) {
+            continue
+        }
+        $semanticLines += $line.TrimEnd()
+    }
+    return Get-BytesSha256 (ConvertTo-Utf8Bytes ($semanticLines -join "`n"))
+}
+
+function Restore-InstallTransactionFiles([object[]]$Targets) {
+    $writeTargets = @()
+    $deleteTargets = @()
+    foreach ($target in @($Targets)) {
+        $current = Get-OptionalFileSnapshot ([string]$target.Path) "安装恢复目标"
+        if (-not $current.Exists -or
+            (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $target.Bytes)) {
+            throw "安装后的配置文件已发生并发变化，无法安全恢复。"
+        }
+        if ([bool]$target.Existed) {
+            $writeTargets += [pscustomobject]@{
+                Path = [string]$target.Path
+                Bytes = $target.OriginalBytes
+                Existed = $true
+                OriginalBytes = $current.Bytes
+                OriginalIdentity = $current.Identity
+            }
+        } else {
+            $deleteTargets += [pscustomobject]@{
+                Path = [string]$target.Path
+                Existed = $true
+                OriginalBytes = $current.Bytes
+                OriginalIdentity = $current.Identity
+            }
+        }
+    }
+    Invoke-VerifiedWriteDeleteTransaction $writeTargets $deleteTargets
+}
+
+function Test-InstallRuntimeRestored([object]$ActivationContext) {
+    $currentIdentity = Get-ClashVergeProcessIdentity
+    if (-not (Test-ClashVergeProcessIdentity $currentIdentity $ActivationContext.ClientIdentity)) {
+        throw "Clash Verge Rev 客户端已变化，无法确认原运行状态。"
+    }
+    $currentContext = Get-ClashControllerContext ([string]$ActivationContext.RuntimePath)
+    if ((Get-InstallRuntimeSemanticFingerprint ([string]$currentContext.RuntimeText)) -cne
+        (Get-InstallRuntimeSemanticFingerprint ([string]$ActivationContext.RuntimeContext.RuntimeText))) {
+        throw "Clash Verge Rev 运行配置未恢复到原内容。"
+    }
+    Restore-ClashRuntimeSelections $currentContext $ActivationContext.Selections
+    $currentState = Get-ClashRuntimeState $currentContext
+    if (-not (Test-InstallRuntimeStateUnchanged $ActivationContext $currentState)) {
+        throw "Clash Verge Rev 原代理选择或 TUN 状态未恢复。"
+    }
+    $confirmedIdentity = Get-ClashVergeProcessIdentity
+    if (-not (Test-ClashVergeProcessIdentity $confirmedIdentity $ActivationContext.ClientIdentity)) {
+        throw "Clash Verge Rev 客户端已变化，无法确认原运行状态。"
+    }
+    return $true
+}
+
 function Complete-InstallAfterTransaction(
     [object]$ActivationContext,
     [int]$Profile,
     [object[]]$Changes,
     [object[]]$WrittenChecks,
     [string]$SuccessCode,
-    [string]$SuccessSummary
+    [string]$SuccessSummary,
+    [object[]]$TransactionTargets
 ) {
+    $dispatchSent = $false
+    $activationFailure = ""
     if ($null -ne $ActivationContext) {
         try {
             $beforeFingerprintIdentity = Get-ClashVergeProcessIdentity
@@ -156,15 +240,21 @@ function Complete-InstallAfterTransaction(
             }
             $preDispatchRuntimeContext = Get-ClashControllerContext `
                 ([string]$ActivationContext.RuntimePath)
+            $preDispatchState = Get-ClashRuntimeState $preDispatchRuntimeContext
+            if (-not (Test-InstallRuntimeStateUnchanged $ActivationContext $preDispatchState)) {
+                throw "Clash Verge Rev 的代理选择或 TUN 状态在安装期间发生变化；未发送重新加载快捷键。"
+            }
             $afterFingerprintIdentity = Get-ClashVergeProcessIdentity
             if (-not (Test-ClashVergeProcessIdentity $afterFingerprintIdentity $ActivationContext.ClientIdentity)) {
                 throw "Clash Verge Rev 客户端已变化。"
             }
             Invoke-ClashVergeReactivationShortcut ([string]$ActivationContext.Shortcut)
+            $dispatchSent = $true
             $null = Wait-ClashVergeRuntimeHealthy `
                 ([string]$ActivationContext.RuntimePath) $preDispatchRuntimeContext `
                 $ActivationContext.Selections ([bool]$ActivationContext.TunEnabled) `
-                $Profile ([string]$ActivationContext.CurlPath) $ActivationContext.Policy
+                $Profile ([string]$ActivationContext.CurlPath) $ActivationContext.Policy `
+                -RequireManagedPatchTransition
             $verifiedIdentity = Get-ClashVergeProcessIdentity
             if (-not (Test-ClashVergeProcessIdentity $verifiedIdentity $ActivationContext.ClientIdentity)) {
                 throw "Clash Verge Rev 客户端已变化。"
@@ -173,15 +263,57 @@ function Complete-InstallAfterTransaction(
             Complete-InstallResult 0 "ok" $SuccessCode $SuccessSummary `
                 $Changes @($WrittenChecks + "runtime_health")
         } catch {
-            Write-Info "配置文件已写入并回读确认，但客户端运行配置尚未完成加载验收。"
+            $activationFailure = $_.Exception.Message
         }
     } else {
         Write-Info "配置文件已写入并回读确认，但当前没有完整的安全运行加载条件。"
     }
-    Complete-InstallResult 1 "partial" "runtime_activation_required" `
-        "Windows ClaudeEasy 配置已写入；仍需在客户端加载并验收运行配置。" `
-        $Changes $WrittenChecks @() @() $false "configuration_written" `
-        @("client_runtime_activation", "runtime_verification")
+
+    if (-not $dispatchSent) {
+        if (-not [string]::IsNullOrWhiteSpace($activationFailure)) {
+            Write-Info ("未发送重新加载快捷键：" + $activationFailure)
+        }
+        Complete-InstallResult 1 "partial" "runtime_activation_required" `
+            "Windows ClaudeEasy 配置已写入；当前不能安全自动加载运行配置。" `
+            $Changes $WrittenChecks @() @() $false "configuration_written" `
+            @("client_runtime_activation", "runtime_verification")
+    }
+
+    Write-Info ("客户端加载验收失败：" + $activationFailure)
+    $filesRestored = $false
+    try {
+        Restore-InstallTransactionFiles $TransactionTargets
+        $filesRestored = $true
+    } catch {
+        Write-Info ("配置文件恢复失败：" + $_.Exception.Message)
+    }
+    $runtimeRestored = $false
+    try {
+        $runtimeRestored = Test-InstallRuntimeRestored $ActivationContext
+    } catch {
+        Write-Info ("运行状态恢复无法确认：" + $_.Exception.Message)
+    }
+    if ($filesRestored -and $runtimeRestored) {
+        Complete-InstallResult 1 "rolled_back" "runtime_activation_rolled_back" `
+            "客户端未能完成本次加载；安装文件和原运行状态已恢复。" `
+            @() @("file_transaction_rolled_back", "runtime_restored")
+    }
+    if ($filesRestored) {
+        Complete-InstallResult 1 "partial" "runtime_activation_recovery_required" `
+            "客户端加载失败；配置文件已恢复，但原运行状态仍需确认。" `
+            @() @("file_transaction_rolled_back") @() @() $false `
+            "configuration_restored" @("runtime_recovery_verification")
+    }
+    if ($runtimeRestored) {
+        Complete-InstallResult 1 "partial" "runtime_activation_configuration_recovery_required" `
+            "客户端加载失败；原运行状态已恢复，但配置文件仍需恢复。" `
+            $Changes @("runtime_restored") @() @() $false `
+            "runtime_restored" @("configuration_recovery")
+    }
+    Complete-InstallResult 1 "partial" "runtime_activation_recovery_failed" `
+        "客户端加载失败，安装文件和原运行状态均无法确认恢复。" `
+        $Changes @() @() @() $false "recovery_attempted" `
+        @("configuration_recovery", "runtime_recovery_verification")
 }
 
 if ($unboundArguments.Count -gt 0) {
@@ -1381,7 +1513,8 @@ try {
             @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update") `
             @("file_transaction") `
             "installed_common_baseline" `
-            "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。"
+            "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。" `
+            $lightTargets
     }
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_tun_mode" "true"
     $configInput = if ($configExisted) { $strictUtf8.GetString($configOriginalBytes) } else { "" }
@@ -1429,7 +1562,7 @@ try {
         $activationContext $resolvedUsageProfile `
         @("global_script", "subscription_reactivation", "auto_update", "tun", "dns", "ipv6") `
         @("mihomo_candidate", "file_transaction") `
-        "installed" "Windows ClaudeEasy 已安装。"
+        "installed" "Windows ClaudeEasy 已安装。" $targets
 } catch {
     Complete-InstallResult 1 $(if ($_.Exception.Message -match "已恢复") { "rolled_back" } else { "failed" }) "install_failed" ("安装失败：" + $_.Exception.Message)
 }

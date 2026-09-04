@@ -425,7 +425,8 @@ function Wait-ClashVergeRuntimeHealthy(
     [int]$Profile,
     [string]$CurlPath,
     [object]$Policy,
-    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
+    [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue,
+    [switch]$RequireManagedPatchTransition
 ) {
     Wait-ClashVergeRuntimeRefresh $RuntimePath $PreviousContext $AbsoluteDeadline
     $context = Get-ClashControllerContext $RuntimePath
@@ -434,19 +435,38 @@ function Wait-ClashVergeRuntimeHealthy(
     if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     if ($AbsoluteDeadline -lt $deadline) { $deadline = $AbsoluteDeadline }
+    $healthyContext = $null
     do {
         try {
             $context = Get-ClashControllerContext $RuntimePath
             Assert-ClashRuntimeHealthy `
                 $context $Selections $TunEnabled $Profile $CurlPath $Policy `
                 -ReadOnly -AbsoluteDeadline $AbsoluteDeadline
-            return $context
+            $healthyContext = $context
+            break
         } catch {
             $lastFailure = $_.Exception.Message
         }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Clash Verge Rev 热加载后没有恢复完整运行状态：$lastFailure"
+    if ($null -eq $healthyContext) {
+        throw "Clash Verge Rev 热加载后没有恢复完整运行状态：$lastFailure"
+    }
+    if ($RequireManagedPatchTransition) {
+        $currentState = Get-ClashRuntimeState $healthyContext
+        $previousPatchApplied = $false
+        try {
+            Assert-ClashRuntimePatch `
+                ([string]$PreviousContext.RuntimeText) $currentState $Policy $Profile
+            $previousPatchApplied = $true
+        } catch {
+            $previousPatchApplied = $false
+        }
+        if ($previousPatchApplied) {
+            throw "发送快捷键前的运行配置已包含相同受管补丁，无法确认本次加载应用了新配置。"
+        }
+    }
+    return $healthyContext
 }
 
 function ConvertFrom-ClashRuntimeYamlScalar([string]$Value) {

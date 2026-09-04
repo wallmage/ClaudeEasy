@@ -122,6 +122,12 @@ function New-ClaudeEasyResult(
         "subscription_update"
     } elseif ($Code -ceq "runtime_activation_required") {
         "configuration_written"
+    } elseif ($Code -ceq "runtime_activation_recovery_required") {
+        "configuration_restored"
+    } elseif ($Code -ceq "runtime_activation_configuration_recovery_required") {
+        "runtime_restored"
+    } elseif ($Code -ceq "runtime_activation_recovery_failed") {
+        "recovery_attempted"
     } elseif ($Operation -ceq "snapshot_profiles" -and $Code -ceq "snapshot_created") {
         "subscription_snapshot"
     } else {

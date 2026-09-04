@@ -143,18 +143,33 @@ function Find-YamlMappingNode(
 
     $start = [int]$foundIndexes[0]
     $finish = $SearchEnd
+    $pendingSiblingComment = -1
     for ($i = $start + 1; $i -lt $SearchEnd; $i++) {
         $line = $Lines[$i]
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $lineIndent = Get-YamlIndent $line
         if ($line.TrimStart().StartsWith("#")) {
+            if ($lineIndent -le $Indent -and $pendingSiblingComment -lt 0) {
+                $pendingSiblingComment = $i
+            }
+            continue
+        }
+        if ($lineIndent -eq $Indent -and $line.TrimStart().StartsWith("- ")) {
+            $pendingSiblingComment = -1
             continue
         }
         if ($lineIndent -lt $Indent -or
-            ($lineIndent -eq $Indent -and -not $line.TrimStart().StartsWith("- "))) {
-            $finish = $i
+            $lineIndent -eq $Indent) {
+            $finish = if ($pendingSiblingComment -ge 0) {
+                $pendingSiblingComment
+            } else {
+                $i
+            }
             break
         }
+    }
+    if ($pendingSiblingComment -ge 0 -and $finish -eq $SearchEnd) {
+        $finish = $pendingSiblingComment
     }
     $entry = Get-YamlMappingEntry $Lines[$start]
     $value = if ($null -ne $entry) { $entry.Value } else { "" }

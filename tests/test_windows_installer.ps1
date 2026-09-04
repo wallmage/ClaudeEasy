@@ -314,13 +314,18 @@ function Invoke-TestPowerShell(
     [string[]]$ScriptArguments,
     [switch]$SimulateRuntimeRefresh,
     [switch]$SimulateUnrelatedRuntimeRefresh,
+    [switch]$SimulateConcurrentSelectionChange,
+    [switch]$SimulateInstallFileRecoveryConflict,
     [int]$FirstRuntimeRefreshDelayMilliseconds = 200,
     [switch]$FailRestoreRuntimeDispatch,
     [string]$RuntimeDispatchLogPath = "",
+    [string]$InitialRuntimeText = "",
+    [string]$RuntimeAfterText = "",
     [int]$RefreshStartedAgeSeconds = 0
 ) {
     $temporarySafeUpdateClient = $null
     $simulatedRuntimeBootstrap = $null
+    $installFileRecoveryConflictJob = $null
     $previousSafeUpdatePath = $null
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
@@ -335,13 +340,24 @@ function Invoke-TestPowerShell(
             $runtimeHome = [string]$ScriptArguments[$appHomeIndex + 1]
             if (Test-Path -LiteralPath $runtimeHome -PathType Container) {
                 $runtimePath = Join-Path $runtimeHome "clash-verge.yaml"
-                [System.IO.File]::WriteAllText($runtimePath, $script:safeUpdateRuntimeText)
+                $initialRuntime = if ([string]::IsNullOrEmpty($InitialRuntimeText)) {
+                    $script:safeUpdateRuntimeText
+                } else {
+                    $InitialRuntimeText
+                }
+                [System.IO.File]::WriteAllText($runtimePath, $initialRuntime)
             }
         }
         $temporarySafeUpdateClient = Start-Process `
             -FilePath $script:safeUpdateClientPath `
             -ArgumentList @("-t", "127.0.0.1") `
             -PassThru
+        if ($SimulateConcurrentSelectionChange) {
+            [System.IO.File]::WriteAllText(
+                $script:safeUpdateControllerSelectionPath,
+                "NodeThenOther"
+            )
+        }
         $previousSafeUpdatePath = $env:PATH
         $previousImmediateCurl = $env:CLAUDE_EASY_TEST_CURL_IMMEDIATE_SUCCESS
         $env:PATH = $fakeCurlDirectory + [System.IO.Path]::PathSeparator + $env:PATH
@@ -384,6 +400,11 @@ function Invoke-TestPowerShell(
                 } else { "" }
                 Json = $ScriptArguments -contains "-Json"
                 RuntimePath = $runtimePath
+                RuntimeAfterText = if ([string]::IsNullOrEmpty($RuntimeAfterText)) {
+                    $script:safeUpdateRuntimeText
+                } else {
+                    $RuntimeAfterText
+                }
                 FirstRuntimeRefreshDelayMilliseconds = $FirstRuntimeRefreshDelayMilliseconds
                 SimulateUnrelatedRuntimeRefresh = [bool]$SimulateUnrelatedRuntimeRefresh
                 FailRestoreRuntimeDispatch = [bool]$FailRestoreRuntimeDispatch
@@ -396,8 +417,9 @@ function Invoke-TestPowerShell(
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static string AppHome; public static string DispatchLogPath; public static int FirstDelayMilliseconds; public static bool FailRestoreDispatch; public static bool SimulateUnrelatedRefresh; private static int SendCount; private static bool IsRestoreKindManifest() { if (string.IsNullOrEmpty(AppHome)) { return false; } string manifestPath = System.IO.Path.Combine(AppHome, "claude-easy-safe-update.json"); if (!System.IO.File.Exists(manifestPath)) { return false; } return System.Text.RegularExpressions.Regex.IsMatch(System.IO.File.ReadAllText(manifestPath), "\\\"Kind\\\"\\s*:\\s*\\\"safe_update_runtime_recovery\\\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant); } public static void StartUnrelatedRefreshWatcher() { if (!SimulateUnrelatedRefresh) { return; } var thread = new System.Threading.Thread(delegate() { string scriptPath = System.IO.Path.Combine(AppHome, "profiles", "Script.js"); while (!System.IO.File.Exists(scriptPath)) { System.Threading.Thread.Sleep(5); } System.IO.File.AppendAllText(RuntimePath, "\n# unrelated refresh\n"); }); thread.IsBackground = true; thread.Start(); } public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } int count = System.Threading.Interlocked.Increment(ref SendCount); if (!string.IsNullOrEmpty(DispatchLogPath)) { System.IO.File.AppendAllText(DispatchLogPath, count.ToString() + "\n"); } bool isRestore = IsRestoreKindManifest(); if (FailRestoreDispatch && (count >= 2 || isRestore)) { return false; } string path = RuntimePath; int delay = isRestore ? 200 : FirstDelayMilliseconds; var delayThread = new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(delay); System.IO.File.AppendAllText(path, "\n# simulated refresh\n"); }); delayThread.IsBackground = true; delayThread.Start(); return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static string RuntimeAfterText; public static string AppHome; public static string DispatchLogPath; public static int FirstDelayMilliseconds; public static bool FailRestoreDispatch; public static bool SimulateUnrelatedRefresh; private static int SendCount; private static bool IsRestoreKindManifest() { if (string.IsNullOrEmpty(AppHome)) { return false; } string manifestPath = System.IO.Path.Combine(AppHome, "claude-easy-safe-update.json"); if (!System.IO.File.Exists(manifestPath)) { return false; } return System.Text.RegularExpressions.Regex.IsMatch(System.IO.File.ReadAllText(manifestPath), "\\\"Kind\\\"\\s*:\\s*\\\"safe_update_runtime_recovery\\\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant); } public static void StartUnrelatedRefreshWatcher() { if (!SimulateUnrelatedRefresh) { return; } var thread = new System.Threading.Thread(delegate() { string scriptPath = System.IO.Path.Combine(AppHome, "profiles", "Script.js"); while (!System.IO.File.Exists(scriptPath)) { System.Threading.Thread.Sleep(5); } System.IO.File.AppendAllText(RuntimePath, "\n# unrelated refresh\n"); }); thread.IsBackground = true; thread.Start(); } public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } int count = System.Threading.Interlocked.Increment(ref SendCount); if (!string.IsNullOrEmpty(DispatchLogPath)) { System.IO.File.AppendAllText(DispatchLogPath, count.ToString() + "\n"); } bool isRestore = IsRestoreKindManifest(); if (FailRestoreDispatch && (count >= 2 || isRestore)) { return false; } string path = RuntimePath; string runtimeAfter = RuntimeAfterText; int delay = isRestore ? 200 : FirstDelayMilliseconds; var delayThread = new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(delay); System.IO.File.WriteAllText(path, runtimeAfter); }); delayThread.IsBackground = true; delayThread.Start(); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
+[ClaudeEasy.SendInputNative]::RuntimeAfterText = [string]$payload.RuntimeAfterText
 [ClaudeEasy.SendInputNative]::AppHome = [string]$payload.AppHome
 [ClaudeEasy.SendInputNative]::DispatchLogPath = [string]$payload.RuntimeDispatchLogPath
 [ClaudeEasy.SendInputNative]::FirstDelayMilliseconds = [int]$payload.FirstRuntimeRefreshDelayMilliseconds
@@ -445,6 +467,29 @@ exit $LASTEXITCODE
                 $bootstrap,
                 [System.Text.Encoding]::ASCII
             )
+            if ($SimulateInstallFileRecoveryConflict) {
+                $recoveryConflictReady = $RuntimeDispatchLogPath + ".ready"
+                $installFileRecoveryConflictJob = Start-Job -ArgumentList @(
+                    $RuntimeDispatchLogPath,
+                    (Join-Path $runtimeHome "verge.yaml"),
+                    $recoveryConflictReady
+                ) -ScriptBlock {
+                    param([string]$DispatchLogPath, [string]$TargetPath, [string]$ReadyPath)
+                    [System.IO.File]::WriteAllText($ReadyPath, "ready")
+                    while (-not (Test-Path -LiteralPath $DispatchLogPath -PathType Leaf)) {
+                        Start-Sleep -Milliseconds 5
+                    }
+                    [System.IO.File]::AppendAllText($TargetPath, "`n# concurrent recovery conflict`n")
+                }
+                $recoveryConflictDeadline = [DateTime]::UtcNow.AddSeconds(10)
+                while (-not (Test-Path -LiteralPath $recoveryConflictReady -PathType Leaf) -and
+                    [DateTime]::UtcNow -lt $recoveryConflictDeadline) {
+                    Start-Sleep -Milliseconds 10
+                }
+                if (-not (Test-Path -LiteralPath $recoveryConflictReady -PathType Leaf)) {
+                    throw "install file recovery conflict watcher did not start"
+                }
+            }
             $output = & $PowerShellPath -NoLogo -NoProfile -File $simulatedRuntimeBootstrap 2>&1 | Out-String
             $exitCode = $LASTEXITCODE
         } else {
@@ -456,6 +501,10 @@ exit $LASTEXITCODE
             ExitCode = $exitCode
         }
     } finally {
+        if ($null -ne $installFileRecoveryConflictJob) {
+            Stop-Job $installFileRecoveryConflictJob -ErrorAction SilentlyContinue
+            Remove-Job $installFileRecoveryConflictJob -Force -ErrorAction SilentlyContinue
+        }
         if ($null -ne $simulatedRuntimeBootstrap) {
             Remove-Item -LiteralPath $simulatedRuntimeBootstrap -Force -ErrorAction SilentlyContinue
         }
@@ -633,6 +682,7 @@ tun:
   # legacy list entry follows
   - stale.example:53
   - tcp://stale.example:53
+  # keep user note for the next setting
   auto-route: false
   auto-detect-interface: false
   strict-route: false
@@ -648,10 +698,24 @@ tun:
         $updatedSameIndentTunList -match '(?m)^  auto-route: true\r?$'
     ) "TUN update removed the following auto-route sibling"
     Assert-True (
+        $updatedSameIndentTunList -match '(?m)^  # keep user note for the next setting\r?$'
+    ) "TUN update removed a user comment adjacent to the next sibling"
+    Assert-True (
         $managedDnsHijackEntries.Count -eq 2 -and
         $managedDnsHijackEntries -ccontains '    - any:53' -and
         $managedDnsHijackEntries -ccontains '    - tcp://any:53'
     ) "TUN update did not write exactly the two managed dns-hijack entries"
+    $eofAdjacentTunComment = @'
+tun:
+  dns-hijack:
+  - stale.example:53
+  # keep user note at EOF
+'@
+    $updatedEofAdjacentTunComment = Set-YamlTunMapping $eofAdjacentTunComment
+    Assert-True (
+        $updatedEofAdjacentTunComment -notmatch 'stale\.example:53' -and
+        $updatedEofAdjacentTunComment -match '(?m)^  # keep user note at EOF\r?$'
+    ) "TUN update removed a user comment adjacent to EOF"
     New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $sameContentRuntime = Join-Path $sandbox "same-content-runtime.yaml"
     [System.IO.File]::WriteAllText($sameContentRuntime, "runtime")
@@ -883,19 +947,26 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
 
     }
     if ((Test-GroupSelected 'core') -and $onWindows) {
-        $invalidActivationMetadataRejected = $false
-        try {
-            New-ClaudeEasyResult `
-                -Command "install" -Operation "install" -Ok $false `
-                -Status "partial" -Code "runtime_activation_required" -ExitCode 1 `
-                -SummaryZh "test" -WorkflowComplete $false `
-                -CompletedScope "subscription_update" `
-                -RequiredFollowups @("runtime_verification") | Out-Null
-        } catch {
-            $invalidActivationMetadataRejected = $true
+        foreach ($invalidWorkflowCase in @(
+            @{ Code = "runtime_activation_required"; Scope = "subscription_update" },
+            @{ Code = "runtime_activation_recovery_required"; Scope = "configuration_written" },
+            @{ Code = "runtime_activation_configuration_recovery_required"; Scope = "configuration_restored" },
+            @{ Code = "runtime_activation_recovery_failed"; Scope = "configuration_restored" }
+        )) {
+            $invalidWorkflowMetadataRejected = $false
+            try {
+                New-ClaudeEasyResult `
+                    -Command "install" -Operation "install" -Ok $false `
+                    -Status "partial" -Code ([string]$invalidWorkflowCase.Code) -ExitCode 1 `
+                    -SummaryZh "test" -WorkflowComplete $false `
+                    -CompletedScope ([string]$invalidWorkflowCase.Scope) `
+                    -RequiredFollowups @("runtime_verification") | Out-Null
+            } catch {
+                $invalidWorkflowMetadataRejected = $true
+            }
+            Assert-True $invalidWorkflowMetadataRejected `
+                "result contract accepted malformed runtime workflow metadata for $($invalidWorkflowCase.Code)"
         }
-        Assert-True $invalidActivationMetadataRejected `
-            "result contract accepted malformed runtime activation workflow metadata"
 
         $customCoreDirectory = Join-Path $sandbox "D-clash-verge"
         $customCorePath = Join-Path $customCoreDirectory "verge-mihomo.exe"
@@ -1429,6 +1500,8 @@ public static class FakeCurl {
             throw "failed to compile fake curl.exe"
         }
         $safeUpdateControllerReady = Join-Path $sandbox "safe-update-controller-ready"
+        $script:safeUpdateControllerSelectionPath = Join-Path $sandbox "safe-update-controller-selection"
+        [System.IO.File]::WriteAllText($script:safeUpdateControllerSelectionPath, "Node")
         $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
         $portProbe.Start()
         $script:safeUpdateControllerPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
@@ -1475,9 +1548,15 @@ rules:
         $safeUpdateControllerJob = Start-Job -ArgumentList @(
             $script:safeUpdateControllerPort,
             $safeUpdateControllerReady,
-            [string]$safeUpdateDomainProvider.name
+            [string]$safeUpdateDomainProvider.name,
+            $script:safeUpdateControllerSelectionPath
         ) -ScriptBlock {
-            param([int]$Port, [string]$ReadyPath, [string]$DomainProviderName)
+            param(
+                [int]$Port,
+                [string]$ReadyPath,
+                [string]$DomainProviderName,
+                [string]$SelectionPath
+            )
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
             $listener.Start()
             [System.IO.File]::WriteAllText($ReadyPath, "ready")
@@ -1501,7 +1580,12 @@ rules:
                         if ($method -eq "GET" -and $path -eq "/configs") {
                             $body = "{`"tun`":{`"enable`":false},`"mixed-port`":$Port}"
                         } elseif ($method -eq "GET" -and $path -eq "/proxies") {
-                            $body = '{"proxies":{"Main":{"type":"Selector","now":"Node","all":["Node"]},"Node":{"type":"Shadowsocks"}}}'
+                            $selected = [System.IO.File]::ReadAllText($SelectionPath).Trim()
+                            if ($selected -ceq "NodeThenOther") {
+                                $selected = "Node"
+                                [System.IO.File]::WriteAllText($SelectionPath, "Other")
+                            }
+                            $body = "{`"proxies`":{`"Main`":{`"type`":`"Selector`",`"now`":`"$selected`",`"all`":[`"Node`",`"Other`"]},`"Node`":{`"type`":`"Shadowsocks`"},`"Other`":{`"type`":`"Shadowsocks`"}}}"
                         } elseif ($method -eq "GET" -and $path -eq "/rules") {
                             $body = "{`"rules`":[{`"type`":`"RuleSet`",`"payload`":`"$DomainProviderName`",`"proxy`":`"DIRECT`"},{`"type`":`"Match`",`"payload`":`"`",`"proxy`":`"Main`"}]}"
                         } elseif ($method -eq "GET" -and $path -eq "/providers/proxies") {
@@ -1534,27 +1618,38 @@ rules:
         $script:safeUpdateClientPath = Join-Path $sandbox "clash-verge.exe"
         Copy-Item -LiteralPath (Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe") -Destination $script:safeUpdateClientPath
 
+        $runtimeFixtureConfigText = "mode: rule`nipv6: true`ntun: null`n"
+        $runtimeFixtureVergeText = "enable_global_hotkey: true`nhotkeys:`n  - reactivate_profiles,CTRL+ALT+SHIFT+F24`nenable_tun_mode: false`n"
+        $runtimeFixtureProfilesText = "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
+        $initializeRuntimeFixture = {
+            param([string]$Home)
+            New-Item -ItemType Directory -Path (Join-Path $Home "profiles") -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $Home "config.yaml"), $runtimeFixtureConfigText)
+            [System.IO.File]::WriteAllText((Join-Path $Home "verge.yaml"), $runtimeFixtureVergeText)
+            [System.IO.File]::WriteAllText((Join-Path $Home "profiles.yaml"), $runtimeFixtureProfilesText)
+        }
+        $installRuntimeBeforeText = @"
+external-controller: 127.0.0.1:$($script:safeUpdateControllerPort)
+secret: ''
+mixed-port: $($script:safeUpdateControllerPort)
+profile:
+  store-selected: false
+dns:
+  enable: false
+rules:
+  - MATCH,Main
+"@
+
         $runtimeInstallHome = Join-Path $sandbox "install-runtime-activation-success"
-        New-Item -ItemType Directory -Path (Join-Path $runtimeInstallHome "profiles") -Force | Out-Null
-        [System.IO.File]::WriteAllText(
-            (Join-Path $runtimeInstallHome "config.yaml"),
-            "mode: rule`nipv6: true`ntun: null`n"
-        )
-        [System.IO.File]::WriteAllText(
-            (Join-Path $runtimeInstallHome "verge.yaml"),
-            "enable_global_hotkey: true`nhotkeys:`n  - reactivate_profiles,CTRL+ALT+SHIFT+F24`nenable_tun_mode: false`n"
-        )
-        [System.IO.File]::WriteAllText(
-            (Join-Path $runtimeInstallHome "profiles.yaml"),
-            "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
-        )
+        & $initializeRuntimeFixture $runtimeInstallHome
         $runtimeInstallDispatchLog = Join-Path $sandbox "install-runtime-activation-success.log"
         $runtimeInstall = Invoke-TestPowerShell $installer @(
             "-AppHome", $runtimeInstallHome,
             "-UsageProfile", "1",
             "-MihomoPath", $fakeCore,
             "-Json"
-        ) -SimulateRuntimeRefresh -RuntimeDispatchLogPath $runtimeInstallDispatchLog
+        ) -SimulateRuntimeRefresh -InitialRuntimeText $installRuntimeBeforeText `
+            -RuntimeDispatchLogPath $runtimeInstallDispatchLog
         $runtimeInstallJson = Assert-JsonResult $runtimeInstall "install" 0
         Assert-True (
             $runtimeInstallJson.code -eq "installed_common_baseline" -and
@@ -1563,33 +1658,92 @@ rules:
         ) "install did not activate and verify the captured client runtime exactly once"
 
         $runtimeRaceHome = Join-Path $sandbox "install-runtime-attribution-race"
-        New-Item -ItemType Directory -Path (Join-Path $runtimeRaceHome "profiles") -Force | Out-Null
-        [System.IO.File]::WriteAllText(
-            (Join-Path $runtimeRaceHome "config.yaml"),
-            "mode: rule`nipv6: true`ntun: null`n"
-        )
-        [System.IO.File]::WriteAllText(
-            (Join-Path $runtimeRaceHome "verge.yaml"),
-            "enable_global_hotkey: true`nhotkeys:`n  - reactivate_profiles,CTRL+ALT+SHIFT+F24`nenable_tun_mode: false`n"
-        )
-        [System.IO.File]::WriteAllText(
-            (Join-Path $runtimeRaceHome "profiles.yaml"),
-            "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
-        )
+        & $initializeRuntimeFixture $runtimeRaceHome
         $runtimeRaceDispatchLog = Join-Path $sandbox "install-runtime-attribution-race.log"
         $runtimeRace = Invoke-TestPowerShell $installer @(
             "-AppHome", $runtimeRaceHome,
             "-UsageProfile", "1",
             "-MihomoPath", $fakeCore,
             "-Json"
-        ) -SimulateRuntimeRefresh -SimulateUnrelatedRuntimeRefresh `
-            -FirstRuntimeRefreshDelayMilliseconds 60000 `
+        ) -SimulateRuntimeRefresh `
+            -RuntimeAfterText ($script:safeUpdateRuntimeText + "`n# unrelated refresh`n") `
             -RuntimeDispatchLogPath $runtimeRaceDispatchLog
         $runtimeRaceJson = Assert-JsonResult $runtimeRace "install" 1
         Assert-True (
-            $runtimeRaceJson.code -eq "runtime_activation_required" -and
-            @([System.IO.File]::ReadAllLines($runtimeRaceDispatchLog)).Count -eq 1
-        ) "install accepted a pre-dispatch runtime rewrite as activation proof"
+            $runtimeRaceJson.status -eq "rolled_back" -and
+            $runtimeRaceJson.code -eq "runtime_activation_rolled_back" -and
+            @([System.IO.File]::ReadAllLines($runtimeRaceDispatchLog)).Count -eq 1 -and
+            -not (Test-Path -LiteralPath (Join-Path $runtimeRaceHome "profiles/Script.js")) -and
+            [System.IO.File]::ReadAllText((Join-Path $runtimeRaceHome "config.yaml")) -ceq $runtimeFixtureConfigText -and
+            (@($runtimeRaceJson.messages) -join "`n") -match "无法确认本次加载"
+        ) "install accepted a comment-only runtime rewrite as activation proof"
+
+        $runtimeFileRecoveryHome = Join-Path $sandbox "install-runtime-file-recovery-conflict"
+        & $initializeRuntimeFixture $runtimeFileRecoveryHome
+        $runtimeFileRecoveryLog = Join-Path $sandbox "install-runtime-file-recovery-conflict.log"
+        $runtimeFileRecovery = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runtimeFileRecoveryHome,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        ) -SimulateRuntimeRefresh -SimulateInstallFileRecoveryConflict `
+            -RuntimeAfterText ($script:safeUpdateRuntimeText + "`n# unrelated refresh`n") `
+            -RuntimeDispatchLogPath $runtimeFileRecoveryLog
+        $runtimeFileRecoveryJson = Assert-JsonResult $runtimeFileRecovery "install" 1
+        Assert-True (
+            $runtimeFileRecoveryJson.status -eq "partial" -and
+            $runtimeFileRecoveryJson.code -eq "runtime_activation_configuration_recovery_required" -and
+            $runtimeFileRecoveryJson.workflow_complete -eq $false -and
+            $runtimeFileRecoveryJson.completed_scope -eq "runtime_restored" -and
+            (@($runtimeFileRecoveryJson.required_followups) -join ",") -ceq "configuration_recovery" -and
+            @($runtimeFileRecoveryJson.checks) -ccontains "runtime_restored" -and
+            @([System.IO.File]::ReadAllLines($runtimeFileRecoveryLog)).Count -eq 1 -and
+            [System.IO.File]::ReadAllText((Join-Path $runtimeFileRecoveryHome "verge.yaml")) -cne $runtimeFixtureVergeText
+        ) "install misreported the runtime-restored/file-recovery-required quadrant"
+
+        $runtimeHealthFailureHome = Join-Path $sandbox "install-runtime-health-failure"
+        & $initializeRuntimeFixture $runtimeHealthFailureHome
+        $runtimeHealthFailureLog = Join-Path $sandbox "install-runtime-health-failure.log"
+        $runtimeHealthFailure = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runtimeHealthFailureHome,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        ) -SimulateRuntimeRefresh -InitialRuntimeText $installRuntimeBeforeText `
+            -RuntimeAfterText "mode: rule`n" `
+            -RuntimeDispatchLogPath $runtimeHealthFailureLog
+        $runtimeHealthFailureJson = Assert-JsonResult $runtimeHealthFailure "install" 1
+        Assert-True (
+            $runtimeHealthFailureJson.status -eq "partial" -and
+            $runtimeHealthFailureJson.code -eq "runtime_activation_recovery_required" -and
+            $runtimeHealthFailureJson.workflow_complete -eq $false -and
+            $runtimeHealthFailureJson.completed_scope -eq "configuration_restored" -and
+            @($runtimeHealthFailureJson.required_followups) -cnotcontains "client_runtime_activation" -and
+            @([System.IO.File]::ReadAllLines($runtimeHealthFailureLog)).Count -eq 1 -and
+            -not (Test-Path -LiteralPath (Join-Path $runtimeHealthFailureHome "profiles/Script.js")) -and
+            [System.IO.File]::ReadAllText((Join-Path $runtimeHealthFailureHome "config.yaml")) -ceq $runtimeFixtureConfigText -and
+            (@($runtimeHealthFailureJson.messages) -join "`n") -match "运行配置"
+        ) "install did not restore files and report an unconfirmed runtime after health failure"
+
+        $runtimeSelectionRaceHome = Join-Path $sandbox "install-runtime-selection-race"
+        & $initializeRuntimeFixture $runtimeSelectionRaceHome
+        $runtimeSelectionRaceLog = Join-Path $sandbox "install-runtime-selection-race.log"
+        $runtimeSelectionRace = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runtimeSelectionRaceHome,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        ) -SimulateRuntimeRefresh -SimulateConcurrentSelectionChange `
+            -InitialRuntimeText $installRuntimeBeforeText `
+            -RuntimeDispatchLogPath $runtimeSelectionRaceLog
+        $runtimeSelectionRaceJson = Assert-JsonResult $runtimeSelectionRace "install" 1
+        Assert-True (
+            $runtimeSelectionRaceJson.code -eq "runtime_activation_required" -and
+            -not (Test-Path -LiteralPath $runtimeSelectionRaceLog) -and
+            [System.IO.File]::ReadAllText($script:safeUpdateControllerSelectionPath).Trim() -ceq "Other" -and
+            (Test-Path -LiteralPath (Join-Path $runtimeSelectionRaceHome "profiles/Script.js") -PathType Leaf)
+        ) "install dispatched after a concurrent proxy selection change"
+        [System.IO.File]::WriteAllText($script:safeUpdateControllerSelectionPath, "Node")
     }
     $noPrecheckSnapshotCase = Join-Path $sandbox "safe-update-snapshot-with-invalid-current-content"
     $noPrecheckSnapshotProfiles = Join-Path $noPrecheckSnapshotCase "profiles"
