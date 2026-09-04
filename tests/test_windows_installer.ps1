@@ -618,13 +618,20 @@ tun:
   strict-route: false
 '@
     $updatedSameIndentTunList = Set-YamlTunMapping $sameIndentTunList
+    $managedDnsHijackEntries = @($updatedSameIndentTunList -split "`r?`n" | Where-Object {
+        $_ -match '^    - '
+    })
     Assert-True (
-        $updatedSameIndentTunList -notmatch 'stale\.example:53' -and
-        $updatedSameIndentTunList -match '(?m)^  auto-route: true$' -and
-        @($updatedSameIndentTunList -split '\r?\n' | Where-Object {
-            $_ -match '^    - (?:any:53|tcp://any:53)$'
-        }).Count -eq 2
-    ) "TUN update retained same-indent dns-hijack entries"
+        $updatedSameIndentTunList -notmatch 'stale\.example:53'
+    ) "TUN update retained stale same-indent dns-hijack entries"
+    Assert-True (
+        $updatedSameIndentTunList -match '(?m)^  auto-route: true$'
+    ) "TUN update removed the following auto-route sibling"
+    Assert-True (
+        $managedDnsHijackEntries.Count -eq 2 -and
+        $managedDnsHijackEntries -ccontains '    - any:53' -and
+        $managedDnsHijackEntries -ccontains '    - tcp://any:53'
+    ) "TUN update did not write exactly the two managed dns-hijack entries"
     New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $sameContentRuntime = Join-Path $sandbox "same-content-runtime.yaml"
     [System.IO.File]::WriteAllText($sameContentRuntime, "runtime")
