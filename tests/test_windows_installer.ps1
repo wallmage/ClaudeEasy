@@ -621,7 +621,7 @@ tun:
     Assert-True (
         $updatedSameIndentTunList -notmatch 'stale\.example:53' -and
         $updatedSameIndentTunList -match '(?m)^  auto-route: true$' -and
-        @($updatedSameIndentTunList -split "`r?`n" | Where-Object {
+        @($updatedSameIndentTunList -split '\r?\n' | Where-Object {
             $_ -match '^    - (?:any:53|tcp://any:53)$'
         }).Count -eq 2
     ) "TUN update retained same-indent dns-hijack entries"
