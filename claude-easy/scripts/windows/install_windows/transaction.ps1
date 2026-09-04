@@ -103,6 +103,9 @@ function Enter-AppHomeMutationLock([string]$AppHome, [switch]$SkipRecovery) {
             $lockStream = New-Object System.IO.FileStream($lockHandle, [System.IO.FileAccess]::ReadWrite)
         } catch [System.ComponentModel.Win32Exception] {
             $lockError = $_.Exception
+            while (-not ($lockError -is [System.ComponentModel.Win32Exception])) {
+                $lockError = $lockError.InnerException
+            }
             if (Test-AppHomeMutationLockContention $lockError) {
                 throw [System.InvalidOperationException]::new(
                     "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。",
