@@ -1722,7 +1722,7 @@ rules:
             @([System.IO.File]::ReadAllLines($runtimeHealthFailureLog)).Count -eq 1 -and
             -not (Test-Path -LiteralPath (Join-Path $runtimeHealthFailureHome "profiles/Script.js")) -and
             [System.IO.File]::ReadAllText((Join-Path $runtimeHealthFailureHome "config.yaml")) -ceq $runtimeFixtureConfigText -and
-            (@($runtimeHealthFailureJson.messages) -join "`n") -match "运行配置"
+            (@($runtimeHealthFailureJson.messages) -join "`n") -match "本地控制器"
         ) "install did not restore files and report an unconfirmed runtime after health failure"
 
         $runtimeSelectionRaceHome = Join-Path $sandbox "install-runtime-selection-race"
