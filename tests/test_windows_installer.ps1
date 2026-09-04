@@ -267,7 +267,7 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
     $script:executedScenarioCount++
     $text = $Invocation.Output.Trim()
     $diagnostic = Get-TestOutputDiagnostic $text
-    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object at caller line $($MyInvocation.ScriptLineNumber): $diagnostic"
+    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic"
     try {
         if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
             $result = $text | ConvertFrom-Json -DateKind String
@@ -373,10 +373,14 @@ function Invoke-TestPowerShell(
         }
         if ($SimulateRuntimeRefresh) {
             $mihomoPathIndex = [Array]::IndexOf($ScriptArguments, "-MihomoPath")
+            $usageProfileIndex = [Array]::IndexOf($ScriptArguments, "-UsageProfile")
             $payload = [pscustomobject]@{
                 ScriptPath = $ScriptPath
                 AppHome = [string]$ScriptArguments[$appHomeIndex + 1]
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
+                UsageProfile = if ($usageProfileIndex -ge 0) {
+                    [string]$ScriptArguments[$usageProfileIndex + 1]
+                } else { "" }
                 Json = $ScriptArguments -contains "-Json"
                 RuntimePath = $runtimePath
                 FirstRuntimeRefreshDelayMilliseconds = $FirstRuntimeRefreshDelayMilliseconds
@@ -384,7 +388,6 @@ function Invoke-TestPowerShell(
                 RuntimeDispatchLogPath = $RuntimeDispatchLogPath
                 RefreshStartedAgeSeconds = $RefreshStartedAgeSeconds
                 RunOriginalCommand = -not ($ScriptArguments -contains "-VerifySafeUpdate")
-                ScriptArguments = @($ScriptArguments)
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
@@ -419,8 +422,13 @@ $arguments = @{
     Json = [bool]$payload.Json
 }
 if ([bool]$payload.RunOriginalCommand) {
-    $originalArguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
-    & ([string]$payload.ScriptPath) @originalArguments
+    $installArguments = @{
+        AppHome = [string]$payload.AppHome
+        UsageProfile = [string]$payload.UsageProfile
+        MihomoPath = [string]$payload.MihomoPath
+        Json = [bool]$payload.Json
+    }
+    & ([string]$payload.ScriptPath) @installArguments
 } else {
     & ([string]$payload.ScriptPath) @arguments
 }
