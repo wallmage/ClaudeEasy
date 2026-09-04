@@ -108,6 +108,72 @@ try {
     exit 6
 }
 
+function Get-InstallRuntimeActivationContext(
+    [string]$RuntimePath,
+    [string]$ExistingVergeText
+) {
+    try {
+        $clientIdentity = Get-ClashVergeProcessIdentity
+        $runtimeContext = Get-ClashControllerContext $RuntimePath
+        $runtimeState = Get-ClashRuntimeState $runtimeContext
+        $shortcut = Get-ClashVergeReactivationShortcut $ExistingVergeText
+        $policyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
+        $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+        $policy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($policyPath)) | ConvertFrom-Json
+        $curl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $confirmedIdentity = Get-ClashVergeProcessIdentity
+        if (-not (Test-ClashVergeProcessIdentity $confirmedIdentity $clientIdentity)) {
+            throw "Clash Verge Rev 客户端在运行状态捕获期间发生变化。"
+        }
+        return [pscustomobject]@{
+            ClientIdentity = $clientIdentity
+            RuntimePath = $RuntimePath
+            RuntimeContext = $runtimeContext
+            Selections = $runtimeState.Selections
+            TunEnabled = [bool]$runtimeState.TunEnabled
+            Shortcut = $shortcut
+            Policy = $policy
+            CurlPath = [string]$curl.Source
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Complete-InstallAfterTransaction(
+    [object]$ActivationContext,
+    [int]$Profile,
+    [object[]]$Changes,
+    [object[]]$WrittenChecks,
+    [string]$SuccessCode,
+    [string]$SuccessSummary
+) {
+    if ($null -ne $ActivationContext) {
+        try {
+            $currentIdentity = Get-ClashVergeProcessIdentity
+            if (-not (Test-ClashVergeProcessIdentity $currentIdentity $ActivationContext.ClientIdentity)) {
+                throw "Clash Verge Rev 客户端已变化。"
+            }
+            Invoke-ClashVergeReactivationShortcut ([string]$ActivationContext.Shortcut)
+            $null = Wait-ClashVergeRuntimeHealthy `
+                ([string]$ActivationContext.RuntimePath) $ActivationContext.RuntimeContext `
+                $ActivationContext.Selections ([bool]$ActivationContext.TunEnabled) `
+                $Profile ([string]$ActivationContext.CurlPath) $ActivationContext.Policy
+            Write-Info "已触发一次客户端重新加载，并完成运行配置与原选择验收。"
+            Complete-InstallResult 0 "ok" $SuccessCode $SuccessSummary `
+                $Changes @($WrittenChecks + "runtime_health")
+        } catch {
+            Write-Info "配置文件已写入并回读确认，但客户端运行配置尚未完成加载验收。"
+        }
+    } else {
+        Write-Info "配置文件已写入并回读确认，但当前没有完整的安全运行加载条件。"
+    }
+    Complete-InstallResult 1 "partial" "runtime_activation_required" `
+        "Windows ClaudeEasy 配置已写入；仍需在客户端加载并验收运行配置。" `
+        $Changes $WrittenChecks @() @() $false "configuration_written" `
+        @("client_runtime_activation", "runtime_verification")
+}
+
 if ($unboundArguments.Count -gt 0) {
     Complete-InstallResult 64 "invalid_request" "invalid_arguments" "参数错误；未执行任何修改。"
 }
@@ -1296,10 +1362,16 @@ try {
             Backup-InitialOnce $target.Path $backupRoot | Out-Null
             Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
         }
+        $activationContext = Get-InstallRuntimeActivationContext $runtimeConfigPath $vergeInput
         Invoke-VerifiedFileTransaction $lightTargets
         if ($profileSource -ne "saved") { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
         Write-Info "已为全部订阅安装共享国内域名直连规则、自动重新加载入口，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
-        Complete-InstallResult 0 "ok" "installed_common_baseline" "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。" @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update")
+        Complete-InstallAfterTransaction `
+            $activationContext $resolvedUsageProfile `
+            @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update") `
+            @("file_transaction") `
+            "installed_common_baseline" `
+            "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。"
     }
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_tun_mode" "true"
     $configInput = if ($configExisted) { $strictUtf8.GetString($configOriginalBytes) } else { "" }
@@ -1334,16 +1406,20 @@ try {
         Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
     }
 
+    $activationContext = Get-InstallRuntimeActivationContext $runtimeConfigPath $vergeInput
     Invoke-VerifiedFileTransaction $targets
 
     if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
     Write-Info "已安装全局扩展脚本，之后每次加载或刷新订阅都会自动应用补丁。"
     Write-Info "已自动关闭全部远程订阅的自动更新，并回读确认 profiles.yaml。"
-    Write-Info "已写入 TUN 与 DNS 设置；代理仍需通过客户端加载并验收实际运行配置。"
+    Write-Info "已写入 TUN 与 DNS 设置。"
     Write-Info "安装程序从未退出、停止或重启 Clash Verge Rev。"
     Write-Info "已有 AI 分组只补全规则；没有时创建包含全部可用节点和代理提供者的独立选择器。安装程序不会替你选择节点。"
-    Complete-InstallResult 0 "ok" "installed" "Windows ClaudeEasy 已安装。" @("global_script", "subscription_reactivation", "auto_update", "tun", "dns", "ipv6")
-    exit 0
+    Complete-InstallAfterTransaction `
+        $activationContext $resolvedUsageProfile `
+        @("global_script", "subscription_reactivation", "auto_update", "tun", "dns", "ipv6") `
+        @("mihomo_candidate", "file_transaction") `
+        "installed" "Windows ClaudeEasy 已安装。"
 } catch {
     Complete-InstallResult 1 $(if ($_.Exception.Message -match "已恢复") { "rolled_back" } else { "failed" }) "install_failed" ("安装失败：" + $_.Exception.Message)
 }

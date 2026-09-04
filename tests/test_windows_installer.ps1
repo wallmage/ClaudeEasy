@@ -324,7 +324,8 @@ function Invoke-TestPowerShell(
     $previousImmediateCurl = $null
     $usesSafeUpdateRuntime = $onWindows -and $script:safeUpdateControllerPort -gt 0 -and
         (Split-Path -Leaf $ScriptPath) -eq "install_windows.ps1" -and
-        ($ScriptArguments -contains "-SnapshotProfiles" -or
+        ($SimulateRuntimeRefresh -or
+            $ScriptArguments -contains "-SnapshotProfiles" -or
             $ScriptArguments -contains "-BeginSafeUpdateRefresh" -or
             $ScriptArguments -contains "-VerifySafeUpdate")
     if ($usesSafeUpdateRuntime) {
@@ -382,6 +383,8 @@ function Invoke-TestPowerShell(
                 FailRestoreRuntimeDispatch = [bool]$FailRestoreRuntimeDispatch
                 RuntimeDispatchLogPath = $RuntimeDispatchLogPath
                 RefreshStartedAgeSeconds = $RefreshStartedAgeSeconds
+                RunOriginalCommand = -not ($ScriptArguments -contains "-VerifySafeUpdate")
+                ScriptArguments = @($ScriptArguments)
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
                 [System.Text.Encoding]::UTF8.GetBytes($payload)
@@ -415,7 +418,12 @@ $arguments = @{
     RefreshConfirmed = $true
     Json = [bool]$payload.Json
 }
-& ([string]$payload.ScriptPath) @arguments
+if ([bool]$payload.RunOriginalCommand) {
+    $originalArguments = @($payload.ScriptArguments | ForEach-Object { [string]$_ })
+    & ([string]$payload.ScriptPath) @originalArguments
+} else {
+    & ([string]$payload.ScriptPath) @arguments
+}
 exit $LASTEXITCODE
 '@
             $bootstrap = $bootstrap.Replace('__PAYLOAD__', $payloadBase64)
@@ -799,8 +807,10 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                         "-MihomoPath", $realMihomoPath,
                         "-Json"
                     )
-                    $realInstallJson = Assert-JsonResult $realInstall "install" 0
-                    Assert-True $realInstallJson.ok "real Mihomo public install did not succeed"
+                    $realInstallJson = Assert-JsonResult $realInstall "install" 1
+                    Assert-True (
+                        $realInstallJson.code -eq "runtime_activation_required"
+                    ) "real Mihomo install without a client runtime reported complete"
                     $realValidation = Invoke-Mihomo $realMihomoPath @(
                         "-d", $realCase,
                         "-t",
@@ -902,6 +912,9 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
         Assert-True (
             $activationRequiredJson.status -eq "partial" -and
             $activationRequiredJson.code -eq "runtime_activation_required" -and
+            $activationRequiredJson.workflow_complete -eq $false -and
+            $activationRequiredJson.completed_scope -eq "configuration_written" -and
+            @($activationRequiredJson.required_followups).Count -gt 0 -and
             (Test-Path -LiteralPath (Join-Path $activationRequiredHome "profiles/Script.js") -PathType Leaf)
         ) "install reported complete before runtime activation was verified"
 
@@ -924,7 +937,10 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
                 $liveInstall = Invoke-TestPowerShell $installer @(
                     "-AppHome", $liveHome, "-UsageProfile", $liveProfile.ToString(), "-MihomoPath", $fakeCore, "-Json"
                 )
-                Assert-JsonResult $liveInstall "install" 0 | Out-Null
+                $liveInstallJson = Assert-JsonResult $liveInstall "install" 1
+                Assert-True (
+                    $liveInstallJson.code -eq "runtime_activation_required"
+                ) "live install without a controller reported complete"
                 $liveUsage = Get-Content -LiteralPath (Join-Path $liveHome "claude-easy-usage-profile.json") -Raw | ConvertFrom-Json
                 Assert-True ([int]$liveUsage.Profile -eq $liveProfile) "live install did not save the requested profile"
                 Assert-True (Test-Path -LiteralPath (Join-Path $liveHome "profiles/Script.js")) "live install omitted the global script"
@@ -1297,7 +1313,7 @@ rules:
     $safeUpdateInstall = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase, "-UsageProfile", "1", "-MihomoPath", $fakeCore
     )
-    Assert-True ($safeUpdateInstall.ExitCode -eq 0) "safe update fixture install failed; $(Get-TestOutputDiagnostic $safeUpdateInstall.Output)"
+    Assert-True ($safeUpdateInstall.ExitCode -eq 1) "safe update fixture install did not report its pending runtime activation; $(Get-TestOutputDiagnostic $safeUpdateInstall.Output)"
     $timeoutSafeUpdateCase = Join-Path $sandbox "safe-update-timeout-case"
     Copy-Item -LiteralPath $safeUpdateCase -Destination $timeoutSafeUpdateCase -Recurse
     $timeoutSafeUpdateProfiles = Join-Path $timeoutSafeUpdateCase "profiles"
@@ -1491,6 +1507,34 @@ rules:
         Assert-True (Test-Path -LiteralPath $safeUpdateControllerReady) "safe-update controller did not start"
         $script:safeUpdateClientPath = Join-Path $sandbox "clash-verge.exe"
         Copy-Item -LiteralPath (Join-Path (Join-Path $env:SystemRoot "System32") "ping.exe") -Destination $script:safeUpdateClientPath
+
+        $runtimeInstallHome = Join-Path $sandbox "install-runtime-activation-success"
+        New-Item -ItemType Directory -Path (Join-Path $runtimeInstallHome "profiles") -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runtimeInstallHome "config.yaml"),
+            "mode: rule`nipv6: true`ntun: null`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runtimeInstallHome "verge.yaml"),
+            "enable_global_hotkey: true`nhotkeys:`n  - reactivate_profiles,CTRL+ALT+SHIFT+F24`nenable_tun_mode: false`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runtimeInstallHome "profiles.yaml"),
+            "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
+        )
+        $runtimeInstallDispatchLog = Join-Path $sandbox "install-runtime-activation-success.log"
+        $runtimeInstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runtimeInstallHome,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        ) -SimulateRuntimeRefresh -RuntimeDispatchLogPath $runtimeInstallDispatchLog
+        $runtimeInstallJson = Assert-JsonResult $runtimeInstall "install" 0
+        Assert-True (
+            $runtimeInstallJson.code -eq "installed_common_baseline" -and
+            @([System.IO.File]::ReadAllLines($runtimeInstallDispatchLog)).Count -eq 1 -and
+            [System.IO.File]::ReadAllLines($runtimeInstallDispatchLog)[0] -ceq "1"
+        ) "install did not activate and verify the captured client runtime exactly once"
     }
     $noPrecheckSnapshotCase = Join-Path $sandbox "safe-update-snapshot-with-invalid-current-content"
     $noPrecheckSnapshotProfiles = Join-Path $noPrecheckSnapshotCase "profiles"
@@ -2154,7 +2198,10 @@ rules:
                 "-MihomoPath", $fakeCore,
                 "-Json"
             )
-            Assert-JsonResult $rollbackCrashInstall "install" 0 | Out-Null
+            $rollbackCrashInstallJson = Assert-JsonResult $rollbackCrashInstall "install" 1
+            Assert-True (
+                $rollbackCrashInstallJson.code -eq "runtime_activation_required"
+            ) "rollback crash fixture install without a runtime reported complete"
             $rollbackCrashSnapshot = Invoke-TestPowerShell $rollbackCrashInstaller @(
                 "-AppHome", $rollbackCrashHome,
                 "-SnapshotProfiles",
@@ -2373,7 +2420,7 @@ rules:
             "-UsageProfile", "1",
             "-MihomoPath", $fakeCore
         )
-        Assert-True ($schemaInstall.ExitCode -eq 0) "safe-update schema fixture install failed"
+        Assert-True ($schemaInstall.ExitCode -eq 1) "safe-update schema fixture install did not defer runtime activation"
         $schemaSnapshot = Invoke-TestPowerShell $installer @(
             "-AppHome", $schemaSafeUpdateCase,
             "-SnapshotProfiles",
@@ -2424,8 +2471,8 @@ rules:
             "-MihomoPath", $fakeCore
         )
         Assert-True (
-            $utf8Install.ExitCode -eq 0
-        ) "invalid UTF-8 fixture install failed; $(Get-TestOutputDiagnostic $utf8Install.Output)"
+            $utf8Install.ExitCode -eq 1
+        ) "invalid UTF-8 fixture install did not defer runtime activation; $(Get-TestOutputDiagnostic $utf8Install.Output)"
         $utf8Snapshot = Invoke-TestPowerShell $installer @(
             "-AppHome", $utf8SafeUpdateCase,
             "-SnapshotProfiles",
@@ -3099,7 +3146,10 @@ try {
             "-MihomoPath", $fakeCore,
             "-Json"
         )
-        Assert-JsonResult $publicUninstallSetup "install" 0 | Out-Null
+        $publicUninstallSetupJson = Assert-JsonResult $publicUninstallSetup "install" 1
+        Assert-True (
+            $publicUninstallSetupJson.code -eq "runtime_activation_required"
+        ) "public uninstall setup without a runtime reported complete"
         $publicUninstallTargets = @(
             "config.yaml",
             "verge.yaml",
@@ -3520,9 +3570,9 @@ try {
                 "-MihomoPath", $fakeCore,
                 "-Json"
             )
-            $publicPreJournalRecoveryJson = Assert-JsonResult $publicPreJournalRecovery "install" 0
+            $publicPreJournalRecoveryJson = Assert-JsonResult $publicPreJournalRecovery "install" 1
             Assert-True (
-                $publicPreJournalRecoveryJson.code -eq "installed"
+                $publicPreJournalRecoveryJson.code -eq "runtime_activation_required"
             ) "next public install did not recover the pre-journal new target"
             $publicPreJournalUsageJson = Get-Content -LiteralPath $publicPreJournalUsage -Raw | ConvertFrom-Json
             Assert-True ([int]$publicPreJournalUsageJson.Profile -eq 3) "recovered install did not replace the empty usage state"
@@ -3736,9 +3786,9 @@ try {
                 "-MihomoPath", $fakeCore,
                 "-Json"
             )
-            $publicHandoffRecoveryJson = Assert-JsonResult $publicHandoffRecovery "install" 0
+            $publicHandoffRecoveryJson = Assert-JsonResult $publicHandoffRecovery "install" 1
             Assert-True (
-                $publicHandoffRecoveryJson.code -eq "installed_common_baseline"
+                $publicHandoffRecoveryJson.code -eq "runtime_activation_required"
             ) "next public install did not recover the journal handoff"
             $publicHandoffUsageJson = Get-Content -LiteralPath $publicHandoffUsage -Raw | ConvertFrom-Json
             Assert-True ([int]$publicHandoffUsageJson.Profile -eq 1) "handoff recovery did not publish a valid usage state"

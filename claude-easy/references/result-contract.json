@@ -78,6 +78,11 @@
       "workflow_complete": false,
       "completed_scope": "subscription_update",
       "required_followups": "non_empty_array"
+    },
+    "runtime_activation_required": {
+      "workflow_complete": false,
+      "completed_scope": "configuration_written",
+      "required_followups": "non_empty_array"
     }
   },
   "required_workflow_metadata_by_operation_and_code": {
