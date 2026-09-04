@@ -76,6 +76,10 @@ function Get-AppHomeRelativePath([string]$Path) {
     )
 }
 
+function Test-AppHomeMutationLockContention([System.ComponentModel.Win32Exception]$Error) {
+    return $Error.NativeErrorCode -in @(32, 33)
+}
+
 function Enter-AppHomeMutationLock([string]$AppHome, [switch]$SkipRecovery) {
     $canonical = ConvertTo-NormalizedWindowsPath $AppHome
     Assert-NoReparsePointPath $canonical "Clash Verge Rev 配置目录"
@@ -98,7 +102,23 @@ function Enter-AppHomeMutationLock([string]$AppHome, [switch]$SkipRecovery) {
             }
             $lockStream = New-Object System.IO.FileStream($lockHandle, [System.IO.FileAccess]::ReadWrite)
         } catch [System.ComponentModel.Win32Exception] {
-            throw "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。"
+            $lockError = $_.Exception
+            if (Test-AppHomeMutationLockContention $lockError) {
+                throw [System.InvalidOperationException]::new(
+                    "同一配置目录已有 ClaudeEasy 操作正在进行，请稍后重试。",
+                    $lockError
+                )
+            }
+            if ($lockError.NativeErrorCode -eq 5) {
+                throw [System.UnauthorizedAccessException]::new(
+                    "无法取得配置目录操作锁：访问被拒绝或权限不足。",
+                    $lockError
+                )
+            }
+            throw [System.InvalidOperationException]::new(
+                "无法取得配置目录操作锁（Win32 错误 $($lockError.NativeErrorCode)）。",
+                $lockError
+            )
         }
 
         $script:ClaudeEasyMutationRoot = $canonical

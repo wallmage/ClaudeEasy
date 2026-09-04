@@ -601,7 +601,7 @@ function Invoke-ParallelRouteProbes(
         $label = [string]$probe.Label
         Start-Job -ScriptBlock {
             param($PowerShellPath, $VerifierPath, $Label, $ControllerUrl, $Secret, $ObservationSeconds)
-            $output = ($Secret + "`n") | & $PowerShellPath -NoLogo -NoProfile -File $VerifierPath `
+            $output = ($Secret + "`n") | & $PowerShellPath -NoLogo -NoProfile -ExecutionPolicy Bypass -File $VerifierPath `
                 -ProbeTarget $Label -ObservationSeconds ([string]$ObservationSeconds) -Json `
                 -ControllerUrl $ControllerUrl -SecretStdin 2>&1
             [pscustomobject]@{ Label = $Label; Output = (@($output) -join "`n") }
