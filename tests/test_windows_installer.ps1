@@ -610,6 +610,7 @@ try {
 tun:
   enable: false
   dns-hijack:
+  # legacy list entry follows
   - stale.example:53
   - tcp://stale.example:53
   auto-route: false

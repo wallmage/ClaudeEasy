@@ -148,7 +148,6 @@ function Find-YamlMappingNode(
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $lineIndent = Get-YamlIndent $line
         if ($line.TrimStart().StartsWith("#")) {
-            if ($lineIndent -le $Indent) { $finish = $i; break }
             continue
         }
         if ($lineIndent -lt $Indent -or
