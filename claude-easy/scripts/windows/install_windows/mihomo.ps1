@@ -160,18 +160,23 @@ function Find-MihomoCore([string]$RequestedPath) {
 
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
-        $runningCandidates = @(
-            Get-Process -Name "verge-mihomo" -ErrorAction SilentlyContinue |
-            Where-Object { $_.SessionId -eq $currentSessionId } |
-            ForEach-Object {
+        $runningCandidates = @()
+        foreach ($process in @(Get-Process -Name "verge-mihomo" -ErrorAction SilentlyContinue)) {
+            try {
+                if ($process.SessionId -ne $currentSessionId) { continue }
+                $path = $process.Path
+                if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    throw "Mihomo path unavailable"
+                }
+                $runningCandidates += (Resolve-Path -LiteralPath $path).Path
+            } catch {
                 try {
-                    if (-not [string]::IsNullOrWhiteSpace($_.Path) -and (Test-Path -LiteralPath $_.Path -PathType Leaf)) {
-                        (Resolve-Path -LiteralPath $_.Path).Path
-                    }
+                    if ($process.HasExited) { continue }
                 } catch {}
-            } |
-            Sort-Object -Unique
-        )
+                throw "无法确认运行中 Mihomo 内核的会话或可执行文件路径。"
+            }
+        }
+        $runningCandidates = @($runningCandidates | Sort-Object -Unique)
         if ($runningCandidates.Count -gt 1) { throw "当前会话有多个不同的运行中 Mihomo 内核，无法唯一确认。" }
         if ($runningCandidates.Count -eq 1) { return $runningCandidates[0] }
     }
