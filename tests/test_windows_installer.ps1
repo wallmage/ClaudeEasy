@@ -1622,11 +1622,11 @@ rules:
         $runtimeFixtureVergeText = "enable_global_hotkey: true`nhotkeys:`n  - reactivate_profiles,CTRL+ALT+SHIFT+F24`nenable_tun_mode: false`n"
         $runtimeFixtureProfilesText = "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
         $initializeRuntimeFixture = {
-            param([string]$Home)
-            New-Item -ItemType Directory -Path (Join-Path $Home "profiles") -Force | Out-Null
-            [System.IO.File]::WriteAllText((Join-Path $Home "config.yaml"), $runtimeFixtureConfigText)
-            [System.IO.File]::WriteAllText((Join-Path $Home "verge.yaml"), $runtimeFixtureVergeText)
-            [System.IO.File]::WriteAllText((Join-Path $Home "profiles.yaml"), $runtimeFixtureProfilesText)
+            param([string]$FixtureHome)
+            New-Item -ItemType Directory -Path (Join-Path $FixtureHome "profiles") -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $FixtureHome "config.yaml"), $runtimeFixtureConfigText)
+            [System.IO.File]::WriteAllText((Join-Path $FixtureHome "verge.yaml"), $runtimeFixtureVergeText)
+            [System.IO.File]::WriteAllText((Join-Path $FixtureHome "profiles.yaml"), $runtimeFixtureProfilesText)
         }
         $installRuntimeBeforeText = @"
 external-controller: 127.0.0.1:$($script:safeUpdateControllerPort)
