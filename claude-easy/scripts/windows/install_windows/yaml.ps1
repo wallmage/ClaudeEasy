@@ -158,6 +158,7 @@ function Find-YamlMappingNode(
             $pendingSiblingComment = -1
             continue
         }
+        if ($lineIndent -gt $Indent) { $pendingSiblingComment = -1 }
         if ($lineIndent -lt $Indent -or
             $lineIndent -eq $Indent) {
             $finish = if ($pendingSiblingComment -ge 0) {
