@@ -606,6 +606,24 @@ try {
     Assert-True (
         $runtimeSource.Contains('Test-ClashRuntimeConnectivity $Context $state $CurlPath $ExpectedTunEnabled')
     ) "safe update runtime validation did not preserve the pre-update TUN state"
+    $sameIndentTunList = @'
+tun:
+  enable: false
+  dns-hijack:
+  - stale.example:53
+  - tcp://stale.example:53
+  auto-route: false
+  auto-detect-interface: false
+  strict-route: false
+'@
+    $updatedSameIndentTunList = Set-YamlTunMapping $sameIndentTunList
+    Assert-True (
+        $updatedSameIndentTunList -notmatch 'stale\.example:53' -and
+        $updatedSameIndentTunList -match '(?m)^  auto-route: true$' -and
+        @($updatedSameIndentTunList -split "`r?`n" | Where-Object {
+            $_ -match '^    - (?:any:53|tcp://any:53)$'
+        }).Count -eq 2
+    ) "TUN update retained same-indent dns-hijack entries"
     New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $sameContentRuntime = Join-Path $sandbox "same-content-runtime.yaml"
     [System.IO.File]::WriteAllText($sameContentRuntime, "runtime")
@@ -835,6 +853,53 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
 
     }
     if ((Test-GroupSelected 'core') -and $onWindows) {
+        $customCoreDirectory = Join-Path $sandbox "D-clash-verge"
+        $customCorePath = Join-Path $customCoreDirectory "verge-mihomo.exe"
+        New-Item -ItemType Directory -Path $customCoreDirectory -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $customCorePath
+        $customCoreProcess = Start-Process -FilePath $customCorePath -ArgumentList @("-n", "20", "127.0.0.1") -PassThru
+        try {
+            Start-Sleep -Milliseconds 100
+            Assert-True (
+                (Find-MihomoCore "") -ceq $customCorePath
+            ) "running custom-directory verge-mihomo.exe was not discovered"
+        } finally {
+            if (-not $customCoreProcess.HasExited) { Stop-Process -Id $customCoreProcess.Id -Force }
+            $customCoreProcess.WaitForExit()
+        }
+
+        $accessDeniedWasMisclassified = $false
+        try {
+            Enter-AppHomeMutationLock (Join-Path $env:SystemDrive "System Volume Information") | Out-Null
+        } catch {
+            $accessDeniedWasMisclassified = $_.Exception.Message.Contains(
+                "同一配置目录已有 ClaudeEasy 操作正在进行"
+            )
+        }
+        Assert-True (-not $accessDeniedWasMisclassified) "access denied while opening the operation lock was reported as another operation"
+
+        $activationRequiredHome = Join-Path $sandbox "install-runtime-activation-required"
+        New-Item -ItemType Directory -Path (Join-Path $activationRequiredHome "profiles") -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $activationRequiredHome "config.yaml"),
+            "mode: rule`nipv6: true`ntun: null`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $activationRequiredHome "verge.yaml"),
+            "enable_tun_mode: false`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $activationRequiredHome "profiles.yaml"),
+            "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
+        )
+        $activationRequiredInstall = Invoke-Installer $activationRequiredHome
+        $activationRequiredJson = Assert-JsonResult $activationRequiredInstall "install" 1
+        Assert-True (
+            $activationRequiredJson.status -eq "partial" -and
+            $activationRequiredJson.code -eq "runtime_activation_required" -and
+            (Test-Path -LiteralPath (Join-Path $activationRequiredHome "profiles/Script.js") -PathType Leaf)
+        ) "install reported complete before runtime activation was verified"
+
         $liveClientPath = Join-Path $sandbox "clash-verge.exe"
         Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32/ping.exe") -Destination $liveClientPath
         $liveClient = Start-Process -FilePath $liveClientPath -ArgumentList @("-n", "180", "127.0.0.1") -PassThru

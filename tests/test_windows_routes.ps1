@@ -83,6 +83,66 @@ Assert-True (-not (
     Test-RouteChains $proxies @("DIRECT", "AI") "AI" "AI Node" "AI" $false
 )) "direct route chain was accepted"
 
+$siblingSequenceRuntime = @'
+dns:
+  direct-nameserver:
+  - 1.1.1.1
+  - 8.8.8.8
+  nameserver:
+  - 9.9.9.9
+'@
+Assert-True (
+    (@(Get-ClashRuntimeYamlSequence $siblingSequenceRuntime @("dns", "direct-nameserver")) -join ",") -ceq
+        "1.1.1.1,8.8.8.8"
+) "runtime parser did not retain same-indent direct-nameserver entries"
+
+$ipv6AiPolicy = [pscustomobject]@{
+    ai_rules = @("IP-CIDR6,2606:4700::/32,{AI}")
+}
+$ipv6AiRules = @([pscustomobject]@{
+    type = "IPCIDR"
+    payload = "2606:4700::/32"
+    proxy = "AI"
+})
+Assert-True (
+    (Get-ClashRuntimeAiGroupName $ipv6AiRules $ipv6AiPolicy) -ceq "AI"
+) "IPv6 IPCIDR runtime rule was rejected for an IPCIDR6 policy rule"
+$ipv4TypeMismatchRejected = $false
+try {
+    Get-ClashRuntimeAiGroupName @([pscustomobject]@{
+        type = "IPCIDR"
+        payload = "198.51.100.0/24"
+        proxy = "AI"
+    }) ([pscustomobject]@{ ai_rules = @("IP-CIDR6,198.51.100.0/24,{AI}") }) | Out-Null
+} catch {
+    $ipv4TypeMismatchRejected = $true
+}
+Assert-True $ipv4TypeMismatchRejected "IPv4 IPCIDR rule was accepted as IPCIDR6"
+
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    $probeCommand = Join-Path ([System.IO.Path]::GetTempPath()) (
+        "claude-easy-route-policy-" + [Guid]::NewGuid().ToString("N") + ".cmd"
+    )
+    [System.IO.File]::WriteAllText($probeCommand, @'
+@echo off
+echo %* | findstr /C:"-ExecutionPolicy Bypass" >nul
+if errorlevel 1 exit /b 1
+echo {"checks":[{"ok":true,"status":"ok"}]}
+'@, [System.Text.Encoding]::ASCII)
+    function global:Join-Path {
+        param([string]$Path, [string]$ChildPath)
+        if ($Path -ceq $PSHOME -and $ChildPath -eq "powershell.exe") { return $probeCommand }
+        return Microsoft.PowerShell.Management\Join-Path @PSBoundParameters
+    }
+    try {
+        $policyProbe = @(Invoke-ParallelRouteProbes @([pscustomobject]@{ Label = "ChatGPT" }) "http://127.0.0.1:9097" "" 1)
+        Assert-True ($policyProbe.Count -eq 1 -and [bool]$policyProbe[0].Passed) "parallel route probe did not pass ExecutionPolicy Bypass to its child PowerShell"
+    } finally {
+        Remove-Item -LiteralPath Function:\global:Join-Path -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $probeCommand -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $invalidOutput = & $PowerShellPath -NoLogo -NoProfile -File $routeVerifier `
     -ObservationSeconds 0 -Json 2>&1
 Assert-True ($LASTEXITCODE -eq 64) "invalid observation window returned the wrong exit code"
