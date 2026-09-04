@@ -716,6 +716,28 @@ tun:
         $updatedEofAdjacentTunComment -notmatch 'stale\.example:53' -and
         $updatedEofAdjacentTunComment -match '(?m)^  # keep user note at EOF\r?$'
     ) "TUN update removed a user comment adjacent to EOF"
+    $outdentedInternalTunComment = @'
+tun:
+  enable: false
+# keep internal TUN note
+  stack: gvisor
+  dns-hijack:
+    - stale.example:53
+  auto-route: false
+  auto-detect-interface: false
+  strict-route: false
+ipv6: true
+'@
+    $updatedOutdentedInternalTunComment = Set-YamlTunMapping $outdentedInternalTunComment
+    $managedStackLines = @($updatedOutdentedInternalTunComment -split "`r?`n" | Where-Object {
+        $_ -match '^  stack:'
+    })
+    Assert-True (
+        $managedStackLines.Count -eq 1 -and
+        $managedStackLines[0] -eq '  stack: system' -and
+        $updatedOutdentedInternalTunComment -notmatch 'stale\.example:53' -and
+        $updatedOutdentedInternalTunComment -match '(?m)^# keep internal TUN note\r?$'
+    ) "TUN update ended the mapping at an outdented internal comment"
     New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
     $sameContentRuntime = Join-Path $sandbox "same-content-runtime.yaml"
     [System.IO.File]::WriteAllText($sameContentRuntime, "runtime")
