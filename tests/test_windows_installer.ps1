@@ -313,6 +313,7 @@ function Invoke-TestPowerShell(
     [string]$ScriptPath,
     [string[]]$ScriptArguments,
     [switch]$SimulateRuntimeRefresh,
+    [switch]$SimulateUnrelatedRuntimeRefresh,
     [int]$FirstRuntimeRefreshDelayMilliseconds = 200,
     [switch]$FailRestoreRuntimeDispatch,
     [string]$RuntimeDispatchLogPath = "",
@@ -384,6 +385,7 @@ function Invoke-TestPowerShell(
                 Json = $ScriptArguments -contains "-Json"
                 RuntimePath = $runtimePath
                 FirstRuntimeRefreshDelayMilliseconds = $FirstRuntimeRefreshDelayMilliseconds
+                SimulateUnrelatedRuntimeRefresh = [bool]$SimulateUnrelatedRuntimeRefresh
                 FailRestoreRuntimeDispatch = [bool]$FailRestoreRuntimeDispatch
                 RuntimeDispatchLogPath = $RuntimeDispatchLogPath
                 RefreshStartedAgeSeconds = $RefreshStartedAgeSeconds
@@ -394,12 +396,14 @@ function Invoke-TestPowerShell(
             )
             $bootstrap = @'
 $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
-Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static string AppHome; public static string DispatchLogPath; public static int FirstDelayMilliseconds; public static bool FailRestoreDispatch; private static int SendCount; private static bool IsRestoreKindManifest() { if (string.IsNullOrEmpty(AppHome)) { return false; } string manifestPath = System.IO.Path.Combine(AppHome, "claude-easy-safe-update.json"); if (!System.IO.File.Exists(manifestPath)) { return false; } return System.Text.RegularExpressions.Regex.IsMatch(System.IO.File.ReadAllText(manifestPath), "\\\"Kind\\\"\\s*:\\s*\\\"safe_update_runtime_recovery\\\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant); } public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } int count = System.Threading.Interlocked.Increment(ref SendCount); if (!string.IsNullOrEmpty(DispatchLogPath)) { System.IO.File.AppendAllText(DispatchLogPath, count.ToString() + "\n"); } bool isRestore = IsRestoreKindManifest(); if (FailRestoreDispatch && (count >= 2 || isRestore)) { return false; } string path = RuntimePath; int delay = isRestore ? 200 : FirstDelayMilliseconds; var delayThread = new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(delay); System.IO.File.AppendAllText(path, "\n# simulated refresh\n"); }); delayThread.IsBackground = true; delayThread.Start(); return true; } } }' -ErrorAction Stop | Out-Null
+Add-Type -TypeDefinition 'namespace ClaudeEasy { public static class SendInputNative { public static string RuntimePath; public static string AppHome; public static string DispatchLogPath; public static int FirstDelayMilliseconds; public static bool FailRestoreDispatch; public static bool SimulateUnrelatedRefresh; private static int SendCount; private static bool IsRestoreKindManifest() { if (string.IsNullOrEmpty(AppHome)) { return false; } string manifestPath = System.IO.Path.Combine(AppHome, "claude-easy-safe-update.json"); if (!System.IO.File.Exists(manifestPath)) { return false; } return System.Text.RegularExpressions.Regex.IsMatch(System.IO.File.ReadAllText(manifestPath), "\\\"Kind\\\"\\s*:\\s*\\\"safe_update_runtime_recovery\\\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant); } public static void StartUnrelatedRefreshWatcher() { if (!SimulateUnrelatedRefresh) { return; } var thread = new System.Threading.Thread(delegate() { string scriptPath = System.IO.Path.Combine(AppHome, "profiles", "Script.js"); while (!System.IO.File.Exists(scriptPath)) { System.Threading.Thread.Sleep(5); } System.IO.File.AppendAllText(RuntimePath, "\n# unrelated refresh\n"); }); thread.IsBackground = true; thread.Start(); } public static bool Send(System.UInt16[] keys) { if (keys == null || keys.Length != 4 || keys[0] != 0x11 || keys[1] != 0x12 || keys[2] != 0x10 || keys[3] != 0x87) { return false; } int count = System.Threading.Interlocked.Increment(ref SendCount); if (!string.IsNullOrEmpty(DispatchLogPath)) { System.IO.File.AppendAllText(DispatchLogPath, count.ToString() + "\n"); } bool isRestore = IsRestoreKindManifest(); if (FailRestoreDispatch && (count >= 2 || isRestore)) { return false; } string path = RuntimePath; int delay = isRestore ? 200 : FirstDelayMilliseconds; var delayThread = new System.Threading.Thread(delegate() { System.Threading.Thread.Sleep(delay); System.IO.File.AppendAllText(path, "\n# simulated refresh\n"); }); delayThread.IsBackground = true; delayThread.Start(); return true; } } }' -ErrorAction Stop | Out-Null
 [ClaudeEasy.SendInputNative]::RuntimePath = [string]$payload.RuntimePath
 [ClaudeEasy.SendInputNative]::AppHome = [string]$payload.AppHome
 [ClaudeEasy.SendInputNative]::DispatchLogPath = [string]$payload.RuntimeDispatchLogPath
 [ClaudeEasy.SendInputNative]::FirstDelayMilliseconds = [int]$payload.FirstRuntimeRefreshDelayMilliseconds
 [ClaudeEasy.SendInputNative]::FailRestoreDispatch = [bool]$payload.FailRestoreRuntimeDispatch
+[ClaudeEasy.SendInputNative]::SimulateUnrelatedRefresh = [bool]$payload.SimulateUnrelatedRuntimeRefresh
+[ClaudeEasy.SendInputNative]::StartUnrelatedRefreshWatcher()
 if ($payload.RefreshStartedAgeSeconds -gt 0) {
     $manifestPath = Join-Path ([string]$payload.AppHome) "claude-easy-safe-update.json"
     $manifestText = [System.IO.File]::ReadAllText($manifestPath)
@@ -879,6 +883,20 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
 
     }
     if ((Test-GroupSelected 'core') -and $onWindows) {
+        $invalidActivationMetadataRejected = $false
+        try {
+            New-ClaudeEasyResult `
+                -Command "install" -Operation "install" -Ok $false `
+                -Status "partial" -Code "runtime_activation_required" -ExitCode 1 `
+                -SummaryZh "test" -WorkflowComplete $false `
+                -CompletedScope "subscription_update" `
+                -RequiredFollowups @("runtime_verification") | Out-Null
+        } catch {
+            $invalidActivationMetadataRejected = $true
+        }
+        Assert-True $invalidActivationMetadataRejected `
+            "result contract accepted malformed runtime activation workflow metadata"
+
         $customCoreDirectory = Join-Path $sandbox "D-clash-verge"
         $customCorePath = Join-Path $customCoreDirectory "verge-mihomo.exe"
         New-Item -ItemType Directory -Path $customCoreDirectory -Force | Out-Null
@@ -1543,6 +1561,35 @@ rules:
             @([System.IO.File]::ReadAllLines($runtimeInstallDispatchLog)).Count -eq 1 -and
             [System.IO.File]::ReadAllLines($runtimeInstallDispatchLog)[0] -ceq "1"
         ) "install did not activate and verify the captured client runtime exactly once"
+
+        $runtimeRaceHome = Join-Path $sandbox "install-runtime-attribution-race"
+        New-Item -ItemType Directory -Path (Join-Path $runtimeRaceHome "profiles") -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runtimeRaceHome "config.yaml"),
+            "mode: rule`nipv6: true`ntun: null`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runtimeRaceHome "verge.yaml"),
+            "enable_global_hotkey: true`nhotkeys:`n  - reactivate_profiles,CTRL+ALT+SHIFT+F24`nenable_tun_mode: false`n"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $runtimeRaceHome "profiles.yaml"),
+            "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
+        )
+        $runtimeRaceDispatchLog = Join-Path $sandbox "install-runtime-attribution-race.log"
+        $runtimeRace = Invoke-TestPowerShell $installer @(
+            "-AppHome", $runtimeRaceHome,
+            "-UsageProfile", "1",
+            "-MihomoPath", $fakeCore,
+            "-Json"
+        ) -SimulateRuntimeRefresh -SimulateUnrelatedRuntimeRefresh `
+            -FirstRuntimeRefreshDelayMilliseconds 60000 `
+            -RuntimeDispatchLogPath $runtimeRaceDispatchLog
+        $runtimeRaceJson = Assert-JsonResult $runtimeRace "install" 1
+        Assert-True (
+            $runtimeRaceJson.code -eq "runtime_activation_required" -and
+            @([System.IO.File]::ReadAllLines($runtimeRaceDispatchLog)).Count -eq 1
+        ) "install accepted a pre-dispatch runtime rewrite as activation proof"
     }
     $noPrecheckSnapshotCase = Join-Path $sandbox "safe-update-snapshot-with-invalid-current-content"
     $noPrecheckSnapshotProfiles = Join-Path $noPrecheckSnapshotCase "profiles"
