@@ -233,6 +233,7 @@ function Complete-InstallAfterTransaction(
     $dispatchSent = $false
     $activationFailure = ""
     if ($null -ne $ActivationContext) {
+        $expectedTunEnabled = if ($Profile -eq 3) { $true } else { [bool]$ActivationContext.TunEnabled }
         try {
             $beforeFingerprintIdentity = Get-ClashVergeProcessIdentity
             if (-not (Test-ClashVergeProcessIdentity $beforeFingerprintIdentity $ActivationContext.ClientIdentity)) {
@@ -252,7 +253,7 @@ function Complete-InstallAfterTransaction(
             $dispatchSent = $true
             $null = Wait-ClashVergeRuntimeHealthy `
                 ([string]$ActivationContext.RuntimePath) $preDispatchRuntimeContext `
-                $ActivationContext.Selections ([bool]$ActivationContext.TunEnabled) `
+                $ActivationContext.Selections $expectedTunEnabled `
                 $Profile ([string]$ActivationContext.CurlPath) $ActivationContext.Policy `
                 -RequireManagedPatchTransition
             $verifiedIdentity = Get-ClashVergeProcessIdentity
