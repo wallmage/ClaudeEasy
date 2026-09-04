@@ -158,6 +158,24 @@ function Find-MihomoCore([string]$RequestedPath) {
         return (Resolve-Path -LiteralPath $RequestedPath).Path
     }
 
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+        $runningCandidates = @(
+            Get-Process -Name "verge-mihomo" -ErrorAction SilentlyContinue |
+            Where-Object { $_.SessionId -eq $currentSessionId } |
+            ForEach-Object {
+                try {
+                    if (-not [string]::IsNullOrWhiteSpace($_.Path) -and (Test-Path -LiteralPath $_.Path -PathType Leaf)) {
+                        (Resolve-Path -LiteralPath $_.Path).Path
+                    }
+                } catch {}
+            } |
+            Sort-Object -Unique
+        )
+        if ($runningCandidates.Count -gt 1) { throw "当前会话有多个不同的运行中 Mihomo 内核，无法唯一确认。" }
+        if ($runningCandidates.Count -eq 1) { return $runningCandidates[0] }
+    }
+
     $installCandidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         $installCandidates += (Join-Path (Join-Path $env:LOCALAPPDATA "Clash Verge") "verge-mihomo.exe")
