@@ -120,6 +120,8 @@ function New-ClaudeEasyResult(
         $null -ne $RequiredFollowups
     $requiredWorkflowScope = if ($Code -in @("safe_update_completed", "safe_update_verified")) {
         "subscription_update"
+    } elseif ($Code -ceq "runtime_activation_required") {
+        "configuration_written"
     } elseif ($Operation -ceq "snapshot_profiles" -and $Code -ceq "snapshot_created") {
         "subscription_snapshot"
     } else {

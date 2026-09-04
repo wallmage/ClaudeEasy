@@ -150,15 +150,25 @@ function Complete-InstallAfterTransaction(
 ) {
     if ($null -ne $ActivationContext) {
         try {
-            $currentIdentity = Get-ClashVergeProcessIdentity
-            if (-not (Test-ClashVergeProcessIdentity $currentIdentity $ActivationContext.ClientIdentity)) {
+            $beforeFingerprintIdentity = Get-ClashVergeProcessIdentity
+            if (-not (Test-ClashVergeProcessIdentity $beforeFingerprintIdentity $ActivationContext.ClientIdentity)) {
+                throw "Clash Verge Rev 客户端已变化。"
+            }
+            $preDispatchRuntimeContext = Get-ClashControllerContext `
+                ([string]$ActivationContext.RuntimePath)
+            $afterFingerprintIdentity = Get-ClashVergeProcessIdentity
+            if (-not (Test-ClashVergeProcessIdentity $afterFingerprintIdentity $ActivationContext.ClientIdentity)) {
                 throw "Clash Verge Rev 客户端已变化。"
             }
             Invoke-ClashVergeReactivationShortcut ([string]$ActivationContext.Shortcut)
             $null = Wait-ClashVergeRuntimeHealthy `
-                ([string]$ActivationContext.RuntimePath) $ActivationContext.RuntimeContext `
+                ([string]$ActivationContext.RuntimePath) $preDispatchRuntimeContext `
                 $ActivationContext.Selections ([bool]$ActivationContext.TunEnabled) `
                 $Profile ([string]$ActivationContext.CurlPath) $ActivationContext.Policy
+            $verifiedIdentity = Get-ClashVergeProcessIdentity
+            if (-not (Test-ClashVergeProcessIdentity $verifiedIdentity $ActivationContext.ClientIdentity)) {
+                throw "Clash Verge Rev 客户端已变化。"
+            }
             Write-Info "已触发一次客户端重新加载，并完成运行配置与原选择验收。"
             Complete-InstallResult 0 "ok" $SuccessCode $SuccessSummary `
                 $Changes @($WrittenChecks + "runtime_health")
