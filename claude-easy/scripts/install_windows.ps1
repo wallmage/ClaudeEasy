@@ -232,6 +232,13 @@ function Complete-InstallAfterTransaction(
 ) {
     $dispatchSent = $false
     $activationFailure = ""
+    $transactionChanged = @($TransactionTargets).Count -eq 0 -or @(
+        $TransactionTargets | Where-Object {
+            -not [bool]$_.Existed -or
+                (Get-BytesSha256 ([byte[]]$_.Bytes)) -cne
+                    (Get-BytesSha256 ([byte[]]$_.OriginalBytes))
+        }
+    ).Count -gt 0
     if ($null -ne $ActivationContext) {
         $expectedTunEnabled = if ($Profile -eq 3) { $true } else { [bool]$ActivationContext.TunEnabled }
         try {
@@ -244,6 +251,20 @@ function Complete-InstallAfterTransaction(
             $preDispatchState = Get-ClashRuntimeState $preDispatchRuntimeContext
             if (-not (Test-InstallRuntimeStateUnchanged $ActivationContext $preDispatchState)) {
                 throw "Clash Verge Rev 的代理选择或 TUN 状态在安装期间发生变化；未发送重新加载快捷键。"
+            }
+            if (-not $transactionChanged) {
+                Assert-ClashRuntimeHealthy `
+                    $preDispatchRuntimeContext $ActivationContext.Selections `
+                    $expectedTunEnabled $Profile ([string]$ActivationContext.CurlPath) `
+                    $ActivationContext.Policy -ReadOnly
+                $verifiedIdentity = Get-ClashVergeProcessIdentity
+                if (-not (Test-ClashVergeProcessIdentity $verifiedIdentity $ActivationContext.ClientIdentity)) {
+                    throw "Clash Verge Rev 客户端已变化。"
+                }
+                Write-Info "文件与运行配置已符合当前档位；未重复发送重新加载快捷键。"
+                Complete-InstallResult 0 "ok" $SuccessCode $SuccessSummary `
+                    $Changes @($WrittenChecks + "runtime_health")
+                return
             }
             $afterFingerprintIdentity = Get-ClashVergeProcessIdentity
             if (-not (Test-ClashVergeProcessIdentity $afterFingerprintIdentity $ActivationContext.ClientIdentity)) {
