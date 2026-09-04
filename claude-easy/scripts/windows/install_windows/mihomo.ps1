@@ -161,7 +161,7 @@ function Find-MihomoCore([string]$RequestedPath) {
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
         $runningCandidates = @()
-        foreach ($process in @(Get-Process -Name "verge-mihomo" -ErrorAction SilentlyContinue)) {
+        foreach ($process in @(Get-Process -Name "verge-mihomo", "verge-mihomo-alpha" -ErrorAction SilentlyContinue)) {
             try {
                 if ($process.SessionId -ne $currentSessionId) { continue }
                 $path = $process.Path
