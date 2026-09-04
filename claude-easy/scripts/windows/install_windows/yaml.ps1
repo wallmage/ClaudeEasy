@@ -151,7 +151,11 @@ function Find-YamlMappingNode(
             if ($lineIndent -le $Indent) { $finish = $i; break }
             continue
         }
-        if ($lineIndent -le $Indent) { $finish = $i; break }
+        if ($lineIndent -lt $Indent -or
+            ($lineIndent -eq $Indent -and -not $line.TrimStart().StartsWith("- "))) {
+            $finish = $i
+            break
+        }
     }
     $entry = Get-YamlMappingEntry $Lines[$start]
     $value = if ($null -ne $entry) { $entry.Value } else { "" }

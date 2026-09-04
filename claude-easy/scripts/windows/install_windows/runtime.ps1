@@ -499,7 +499,10 @@ function Get-ClashRuntimeYamlNode([string]$Text, [string[]]$Path) {
         for ($index = $start + 1; $index -lt $searchEnd; $index++) {
             $line = [string]$lines[$index]
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            if ((Get-YamlIndent $line) -le $indent -and -not $line.TrimStart().StartsWith("#")) {
+            $lineIndent = Get-YamlIndent $line
+            if (($lineIndent -lt $indent -or
+                ($lineIndent -eq $indent -and -not $line.TrimStart().StartsWith("- "))) -and
+                -not $line.TrimStart().StartsWith("#")) {
                 $finish = $index
                 break
             }
