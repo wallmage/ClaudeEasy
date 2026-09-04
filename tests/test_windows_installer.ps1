@@ -625,7 +625,7 @@ tun:
         $updatedSameIndentTunList -notmatch 'stale\.example:53'
     ) "TUN update retained stale same-indent dns-hijack entries"
     Assert-True (
-        $updatedSameIndentTunList -match '(?m)^  auto-route: true$'
+        $updatedSameIndentTunList -match '(?m)^  auto-route: true\r?$'
     ) "TUN update removed the following auto-route sibling"
     Assert-True (
         $managedDnsHijackEntries.Count -eq 2 -and
