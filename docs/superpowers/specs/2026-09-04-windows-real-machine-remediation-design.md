@@ -105,4 +105,3 @@ Windows Computer Use 对同一目标连续两次没有取得可回读结果后�
 - 同一 Windows Computer Use 目标两次失败后不再自动重试。
 - Windows CI 全绿；Git diff 不含 macOS 文件。
 - 最终说明区分 CI 证据与仍待下一台真机确认的行为。
-
