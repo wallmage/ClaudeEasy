@@ -868,15 +868,10 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
             $customCoreProcess.WaitForExit()
         }
 
-        $accessDeniedWasMisclassified = $false
-        try {
-            Enter-AppHomeMutationLock (Join-Path $env:SystemDrive "System Volume Information") | Out-Null
-        } catch {
-            $accessDeniedWasMisclassified = $_.Exception.Message.Contains(
-                "同一配置目录已有 ClaudeEasy 操作正在进行"
-            )
-        }
-        Assert-True (-not $accessDeniedWasMisclassified) "access denied while opening the operation lock was reported as another operation"
+        $accessDeniedLockError = New-Object System.ComponentModel.Win32Exception 5
+        $sharingViolationLockError = New-Object System.ComponentModel.Win32Exception 32
+        Assert-True (-not (Test-AppHomeMutationLockContention $accessDeniedLockError)) "access denied while opening the operation lock was classified as another operation"
+        Assert-True (Test-AppHomeMutationLockContention $sharingViolationLockError) "sharing violation while opening the operation lock was not classified as another operation"
 
         $activationRequiredHome = Join-Path $sandbox "install-runtime-activation-required"
         New-Item -ItemType Directory -Path (Join-Path $activationRequiredHome "profiles") -Force | Out-Null
@@ -892,7 +887,9 @@ fs.writeFileSync(process.argv[4], JSON.stringify(output));
             (Join-Path $activationRequiredHome "profiles.yaml"),
             "items:`n- uid: R-test`n  type: remote`n  option:`n    allow_auto_update: true`n"
         )
-        $activationRequiredInstall = Invoke-Installer $activationRequiredHome
+        $activationRequiredInstall = Invoke-TestPowerShell $installer @(
+            "-AppHome", $activationRequiredHome, "-MihomoPath", $fakeCore, "-Json"
+        )
         $activationRequiredJson = Assert-JsonResult $activationRequiredInstall "install" 1
         Assert-True (
             $activationRequiredJson.status -eq "partial" -and
