@@ -267,7 +267,7 @@ function Assert-JsonResult([object]$Invocation, [string]$Command, [int]$ExitCode
     $script:executedScenarioCount++
     $text = $Invocation.Output.Trim()
     $diagnostic = Get-TestOutputDiagnostic $text
-    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object: $diagnostic"
+    Assert-True ($text.StartsWith("{") -and $text.EndsWith("}")) "JSON mode did not emit exactly one object at caller line $($MyInvocation.ScriptLineNumber): $diagnostic"
     try {
         if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
             $result = $text | ConvertFrom-Json -DateKind String
