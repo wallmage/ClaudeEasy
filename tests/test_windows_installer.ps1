@@ -3764,6 +3764,13 @@ try {
             "-Json"
         )
         Assert-JsonResult $publicUninstallCompletion "uninstall" 0 | Out-Null
+        foreach ($stateName in @("claude-easy-usage-profile.json", "claude-easy-auto-update-state.json")) {
+            $stateBackups = @(Get-ChildItem -LiteralPath (Join-Path $publicUninstallCrashHome "claude-easy-backups") -Filter "*--pre-uninstall--*--$stateName.backup")
+            Assert-True (@($stateBackups | Where-Object {
+                [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($_.FullName)) -ceq
+                    $publicUninstallSnapshots[(Join-Path $publicUninstallCrashHome $stateName)]
+            }).Count -gt 0) "uninstall lost the historical $stateName baseline"
+        }
         Assert-True (-not $publicUninstallClient.HasExited) "uninstall recovery stopped the client"
         } finally {
             if (-not $publicUninstallClient.HasExited) { Stop-Process -Id $publicUninstallClient.Id -Force }

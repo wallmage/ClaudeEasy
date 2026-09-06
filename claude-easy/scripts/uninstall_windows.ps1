@@ -413,9 +413,6 @@ try {
     if ($null -ne $autoUpdatePlan) { $filePlans += $autoUpdatePlan }
     if ($null -ne $scriptPlan) { $filePlans += $scriptPlan }
     $filePlans += @($settingPlans | Where-Object { $_.Changed })
-    foreach ($filePlan in $filePlans) {
-        if ([bool]$filePlan.Existed) { New-UninstallBackup $filePlan.Path | Out-Null }
-    }
     $writePlans = @($filePlans | Where-Object { -not [bool]$_.Delete })
     $deletePlans = @($filePlans | Where-Object { [bool]$_.Delete } | ForEach-Object {
         [pscustomobject]@{
@@ -459,6 +456,9 @@ try {
             OriginalIdentity = $_.OriginalIdentity
         }
     })
+    foreach ($filePlan in @($writeTargets) + @($deletePlans)) {
+        if ([bool]$filePlan.Existed) { New-UninstallBackup $filePlan.Path | Out-Null }
+    }
     Invoke-VerifiedWriteDeleteTransaction $writeTargets $deletePlans
 
     $changes = @()

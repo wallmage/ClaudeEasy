@@ -1576,7 +1576,6 @@ try {
         }
         $lightTargets += $usageProfileTarget
         foreach ($target in $lightTargets) {
-            if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
             Backup-InitialOnce $target.Path $backupRoot | Out-Null
             Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
         }
@@ -1620,7 +1619,6 @@ try {
     if ($null -ne $autoUpdateStateTarget) { $targets += $autoUpdateStateTarget }
     $targets += $usageProfileTarget
     foreach ($target in $targets) {
-        if ($target.Path -in @($usageStatePath, $autoUpdateStatePath)) { continue }
         Backup-InitialOnce $target.Path $backupRoot | Out-Null
         Backup-Versioned $target.Path $backupRoot "prewrite" | Out-Null
     }
