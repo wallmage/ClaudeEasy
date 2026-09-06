@@ -676,6 +676,8 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
         $properties = @($item.PSObject.Properties.Name | Sort-Object)
         $expectedProperties = if ($manifestVersion -eq 1) {
             "Backup,BeforeSha256,File,Uid"
+        } elseif ($manifestVersion -eq 5) {
+            "Backup,BeforeSha256,BeforeUpdated,File,Uid,UpdatedSha256"
         } else {
             "Backup,BeforeSha256,BeforeUpdated,File,Uid"
         }
@@ -686,6 +688,10 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
             -not ($item.BeforeSha256 -is [string]) -or
             ($manifestVersion -ge 2 -and -not ($item.BeforeUpdated -is [string]))) {
             throw "安全更新准备记录包含无效订阅项。"
+        }
+        if ($manifestVersion -eq 5 -and ($item.UpdatedSha256 -isnot [string] -or
+            [string]$item.UpdatedSha256 -cnotmatch '^[0-9a-f]{64}$')) {
+            throw "安全更新准备记录包含无效更新哈希。"
         }
         $uid = [string]$item.Uid
         $file = [string]$item.File
@@ -733,14 +739,15 @@ function Get-SafeUpdateRecoveryItems([object]$Manifest, [string]$Directory, [str
 function Get-SafeUpdateVerificationTargets(
     [string]$ProfilesIndexText,
     [string]$Directory,
-    [object[]]$RecoveryItems
+    [object[]]$RecoveryItems,
+    [switch]$AllowSubset
 ) {
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
         throw "找不到订阅目录。"
     }
     $items = @(Get-RemoteSubscriptionProfileItems @(Split-YamlLines $ProfilesIndexText))
     $items = @($items | Where-Object { $_.Type -eq "remote" })
-    if ($items.Count -eq 0 -or $items.Count -ne $RecoveryItems.Count) {
+    if ($items.Count -eq 0 -or (-not $AllowSubset -and $items.Count -ne $RecoveryItems.Count)) {
         throw "远程订阅清单在更新期间发生变化。"
     }
     $targets = @()

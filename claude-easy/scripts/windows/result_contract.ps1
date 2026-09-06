@@ -118,7 +118,7 @@ function New-ClaudeEasyResult(
     }
     $hasWorkflowMetadata = $null -ne $WorkflowComplete -or $null -ne $CompletedScope -or
         $null -ne $RequiredFollowups
-    $requiredWorkflowScope = if ($Code -in @("safe_update_completed", "safe_update_verified")) {
+    $requiredWorkflowScope = if ($Code -in @("safe_update_completed", "safe_update_verified", "subscriptions_updated")) {
         "subscription_update"
     } elseif ($Code -ceq "runtime_activation_required") {
         "configuration_written"

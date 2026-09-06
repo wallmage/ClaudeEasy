@@ -28,6 +28,12 @@ function Complete-InstallResult(
     [object]$CompletedScope = $null,
     [object]$RequiredFollowups = $null
 ) {
+    if ($script:ClaudeEasyOperation -ceq "install" -and $ExitCode -eq 0) {
+        $WorkflowComplete = $false
+        $CompletedScope = "configuration_and_runtime_verified"
+        $RequiredFollowups = @(Get-SafeUpdateRequiredFollowups ([int]$script:ClaudeEasyProfile))
+        $SummaryZh += " 仍需在客户端确认订阅自动更新已关闭，并完成当前档位验收。"
+    }
     if ($Json) {
         $result = New-ClaudeEasyResult -Command "install" -Operation $script:ClaudeEasyOperation -Ok ($ExitCode -eq 0) -Status $Status -Code $Code -ExitCode $ExitCode -SummaryZh $SummaryZh -Profile $script:ClaudeEasyProfile -Changes $Changes -Checks $Checks -Items $Items -Messages @($script:ClaudeEasyMessages) -Warnings $Warnings -WorkflowComplete $WorkflowComplete -CompletedScope $CompletedScope -RequiredFollowups $RequiredFollowups
         Write-ClaudeEasyResult $result
@@ -41,11 +47,11 @@ function Complete-InstallResult(
 
 function Get-SafeUpdateRequiredFollowups([int]$Profile) {
     switch ($Profile) {
-        1 { return @("client_switch_verification", "site_verification", "final_state_audit") }
-        2 { return @("client_switch_verification", "site_verification", "final_state_audit") }
+        1 { return @("client_auto_update_reconciliation", "client_switch_verification", "site_verification", "final_state_audit") }
+        2 { return @("client_auto_update_reconciliation", "client_switch_verification", "site_verification", "final_state_audit") }
         3 {
             return @(
-                "client_switch_verification", "site_verification",
+                "client_auto_update_reconciliation", "client_switch_verification", "site_verification",
                 "route_verification", "dns_deep_test",
                 "webrtc_test", "local_region_fingerprint_test", "final_state_audit"
             )

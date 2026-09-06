@@ -24,9 +24,29 @@ function Get-YamlMappingEntry([string]$Line) {
     return [pscustomobject]@{ Key = $key; Value = $Matches[4] }
 }
 
+function Remove-YamlComment([string]$Text, [ref]$Quote) {
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $character = $Text[$i]
+        if ($Quote.Value -eq '"' -and $character -eq '\') { $i++; continue }
+        if ($Quote.Value) {
+            if ($character -eq $Quote.Value) {
+                if ($character -eq "'" -and $i + 1 -lt $Text.Length -and $Text[$i + 1] -eq "'") { $i++; continue }
+                $Quote.Value = ''
+            }
+        } elseif ($character -eq '#' -and ($i -eq 0 -or [char]::IsWhiteSpace($Text[$i - 1]))) {
+            return $Text.Substring(0, $i).TrimEnd()
+        } elseif ($character -in @("'", '"') -and
+                  ($i -eq 0 -or $Text[$i - 1] -match '[\s\[\{,:-]')) {
+            $Quote.Value = [string]$character
+        }
+    }
+    return $Text
+}
+
 function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
     if ([string]::IsNullOrWhiteSpace($Raw)) { throw "$Label 为空。" }
-    $value = ($Raw -replace '\s+#.*$', '').Trim()
+    $quote = ''
+    $value = (Remove-YamlComment $Raw ([ref]$quote)).Trim()
     if ($value.StartsWith("'") -and $value.EndsWith("'") -and $value.Length -ge 2) {
         return $value.Substring(1, $value.Length - 2).Replace("''", "'")
     }
@@ -48,12 +68,29 @@ function Get-YamlPathFingerprints([string]$Text) {
     $values = @{}
     $stack = New-Object System.Collections.ArrayList
 
+    $quote = ''
+    $blockIndent = -1
+    $blockPath = ''
     foreach ($line in $lines) {
+        if ($blockIndent -ge 0) {
+            if ([string]::IsNullOrWhiteSpace($line) -or (Get-YamlIndent $line) -gt $blockIndent) {
+                $values[$blockPath].Add($line)
+                continue
+            }
+            $blockIndent = -1
+        }
+        if ($quote) {
+            $values[$blockPath].Add((Remove-YamlComment $line ([ref]$quote)))
+            continue
+        }
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
         if ($line -match "`t") { throw "YAML 使用了制表符缩进，无法安全比较。" }
         $indent = Get-YamlIndent $line
         $trimmed = $line.TrimStart()
+        $trimmed = (Remove-YamlComment $trimmed ([ref]$quote)).Trim()
+        if ($trimmed -match '(?:^|:\s+|-\s+)[|>](?:[1-9][+-]?|[+-][1-9]?)?$') { $blockIndent = $indent }
         $sequenceItem = $trimmed.StartsWith("- ")
+        if ($blockIndent -ge 0 -and $sequenceItem -and $trimmed -match '^-\s+[^:]+:\s+') { $blockIndent += 2 }
         while ($stack.Count -gt 0 -and
                [int]$stack[$stack.Count - 1].Indent -ge $indent -and
                -not ($sequenceItem -and [int]$stack[$stack.Count - 1].Indent -eq $indent)) {
@@ -62,12 +99,14 @@ function Get-YamlPathFingerprints([string]$Text) {
         if ($sequenceItem) {
             if ($stack.Count -eq 0) { continue }
             $path = [string]$stack[$stack.Count - 1].Path
-            $values[$path].Add((($trimmed -replace '\s+#.*$', '').Trim()))
+            $values[$path].Add($trimmed)
+            $blockPath = $path
             [void]$stack.Add([pscustomobject]@{ Indent = $indent; Path = $path; Sequence = $true })
             continue
         }
         if ($stack.Count -gt 0 -and $stack[$stack.Count - 1].Sequence) {
-            $values[[string]$stack[$stack.Count - 1].Path].Add((($trimmed -replace '\s+#.*$', '').Trim()))
+            $blockPath = [string]$stack[$stack.Count - 1].Path
+            $values[$blockPath].Add($trimmed)
             continue
         }
         $entry = Get-YamlMappingEntry $trimmed
@@ -82,7 +121,8 @@ function Get-YamlPathFingerprints([string]$Text) {
         $path = if ([string]::IsNullOrWhiteSpace($parent)) { [string]$entry.Key } else { "$parent.$($entry.Key)" }
         if ($values.ContainsKey($path)) { throw "YAML 中存在重复键：$path。无法安全比较。" }
         $values[$path] = New-Object System.Collections.Generic.List[string]
-        $value = ($entry.Value -replace '\s+#.*$', '').Trim()
+        $blockPath = $path
+        $value = $entry.Value.Trim()
         if (-not [string]::IsNullOrWhiteSpace($value)) { $values[$path].Add($value) }
         [void]$stack.Add([pscustomobject]@{ Indent = $indent; Path = $path; Sequence = $false })
     }

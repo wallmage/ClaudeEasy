@@ -90,6 +90,32 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+function Test-IncidentRuntimeIpv6 {
+    $policy = Get-Content (Join-Path $root "claude-easy/references/policy.json") -Raw | ConvertFrom-Json
+    $rules = @($policy.ai_rules | ForEach-Object { $_.Replace('{AI}', 'Main') }) + @($policy.ai_rules | ForEach-Object { $_.Replace('{AI}', 'REJECT') }) + @($policy.lan_udp_direct_rules) + @("RULE-SET,$($policy.cn_domain_provider.name),DIRECT", $policy.cn_udp_direct_rule.Replace('{CN_IP}', $policy.cn_ip_provider.name), 'NETWORK,UDP,Main', 'NETWORK,UDP,REJECT')
+    $text = "ipv6: false`nprofile:`n  store-selected: true`ndns:`n  ipv6: false`n  enable: true`n  respect-rules: true`n  direct-nameserver-follow-policy: false`n  direct-nameserver:`n"
+    $text += (@($policy.direct_resolvers | ForEach-Object { "    - $_" }) -join "`n") + "`n  nameserver-policy:`n    rule-set:$($policy.cn_domain_provider.name):`n"
+    $text += (@($policy.direct_resolvers | ForEach-Object { "      - $_" }) -join "`n") + "`nrule-providers:`n"
+    foreach ($provider in @($policy.cn_domain_provider, $policy.cn_ip_provider)) {
+        $text += "  $($provider.name):`n"
+        foreach ($key in @('type', 'behavior', 'format', 'url', 'path', 'interval')) { $text += "    ${key}: $($provider.$key)`n" }
+        $text += "    proxy: Main`n    size-limit: $($provider.size_limit)`n"
+    }
+    $text += "rules:`n" + (@($rules | ForEach-Object { "  - $_" }) -join "`n")
+    $state = @{ Rules = @($rules | ForEach-Object { $parts = $_.Split(','); @{ type = $parts[0]; payload = $parts[1]; proxy = $parts[2] } }); Proxies = [pscustomobject]@{ Main = @{ type = 'Selector' } } }
+    Assert-ClashRuntimePatch $text $state $policy 3
+    foreach ($pattern in @('(?m)^ipv6: false', '(?m)^  ipv6: false')) {
+        foreach ($replacement in @('', 'ipv6: true')) {
+            $bad = $text -replace $pattern, $(if ($replacement -and $pattern.Contains('^  ')) { '  ' + $replacement } else { $replacement })
+            $rejected = $false
+            try { Assert-ClashRuntimePatch $bad $state $policy 3 } catch { $rejected = $true }
+            Assert-True $rejected "profile 3 accepted missing or enabled IPv6: $pattern"
+            foreach ($profile in 1..2) { Assert-ClashRuntimePatch $bad $state $policy $profile }
+        }
+    }
+}
+Test-IncidentRuntimeIpv6
+
 function Test-IncidentControllerReadiness {
     $script:incidentAttempts = 0
     function Wait-ClashVergeRuntimeRefresh { }
@@ -238,29 +264,20 @@ if ($onWindows) {
     }
 }
 
-$safeUpdateFollowupCases = @(
-    [pscustomobject]@{
-        Profile = 1
-        Expected = @("client_switch_verification", "site_verification", "final_state_audit")
-    },
-    [pscustomobject]@{
-        Profile = 2
-        Expected = @("client_switch_verification", "site_verification", "final_state_audit")
-    },
-    [pscustomobject]@{
-        Profile = 3
-        Expected = @(
-            "client_switch_verification", "site_verification",
-            "route_verification", "dns_deep_test",
-            "webrtc_test", "local_region_fingerprint_test", "final_state_audit"
-        )
-    }
-)
-foreach ($followupCase in $safeUpdateFollowupCases) {
-    $actualFollowups = @(Get-SafeUpdateRequiredFollowups ([int]$followupCase.Profile))
-    Assert-True (
-        ($actualFollowups -join ",") -ceq (@($followupCase.Expected) -join ",")
-    ) "Windows safe-update follow-ups differ from the shared profile workflow for profile $($followupCase.Profile)"
+foreach ($profile in 1..3) {
+    Assert-True (@(Get-SafeUpdateRequiredFollowups $profile) -contains "client_auto_update_reconciliation") "client timer reconciliation was omitted"
+    $completionProbe = @"
+. '$($resultContract.Replace("'", "''"))'
+. '$((Join-Path $installerModuleRoot "common.ps1").Replace("'", "''"))'
+`$Json = `$true
+`$script:ClaudeEasyOperation = 'install'
+`$script:ClaudeEasyProfile = $profile
+`$script:ClaudeEasyMessages = @()
+Complete-InstallResult 0 'ok' 'installed' 'fixture'
+"@
+    $completionResult = (& $PowerShellPath -NoLogo -NoProfile -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($completionProbe)))) | ConvertFrom-Json
+    Assert-True ($LASTEXITCODE -eq 0 -and $completionResult.workflow_complete -eq $false -and
+        $completionResult.required_followups -contains "client_auto_update_reconciliation") "disk-only installation was reported without client reconciliation"
 }
 
 $remoteCompareRoot = Join-Path $sandbox "remote-compare"
@@ -301,6 +318,11 @@ proxies:
 Assert-True ($remoteComparePlan.Count -eq 2) "remote comparison did not inspect every subscription"
 Assert-True (-not [bool]$remoteComparePlan[0].Changed) "semantic-only YAML formatting change was reported as an update"
 Assert-True ([bool]$remoteComparePlan[1].Changed) "remote subscription content change was not detected"
+foreach ($password in @("'prefix #old'", '"prefix \" #old"', "'prefix '' #old'", "|`n      #old", ">-`n      prefix #old")) {
+    $before = "proxies:`n  - name: node-a`n    password: $password`n"
+    $after = $before.Replace('#old', '#new')
+    Assert-True (-not (Test-RemoteSubscriptionSemanticEqual (Get-YamlPathFingerprints $before) (Get-YamlPathFingerprints $after))) "password content after # was ignored"
+}
 $flatLocalPath = Join-Path $remoteCompareRoot "flat.yaml"
 [System.IO.File]::WriteAllText($flatLocalPath, @'
 proxies:
@@ -529,6 +551,7 @@ function Invoke-TestPowerShell(
                 FailRestoreRuntimeDispatch = [bool]$FailRestoreRuntimeDispatch
                 RuntimeDispatchLogPath = $RuntimeDispatchLogPath
                 RefreshStartedAgeSeconds = $RefreshStartedAgeSeconds
+                SafeUpdateChangedOnly = $ScriptArguments -contains "-SafeUpdateChangedOnly"
                 RunOriginalCommand = -not ($ScriptArguments -contains "-VerifySafeUpdate")
             } | ConvertTo-Json -Compress -Depth 3
             $payloadBase64 = [Convert]::ToBase64String(
@@ -573,6 +596,7 @@ if ([bool]$payload.RunOriginalCommand) {
         MihomoPath = [string]$payload.MihomoPath
         Json = [bool]$payload.Json
     }
+    if ([bool]$payload.SafeUpdateChangedOnly) { $installArguments.SafeUpdateChangedOnly = $true }
     & ([string]$payload.ScriptPath) @installArguments
 } else {
     & ([string]$payload.ScriptPath) @arguments
@@ -1500,6 +1524,7 @@ current: R-first
 items:
 - uid: R-first
   type: remote
+  url: https://first.invalid/sub
   name: First
   updated: null
   option:
@@ -1510,12 +1535,19 @@ items:
   name: Local
 - uid: R-second
   type: remote
+  url: https://second.invalid/sub
   name: Second
   updated: 200
   option: null
 '@
 
     if (Test-GroupSelected 'safe-update') {
+    $missingUpdateWorkflowRejected = $false
+    try {
+        New-ClaudeEasyResult -Command install -Operation safe_update_changed_only -Ok $true `
+            -Status ok -Code subscriptions_updated -ExitCode 0 -SummaryZh test | Out-Null
+    } catch { $missingUpdateWorkflowRejected = $true }
+    Assert-True $missingUpdateWorkflowRejected "subscriptions_updated accepted missing follow-up metadata"
 
     $fileFieldCase = Join-Path $sandbox "remote-target-file-field"
     $fileFieldProfiles = Join-Path $fileFieldCase "profiles"
@@ -2322,8 +2354,7 @@ rules:
     ) "failed runtime rollback did not publish a strict recovery record"
     $runtimeRecoveryRetry = Invoke-TestPowerShell $installer @(
         "-AppHome", $safeUpdateCase,
-        "-VerifySafeUpdate",
-        "-RefreshConfirmed",
+        "-SafeUpdateChangedOnly",
         "-MihomoPath", $fakeCore,
         "-Json"
     ) -SimulateRuntimeRefresh
@@ -2334,12 +2365,6 @@ rules:
     ) "runtime-only safe-update recovery did not resume"
     Assert-True (-not (Test-Path -LiteralPath $runtimeRecoveryPath)) "completed runtime recovery retained its record"
 
-    $successSnapshot = Invoke-TestPowerShell $installer @(
-        "-AppHome", $safeUpdateCase,
-        "-SnapshotProfiles",
-        "-MihomoPath", $fakeCore
-    )
-    Assert-True ($successSnapshot.ExitCode -eq 0) "successful safe update snapshot failed; $(Get-TestOutputDiagnostic $successSnapshot.Output)"
     $firstSafeUpdated = @'
 mode: rule
 proxies:
@@ -2365,17 +2390,55 @@ proxies: [{ name: "Hong Kong #1", type: ss, server: proxy.invalid, port: 443, ci
 proxy-groups: [{ name: "AI", type: select, proxies: ["Hong Kong #1"] }]
 rules: ["MATCH,AI"]
 '@
+    $changedPackage = Join-Path $sandbox "changed-only-package"
+    Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $changedPackage -Recurse
+    $changedInstaller = Join-Path $changedPackage "scripts/install_windows.ps1"
+    $changedModules = Join-Path $changedPackage "scripts/windows/install_windows"
+    [System.IO.File]::WriteAllText((Join-Path $changedModules "first.response"), $firstSafeUpdated)
+    [System.IO.File]::WriteAllText((Join-Path $changedModules "second.response"), $secondSafeOriginal)
+    [System.IO.File]::AppendAllText((Join-Path $changedModules "remote_preflight.ps1"), @'
+
+function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
+    $log = Join-Path $PSScriptRoot "fetch.log"
+    $response = if (Test-Path -LiteralPath $log) { "second.response" } else { "first.response" }
+    [System.IO.File]::AppendAllText($log, "fetch`n")
+    return ,([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $response)))
+}
+'@)
+    [System.IO.File]::AppendAllText((Join-Path $changedModules "safe_update.ps1"), "`nfunction Set-SafeUpdateActivationAttempt { exit 77 }`n")
+    $freshUpdate = Invoke-TestPowerShell $changedInstaller @("-AppHome", $safeUpdateCase, "-SafeUpdateChangedOnly", "-MihomoPath", $fakeCore, "-Json") -SimulateRuntimeRefresh
+    Assert-True ($freshUpdate.ExitCode -eq 77) "fresh changed-only update did not reach durable commit"
+    $changedManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
+    $changedManifest = [System.IO.File]::ReadAllText($changedManifestPath) | ConvertFrom-Json
+    Assert-True ($changedManifest.Version -eq 5 -and @($changedManifest.Profiles).Count -eq 1 -and
+        $changedManifest.Profiles[0].BeforeSha256 -ceq (Get-BytesSha256 ([System.Text.Encoding]::UTF8.GetBytes($firstSafeOriginal))) -and
+        ([System.IO.File]::ReadAllText((Join-Path $safeUpdateProfiles "R-second.yml"))) -ceq $secondSafeOriginal -and
+        @([System.IO.File]::ReadAllLines((Join-Path $changedModules "fetch.log"))).Count -eq 2
+    ) "fresh update did not preserve unchanged subscription and changed-only recovery snapshot"
+    $concurrentContent = $firstSafeUpdated + "`n# concurrent writer`n"
+    foreach ($age in @(0, 181)) {
+        [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $concurrentContent)
+        $conflictVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SafeUpdateChangedOnly", "-MihomoPath", $fakeCore, "-Json") -SimulateRuntimeRefresh -RefreshStartedAgeSeconds $age
+        Assert-JsonResult $conflictVerify "install" 1 | Out-Null
+        Assert-True (([System.IO.File]::ReadAllText((Join-Path $safeUpdateProfiles "R-first.yaml"))) -ceq $concurrentContent) "v5 recovery overwrote concurrent content"
+        Assert-True (Test-Path -LiteralPath $changedManifestPath) "v5 conflict discarded recovery record"
+    }
     [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $firstSafeUpdated)
-    [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-second.yml"), $secondSafeUpdated)
-    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-VerifySafeUpdate", "-RefreshConfirmed", "-MihomoPath", $fakeCore, "-Json") -SimulateRuntimeRefresh
+    [System.IO.File]::WriteAllText($changedManifestPath, ($changedManifest | ConvertTo-Json -Depth 7))
+    $successVerify = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SafeUpdateChangedOnly", "-MihomoPath", $fakeCore, "-Json") -SimulateRuntimeRefresh
     $successVerifyJson = $successVerify.Output | ConvertFrom-Json
     Assert-True ($successVerify.ExitCode -eq 0) (
         "valid safe update was rejected; code=$($successVerifyJson.code); " +
         "messages=$(@($successVerifyJson.messages) -join ';')"
     )
     Assert-JsonResult $successVerify "install" 0 | Out-Null
+    Assert-True ($successVerifyJson.code -eq "subscriptions_updated" -and
+        $successVerifyJson.workflow_complete -eq $false -and
+        $successVerifyJson.completed_scope -eq "subscription_update" -and
+        @($successVerifyJson.required_followups).Count -gt 0
+    ) "changed-only recovery omitted mandatory follow-up work"
     Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-first.yaml") -Raw) -eq $firstSafeUpdated) "valid safe update incorrectly restored first remote subscription"
-    Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeUpdated) "valid safe update incorrectly restored second remote subscription"
+    Assert-True ((Get-Content -LiteralPath (Join-Path $safeUpdateProfiles "R-second.yml") -Raw) -eq $secondSafeOriginal) "valid changed-only update modified unchanged subscription"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $safeUpdateCase "claude-easy-safe-update.json"))) "accepted safe update left a stale manifest"
 
     $legacyRetirementSnapshot = Invoke-TestPowerShell $installer @(

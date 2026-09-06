@@ -705,6 +705,10 @@ function Assert-ClashRuntimePatch(
     if ($UsageProfile -lt 3) {
         return
     }
+    if ((Get-ClaudeEasyTopLevelScalar $RuntimeText "ipv6") -cne "false" -or
+        [string]$dns.ipv6 -cne "false") {
+        throw "Clash Verge Rev 运行配置没有关闭档位 3 的 IPv6。"
+    }
     $aiGroup = Get-ClashRuntimeAiGroupName $rules $Policy
     $ipProviderInfo = Get-ClashRuntimeManagedProvider $RuntimeText $Policy.cn_ip_provider $mainGroup
     $ipProvider = [string]$ipProviderInfo.Name

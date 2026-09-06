@@ -478,7 +478,7 @@ try {
 
 try {
 try {
-if ($script:ClaudeEasyOperation -in @("install", "restore_backup", "safe_update_changed_only")) {
+if ($script:ClaudeEasyOperation -in @("install", "restore_backup")) {
     $pendingSafeUpdate = $false
     try {
         $pendingSafeUpdate = (Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录").Exists
@@ -533,7 +533,19 @@ if ($BackupSubscriptions) {
         @("profile_backups") @() $backupItems
 }
 
-if ($SafeUpdateChangedOnly) {
+if ($SafeUpdateChangedOnly -and (Test-Path -LiteralPath $safeUpdateStatePath -PathType Leaf)) {
+    # Finish a committed update or runtime recovery before another remote comparison.
+    $pendingSnapshot = Get-OptionalFileSnapshot $safeUpdateStatePath "安全更新准备记录"
+    $pendingManifest = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($pendingSnapshot.Bytes) | ConvertFrom-Json
+    if ($pendingManifest.Version -ne 5 -and
+        ($null -eq $pendingManifest.PSObject.Properties["Kind"] -or
+         [string]$pendingManifest.Kind -cne "safe_update_runtime_recovery")) {
+        Complete-InstallResult 1 "partial" "safe_update_pending" "发现尚未验收的客户端订阅刷新；请确认本轮刷新后继续验收。"
+    }
+    $VerifySafeUpdate = $true
+}
+
+if ($SafeUpdateChangedOnly -and -not $VerifySafeUpdate) {
     if ($savedUsageProfile -eq 0) {
         Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
     }
@@ -583,11 +595,40 @@ if ($SafeUpdateChangedOnly) {
         Assert-SubscriptionProtocolPreserved ([string]$entry.LocalText) ([string]$entry.RemoteText)
         Test-MihomoCandidate $core ([string]$entry.RemoteText) $profilesDirectory $safeUpdateDeadline | Out-Null
     }
+    $manifestItems = @()
     foreach ($entry in $changed) {
         Backup-InitialOnce $entry.Path $backupRoot -SourceBytes $entry.LocalBytes -UseSourceBytes | Out-Null
-        Backup-Versioned $entry.Path $backupRoot "pre-update" -SourceBytes $entry.LocalBytes -UseSourceBytes | Out-Null
+        $backup = Backup-Versioned $entry.Path $backupRoot "pre-update" -SourceBytes $entry.LocalBytes -UseSourceBytes -WithMetadata
+        $profile = @($profiles | Where-Object { $_.Uid -ceq $entry.Uid })[0]
+        $manifestItems += [ordered]@{
+            Uid = [string]$entry.Uid
+            File = (Split-Path -Leaf $entry.Path)
+            BeforeSha256 = [string]$backup.Sha256
+            BeforeUpdated = [string]$profile.Updated
+            Backup = (Split-Path -Leaf $backup.Path)
+            UpdatedSha256 = [string]$entry.RemoteSha256
+        }
     }
-    $writeTargets = @($changed | ForEach-Object {
+    $manifest = [ordered]@{
+        Version = 5
+        CreatedAt = [DateTimeOffset]::Now.ToString("o")
+        RefreshStartedAt = ([DateTimeOffset]$safeUpdateDeadline.AddSeconds(-180)).ToString("o")
+        Profiles = $manifestItems
+        Runtime = [ordered]@{
+            TunEnabled = $runtimeTunEnabled
+            Selections = @($runtimeSelections.Keys | Sort-Object | ForEach-Object {
+                [ordered]@{ Group = [string]$_; Selection = [string]$runtimeSelections[$_] }
+            })
+        }
+        UpdateDispatchCommittedFor = $null
+    }
+    $writeTargets = @([pscustomobject]@{
+        Path = $safeUpdateStatePath
+        Bytes = ConvertTo-Utf8Bytes (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
+        Existed = $false
+        OriginalBytes = $null
+        OriginalIdentity = $null
+    }) + @($changed | ForEach-Object {
         [pscustomobject]@{
             Path = [string]$_.Path
             Bytes = [byte[]]$_.RemoteBytes
@@ -596,57 +637,8 @@ if ($SafeUpdateChangedOnly) {
             OriginalIdentity = [string]$_.LocalIdentity
         }
     })
-    Invoke-VerifiedFileTransaction $writeTargets
-    try {
-        Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-        $null = Wait-ClashVergeRuntimeHealthy `
-            $runtimeConfigPath $runtimeContext $runtimeSelections $runtimeTunEnabled `
-            $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy $safeUpdateDeadline
-        foreach ($entry in $changed) {
-            $current = Get-OptionalFileSnapshot $entry.Path "更新后的远程订阅"
-            if (-not $current.Exists -or (Get-BytesSha256 $current.Bytes) -cne [string]$entry.RemoteSha256) {
-                throw "更新后的远程订阅与已读取的远端内容不一致。"
-            }
-        }
-        $updatedItems = @($plan | ForEach-Object {
-            Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) $(if ($_.Changed) { "updated" } else { "unchanged" })
-        })
-        Complete-InstallResult 0 "ok" "subscriptions_updated" "已只更新发生变化的远程订阅，并完成客户端重载和运行状态验收。" @("remote_compare", "subscription_update", "runtime_verification") @("remote_subscription_compare", "mihomo_candidate", "runtime_health") $updatedItems
-    } catch {
-        $failureMessage = $_.Exception.Message
-        $rollbackTargets = @()
-        $rollbackPossible = $true
-        foreach ($entry in $changed) {
-            $current = Get-OptionalFileSnapshot $entry.Path "待恢复的远程订阅"
-            if (-not $current.Exists -or (Get-BytesSha256 $current.Bytes) -cne [string]$entry.RemoteSha256) {
-                $rollbackPossible = $false
-                break
-            }
-            $rollbackTargets += [pscustomobject]@{
-                Path = [string]$entry.Path
-                Bytes = [byte[]]$entry.LocalBytes
-                Existed = $true
-                OriginalBytes = [byte[]]$current.Bytes
-                OriginalIdentity = [string]$current.Identity
-            }
-        }
-        if ($rollbackPossible) {
-            try {
-                Invoke-VerifiedFileTransaction $rollbackTargets
-                Invoke-ClashVergeReactivationShortcut $reactivationShortcut
-                $null = Wait-ClashVergeRuntimeHealthy `
-                    $runtimeConfigPath $runtimeContext $runtimeSelections $runtimeTunEnabled `
-                    $savedUsageProfile ([string]$runtimeCurl.Source) $runtimePolicy
-                $rolledBackItems = @($plan | ForEach-Object {
-                    Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) $(if ($_.Changed) { "rolled_back" } else { "unchanged" })
-                })
-                Complete-InstallResult 1 "rolled_back" "subscriptions_update_rolled_back" "订阅更新验收失败，已恢复更新前的变化订阅和运行状态。" @() @("runtime_unverified") $rolledBackItems @($failureMessage)
-            } catch {
-                $failureMessage = "$failureMessage；恢复失败：$($_.Exception.Message)"
-            }
-        }
-        Complete-InstallResult 1 "partial" "subscriptions_update_recovery_pending" "订阅更新验收失败，无法确认全部变化订阅和运行状态已恢复。" @() @("runtime_unverified") $compareItems @($failureMessage)
-    }
+    Invoke-VerifiedFileTransaction $writeTargets -InterruptedRecoveryPolicy "safe_update_running_client"
+    $VerifySafeUpdate = $true
 }
 
 if ($SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate) {
@@ -893,7 +885,7 @@ if ($VerifySafeUpdate) {
     ).Count -eq 1
     $manifestVersionIsNumeric = $manifest.Version -is [int] -or $manifest.Version -is [long]
     $manifestVersion = if ($manifestVersionIsNumeric) { [long]$manifest.Version } else { 0L }
-    $expectedManifestProperties = if ($manifestVersion -eq 4) {
+    $expectedManifestProperties = if ($manifestVersion -in @(4, 5)) {
         "CreatedAt,Profiles,RefreshStartedAt,Runtime,UpdateDispatchCommittedFor,Version"
     } elseif ($manifestVersion -eq 3) {
         "CreatedAt,Profiles,Runtime,Version"
@@ -902,7 +894,7 @@ if ($VerifySafeUpdate) {
     }
     if (($manifestProperties -join ",") -cne $expectedManifestProperties -or
         -not $manifestVersionIsNumeric -or
-        $manifestVersion -notin @(1, 2, 3, 4) -or
+        $manifestVersion -notin @(1, 2, 3, 4, 5) -or
         -not $createdAtIsJsonString -or
         @($manifest.Profiles).Count -eq 0) {
         throw "安全更新准备记录无效。"
@@ -918,7 +910,7 @@ if ($VerifySafeUpdate) {
         throw "安全更新准备记录无效。"
     }
     $safeUpdateDeadline = [DateTime]::MaxValue
-    if ($manifestVersion -eq 4) {
+    if ($manifestVersion -in @(4, 5)) {
         $refreshStartedAt = [DateTimeOffset]::MinValue
         $refreshStartedAtMatch = [regex]::Match(
             $manifestText,
@@ -943,8 +935,8 @@ if ($VerifySafeUpdate) {
     }
     $expectedSelections = New-OrdinalStringDictionary
     $expectedTunEnabled = $false
-    $hasRuntimeSnapshot = $manifestVersion -in @(3, 4)
-    if ($manifestVersion -eq 4 -and $null -ne $manifest.UpdateDispatchCommittedFor -and
+    $hasRuntimeSnapshot = $manifestVersion -in @(3, 4, 5)
+    if ($manifestVersion -in @(4, 5) -and $null -ne $manifest.UpdateDispatchCommittedFor -and
         -not (Test-SafeUpdateActivationRecord $manifest.UpdateDispatchCommittedFor)) {
         throw "安全更新准备记录中的客户端激活状态无效。"
     }
@@ -982,7 +974,7 @@ if ($VerifySafeUpdate) {
         if (-not $indexSnapshot.Exists) { throw "远程订阅清单在更新期间消失。" }
         $indexText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($indexSnapshot.Bytes)
         $currentTargets = @(
-            Get-SafeUpdateVerificationTargets $indexText $profilesDirectory $recoveryItems
+            Get-SafeUpdateVerificationTargets $indexText $profilesDirectory $recoveryItems -AllowSubset:($manifestVersion -eq 5)
         )
         $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
         $missingTarget = $false
@@ -993,6 +985,11 @@ if ($VerifySafeUpdate) {
             } else {
                 $observedCurrentHashes[$recovery.TargetPath] = ""
                 $missingTarget = $true
+            }
+        }
+        if ($manifestVersion -eq 5) {
+            foreach ($item in $manifest.Profiles) {
+                $observedCurrentHashes[(Join-Path $profilesDirectory ([string]$item.File))] = [string]$item.UpdatedSha256
             }
         }
         if ($missingTarget) {
@@ -1016,6 +1013,9 @@ if ($VerifySafeUpdate) {
                 try {
                     $validatedBytes = Get-StreamBytes $targetGuard.Stream
                     $validatedHash = Get-BytesSha256 $validatedBytes
+                    if ($manifestVersion -eq 5 -and $validatedHash -cne [string]$item.UpdatedSha256) {
+                        throw "更新后的远程订阅与已读取的远端内容不一致。"
+                    }
                     $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($validatedBytes)
                     $recovery = @($recoveryItems | Where-Object { $_.Uid -eq [string]$item.Uid })
                     if ($recovery.Count -ne 1) { throw "安全更新准备记录中的订阅清单无效。" }
@@ -1291,6 +1291,12 @@ if ($VerifySafeUpdate) {
         Get-PublicSubscriptionResult ([string]$_.Target.Uid) ([string]$_.Target.Name) $itemStatus
     })
     $requiredFollowups = @(Get-SafeUpdateRequiredFollowups $script:ClaudeEasyProfile)
+    if ($manifestVersion -eq 5) {
+        Complete-InstallResult 0 "ok" "subscriptions_updated" `
+            "已更新变化订阅并通过运行状态验收；当前档位的后续验收尚未完成。" `
+            @("subscription_update", "runtime_verification") @("global_script", "yaml", "mihomo", "auto_update", "runtime_health") $verifiedItems @() `
+            $false "subscription_update" $requiredFollowups
+    }
     Complete-InstallResult 0 "ok" "safe_update_verified" `
         "订阅、补丁和平台检查已完成；当前档位的后续验收尚未完成。" `
         @() @("global_script", "yaml", "mihomo", "auto_update") $verifiedItems @() `
@@ -1582,13 +1588,13 @@ try {
         $activationContext = Get-InstallRuntimeActivationContext $runtimeConfigPath $vergeInput
         Invoke-VerifiedFileTransaction $lightTargets
         if ($profileSource -ne "saved") { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
-        Write-Info "已为全部订阅安装共享国内域名直连规则、自动重新加载入口，并关闭全部远程订阅的自动更新；未修改 TUN 或 IPv6。"
+        Write-Info "已为全部订阅安装共享国内域名直连规则、自动重新加载入口，并将订阅自动更新的文件设置改为关闭；客户端内存设置仍需确认。未修改 TUN 或 IPv6。"
         Complete-InstallAfterTransaction `
             $activationContext $resolvedUsageProfile `
             @("global_script", "subscription_reactivation", "cn_domain_baseline", "auto_update") `
             @("file_transaction") `
             "installed_common_baseline" `
-            "已安装全部订阅共用的国内域名直连规则、更新加载入口，并关闭订阅自动更新。" `
+            "已安装全部订阅共用的国内域名直连规则、更新加载入口，并保存订阅自动更新关闭设置。" `
             $lightTargets
     }
     $vergeOutput = Set-YamlTopLevelScalar $vergeOutput "enable_tun_mode" "true"
@@ -1628,7 +1634,7 @@ try {
 
     if ($null -ne $usageProfileTarget) { Write-Info "已保存用途档位 $resolvedUsageProfile。" }
     Write-Info "已安装全局扩展脚本，之后每次加载或刷新订阅都会自动应用补丁。"
-    Write-Info "已自动关闭全部远程订阅的自动更新，并回读确认 profiles.yaml。"
+    Write-Info "已将 profiles.yaml 中的订阅自动更新设为关闭；仍需通过客户端界面确认内存设置。"
     Write-Info "已写入 TUN 与 DNS 设置。"
     Write-Info "安装程序从未退出、停止或重启 Clash Verge Rev。"
     Write-Info "已有 AI 分组只补全规则；没有时创建包含全部可用节点和代理提供者的独立选择器。安装程序不会替你选择节点。"

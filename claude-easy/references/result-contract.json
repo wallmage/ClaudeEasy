@@ -79,6 +79,11 @@
       "completed_scope": "subscription_update",
       "required_followups": "non_empty_array"
     },
+    "subscriptions_updated": {
+      "workflow_complete": false,
+      "completed_scope": "subscription_update",
+      "required_followups": "non_empty_array"
+    },
     "runtime_activation_required": {
       "workflow_complete": false,
       "completed_scope": "configuration_written",
