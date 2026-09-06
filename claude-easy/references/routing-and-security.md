@@ -31,7 +31,7 @@ dns:
 
 `policy.json` 的 `resolvers` 与 `direct_resolvers` 都直接连接解析器 IP，无需先解析解析器域名，避免引导解析错误引发证书失败。所有查询都使用 HTTPS，不加入广告拦截，不发送 ECS。
 
-`default-nameserver` 和 `proxy-server-nameserver` 属于网络启动边界，存在时必须是列表，安全用户值必须保留。`proxy-server-nameserver` 缺失、类型不对，或任一值使用 `system`、明文 DNS 或不安全的固定境外 DNS 组合时，统一迁移到策略中的大陆 IP DoH，并带 `#DIRECT` 直接连接；这组解析器不依赖系统 DNS、明文 53 或解析器域名引导。已有 `default-nameserver` 类型不对或含同类危险值时也迁移，字段缺失时不新增。这样节点域名解析不会重进 AdGuard、TUN `dns-hijack` 和 Mihomo Fake-IP 链。
+`default-nameserver` 和 `proxy-server-nameserver` 属于网络启动边界，存在时必须是列表，安全用户值必须保留。`proxy-server-nameserver` 缺失、类型不对，或任一值使用 `system`、明文 DNS 或不安全的固定境外 DNS 组合时，统一迁移到策略中的大陆 IP DoH，并带 `#DIRECT` 直接连接；这组解析器不依赖系统 DNS、明文 53 或解析器域名引导。已有 `default-nameserver` 类型不对或含同类危险值时也迁移，字段缺失时不新增。这样节点域名解析不会重进 AdGuard、TUN `dns-hijack` 和 Mihomo Fake-IP 链。 单项 DNS 修复同样先检查这个启动边界：将普通 DNS 改为经代理发送前，必须确认节点域名有不依赖该代理的解析路径；缺失时与普通 DNS 放在同一候选中修复、校验和加载，不能先上线普通 DNS 再补节点解析。“一次只改一个变量”以完整依赖为单位，不能拆开会相互等待的配置。YAML 和 Mihomo 候选校验通过只证明配置可接受，不证明节点解析或实际连接可用。
 
 `direct-nameserver` 不保留原值，统一写成策略文件中的大陆 IP DoH；同时把 `direct-nameserver-follow-policy` 设为 `false`。`nameserver-policy` 中的 `geosite:cn` 也必须覆盖为同一组解析器，避免 Fake-IP 初次解析先落到代理侧。这样不会让用户原有的 `system`、明文 DNS 或代理 DNS 使国内域名继续泄露或获得境外 CDN。直连 DoH 会让阿里或 DNSPod 看到国内域名查询，但本地运营商只能看到加密的 HTTPS 连接；这属于受管的分流，不是意外泄露。
 
