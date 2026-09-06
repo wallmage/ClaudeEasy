@@ -2071,7 +2071,7 @@ rules:
         (@($snapshotJson.required_followups) -join ",") -ceq (
             @(
                 "subscription_refresh", "safe_update_verification",
-                "client_switch_verification", "site_verification", "final_state_audit"
+                "client_auto_update_reconciliation", "client_switch_verification", "site_verification", "final_state_audit"
             ) -join ","
         )
     ) "safe update snapshot did not preserve the remaining profile 1 workflow"
@@ -2238,7 +2238,7 @@ rules:
         (@($profileThreeSnapshotJson.required_followups) -join ",") -ceq (
             @(
                 "subscription_refresh", "safe_update_verification",
-                "client_switch_verification", "site_verification",
+                "client_auto_update_reconciliation", "client_switch_verification", "site_verification",
                 "route_verification", "dns_deep_test",
                 "webrtc_test", "local_region_fingerprint_test",
                 "final_state_audit"
