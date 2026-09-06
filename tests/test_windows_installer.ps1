@@ -318,11 +318,10 @@ proxies:
 Assert-True ($remoteComparePlan.Count -eq 2) "remote comparison did not inspect every subscription"
 Assert-True (-not [bool]$remoteComparePlan[0].Changed) "semantic-only YAML formatting change was reported as an update"
 Assert-True ([bool]$remoteComparePlan[1].Changed) "remote subscription content change was not detected"
-foreach ($password in @("'prefix #old'", '"prefix \" #old"', "'prefix '' #old'", "|`n      #old", ">-`n      prefix #old")) {
-    $before = "proxies:`n  - name: node-a`n    password: $password`n"
-    $after = $before.Replace('#old', '#new')
-    Assert-True (-not (Test-RemoteSubscriptionSemanticEqual (Get-YamlPathFingerprints $before) (Get-YamlPathFingerprints $after))) "password content after # was ignored"
-}
+foreach ($name in @('node-a', 'foo "bar', "Bob 's", 'foo, "bar')) { foreach ($password in @("'prefix #old'", '"prefix \" #old"', "'prefix '' #old'", "|`n      #old", ">-`n      prefix #old", '!!str "secret #old"', '&credential "secret #old"')) {
+    $before = "proxies:`n  - name: $name`n    password: $password`n"
+    Assert-True (-not (Test-RemoteSubscriptionSemanticEqual (Get-YamlPathFingerprints $before) (Get-YamlPathFingerprints ($before.Replace('#old', '#new'))))) "password content after # was ignored"
+} }
 $flatLocalPath = Join-Path $remoteCompareRoot "flat.yaml"
 [System.IO.File]::WriteAllText($flatLocalPath, @'
 proxies:

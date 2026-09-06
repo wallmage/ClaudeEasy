@@ -24,7 +24,8 @@ function Get-YamlMappingEntry([string]$Line) {
     return [pscustomobject]@{ Key = $key; Value = $Matches[4] }
 }
 
-function Remove-YamlComment([string]$Text, [ref]$Quote) {
+function Remove-YamlComment([string]$Text, [ref]$Quote, [ref]$Flow) {
+    $plain = $false
     for ($i = 0; $i -lt $Text.Length; $i++) {
         $character = $Text[$i]
         if ($Quote.Value -eq '"' -and $character -eq '\') { $i++; continue }
@@ -32,12 +33,30 @@ function Remove-YamlComment([string]$Text, [ref]$Quote) {
             if ($character -eq $Quote.Value) {
                 if ($character -eq "'" -and $i + 1 -lt $Text.Length -and $Text[$i + 1] -eq "'") { $i++; continue }
                 $Quote.Value = ''
+                $plain = $true
             }
         } elseif ($character -eq '#' -and ($i -eq 0 -or [char]::IsWhiteSpace($Text[$i - 1]))) {
             return $Text.Substring(0, $i).TrimEnd()
-        } elseif ($character -in @("'", '"') -and
-                  ($i -eq 0 -or $Text[$i - 1] -match '[\s\[\{,:-]')) {
+        } elseif (-not $plain -and $character -in @('!', '&')) {
+            # Tags and anchors precede the scalar; they do not start plain text.
+            $property = [regex]::Match($Text.Substring($i), '^(?:!<[^>]*>|[!&][^\s,\[\]{}]*)')
+            $i += $property.Length - 1
+        } elseif ($character -in @("'", '"') -and -not $plain) {
             $Quote.Value = [string]$character
+        } elseif ((-not $plain -or $Flow.Value -gt 0) -and $character -in @('[', '{')) {
+            $Flow.Value++; $plain = $false
+        } elseif ($Flow.Value -gt 0 -and $character -in @(']', '}', ',')) {
+            if ($character -ne ',') { $Flow.Value-- }
+            $plain = $false
+        } elseif ($character -eq ':' -and ($i + 1 -eq $Text.Length -or
+                  [char]::IsWhiteSpace($Text[$i + 1]) -or
+                  ($Flow.Value -gt 0 -and $Text[$i + 1] -in @("'", '"', '[', '{', ']', '}', ',')))) {
+            $plain = $false
+        } elseif (-not $plain -and $character -in @('-', '?') -and
+                  ($i + 1 -eq $Text.Length -or [char]::IsWhiteSpace($Text[$i + 1]))) {
+            continue
+        } elseif (-not [char]::IsWhiteSpace($character)) {
+            $plain = $true
         }
     }
     return $Text
@@ -46,7 +65,8 @@ function Remove-YamlComment([string]$Text, [ref]$Quote) {
 function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
     if ([string]::IsNullOrWhiteSpace($Raw)) { throw "$Label 为空。" }
     $quote = ''
-    $value = (Remove-YamlComment $Raw ([ref]$quote)).Trim()
+    $flow = 0
+    $value = (Remove-YamlComment $Raw ([ref]$quote) ([ref]$flow)).Trim()
     if ($value.StartsWith("'") -and $value.EndsWith("'") -and $value.Length -ge 2) {
         return $value.Substring(1, $value.Length - 2).Replace("''", "'")
     }
@@ -69,6 +89,7 @@ function Get-YamlPathFingerprints([string]$Text) {
     $stack = New-Object System.Collections.ArrayList
 
     $quote = ''
+    $flow = 0
     $blockIndent = -1
     $blockPath = ''
     foreach ($line in $lines) {
@@ -80,14 +101,14 @@ function Get-YamlPathFingerprints([string]$Text) {
             $blockIndent = -1
         }
         if ($quote) {
-            $values[$blockPath].Add((Remove-YamlComment $line ([ref]$quote)))
+            $values[$blockPath].Add((Remove-YamlComment $line ([ref]$quote) ([ref]$flow)))
             continue
         }
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) { continue }
         if ($line -match "`t") { throw "YAML 使用了制表符缩进，无法安全比较。" }
         $indent = Get-YamlIndent $line
         $trimmed = $line.TrimStart()
-        $trimmed = (Remove-YamlComment $trimmed ([ref]$quote)).Trim()
+        $trimmed = (Remove-YamlComment $trimmed ([ref]$quote) ([ref]$flow)).Trim()
         if ($trimmed -match '(?:^|:\s+|-\s+)[|>](?:[1-9][+-]?|[+-][1-9]?)?$') { $blockIndent = $indent }
         $sequenceItem = $trimmed.StartsWith("- ")
         if ($blockIndent -ge 0 -and $sequenceItem -and $trimmed -match '^-\s+[^:]+:\s+') { $blockIndent += 2 }
