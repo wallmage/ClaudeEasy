@@ -538,7 +538,7 @@ function Invoke-TestPowerShell(
                 MihomoPath = [string]$ScriptArguments[$mihomoPathIndex + 1]
                 UsageProfile = if ($usageProfileIndex -ge 0) {
                     [string]$ScriptArguments[$usageProfileIndex + 1]
-                } else { "" }
+                } else { "0" }
                 Json = $ScriptArguments -contains "-Json"
                 RuntimePath = $runtimePath
                 RuntimeAfterText = if ([string]::IsNullOrEmpty($RuntimeAfterText)) {
