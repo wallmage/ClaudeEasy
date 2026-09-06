@@ -129,13 +129,12 @@ function New-UninstallBackup([string]$Path) {
     return (Backup-Versioned $Path $backupRoot "pre-uninstall")
 }
 
-function Get-InstalledSettingRestorePlan([object]$Entry, [string]$Path, [string]$Label) {
+function Get-InstalledSettingRestorePlan([object]$Entry, [string]$Path, [string]$Label, [int]$Profile = 0) {
     if ($null -eq $Entry) { return $null }
     $snapshot = Get-OptionalFileSnapshot $Path $Label
     $existed = [bool]$snapshot.Exists
     $currentBytes = $snapshot.Bytes
     $current = Get-BytesSha256 $currentBytes
-    $expected = [string]$Entry.InstalledSha256
     if ([bool]$Entry.Existed) {
         $originalBytes = [Convert]::FromBase64String([string]$Entry.OriginalBase64)
         if ($existed -and $current -eq (Get-BytesSha256 $originalBytes)) {
@@ -144,10 +143,9 @@ function Get-InstalledSettingRestorePlan([object]$Entry, [string]$Path, [string]
     } elseif (-not $existed) {
         return [pscustomobject]@{ Changed = $false; Path = $Path; Label = $Label }
     }
-    if ($current -ne $expected) {
-        throw "$Label 在安装后有新改动，未自动覆盖。"
-    }
-    $replacement = if ([bool]$Entry.Existed) { $originalBytes } else { [byte[]]@() }
+    $Entry = Resolve-InstallStateEntry $Entry $snapshot $Label $Profile
+    Assert-StateSnapshotUnchanged $Entry $snapshot $Label
+    $replacement = if ([bool]$Entry.Existed) { [Convert]::FromBase64String([string]$Entry.OriginalBase64) } else { [byte[]]@() }
     return [pscustomobject]@{
         Changed = $true
         Path = $Path
@@ -397,7 +395,7 @@ try {
             [pscustomobject]@{ Entry = $state.VergeYaml; Path = $vergePath; Label = "verge.yaml" }
         )
         foreach ($settingEntry in $settingEntries) {
-            $settingPlans += Get-InstalledSettingRestorePlan $settingEntry.Entry $settingEntry.Path $settingEntry.Label
+            $settingPlans += Get-InstalledSettingRestorePlan $settingEntry.Entry $settingEntry.Path $settingEntry.Label ([int]$usageState.Profile)
         }
     }
 

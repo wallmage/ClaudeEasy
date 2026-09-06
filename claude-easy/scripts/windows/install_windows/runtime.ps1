@@ -403,8 +403,15 @@ function Wait-ClashVergeRuntimeRefresh(
     if ($AbsoluteDeadline -lt $deadline) { $deadline = $AbsoluteDeadline }
     do {
         if (Test-Path -LiteralPath $RuntimePath -PathType Leaf) {
-            $current = Get-OptionalFileSnapshot $RuntimePath "Clash Verge Rev 运行配置"
-            if ($current.Exists -and (
+            $current = $null
+            try {
+                $current = Get-OptionalFileSnapshot $RuntimePath "Clash Verge Rev 运行配置"
+            } catch {
+                $snapshotException = $_.Exception
+                while ($null -ne $snapshotException.InnerException) { $snapshotException = $snapshotException.InnerException }
+                if (-not ($snapshotException -is [System.ComponentModel.Win32Exception]) -or $snapshotException.NativeErrorCode -notin @(32, 33)) { throw }
+            }
+            if ($null -ne $current -and $current.Exists -and (
                 $current.Identity -cne $previousIdentity -or
                 (Get-BytesSha256 $current.Bytes) -cne $previousSha256 -or
                 [System.IO.File]::GetLastWriteTimeUtc($RuntimePath).Ticks -gt $previousLastWriteTicks
@@ -429,16 +436,19 @@ function Wait-ClashVergeRuntimeHealthy(
     [switch]$RequireManagedPatchTransition
 ) {
     Wait-ClashVergeRuntimeRefresh $RuntimePath $PreviousContext $AbsoluteDeadline
-    $context = Get-ClashControllerContext $RuntimePath
-    Restore-ClashRuntimeSelections $context $Selections
-    $flush = Invoke-ClashControllerRequest $context "POST" "/cache/dns/flush"
-    if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     if ($AbsoluteDeadline -lt $deadline) { $deadline = $AbsoluteDeadline }
     $healthyContext = $null
+    $prepared = $false
     do {
         try {
             $context = Get-ClashControllerContext $RuntimePath
+            if (-not $prepared) {
+                Restore-ClashRuntimeSelections $context $Selections
+                $flush = Invoke-ClashControllerRequest $context "POST" "/cache/dns/flush"
+                if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
+                $prepared = $true
+            }
             Assert-ClashRuntimeHealthy `
                 $context $Selections $TunEnabled $Profile $CurlPath $Policy `
                 -ReadOnly -AbsoluteDeadline $AbsoluteDeadline

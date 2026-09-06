@@ -170,19 +170,23 @@ function Get-InstallRuntimeSemanticFingerprint([string]$Text) {
     return Get-BytesSha256 (ConvertTo-Utf8Bytes ($semanticLines -join "`n"))
 }
 
-function Restore-InstallTransactionFiles([object[]]$Targets) {
+function Restore-InstallTransactionFiles([object[]]$Targets, [int]$Profile) {
     $writeTargets = @()
     $deleteTargets = @()
     foreach ($target in @($Targets)) {
         $current = Get-OptionalFileSnapshot ([string]$target.Path) "安装恢复目标"
-        if (-not $current.Exists -or
-            (Get-BytesSha256 $current.Bytes) -cne (Get-BytesSha256 $target.Bytes)) {
-            throw "安装后的配置文件已发生并发变化，无法安全恢复。"
+        $entry = [pscustomobject]@{
+            Existed = [bool]$target.Existed
+            OriginalBase64 = $(if ($target.Existed) { [Convert]::ToBase64String($target.OriginalBytes) } else { "" })
+            InstalledSha256 = Get-BytesSha256 $target.Bytes
         }
+        $label = Split-Path -Leaf ([string]$target.Path)
+        $entry = Resolve-InstallStateEntry $entry $current $label $Profile
+        Assert-StateSnapshotUnchanged $entry $current $label
         if ([bool]$target.Existed) {
             $writeTargets += [pscustomobject]@{
                 Path = [string]$target.Path
-                Bytes = $target.OriginalBytes
+                Bytes = [Convert]::FromBase64String([string]$entry.OriginalBase64)
                 Existed = $true
                 OriginalBytes = $current.Bytes
                 OriginalIdentity = $current.Identity
@@ -219,6 +223,35 @@ function Test-InstallRuntimeRestored([object]$ActivationContext) {
         throw "Clash Verge Rev 客户端已变化，无法确认原运行状态。"
     }
     return $true
+}
+
+function Restore-InstallRuntime([object]$ActivationContext) {
+    $identity = Get-ClashVergeProcessIdentity
+    if (-not (Test-ClashVergeProcessIdentity $identity $ActivationContext.ClientIdentity)) {
+        throw "Clash Verge Rev 客户端已变化；未发送恢复快捷键。"
+    }
+    $before = [pscustomobject]@{
+        Snapshot = Get-OptionalFileSnapshot ([string]$ActivationContext.RuntimePath) "Clash Verge Rev 运行配置"
+        LastWriteTicks = [System.IO.File]::GetLastWriteTimeUtc([string]$ActivationContext.RuntimePath).Ticks
+    }
+    $identity = Get-ClashVergeProcessIdentity
+    if (-not (Test-ClashVergeProcessIdentity $identity $ActivationContext.ClientIdentity)) {
+        throw "Clash Verge Rev 客户端已变化；未发送恢复快捷键。"
+    }
+    Invoke-ClashVergeReactivationShortcut ([string]$ActivationContext.Shortcut)
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    Wait-ClashVergeRuntimeRefresh ([string]$ActivationContext.RuntimePath) $before $deadline
+    do {
+        try {
+            $null = Test-InstallRuntimeRestored $ActivationContext
+            $context = Get-ClashControllerContext ([string]$ActivationContext.RuntimePath)
+            $flush = Invoke-ClashControllerRequest $context "POST" "/cache/dns/flush"
+            if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
+            return $true
+        } catch { $failure = $_.Exception.Message }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Clash Verge Rev 原运行状态恢复未通过：$failure"
 }
 
 function Complete-InstallAfterTransaction(
@@ -270,13 +303,24 @@ function Complete-InstallAfterTransaction(
             if (-not (Test-ClashVergeProcessIdentity $afterFingerprintIdentity $ActivationContext.ClientIdentity)) {
                 throw "Clash Verge Rev 客户端已变化。"
             }
+            $requirePatchTransition = $true
+            $previousScript = @($TransactionTargets | Where-Object { $_.Existed -and (Split-Path -Leaf $_.Path) -ceq "Script.js" })
+            $previousUsage = @($TransactionTargets | Where-Object { $_.Existed -and (Split-Path -Leaf $_.Path) -ceq "claude-easy-usage-profile.json" })
+            if ($previousScript.Count -eq 1 -and $previousUsage.Count -eq 1) {
+                $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+                $oldUsage = $utf8.GetString($previousUsage[0].OriginalBytes) | ConvertFrom-Json
+                if ($oldUsage.Version -eq 2 -and $oldUsage.Profile -eq $Profile) {
+                    $oldEnvelope = Get-ClaudeEasyManagedScriptEnvelope ($utf8.GetString($previousScript[0].OriginalBytes)) $Profile
+                    $requirePatchTransition = (Get-BytesSha256 (ConvertTo-Utf8Bytes $oldEnvelope)) -cne $oldUsage.ManagedScriptSha256
+                }
+            }
             Invoke-ClashVergeReactivationShortcut ([string]$ActivationContext.Shortcut)
             $dispatchSent = $true
             $null = Wait-ClashVergeRuntimeHealthy `
                 ([string]$ActivationContext.RuntimePath) $preDispatchRuntimeContext `
                 $ActivationContext.Selections $expectedTunEnabled `
                 $Profile ([string]$ActivationContext.CurlPath) $ActivationContext.Policy `
-                -RequireManagedPatchTransition
+                -RequireManagedPatchTransition:$requirePatchTransition
             $verifiedIdentity = Get-ClashVergeProcessIdentity
             if (-not (Test-ClashVergeProcessIdentity $verifiedIdentity $ActivationContext.ClientIdentity)) {
                 throw "Clash Verge Rev 客户端已变化。"
@@ -284,6 +328,7 @@ function Complete-InstallAfterTransaction(
             Write-Info "已触发一次客户端重新加载，并完成运行配置与原选择验收。"
             Complete-InstallResult 0 "ok" $SuccessCode $SuccessSummary `
                 $Changes @($WrittenChecks + "runtime_health")
+            return
         } catch {
             $activationFailure = $_.Exception.Message
         }
@@ -304,7 +349,7 @@ function Complete-InstallAfterTransaction(
     Write-Info ("客户端加载验收失败：" + $activationFailure)
     $filesRestored = $false
     try {
-        Restore-InstallTransactionFiles $TransactionTargets
+        Restore-InstallTransactionFiles $TransactionTargets $Profile
         $filesRestored = $true
     } catch {
         Write-Info ("配置文件恢复失败：" + $_.Exception.Message)
@@ -314,6 +359,13 @@ function Complete-InstallAfterTransaction(
         $runtimeRestored = Test-InstallRuntimeRestored $ActivationContext
     } catch {
         Write-Info ("运行状态恢复无法确认：" + $_.Exception.Message)
+    }
+    if ($filesRestored -and -not $runtimeRestored) {
+        try {
+            $runtimeRestored = Restore-InstallRuntime $ActivationContext
+        } catch {
+            Write-Info ("旧配置重新加载未通过：" + $_.Exception.Message)
+        }
     }
     if ($filesRestored -and $runtimeRestored) {
         Complete-InstallResult 1 "rolled_back" "runtime_activation_rolled_back" `
@@ -1469,6 +1521,7 @@ try {
     $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
     $vergeExisted = [bool]$vergeSnapshot.Exists
     $vergeOriginalBytes = $vergeSnapshot.Bytes
+    $previousVerge = Resolve-InstallStateEntry $previousVerge $vergeSnapshot "verge.yaml" $savedUsageProfile
     Assert-StateSnapshotUnchanged $previousVerge $vergeSnapshot "verge.yaml"
     $vergeInput = if ($vergeExisted) { $strictUtf8.GetString($vergeOriginalBytes) } else { "" }
     $vergeOutput = Set-ClaudeEasyReactivationHotkey $vergeInput
@@ -1478,6 +1531,7 @@ try {
     $configSnapshot = Get-OptionalFileSnapshot $configPath "config.yaml"
     $configExisted = [bool]$configSnapshot.Exists
     $configOriginalBytes = $configSnapshot.Bytes
+    $previousConfig = Resolve-InstallStateEntry $previousConfig $configSnapshot "config.yaml" $savedUsageProfile
     Assert-StateSnapshotUnchanged $previousConfig $configSnapshot "config.yaml"
     $vergeBytes = ConvertTo-Utf8Bytes $vergeOutput
 

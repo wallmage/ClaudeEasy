@@ -210,7 +210,7 @@ function Get-ManagedTunLines([int]$Indent, [string]$Key) {
     switch ($Key) {
         "enable" { return @("${prefix}enable: true") }
         "stack" { return @("${prefix}stack: system") }
-        "dns-hijack" { return @("${prefix}dns-hijack:", "${prefix}  - any:53", "${prefix}  - tcp://any:53") }
+        "dns-hijack" { return @("${prefix}dns-hijack:", "${prefix}- any:53", "${prefix}- tcp://any:53") }
         "auto-route" { return @("${prefix}auto-route: true") }
         "auto-detect-interface" { return @("${prefix}auto-detect-interface: true") }
         "strict-route" { return @("${prefix}strict-route: true") }

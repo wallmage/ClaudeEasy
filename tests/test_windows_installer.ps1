@@ -90,6 +90,125 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+function Test-IncidentControllerReadiness {
+    $script:incidentAttempts = 0
+    function Wait-ClashVergeRuntimeRefresh { }
+    function Get-ClashControllerContext { return [pscustomobject]@{ Ready = $true } }
+    function Restore-ClashRuntimeSelections {
+        $script:incidentAttempts++
+        if ($script:incidentAttempts -eq 1) { throw "controller still starting" }
+    }
+    function Invoke-ClashControllerRequest { return @{ Status = 204 } }
+    function Assert-ClashRuntimeHealthy { }
+    $result = Wait-ClashVergeRuntimeHealthy "runtime" @{} @{} $true 3 "curl" @{} ([DateTime]::UtcNow.AddSeconds(2))
+    Assert-True ($result.Ready -and $script:incidentAttempts -eq 2) "controller readiness race aborted recovery"
+}
+Test-IncidentControllerReadiness
+
+function Test-IncidentRuntimeFileBusy {
+    $script:incidentSnapshots = 0
+    function Test-Path { return $true }
+    function Get-OptionalFileSnapshot {
+        $script:incidentSnapshots++
+        if ($script:incidentSnapshots -eq 1) { throw (New-Object System.ComponentModel.Win32Exception 32) }
+        return @{ Exists = $true; Identity = "new"; Bytes = [byte[]]@(1) }
+    }
+    $before = @{ Snapshot = @{ Identity = "old"; Bytes = [byte[]]@(0) }; LastWriteTicks = 1L }
+    Wait-ClashVergeRuntimeRefresh "runtime" $before ([DateTime]::UtcNow.AddSeconds(2))
+    Assert-True ($script:incidentSnapshots -eq 2) "client writer lock aborted runtime refresh"
+}
+Test-IncidentRuntimeFileBusy
+
+function Test-IncidentRuntimeRollback {
+    foreach ($scenario in @("recover", "already", "file-conflict", "client-changed", "upgrade")) {
+        $script:incidentDispatches = 0
+        $script:incidentRestoredFiles = $false
+        $script:incidentOldRuntime = $true
+        function Write-Info { }
+        function Get-ClashVergeProcessIdentity { return @{} }
+        function Test-ClashVergeProcessIdentity { return -not ($scenario -eq "client-changed" -and $script:incidentRestoredFiles) }
+        function Get-ClashControllerContext { return @{} }
+        function Get-OptionalFileSnapshot { return @{ Exists = $true; Identity = "fixture"; Bytes = [byte[]]@(1) } }
+        function Get-ClashRuntimeState { return @{} }
+        function Test-InstallRuntimeStateUnchanged { return $true }
+        function Invoke-ClashVergeReactivationShortcut {
+            $script:incidentDispatches++
+            $script:incidentOldRuntime = $script:incidentRestoredFiles
+        }
+        function Wait-ClashVergeRuntimeHealthy {
+            param($RuntimePath, $PreviousContext, $Selections, $TunEnabled, $Profile, $CurlPath, $Policy, [switch]$RequireManagedPatchTransition)
+            if ($scenario -ne "upgrade" -or $RequireManagedPatchTransition) { throw "candidate health failed" }
+        }
+        function Wait-ClashVergeRuntimeRefresh { }
+        function Restore-InstallTransactionFiles {
+            if ($scenario -eq "file-conflict") { throw "external change" }
+            $script:incidentRestoredFiles = $true
+            if ($scenario -eq "already") { $script:incidentOldRuntime = $true }
+        }
+        function Test-InstallRuntimeRestored {
+            if (-not $script:incidentOldRuntime) { throw "candidate still running" }
+            return $true
+        }
+        function Invoke-ClashControllerRequest { return @{ Status = 204 } }
+        function Complete-InstallResult($ExitCode, $Status, $Code) {
+            if ($ExitCode -eq 0) { $script:incidentSuccess = "RESULT:$Code"; return }
+            throw "RESULT:$Code"
+        }
+        $context = @{ ClientIdentity = @{}; RuntimePath = "runtime"; Shortcut = "CTRL+ALT+SHIFT+F24"; Selections = @{}; TunEnabled = $true; Policy = @{}; CurlPath = "curl" }
+        $targets = @()
+        if ($scenario -eq "upgrade") {
+            $oldScript = "// CLAUDEEASY BEGIN`nconst CLAUDE_EASY_USAGE_PROFILE = 3;`nfunction claudeEasyTransform() {}`nfunction claudeEasyDetectMain() {}`n// CLAUDEEASY END"
+            $oldState = @{ Version = 2; Profile = 3; ManagedScriptSha256 = Get-BytesSha256 (ConvertTo-Utf8Bytes $oldScript) } | ConvertTo-Json
+            $targets = @(
+                @{ Path = "Script.js"; Existed = $true; OriginalBytes = ConvertTo-Utf8Bytes $oldScript; Bytes = ConvertTo-Utf8Bytes ($oldScript + "`n// upgrade") },
+                @{ Path = "claude-easy-usage-profile.json"; Existed = $true; OriginalBytes = ConvertTo-Utf8Bytes $oldState; Bytes = ConvertTo-Utf8Bytes $oldState }
+            )
+        }
+        $result = ""
+        $script:incidentSuccess = ""
+        try { Complete-InstallAfterTransaction $context 3 @() @() "installed" "ok" $targets } catch { $result = $_.Exception.Message }
+        if ($script:incidentSuccess) { $result = $script:incidentSuccess }
+        $expectedCode = if ($scenario -eq "upgrade") { "installed" } elseif ($scenario -in @("recover", "already")) { "runtime_activation_rolled_back" } elseif ($scenario -eq "file-conflict") { "runtime_activation_recovery_failed" } else { "runtime_activation_recovery_required" }
+        $expectedDispatches = if ($scenario -eq "recover") { 2 } else { 1 }
+        Assert-True ($result -eq "RESULT:$expectedCode" -and $script:incidentDispatches -eq $expectedDispatches) "rollback $scenario failed: $result; dispatches=$script:incidentDispatches"
+    }
+}
+
+function Test-IncidentSettingReconciliation {
+    $original = "enable_system_proxy: true`r`nenable_external_controller: false`r`nother: keep`r`n"
+    foreach ($mask in 1..3) {
+        $current = $original
+        if ($mask -band 1) { $current = $current.Replace("enable_system_proxy: true", "enable_system_proxy: false") }
+        if ($mask -band 2) { $current = $current.Replace("enable_external_controller: false", "enable_external_controller: true") }
+        $entry = [pscustomobject]@{ Existed = $true; OriginalBase64 = [Convert]::ToBase64String((ConvertTo-Utf8Bytes $original)); InstalledSha256 = Get-BytesSha256 (ConvertTo-Utf8Bytes $original) }
+        $snapshot = @{ Exists = $true; Bytes = ConvertTo-Utf8Bytes $current }
+        $resolved = Resolve-InstallStateEntry $entry $snapshot "verge.yaml" 3
+        Assert-StateSnapshotUnchanged $resolved $snapshot "verge.yaml"
+        Assert-True ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($resolved.OriginalBase64)) -ceq $current) "uninstall would undo an accepted client switch"
+        foreach ($bad in @($current.Replace("other: keep", "other: changed"), $current.Replace("true", "false"))) {
+            $badSnapshot = @{ Exists = $true; Bytes = ConvertTo-Utf8Bytes $bad }
+            $candidate = Resolve-InstallStateEntry $entry $badSnapshot "verge.yaml" 1
+            $rejected = $false
+            try { Assert-StateSnapshotUnchanged $candidate $badSnapshot "verge.yaml" } catch { $rejected = $true }
+            if ($bad -cne $original) { Assert-True $rejected "accepted unrelated or unauthorized setting change" }
+        }
+    }
+    $installed = "tun:`r`n  dns-hijack:`r`n    - any:53`r`n    - tcp://any:53`r`nipv6: false`r`n"
+    $entry = [pscustomobject]@{ Existed = $true; OriginalBase64 = ""; InstalledSha256 = Get-BytesSha256 (ConvertTo-Utf8Bytes $installed) }
+    $snapshot = @{ Exists = $true; Bytes = ConvertTo-Utf8Bytes ($installed.Replace("    -", "  -")) }
+    Assert-StateSnapshotUnchanged (Resolve-InstallStateEntry $entry $snapshot "config.yaml" 3) $snapshot "config.yaml"
+}
+
+& {
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
+    $ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -in @("Complete-InstallAfterTransaction", "Restore-InstallRuntime")
+    }, $false) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
+    Test-IncidentRuntimeRollback
+    Test-IncidentSettingReconciliation
+}
+
 function Test-GroupSelected([string]$Name) {
     return (-not $TestGroup) -or ($TestGroup -eq $Name)
 }
@@ -689,7 +808,7 @@ tun:
 '@
     $updatedSameIndentTunList = Set-YamlTunMapping $sameIndentTunList
     $managedDnsHijackEntries = @($updatedSameIndentTunList -split "`r?`n" | Where-Object {
-        $_ -match '^    - '
+        $_ -match '^  - '
     })
     Assert-True (
         $updatedSameIndentTunList -notmatch 'stale\.example:53'
@@ -702,8 +821,8 @@ tun:
     ) "TUN update removed a user comment adjacent to the next sibling"
     Assert-True (
         $managedDnsHijackEntries.Count -eq 2 -and
-        $managedDnsHijackEntries -ccontains '    - any:53' -and
-        $managedDnsHijackEntries -ccontains '    - tcp://any:53'
+        $managedDnsHijackEntries -ccontains '  - any:53' -and
+        $managedDnsHijackEntries -ccontains '  - tcp://any:53'
     ) "TUN update did not write exactly the two managed dns-hijack entries"
     $eofAdjacentTunComment = @'
 tun:
@@ -1836,7 +1955,7 @@ rules:
             $runtimeHealthFailureJson.workflow_complete -eq $false -and
             $runtimeHealthFailureJson.completed_scope -eq "configuration_restored" -and
             @($runtimeHealthFailureJson.required_followups) -cnotcontains "client_runtime_activation" -and
-            @([System.IO.File]::ReadAllLines($runtimeHealthFailureLog)).Count -eq 1 -and
+            @([System.IO.File]::ReadAllLines($runtimeHealthFailureLog)).Count -eq 2 -and
             -not (Test-Path -LiteralPath (Join-Path $runtimeHealthFailureHome "profiles/Script.js")) -and
             [System.IO.File]::ReadAllText((Join-Path $runtimeHealthFailureHome "config.yaml")) -ceq $runtimeFixtureConfigText -and
             (@($runtimeHealthFailureJson.messages) -join "`n") -match "本地控制器"

@@ -353,9 +353,10 @@ function Get-OptionalFileSnapshot([string]$Path, [string]$Label) {
     }
     Initialize-VerifiedFileNative
     $directoryHandles = @(Open-VerifiedDirectoryChain (Split-Path -Parent $Path))
-    $handle = [ClaudeEasy.VerifiedDeleteNative]::Open($Path, $false, $false)
+    $handle = $null
     $stream = $null
     try {
+        $handle = [ClaudeEasy.VerifiedDeleteNative]::Open($Path, $false, $false)
         if ([ClaudeEasy.VerifiedDeleteNative]::IsReparsePoint($handle)) {
             throw "$Label 不能是符号链接或其他重解析点。"
         }
@@ -373,7 +374,7 @@ function Get-OptionalFileSnapshot([string]$Path, [string]$Label) {
     } finally {
         if ($null -ne $stream) {
             $stream.Dispose()
-        } else {
+        } elseif ($null -ne $handle) {
             $handle.Dispose()
         }
         for ($index = $directoryHandles.Count - 1; $index -ge 0; $index--) {
@@ -2040,6 +2041,51 @@ function Assert-InstallState([object]$State) {
     if (-not $numericVersion -or [long]$version -ne 1) { throw "安装状态文件无效：版本不受支持。" }
     Assert-InstallStateEntry (Get-InstallStateEntry $State "VergeYaml") "VergeYaml"
     Assert-InstallStateEntry (Get-InstallStateEntry $State "ConfigYaml") "ConfigYaml"
+}
+
+function Resolve-InstallStateEntry([object]$Entry, [object]$Snapshot, [string]$Label, [int]$Profile) {
+    if ($null -eq $Entry -or -not $Snapshot.Exists) { return $Entry }
+    $actual = Get-BytesSha256 $Snapshot.Bytes
+    if ($actual -eq $Entry.InstalledSha256) { return $Entry }
+    $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $text = $utf8.GetString($Snapshot.Bytes)
+    $expected = [string]$Entry.InstalledSha256
+    $original = $utf8.GetString([Convert]::FromBase64String([string]$Entry.OriginalBase64))
+    if ($Label -ceq "config.yaml") {
+        # Clash serializes this sequence at the same indentation as its key.
+        $previous = [regex]::Replace($text,
+            '(?m)(^  dns-hijack:\r?\n)  - any:53(\r?\n)  - tcp://any:53(?=\r?$)',
+            '${1}    - any:53${2}    - tcp://any:53')
+        if ((Get-BytesSha256 (ConvertTo-Utf8Bytes $previous)) -ne $expected) { return $Entry }
+    } elseif ($Label -ceq "verge.yaml" -and $Entry.Existed) {
+        $matched = $false
+        foreach ($mask in 1..3) {
+            if (($mask -band 1) -and $Profile -ne 3) { continue }
+            $previous = $text
+            $restored = $original
+            foreach ($change in @(
+                @{ Bit = 1; Key = "enable_system_proxy"; Before = "true"; After = "false" },
+                @{ Bit = 2; Key = "enable_external_controller"; Before = "false"; After = "true" }
+            )) {
+                if (-not ($mask -band $change.Bit)) { continue }
+                $pattern = '(?m)^' + $change.Key + ': ' + $change.After + '(?=\r?$)'
+                if ([regex]::Matches($previous, $pattern).Count -ne 1) { continue }
+                $previous = [regex]::Replace($previous, $pattern, ($change.Key + ": " + $change.Before))
+                $restored = Set-YamlTopLevelScalar $restored $change.Key $change.After
+            }
+            if ((Get-BytesSha256 (ConvertTo-Utf8Bytes $previous)) -eq $expected) {
+                $original = $restored
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) { return $Entry }
+    } else { return $Entry }
+    return [pscustomobject]@{
+        Existed = [bool]$Entry.Existed
+        OriginalBase64 = [Convert]::ToBase64String($utf8.GetBytes($original))
+        InstalledSha256 = $actual
+    }
 }
 
 function Assert-StateSnapshotUnchanged([object]$Entry, [object]$Snapshot, [string]$Label) {

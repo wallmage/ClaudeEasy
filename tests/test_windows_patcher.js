@@ -3,22 +3,14 @@ const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { isDeepStrictEqual } = require('node:util');
-const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
+const os = require('node:os');
 const root = path.resolve(__dirname, '..');
 const enginePath = path.join(root, 'claude-easy/scripts/windows/clash_verge_global.js');
-const policyPath = path.join(root, 'claude-easy/references/policy.json');
-const installerPath = path.join(root, 'claude-easy/scripts/install_windows.ps1');
-const installerModuleDir = path.join(root, 'claude-easy/scripts/windows/install_windows');
 const fixturePath = path.join(root, 'tests/fixtures/main_group_cases.json');
-const available = fs.existsSync(enginePath) && fs.existsSync(policyPath);
-const fixturesAvailable = available && fs.existsSync(fixturePath);
-const engine = available ? require(enginePath) : null;
+const engine = require(enginePath);
 
-test('Windows engine files exist', () => {
-  assert.equal(fs.existsSync(enginePath), true, 'Windows enhancement script is missing');
-  assert.equal(fs.existsSync(policyPath), true, 'canonical policy is missing');
-});
-test('global transform applies common policy', { skip: !available }, () => {
+test('global transform applies common policy', () => {
   const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   const safeGroup = engine.claudeEasyRouteGroupName(patched);
@@ -37,7 +29,7 @@ test('global transform applies common policy', { skip: !available }, () => {
   assert.ok(patched.rules.includes('DOMAIN,raw.githubusercontent.com,AI'));
   assert.ok(patched.rules.includes('DOMAIN,storage.googleapis.com,AI'));
 });
-test('routes UDP by deterministic destination and fails closed for AI', { skip: !available }, () => {
+test('routes UDP by deterministic destination and fails closed for AI', () => {
   const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   const cnProvider = engine.CLAUDE_EASY_POLICY.cnDomainProvider.name;
@@ -59,7 +51,7 @@ test('routes UDP by deterministic destination and fails closed for AI', { skip: 
   }
   assert.deepEqual(engine.claudeEasyTransform(structuredClone(patched), 'fixture'), patched);
 });
-test('routes local UDP direct before the global UDP guard', { skip: !available }, () => {
+test('routes local UDP direct before the global UDP guard', () => {
   const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');
   const globalUdp = patched.rules.indexOf(`NETWORK,UDP,${ai.name}`);
@@ -88,7 +80,7 @@ for (const [name, declaredMembership] of [
   ['OpenAI', ['美国家宽 01']],
   ['AI Tools', ['REJECT']]
 ]) {
-  test(`preserves user AI group membership: ${name}`, { skip: !available }, () => {
+  test(`preserves user AI group membership: ${name}`, () => {
     const config = baseConfig();
     config['proxy-groups'] = config['proxy-groups'].filter((group) => group.name !== 'AI');
     config['proxy-groups'].push({ name, type: 'select', proxies: declaredMembership });
@@ -100,7 +92,7 @@ for (const [name, declaredMembership] of [
     assert.deepEqual(engine.main(structuredClone(patched), 'subscription'), patched);
   });
 }
-test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvailable }, () => {
+test('shared main-group fixtures match the Ruby engine', () => {
   const shared = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
   assert.equal(shared.schema_version, 1);
   const cases = shared.cases;
@@ -113,7 +105,7 @@ test('shared main-group fixtures match the Ruby engine', { skip: !fixturesAvaila
     }
   }
 });
-test('shared full-transform fixtures match the Ruby engine', { skip: !fixturesAvailable }, () => {
+test('shared full-transform fixtures match the Ruby engine', () => {
   const fixtures = JSON.parse(fs.readFileSync(fixturePath, 'utf8')).transform_cases;
   for (const fixture of fixtures) {
     const input = structuredClone(fixture.input);
@@ -174,3 +166,26 @@ function baseConfig() {
     ]
   };
 }
+
+// Boa 0.21.1 is the engine embedded in Clash Verge Rev 2.5.2.
+test('large subscription finishes within the client script deadline', {
+  skip: !process.env.CLAUDEEASY_BOA_PATH
+}, () => {
+  const config = baseConfig();
+  config.proxies = Array.from({ length: 172 }, (_,i) => ({ name: `Node ${i}`, type: 'ss', server: 'example.test', port: 443, cipher: 'aes-128-gcm', password: 'fixture' }));
+  config['proxy-groups'] = Array.from({ length: 31 }, (_,i) => ({ name: i === 0 ? 'Main' : i === 1 ? 'AI' : `Group ${i}`, type: 'select', proxies: config.proxies.map(p => p.name) }));
+  config.rules = Array.from({ length: 3475 }, (_,i) => `DOMAIN-SUFFIX,site${i}.test,Main`).concat('MATCH,Main');
+  for (let i = 0; i < 250; i++) config.dns['nameserver-policy'][`+.site${i}.test`] = ['https://1.1.1.1/dns-query#Main'];
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'claudeeasy-boa-'));
+  try {
+    const script = path.join(directory, 'large.js');
+    fs.writeFileSync(script, 'try {\n' + fs.readFileSync(enginePath, 'utf8') + '\nJSON.stringify(main(' + JSON.stringify(config) + ',"fixture"));\n} catch(e) {"__error_flag__" + e.toString()}');
+    const result = execFileSync(process.env.CLAUDEEASY_BOA_PATH, [script], { encoding: 'utf8', timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
+    const patched = JSON.parse(JSON.parse(result));
+    assert.deepEqual(patched, engine.main(config, 'fixture'));
+    assert.notDeepEqual(patched, config);
+    assert.deepEqual(engine.main(patched, 'fixture'), patched);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -131,6 +131,12 @@ jobs:
           else
             git show --check --format= HEAD
           fi
+      - name: Boa script deadline regression (under 5 seconds)
+        run: |
+          curl --fail --location --retry 2 https://github.com/boa-dev/boa/releases/download/v0.21.1/boa-aarch64-apple-darwin -o "$RUNNER_TEMP/boa"
+          echo "07c472eea8f8fb799c7c6dd0802a6b68b37c605ed386096a27780074ca064413  $RUNNER_TEMP/boa" | shasum -a 256 -c -
+          chmod +x "$RUNNER_TEMP/boa"
+          echo "CLAUDEEASY_BOA_PATH=$RUNNER_TEMP/boa" >> "$GITHUB_ENV"
       - name: Node syntax and contract checks
         run: |
           node --check claude-easy/scripts/windows/clash_verge_global.js
