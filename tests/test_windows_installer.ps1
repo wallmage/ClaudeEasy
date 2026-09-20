@@ -1566,20 +1566,22 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
     return ,([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'response')))
 }
 '@)
-    foreach ($scenario in @('same', 'changed', 'invalid', 'concurrent')) {
+    foreach ($scenario in @('same', 'changed', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
         Write-TestUtf8Text $checkPath $checkBody
         $fetchLog = Join-Path $checkModules 'fetch.log'
         if (Test-Path -LiteralPath $fetchLog) { Remove-Item -LiteralPath $fetchLog }
         $response = switch ($scenario) {
             'changed' { $checkBody.Replace('mode: rule', 'mode: global') }
             'invalid' { '<html>password=fixture-secret</html>' }
+            'truncated-flow' { "proxies: [`n" }
+            'truncated-quote' { 'mode: "rule' }
             default { $checkBody }
         }
         Write-TestUtf8Text (Join-Path $checkModules 'response') $response
         if ($scenario -eq 'concurrent') { Write-TestUtf8Text (Join-Path $checkModules 'concurrent') '1' }
         $beforeCheck = Get-TreeContentSnapshot $checkHome
         $invocation = Invoke-TestPowerShell $checkInstaller @('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-SubscriptionName', 'Selected', '-Json')
-        $expectedExit = if ($scenario -in @('invalid', 'concurrent')) { 1 } else { 0 }
+        $expectedExit = if ($scenario -in @('same', 'changed')) { 0 } else { 1 }
         $checkResult = Assert-JsonResult $invocation 'install' $expectedExit
         Assert-True ($checkResult.operation -ceq 'check_subscription_updates') 'wrong check operation'
         Assert-True ($checkResult.changes.Count -eq 0 -and $checkResult.items.Count -eq 1) 'check result changed scope'
@@ -1619,6 +1621,22 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
     $aliasResult = Assert-JsonResult $aliasCheck 'install' 1
     Assert-True ($aliasResult.status -ceq 'failed') 'aliased local baseline was accepted'
     Assert-True (@([System.IO.File]::ReadAllLines($fetchLog)).Count -eq $fetchCount) 'aliased targets downloaded before rejection'
+
+    foreach ($case in @(
+        @{ Raw = "'Bob''s'"; Name = "Bob's"; Count = 1 },
+        @{ Raw = '"Team #1"'; Name = 'Team #1'; Count = 1 },
+        @{ Raw = 'Other'; Name = ''; Count = 2 }
+    )) {
+        $index = $checkIndex.Replace('name: Selected', ('name: ' + $case.Raw))
+        Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $index.Replace('https://other.invalid/sub', 'https://selected.invalid/sub')
+        Write-TestUtf8Text (Join-Path $checkProfiles 'B.yaml') $checkBody
+        $arguments = @('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-Json')
+        if ($case.Name) { $arguments += @('-SubscriptionName', $case.Name) }
+        $beforeCheck = Get-TreeContentSnapshot $checkHome
+        $nameResult = Assert-JsonResult (Invoke-TestPowerShell $checkInstaller $arguments) 'install' 0
+        Assert-True ($nameResult.status -ceq 'no_change' -and $nameResult.items.Count -eq $case.Count) 'valid subscription names rejected'
+        Assert-True ((Get-TreeContentSnapshot $checkHome) -ceq $beforeCheck) 'name selection changed app tree'
+    }
 
     $missingUpdateWorkflowRejected = $false
     try {
