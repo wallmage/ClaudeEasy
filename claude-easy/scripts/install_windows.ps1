@@ -8,6 +8,8 @@
     [switch]$BeginSafeUpdateRefresh,
     [switch]$VerifySafeUpdate,
     [switch]$SafeUpdateChangedOnly,
+    [switch]$CheckSubscriptionUpdates,
+    [string]$SubscriptionName = "",
     [switch]$RefreshConfirmed,
     [switch]$ListBackups,
     [string]$CompareBackup = "",
@@ -51,6 +53,7 @@ if (-not $resultContractLoaded) {
 $script:ClaudeEasyMessages = New-Object System.Collections.ArrayList
 $script:ClaudeEasyOperation = if ($BackupSubscriptions) { "backup_subscriptions" } elseif ($SnapshotProfiles) { "snapshot_profiles" } elseif ($BeginSafeUpdateRefresh) { "begin_safe_update_refresh" } elseif ($VerifySafeUpdate) { "verify_safe_update" } elseif ($SafeUpdateChangedOnly) { "safe_update_changed_only" } elseif ($ListBackups) { "list_backups" } elseif (-not [string]::IsNullOrWhiteSpace($CompareBackup)) { "compare_backup" } elseif (-not [string]::IsNullOrWhiteSpace($RestoreBackup)) { "restore_backup" } elseif ($ShowUsageProfile) { "show_usage_profile" } else { "install" }
 $script:ClaudeEasyProfile = $null
+if ($CheckSubscriptionUpdates) { $script:ClaudeEasyOperation = 'check_subscription_updates' }
 
 $installerModuleRoot = Join-Path (Join-Path $PSScriptRoot "windows") "install_windows"
 $enginePath = Join-Path (Join-Path $PSScriptRoot "windows") "clash_verge_global.js"
@@ -84,7 +87,7 @@ try {
         "Get-InstallStateEntry", "Assert-InstallState", "Assert-StateSnapshotUnchanged", "New-InstallStateEntry",
         "Split-YamlLines", "Set-YamlTopLevelScalar", "Set-YamlTunMapping", "Test-GeneratedYaml", "Get-RedactedYamlChangedPaths",
         "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionTargets", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionLabel", "Get-PublicSubscriptionResult",
-        "Get-RemoteSubscriptionHttpBytes", "Get-RemoteSubscriptionUpdatePlan",
+        "Get-RemoteSubscriptionHttpBytes", "Get-RemoteSubscriptionUpdatePlan", "Get-SubscriptionCheckResult",
         "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Merge-RemoteSubscriptionAutoUpdateOwnership", "Assert-ClaudeEasyProxyGroupCollection",
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning", "Get-ClashVergeProcessIdentity", "Test-ClashVergeProcessIdentity",
@@ -394,6 +397,13 @@ if ($unboundArguments.Count -gt 0) {
     Complete-InstallResult 64 "invalid_request" "invalid_arguments" "参数错误；未执行任何修改。"
 }
 
+if (($PSBoundParameters.ContainsKey('SubscriptionName') -and
+     (-not $CheckSubscriptionUpdates -or [string]::IsNullOrWhiteSpace($SubscriptionName))) -or
+    ($CheckSubscriptionUpdates -and ($PSBoundParameters.ContainsKey('UsageProfile') -or
+     $PSBoundParameters.ContainsKey('MihomoPath') -or $RefreshConfirmed -or $ExpectedCurrentSha256))) {
+    Complete-InstallResult 64 'invalid_request' 'conflicting_operations' '检查参数不能与写入或验收参数组合；未执行任何修改。'
+}
+
 $parsedUsageProfileArgument = 0
 if (-not [int]::TryParse(
         [string]$UsageProfile,
@@ -425,6 +435,7 @@ if ([string]::IsNullOrWhiteSpace($AppHome) -or -not (Test-Path -LiteralPath $App
 }
 
 $requestedOperations = @(
+    [bool]$CheckSubscriptionUpdates,
     [bool]$BackupSubscriptions,
     [bool]$SnapshotProfiles,
     [bool]$BeginSafeUpdateRefresh,
@@ -464,6 +475,11 @@ $autoUpdateStatePath = Join-Path $AppHome "claude-easy-auto-update-state.json"
 $usageStatePath = Join-Path $AppHome "claude-easy-usage-profile.json"
 $safeUpdateStatePath = Join-Path $AppHome "claude-easy-safe-update.json"
 $targetScript = Join-Path $profilesDirectory "Script.js"
+
+if ($CheckSubscriptionUpdates) {
+    $check = Get-SubscriptionCheckResult $AppHome $SubscriptionName
+    Complete-InstallResult $check.exit_code $check.status $check.code $check.summary_zh @() @() $check.items
+}
 
 $mutationLock = $null
 try {

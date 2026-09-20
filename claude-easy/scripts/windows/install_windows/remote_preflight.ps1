@@ -69,6 +69,76 @@ function Test-RemoteSubscriptionSemanticEqual([hashtable]$Before, [hashtable]$Af
     return $true
 }
 
+function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName) {
+    $results = @()
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+        $indexPath = Join-Path $AppHome 'profiles.yaml'
+        $index = Get-OptionalFileSnapshot $indexPath '订阅索引'
+        if (-not $index.Exists) { throw 'missing index' }
+        $records = @(Get-RemoteSubscriptionProfileItems @(Split-YamlLines ($utf8.GetString($index.Bytes))) | Where-Object { $_.Type -eq 'remote' })
+        if ($SubscriptionName) {
+            $records = @($records | Where-Object { $_.Name -ceq $SubscriptionName })
+            if ($records.Count -ne 1) { throw 'ambiguous subscription' }
+        }
+        if ($records.Count -eq 0) { throw 'no remote subscriptions' }
+        $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($record in $records) {
+            if (-not $names.Add([string]$record.Name)) { throw 'ambiguous subscription' }
+        }
+        foreach ($record in $records) {
+            $item = [ordered]@{
+                id = 'ce-subscription-v1-' + (Get-BytesSha256 (ConvertTo-Utf8Bytes ([string]$record.Uid)))
+                name = Protect-ClaudeEasyResultText ([string]$record.Name)
+                status = 'failed'
+                update_available = $null
+                comparison_basis = 'local_subscription'
+            }
+            try {
+                $path = Resolve-RemoteSubscriptionTargetPath -Item $record -Directory (Join-Path $AppHome 'profiles')
+                $before = Get-OptionalFileSnapshot $path '本地订阅'
+                if (-not $before.Exists -or $record.UrlCount -ne 1) { throw 'invalid subscription' }
+                $url = ConvertFrom-SubscriptionScalar ([string]$record.UrlRaw) 'url'
+                $remoteBytes = Get-RemoteSubscriptionHttpBytes $url
+                $localText = $utf8.GetString($before.Bytes).TrimStart([char]0xFEFF)
+                $remoteText = $utf8.GetString([byte[]]$remoteBytes).TrimStart([char]0xFEFF)
+                Test-GeneratedYaml $localText '本地订阅' | Out-Null
+                Test-GeneratedYaml $remoteText '远程订阅' | Out-Null
+                $local = Get-YamlPathFingerprints $localText
+                $remote = Get-YamlPathFingerprints $remoteText
+                if ($local.Count -eq 0 -or $remote.Count -eq 0) { throw 'invalid subscription body' }
+                $after = Get-OptionalFileSnapshot $path '本地订阅'
+                $indexAfter = Get-OptionalFileSnapshot $indexPath '订阅索引'
+                if (-not $after.Exists -or $before.Identity -cne $after.Identity -or
+                    (Get-BytesSha256 $before.Bytes) -cne (Get-BytesSha256 $after.Bytes) -or
+                    -not $indexAfter.Exists -or $index.Identity -cne $indexAfter.Identity -or
+                    (Get-BytesSha256 $index.Bytes) -cne (Get-BytesSha256 $indexAfter.Bytes)) { throw 'local snapshot changed' }
+                $changed = -not (Test-RemoteSubscriptionSemanticEqual $local $remote)
+                $item.status = if ($changed) { 'pending' } else { 'unchanged' }
+                $item.update_available = [bool]$changed
+            } catch {
+                $item['code'] = 'subscription_check_failed'
+            }
+            $results += [pscustomobject]$item
+        }
+    } catch {
+        $results = @()
+    }
+    $failed = @($results | Where-Object { $_.status -eq 'failed' }).Count
+    $status = 'failed'; $code = 'subscription_check_failed'; $summary = '订阅检查失败；本次未修改配置。'; $exitCode = 1
+    if ($results.Count -gt 0 -and $failed -eq 0) {
+        $exitCode = 0
+        if (@($results | Where-Object { $_.update_available }).Count -gt 0) {
+            $status = 'ok'; $code = 'subscription_updates_available'; $summary = '订阅与本地配置有变化；本次未修改配置。'
+        } else {
+            $status = 'no_change'; $code = 'subscriptions_unchanged'; $summary = '订阅与本地配置无变化；本次未修改配置。'
+        }
+    } elseif ($failed -gt 0 -and $failed -lt $results.Count) {
+        $status = 'partial'; $code = 'subscription_check_partial'; $summary = '部分订阅检查失败；本次未修改配置。'
+    }
+    return [pscustomobject]@{ status = $status; code = $code; summary_zh = $summary; exit_code = $exitCode; changes = @(); items = @($results) }
+}
+
 function Get-RemoteSubscriptionUpdatePlan(
     [object[]]$Targets,
     [scriptblock]$RemoteContentProvider = $null,

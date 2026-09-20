@@ -68,13 +68,14 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 
 ### 策略读取路由
 
-所有网络任务先完整阅读 [references/policy-core.md](references/policy-core.md)，再按下表读取任务模块；每个选中的文件都要完整阅读。按当前平台读取 [references/macos.md](references/macos.md) 或 [references/windows.md](references/windows.md)，不得读取另一平台后混用规则。
+所有网络任务先完整阅读 [references/policy-core.md](references/policy-core.md)，再按下表读取任务模块。纯订阅检查只读表中指定小节；其他任务完整读取所选文件及当前平台的 [references/macos.md](references/macos.md) 或 [references/windows.md](references/windows.md)，不得读取另一平台后混用规则。
 
 | 任务 | 必须读取 | 条件追加 |
 | --- | --- | --- |
 | Diagnostics：慢、间歇失败、打不开、全红、分流异常或泄漏 | [references/diagnostics.md](references/diagnostics.md)；当前平台文件 | 涉及共同国内直连、DNS、TUN、代理组、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md)；需要改档或执行 Patch 时再读档位文件 |
 | Patch：首次安装、改变用途档位或完整安全增强 | [references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | Windows 完整配置、备份恢复或未完成事务时读 [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md) |
-| 检查订阅是否有更新或更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 无 |
+| 只检查订阅是否有更新 | [只检查订阅](references/safe-update-and-recovery.md#只检查订阅)（含两端读取要求，按当前平台执行） | 入口实际失败时才追踪相关实现；不读 Patch、恢复或浏览器验收章节 |
+| 更新全部订阅 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)、[references/routing-and-security.md](references/routing-and-security.md)；当前平台文件 | 无 |
 | 列出、比较或恢复备份 | [references/safe-update-and-recovery.md](references/safe-update-and-recovery.md)、[references/profiles-and-patch.md](references/profiles-and-patch.md)；当前平台文件 | 恢复后验证 DNS、分流、AI 或 WebRTC 时读 [references/routing-and-security.md](references/routing-and-security.md) |
 | AdGuard 配置或恢复 | [references/adguard.md](references/adguard.md)；当前平台文件 | 仅用户明确要求配置、恢复或导入 AdGuard 时读取 |
 | 维护、审查或测试 Skill | 与改动直接相关的策略文件 | 只有跨模块维护、权威归属审查或整体一致性检查才读取全部七个策略文件 |
@@ -111,7 +112,7 @@ AdGuard 是高级可选能力：默认不检测、不安装、不配置，也不
 - **Diagnostics 模块**：慢、间歇失败、打不开、全红、分流异常或泄漏时使用。不能因为用户提到 Clash 就先运行补丁。
 - **订阅检查与更新**：用户询问是否有更新，或明确要求更新全部订阅时使用；它不是 Patch 或 Diagnostics 的隐含步骤。
 
-如果本次由 schedule task 触发，第一步运行 `scripts/check_skill_update.sh`（macOS）或 `scripts/check_skill_update.ps1`（Windows）检查 GitHub 版本；返回 `skill_updated` 时重新读取已安装的 `SKILL.md`，再按新版本继续。随后仍按订阅比对流程执行：先逐份读取远端配置，全部相同就结束，有变化只更新变化目标。
+如果本次由 schedule task 触发，第一步运行 `scripts/check_skill_update.sh`（macOS）或 `scripts/check_skill_update.ps1`（Windows）检查 GitHub 版本；返回 `skill_updated` 时重新读取已安装的 `SKILL.md`，再按新版本继续。随后按本次请求选择只检查或更新入口。
 
 ### 平台入口
 
