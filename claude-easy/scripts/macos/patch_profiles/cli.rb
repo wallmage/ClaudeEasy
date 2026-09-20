@@ -66,6 +66,7 @@ module ClaudeEasy
   end
 
   def cli_requires_outer_lock?(options)
+    return false if options[:check_subscription_updates]
     return false if options[:disable_subscription_auto_update] ||
                     options[:restore_owned_subscription_auto_update] ||
                     options[:list_backups] || options[:compare_backup]
@@ -294,6 +295,8 @@ module ClaudeEasy
       opts.on("--restore-backup ID", "恢复指定备份") { |value| options[:restore_backup] = value }
       opts.on("--expected-current-sha256 SHA256", "恢复前要求当前配置哈希匹配") { |value| options[:expected_current_sha256] = value }
       opts.on("--safe-update-all", "更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
+      opts.on("--check-subscription-updates", "只检查远程订阅是否变化，不修改配置") { options[:check_subscription_updates] = true }
+      opts.on("--subscription-name NAME", "只检查完整显示名匹配的订阅") { |value| options[:subscription_name] = value }
       opts.on("--reconcile-client-switches", "按已保存档位协调 ClashX Meta 客户端开关") do
         options[:reconcile_client_switches] = true
       end
@@ -311,7 +314,7 @@ module ClaudeEasy
       end
     end
     parser.parse!(argv)
-    validate_wrapper_commit_receipt(options)
+    validate_wrapper_commit_receipt(options) unless options[:check_subscription_updates]
 
     if options[:help]
       return emit_cli_result(
@@ -327,12 +330,16 @@ module ClaudeEasy
       options[:disable_subscription_auto_update],
       options[:restore_owned_subscription_auto_update], options[:snapshot_initial],
       options[:list_backups], options[:compare_backup], options[:restore_backup],
-      options[:safe_update_all], options[:reconcile_client_switches],
+      options[:safe_update_all], options[:check_subscription_updates], options[:reconcile_client_switches],
       options[:recover_profile_transaction], options[:repair_clashx_logs]
     ].compact.reject { |value| value == false }
     incompatible_options = explicit_operations.length > 1 ||
                            (!explicit_operations.empty? &&
                             (options[:dry_run] || !options[:auto_reload]))
+    incompatible_options ||= options[:subscription_name] && !options[:check_subscription_updates]
+    incompatible_options ||= options[:check_subscription_updates] &&
+      (options[:usage_profile] || options[:wrapper_commit_receipt] || options[:wrapper_commit_nonce] ||
+       options[:uninstall_recovery_state] || options[:expected_current_sha256] || !argv.empty?)
     if incompatible_options
       return emit_cli_result(
         operation: "options", exit_code: 64, status: "invalid_request",
@@ -340,6 +347,24 @@ module ClaudeEasy
       ) if options[:json]
       warn "命令选项不能组合；未执行任何修改。"
       return 64
+    end
+
+    if options[:check_subscription_updates]
+      begin
+        profile = saved_usage_profile
+        raise InvalidConfigError, "尚未保存用途档位" unless [1, 2, 3].include?(profile)
+        directories = options[:profile_dirs].empty? ? default_profile_directories : options[:profile_dirs]
+        policy = JSON.parse(File.read(options[:policy], encoding: "UTF-8"))
+        result = check_subscription_updates(directories, policy, usage_profile: profile,
+                                            subscription_name: options[:subscription_name])
+      rescue StandardError
+        result = { operation: "check_subscription_updates", exit_code: 1, status: "failed",
+                   code: "subscription_check_failed", summary_zh: "检查所需配置不可用；本次未修改配置。" }
+      end
+      return emit_cli_result(**result) if options[:json]
+      puts result.fetch(:summary_zh)
+      Array(result[:items]).each { |item| puts "#{item.fetch('name')}：#{item.fetch('status')}" }
+      return result.fetch(:exit_code)
     end
 
     if options[:print_core_status]

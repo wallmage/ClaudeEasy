@@ -38,7 +38,9 @@ module ClaudeEasy
 
     var primaryApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.metacubex.ClashX.meta");
     var alternateApplications = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.MetaCubeX.ClashX.meta");
-    if (Number(primaryApplications.count) + Number(alternateApplications.count) !== 1) fail("ClashX Meta process is not unique");
+    var count = Number(primaryApplications.count) + Number(alternateApplications.count);
+    if (count === 0) fail("client_process_not_visible");
+    if (count > 1) fail("client_process_not_unique");
     var application = Number(primaryApplications.count) === 1 ?
       primaryApplications.objectAtIndex(0) : alternateApplications.objectAtIndex(0);
 
@@ -648,11 +650,14 @@ module ClaudeEasy
     raise InvalidConfigError, "远程订阅地址无效" unless url.start_with?("https://")
     raise InvalidConfigError, "远程订阅地址无效" if url.include?("\r") || url.include?("\n")
     timeout_seconds = Integer(timeout_seconds)
-    stdout, _stderr, status = Open3.capture3(
+    stdout, stderr, status = Open3.capture3(
       "/usr/bin/osascript", "-l", "JavaScript", "-e", CLASHX_NATIVE_FETCH_SCRIPT,
       stdin_data: "#{timeout_seconds}\n#{MAX_REMOTE_SUBSCRIPTION_BYTES}\n#{url}\n", binmode: true
     )
-    raise InvalidConfigError, "远程订阅下载失败" unless status.success? && !stdout.empty?
+    unless status.success? && !stdout.empty?
+      marker = stderr.to_s[/\bclient_process_not_(?:visible|unique)\b/]
+      raise InvalidConfigError, marker || "远程订阅下载失败"
+    end
     raise InvalidConfigError, "远程订阅下载失败" if stdout.bytesize > MAX_REMOTE_SUBSCRIPTION_BYTES
 
     stdout
@@ -666,6 +671,55 @@ module ClaudeEasy
     patched = patch(remote, policy, usage_profile: usage_profile)
     return false unless %i[updated unchanged].include?(patched.fetch(:status))
     dump_config(current) == dump_config(patched.fetch(:config))
+  end
+
+  def check_subscription_updates(directories, policy, usage_profile:, subscription_name: nil)
+    records = remote_subscription_records
+    if subscription_name
+      records = records.select { |record| record.fetch(:name) == subscription_name }
+      raise InvalidConfigError, "订阅名称无法唯一对应" unless records.length == 1
+    end
+    raise InvalidConfigError, "订阅清单无效" if records.empty? || records.map { |r| r.fetch(:name) }.uniq.length != records.length
+    items = records.map do |record|
+      item = {
+        "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(record.fetch(:name))}",
+        "name" => safe_label(record.fetch(:name)), "status" => "failed", "update_available" => nil,
+        "comparison_basis" => "local_profile_with_saved_patch"
+      }
+      begin
+        target = remote_subscription_targets(directories, [record]).first
+        before = regular_file_snapshot_once(target.fetch(:path), "本地订阅")
+        source = fetch_remote_subscription(target)
+        validate_remote_subscription_source!(target, source)
+        current = load_yaml(before.fetch(:bytes).dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
+        remote = load_yaml(source.to_s.b.dup.force_encoding(Encoding::UTF_8), target.fetch(:name))
+        patched = patch(remote, policy, usage_profile: usage_profile)
+        raise InvalidConfigError, "订阅转换失败" unless %i[updated unchanged].include?(patched.fetch(:status))
+        after = regular_file_snapshot_once(target.fetch(:path), "本地订阅")
+        raise InvalidConfigError, "本地订阅发生变化" unless before == after
+        changed = dump_config(current) != dump_config(patched.fetch(:config))
+        item.merge!("status" => changed ? "pending" : "unchanged", "update_available" => changed)
+      rescue StandardError => error
+        item["code"] = %w[client_process_not_visible client_process_not_unique].include?(error.message) ?
+          error.message : "subscription_check_failed"
+      end
+      item
+    end
+    failed = items.count { |item| item.fetch("status") == "failed" }
+    status, code, summary = if failed == items.length
+                              ["failed", "subscription_check_failed", "订阅检查失败；本次未修改配置。"]
+                            elsif failed.positive?
+                              ["partial", "subscription_check_partial", "部分订阅检查失败；本次未修改配置。"]
+                            elsif items.any? { |item| item.fetch("update_available") }
+                              ["ok", "subscription_updates_available", "订阅与本地配置有变化；本次未修改配置。"]
+                            else
+                              ["no_change", "subscriptions_unchanged", "订阅与本地配置无变化；本次未修改配置。"]
+                            end
+    { operation: "check_subscription_updates", status: status, code: code, summary_zh: summary,
+      exit_code: failed.zero? ? 0 : 1, profile: usage_profile, changes: [], items: items }
+  rescue StandardError
+    { operation: "check_subscription_updates", status: "failed", code: "subscription_check_failed",
+      summary_zh: "无法确定检查目标；本次未修改配置。", exit_code: 1, changes: [], items: [] }
   end
 
   def validate_remote_subscription_source!(target, source)

@@ -51,6 +51,108 @@ class MacosPatcherTest < Minitest::Test
     @policy = JSON.parse(File.read(POLICY_PATH)) if PATCHER_AVAILABLE
   end
 
+  def test_subscription_check_selects_once_without_writes_and_reports_failures
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "Selected.yaml")
+      local = ClaudeEasy.dump_config(ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config))
+      File.write(path, local)
+      File.write(File.join(dir, "Other.yaml"), "invalid: [")
+      records = [{ name: "Selected", url: "https://selected.invalid/sub" },
+                 { name: "Other", url: "https://other.invalid/sub" }]
+      scenarios = {
+        same: ["no_change", false], changed: ["ok", true],
+        invalid: ["failed", nil], conversion: ["failed", nil], concurrent: ["failed", nil]
+      }
+      scenarios.each do |scenario, (status, available)|
+        File.write(path, local)
+        calls = []
+        remote = base_config
+        remote["mixed-port"] = 8999 if scenario == :changed
+        remote = { "proxies" => [], "rules" => [] } if scenario == :conversion
+        fetch = lambda do |target|
+          calls << target.fetch(:name)
+          File.write(path, local + "# concurrent\n") if scenario == :concurrent
+          scenario == :invalid ? "invalid: [" : YAML.dump(remote)
+        end
+        stdout, = capture_io do
+          ClaudeEasy.stub(:remote_subscription_records, records) do
+            ClaudeEasy.stub(:saved_usage_profile, 1) do
+              ClaudeEasy.stub(:fetch_remote_subscription, fetch) do
+                ClaudeEasy.stub(:enter_outer_wrapper_lock, ->(*) { flunk "check entered write workflow" }) do
+                  code = ClaudeEasy.cli(["--check-subscription-updates", "--subscription-name", "Selected",
+                                        "--profile-dir", dir, "--json"])
+                  assert_equal(status == "failed" ? 1 : 0, code)
+                end
+              end
+            end
+          end
+        end
+        result = JSON.parse(stdout)
+        assert_equal "check_subscription_updates", result.fetch("operation")
+        assert_equal status, result.fetch("status"), scenario.to_s
+        actual = result.fetch("items").first.fetch("update_available")
+        available.nil? ? assert_nil(actual) : assert_equal(available, actual)
+        assert_equal [], result.fetch("changes")
+        assert_equal ["Selected"], calls
+        assert_equal %w[Other.yaml Selected.yaml], Dir.children(dir).sort
+        assert_equal(scenario == :concurrent ? local + "# concurrent\n" : local, File.read(path))
+        refute_includes stdout, "fixture-secret"
+        refute_includes stdout, "selected.invalid"
+      end
+      [[], [records.first, records.first]].each do |ambiguous|
+        ClaudeEasy.stub(:remote_subscription_records, ambiguous) do
+          ClaudeEasy.stub(:fetch_remote_subscription, ->(*) { flunk "invalid name downloaded" }) do
+            result = ClaudeEasy.check_subscription_updates([dir], @policy, usage_profile: 1, subscription_name: "Selected")
+            assert_equal "failed", result.fetch(:status)
+          end
+        end
+      end
+      ClaudeEasy.stub(:remote_subscription_records, records) do
+        ClaudeEasy.stub(:fetch_remote_subscription, ->(*) { YAML.dump(base_config) }) do
+          result = ClaudeEasy.check_subscription_updates([dir], @policy, usage_profile: 1)
+          assert_equal "partial", result.fetch(:status)
+          assert_equal 2, result.fetch(:items).length
+        end
+      end
+    end
+  end
+
+  def test_subscription_check_rejects_write_options_and_missing_profile_before_downloading
+    [
+      %w[--subscription-name Selected],
+      %w[--check-subscription-updates --safe-update-all],
+      %w[--check-subscription-updates --usage-profile 1],
+      %w[--check-subscription-updates --dry-run],
+      %w[--check-subscription-updates --wrapper-commit-receipt /tmp/receipt],
+      %w[--check-subscription-updates --expected-current-sha256 abc]
+    ].each do |args|
+      stdout, = capture_io do
+        ClaudeEasy.stub(:enter_outer_wrapper_lock, ->(*) { flunk "invalid check entered write workflow" }) do
+          assert_equal 64, ClaudeEasy.cli(args + ["--json"])
+        end
+      end
+      assert_equal "invalid_request", JSON.parse(stdout).fetch("status")
+    end
+    ClaudeEasy.stub(:saved_usage_profile, nil) do
+      ClaudeEasy.stub(:fetch_remote_subscription, ->(*) { flunk "unset profile downloaded" }) do
+        stdout, = capture_io { assert_equal 1, ClaudeEasy.cli(%w[--check-subscription-updates --json]) }
+        assert_equal "failed", JSON.parse(stdout).fetch("status")
+      end
+    end
+  end
+
+  def test_subscription_check_preserves_only_native_visibility_errors
+    %w[client_process_not_visible client_process_not_unique secret-unknown-error].each do |message|
+      status = Struct.new(:success?).new(false)
+      Open3.stub(:capture3, ["", "Error: #{message} password=secret-value", status]) do
+        error = assert_raises(ClaudeEasy::InvalidConfigError) do
+          ClaudeEasy.fetch_remote_subscription({ url: "https://example.invalid/sub" })
+        end
+        assert_equal(message.start_with?("client_process_") ? message : "远程订阅下载失败", error.message)
+      end
+    end
+  end
+
   def test_route_targets_are_observed_in_parallel_and_any_failure_fails_batch
     requester = lambda do |_method, endpoint, _body = nil|
       payload = case endpoint
@@ -511,8 +613,6 @@ class MacosPatcherTest < Minitest::Test
     refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
                     "URLSession:dataTask:didReceiveResponse:completionHandler:"
     assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "var finalURL = response.URL;"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    "Number(primaryApplications.count) + Number(alternateApplications.count) !== 1"
     refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "Alamofire/"
 
     status = Struct.new(:success?).new(true)
@@ -593,26 +693,21 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_clashx_native_request_treats_bridged_application_counts_as_numbers
-    lines = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT.lines
-    count_check = lines.select do |line|
-      line.include?("primaryApplications =") ||
-        line.include?("alternateApplications =") ||
-        line.include?("ClashX Meta process is not unique")
-    end.join
-    count_check.sub!(/var primaryApplications = .*;/, 'var primaryApplications = {count: "1"};')
-    count_check.sub!(/var alternateApplications = .*;/, 'var alternateApplications = {count: "0"};')
-    script = <<~JAVASCRIPT
-      function fail(message) { throw new Error(message); }
-      #{count_check}
-      "unique";
-    JAVASCRIPT
-
-    stdout, stderr, status = Open3.capture3(
-      "/usr/bin/osascript", "-l", "JavaScript", "-e", script
-    )
-
-    assert status.success?, stderr
-    assert_equal "unique\n", stdout
+    [ ["0", "0", "client_process_not_visible"], ["1", "0", "unique"],
+      ["0", "1", "unique"], ["1", "1", "client_process_not_unique"] ].each do |primary, alternate, expected|
+      check = ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT[/var primaryApplications = .*?(?=var application =)/m]
+      check.sub!(/var primaryApplications = .*;/, "var primaryApplications = {count: #{primary.to_json}};")
+      check.sub!(/var alternateApplications = .*;/, "var alternateApplications = {count: #{alternate.to_json}};")
+      script = "function fail(message) { throw new Error(message); }\n#{check}\n'unique';"
+      stdout, stderr, status = Open3.capture3("/usr/bin/osascript", "-l", "JavaScript", "-e", script)
+      if expected == "unique"
+        assert status.success?, stderr
+        assert_equal "unique\n", stdout
+      else
+        refute status.success?
+        assert_includes stderr, expected
+      end
+    end
   end
 
   def test_clashx_native_request_selects_the_nonempty_application_list_with_bridged_counts

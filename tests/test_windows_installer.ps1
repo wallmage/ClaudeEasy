@@ -1541,6 +1541,79 @@ items:
 '@
 
     if (Test-GroupSelected 'safe-update') {
+    # A check must stop before the install lock, fetch only the selected body, and never write app state.
+    $checkHome = Join-Path $sandbox 'subscription-check'
+    $checkProfiles = Join-Path $checkHome 'profiles'
+    New-Item -ItemType Directory -Path $checkProfiles -Force | Out-Null
+    $checkIndex = "items:`n  - uid: A`n    type: remote`n    name: Selected`n    url: https://selected.invalid/sub`n  - uid: B`n    type: remote`n    name: Other`n    url: https://other.invalid/sub`n"
+    $checkBody = "proxies: []`nproxy-groups: []`nrules: [MATCH,DIRECT]`nmode: rule`n"
+    $checkPath = Join-Path $checkProfiles 'A.yaml'
+    Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $checkIndex
+    Write-TestUtf8Text (Join-Path $checkProfiles 'B.yaml') 'invalid: ['
+    $checkPackage = Join-Path $sandbox 'subscription-check-package'
+    Copy-Item -LiteralPath (Join-Path $root 'claude-easy') -Destination $checkPackage -Recurse
+    $checkInstaller = Join-Path $checkPackage 'scripts/install_windows.ps1'
+    $checkModules = Join-Path $checkPackage 'scripts/windows/install_windows'
+    [System.IO.File]::AppendAllText((Join-Path $checkModules 'remote_preflight.ps1'), @'
+
+function Enter-AppHomeMutationLock { throw 'check entered mutation workflow' }
+function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
+    if ($Url -cne 'https://selected.invalid/sub') { throw 'unselected subscription fetched' }
+    [System.IO.File]::AppendAllText((Join-Path $PSScriptRoot 'fetch.log'), "fetch`n")
+    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'concurrent')) {
+        [System.IO.File]::AppendAllText((Join-Path $AppHome 'profiles/A.yaml'), "# concurrent`n")
+    }
+    return ,([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'response')))
+}
+'@)
+    foreach ($scenario in @('same', 'changed', 'invalid', 'concurrent')) {
+        Write-TestUtf8Text $checkPath $checkBody
+        $fetchLog = Join-Path $checkModules 'fetch.log'
+        if (Test-Path -LiteralPath $fetchLog) { Remove-Item -LiteralPath $fetchLog }
+        $response = switch ($scenario) {
+            'changed' { $checkBody.Replace('mode: rule', 'mode: global') }
+            'invalid' { '<html>password=fixture-secret</html>' }
+            default { $checkBody }
+        }
+        Write-TestUtf8Text (Join-Path $checkModules 'response') $response
+        if ($scenario -eq 'concurrent') { Write-TestUtf8Text (Join-Path $checkModules 'concurrent') '1' }
+        $beforeCheck = Get-TreeContentSnapshot $checkHome
+        $invocation = Invoke-TestPowerShell $checkInstaller @('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-SubscriptionName', 'Selected', '-Json')
+        $expectedExit = if ($scenario -in @('invalid', 'concurrent')) { 1 } else { 0 }
+        $checkResult = Assert-JsonResult $invocation 'install' $expectedExit
+        Assert-True ($checkResult.operation -ceq 'check_subscription_updates') 'wrong check operation'
+        Assert-True ($checkResult.changes.Count -eq 0 -and $checkResult.items.Count -eq 1) 'check result changed scope'
+        $expectedStatus = switch ($scenario) { 'same' { 'no_change' }; 'changed' { 'ok' }; default { 'failed' } }
+        Assert-True ($checkResult.status -ceq $expectedStatus) "wrong check status: $scenario"
+        if ($expectedExit -eq 0) {
+            Assert-True ($checkResult.items[0].update_available -eq ($scenario -eq 'changed')) 'wrong change judgment'
+        } else {
+            Assert-True ($null -eq $checkResult.items[0].update_available) 'failed check claimed a change judgment'
+        }
+        Assert-True (@([System.IO.File]::ReadAllLines($fetchLog)).Count -eq 1) 'check fetched more than once'
+        if ($scenario -eq 'concurrent') {
+            Assert-True ((Read-TestUtf8Text $checkPath) -ceq ($checkBody + "# concurrent`n")) 'check overwrote concurrent data'
+            Write-TestUtf8Text $checkPath $checkBody
+            Remove-Item -LiteralPath (Join-Path $checkModules 'concurrent')
+        }
+        Assert-True ((Get-TreeContentSnapshot $checkHome) -ceq $beforeCheck) 'check changed app tree'
+        Assert-True (($checkResult | ConvertTo-Json -Depth 20) -notmatch 'fixture-secret|selected.invalid') 'check exposed sensitive content'
+    }
+    $fetchCount = @([System.IO.File]::ReadAllLines($fetchLog)).Count
+    foreach ($name in @('Missing', '')) {
+        $badIndex = if ($name -eq '') { $checkIndex.Replace('name: Other', 'name: Selected') } else { $checkIndex }
+        Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $badIndex
+        $selectedName = if ($name -eq '') { 'Selected' } else { $name }
+        $invalidCheck = Invoke-TestPowerShell $checkInstaller @('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-SubscriptionName', $selectedName, '-Json')
+        Assert-JsonResult $invalidCheck 'install' 1 | Out-Null
+    }
+    Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $checkIndex
+    foreach ($extra in @(@('-SafeUpdateChangedOnly'), @('-UsageProfile', '1'), @('-RefreshConfirmed'))) {
+        $conflictCheck = Invoke-TestPowerShell $checkInstaller (@('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-Json') + $extra)
+        Assert-JsonResult $conflictCheck 'install' 64 | Out-Null
+    }
+    Assert-True (@([System.IO.File]::ReadAllLines($fetchLog)).Count -eq $fetchCount) 'invalid check fetched a subscription'
+
     $missingUpdateWorkflowRejected = $false
     try {
         New-ClaudeEasyResult -Command install -Operation safe_update_changed_only -Ok $true `
