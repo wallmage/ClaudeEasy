@@ -77,15 +77,14 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
         $index = Get-OptionalFileSnapshot $indexPath '订阅索引'
         if (-not $index.Exists) { throw 'missing index' }
         $records = @(Get-RemoteSubscriptionProfileItems @(Split-YamlLines ($utf8.GetString($index.Bytes))) | Where-Object { $_.Type -eq 'remote' })
+        foreach ($record in $records) {
+            if ($record.NameRaw) { $record.Name = ConvertFrom-SubscriptionScalar ([string]$record.NameRaw) 'name' }
+        }
         if ($SubscriptionName) {
             $records = @($records | Where-Object { $_.Name -ceq $SubscriptionName })
             if ($records.Count -ne 1) { throw 'ambiguous subscription' }
         }
         if ($records.Count -eq 0) { throw 'no remote subscriptions' }
-        $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-        foreach ($record in $records) {
-            if (-not $names.Add([string]$record.Name)) { throw 'ambiguous subscription' }
-        }
         $resolvedPaths = @{}
         $uniquePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($record in $records) {
@@ -116,8 +115,8 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
                 $remoteText = $utf8.GetString([byte[]]$remoteBytes).TrimStart([char]0xFEFF)
                 Test-GeneratedYaml $localText '本地订阅' | Out-Null
                 Test-GeneratedYaml $remoteText '远程订阅' | Out-Null
-                $local = Get-YamlPathFingerprints $localText
-                $remote = Get-YamlPathFingerprints $remoteText
+                $local = Get-YamlPathFingerprints $localText -RequireComplete
+                $remote = Get-YamlPathFingerprints $remoteText -RequireComplete
                 if ($local.Count -eq 0 -or $remote.Count -eq 0) { throw 'invalid subscription body' }
                 $after = Get-OptionalFileSnapshot $path '本地订阅'
                 $indexAfter = Get-OptionalFileSnapshot $indexPath '订阅索引'

@@ -83,7 +83,7 @@ function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
     return $value
 }
 
-function Get-YamlPathFingerprints([string]$Text) {
+function Get-YamlPathFingerprints([string]$Text, [switch]$RequireComplete) {
     $lines = @(Split-YamlLines $Text)
     $values = @{}
     $stack = New-Object System.Collections.ArrayList
@@ -110,6 +110,7 @@ function Get-YamlPathFingerprints([string]$Text) {
         $trimmed = $line.TrimStart()
         $trimmed = (Remove-YamlComment $trimmed ([ref]$quote) ([ref]$flow)).Trim()
         if ($trimmed -match '(?:^|:\s+|-\s+)[|>](?:[1-9][+-]?|[+-][1-9]?)?$') { $blockIndent = $indent }
+        if ($RequireComplete -and $trimmed -match '(?:^|:\s+|-\s+)(?:(?:!<[^>]*>|[!&][^\s]+)\s+)+[|>](?:[1-9][+-]?|[+-][1-9]?)?$') { $blockIndent = $indent }
         $sequenceItem = $trimmed.StartsWith("- ")
         if ($blockIndent -ge 0 -and $sequenceItem -and $trimmed -match '^-\s+[^:]+:\s+') { $blockIndent += 2 }
         while ($stack.Count -gt 0 -and
@@ -148,6 +149,7 @@ function Get-YamlPathFingerprints([string]$Text) {
         [void]$stack.Add([pscustomobject]@{ Indent = $indent; Path = $path; Sequence = $false })
     }
 
+    if ($RequireComplete -and ($quote -or $flow -ne 0)) { throw 'YAML contains an unfinished quoted or flow value.' }
     $fingerprints = @{}
     foreach ($path in $values.Keys) {
         $fingerprints[$path] = Get-BytesSha256 (ConvertTo-Utf8Bytes (($values[$path].ToArray()) -join "`n"))

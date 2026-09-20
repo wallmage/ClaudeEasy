@@ -127,6 +127,7 @@ function Get-RemoteSubscriptionProfileItems([string[]]$Lines) {
             Type = $typeValue
             Uid = $uidValue
             Name = $nameValue
+            NameRaw = $(if ($nameValues.Count -eq 1) { [string]$nameValues[0] } else { $null })
             Updated = $updatedValue
             FileRaw = $(if ($fileValues.Count -eq 1) { [string](@($fileValues)[0]) } else { $null })
             FileCount = $fileValues.Count
