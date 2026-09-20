@@ -1627,6 +1627,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
     foreach ($case in @(
         @{ Raw = "'Bob''s'"; Name = "Bob's"; Count = 1 },
         @{ Raw = '"Team #1"'; Name = 'Team #1'; Count = 1 },
+        @{ Raw = 'Team, Premium'; Name = 'Team, Premium'; Count = 1 },
         @{ Raw = 'Other'; Name = ''; Count = 2 }
     )) {
         Invoke-DeferredProbe "subscription name $($case.Raw)" {

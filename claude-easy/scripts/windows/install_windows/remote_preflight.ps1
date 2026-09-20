@@ -78,7 +78,7 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
         if (-not $index.Exists) { throw 'missing index' }
         $records = @(Get-RemoteSubscriptionProfileItems @(Split-YamlLines ($utf8.GetString($index.Bytes))) | Where-Object { $_.Type -eq 'remote' })
         foreach ($record in $records) {
-            if ($record.NameRaw) { $record.Name = ConvertFrom-SubscriptionScalar ([string]$record.NameRaw) 'name' }
+            if ($record.NameRaw -match '^\s*[''"]') { $record.Name = ConvertFrom-SubscriptionScalar ([string]$record.NameRaw) 'name' }
         }
         if ($SubscriptionName) {
             $records = @($records | Where-Object { $_.Name -ceq $SubscriptionName })
