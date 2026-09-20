@@ -1546,7 +1546,37 @@ items:
     $checkProfiles = Join-Path $checkHome 'profiles'
     New-Item -ItemType Directory -Path $checkProfiles -Force | Out-Null
     $checkIndex = "items:`n  - uid: A`n    type: remote`n    name: Selected`n    url: https://selected.invalid/sub`n  - uid: B`n    type: remote`n    name: Other`n    url: https://other.invalid/sub`n"
-    $checkBody = "proxies: []`nproxy-groups: []`nrules: [MATCH,DIRECT]`nmode: rule`ndescription: !!str |`n  [literal`n"
+    $checkBody = @'
+proxies:
+  - name: Stay 1
+    type: ss
+    server: 192.0.2.1
+    port: 8443
+    password: fixture-secret
+  - name: Old
+    type: ss
+  - name: edge.fixture.invalid
+    type: ss
+    server: edge.fixture.invalid
+    port: 8443
+proxy-groups:
+  - name: Select
+    type: select
+    proxies: [Stay 1, Old]
+proxy-providers:
+  Feed:
+    type: http
+    url: https://selected.invalid/old
+rules:
+  - DOMAIN,old.example,DIRECT
+
+  # Rule spacing must not hide changes.
+  - IP-CIDR,192.0.2.0/24,DIRECT
+  - DST-PORT,8443,DIRECT
+mode: rule
+description: !!str |
+  [literal
+'@
     $checkPath = Join-Path $checkProfiles 'A.yaml'
     Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $checkIndex
     Write-TestUtf8Text (Join-Path $checkProfiles 'B.yaml') 'invalid: ['
@@ -1567,12 +1597,14 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
 }
 '@)
     $fetchLog = Join-Path $checkModules 'fetch.log'
-    foreach ($scenario in @('same', 'changed', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
+    foreach ($scenario in @('same', 'changed', 'reordered', 'unconfirmed', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
         Invoke-DeferredProbe "subscription check $scenario" {
         Write-TestUtf8Text $checkPath $checkBody
         if (Test-Path -LiteralPath $fetchLog) { Remove-Item -LiteralPath $fetchLog }
         $response = switch ($scenario) {
-            'changed' { $checkBody.Replace('mode: rule', 'mode: global') }
+            'changed' { $checkBody.Replace('Old', 'New').Replace('8443', '9443').Replace('fixture-secret', 'fixture-secret-new').Replace('/old', '/new').Replace('old.example', 'new.example').Replace('192.0.2.0/24', '198.51.100.0/24').Replace('mode: rule', 'mode: global') }
+            'reordered' { $checkBody.Replace('[Stay 1, Old]', '[Old, Stay 1]') }
+            'unconfirmed' { $checkBody.Replace('proxies:', 'proxies: &nodes') }
             'invalid' { '<html>password=fixture-secret</html>' }
             'truncated-flow' { "proxies: [`n" }
             'truncated-quote' { 'mode: "rule' }
@@ -1582,14 +1614,29 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
         if ($scenario -eq 'concurrent') { Write-TestUtf8Text (Join-Path $checkModules 'concurrent') '1' }
         $beforeCheck = Get-TreeContentSnapshot $checkHome
         $invocation = Invoke-TestPowerShell $checkInstaller @('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-SubscriptionName', 'Selected', '-Json')
-        $expectedExit = if ($scenario -in @('same', 'changed')) { 0 } else { 1 }
+        $expectedExit = if ($scenario -in @('same', 'changed', 'reordered', 'unconfirmed')) { 0 } else { 1 }
         $checkResult = Assert-JsonResult $invocation 'install' $expectedExit
         Assert-True ($checkResult.operation -ceq 'check_subscription_updates') 'wrong check operation'
         Assert-True ($checkResult.changes.Count -eq 0 -and $checkResult.items.Count -eq 1) 'check result changed scope'
-        $expectedStatus = switch ($scenario) { 'same' { 'no_change' }; 'changed' { 'ok' }; default { 'failed' } }
+        $expectedStatus = if ($scenario -eq 'same') { 'no_change' } elseif ($expectedExit -eq 0) { 'ok' } else { 'failed' }
         Assert-True ($checkResult.status -ceq $expectedStatus) "wrong check status: $scenario"
         if ($expectedExit -eq 0) {
-            Assert-True ($checkResult.items[0].update_available -eq ($scenario -eq 'changed')) 'wrong change judgment'
+            Assert-True ($checkResult.items[0].update_available -eq ($scenario -ne 'same')) 'wrong change judgment'
+            $details = @($checkResult.items[0].details)
+            if ($scenario -eq 'changed') {
+                Assert-True (@($details | Where-Object { $_.section -ceq 'proxies' -and $_.action -ceq 'added' -and $_.name -ceq 'New' }).Count -eq 1) 'added node missing'
+                Assert-True (@($details | Where-Object { $_.section -ceq 'proxies' -and $_.action -ceq 'removed' -and $_.name -ceq 'Old' }).Count -eq 1) 'removed node missing'
+                $node = @($details | Where-Object { $_.section -ceq 'proxies' -and $_.name -ceq 'Stay 1' })
+                Assert-True ($node.Count -eq 1 -and ($node[0].fields -join ',') -ceq 'password,port') 'changed node fields missing'
+                $group = @($details | Where-Object { $_.section -ceq 'proxy-groups' -and $_.name -ceq 'Select' })
+                Assert-True ($group.Count -eq 1 -and $group[0].added -ccontains 'New' -and $group[0].removed -ccontains 'Old') 'group member changes missing'
+                Assert-True (@($details | Where-Object { $_.section -ceq 'proxy-providers' -and $_.name -ceq 'Feed' -and $_.fields -ccontains 'url' }).Count -eq 1) 'provider change missing'
+                Assert-True (@($details | Where-Object { $_.section -ceq 'rules' -and $_.action -ceq 'added' -and $_.name -ceq 'DOMAIN,new.example,DIRECT' }).Count -eq 1) 'rule change missing'
+            } elseif ($scenario -eq 'reordered') {
+                Assert-True (@($details | Where-Object { $_.section -ceq 'proxy-groups' -and $_.name -ceq 'Select' -and $_.action -ceq 'reordered' }).Count -eq 1) 'group reorder missing'
+            } elseif ($scenario -eq 'unconfirmed') {
+                Assert-True ($checkResult.items[0].detail_status -ceq 'unconfirmed' -and @($details | Where-Object { $_.section -ceq 'proxies' -and $_.status -ceq 'unconfirmed' }).Count -eq 1) 'unsupported detail claimed confirmed'
+            } else { Assert-True ($details.Count -eq 0) 'unchanged check invented details' }
         } else {
             Assert-True ($null -eq $checkResult.items[0].update_available) 'failed check claimed a change judgment'
         }
@@ -1600,7 +1647,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
             Remove-Item -LiteralPath (Join-Path $checkModules 'concurrent')
         }
         Assert-True ((Get-TreeContentSnapshot $checkHome) -ceq $beforeCheck) 'check changed app tree'
-        Assert-True (($checkResult | ConvertTo-Json -Depth 20) -notmatch 'fixture-secret|selected.invalid') 'check exposed sensitive content'
+        Assert-True (($checkResult | ConvertTo-Json -Depth 20) -notmatch 'fixture-secret|selected.invalid|edge\.fixture\.invalid|192\.0\.2\.|198\.51\.100\.|8443|9443') 'check exposed sensitive content'
         }
     }
     $fetchCount = @([System.IO.File]::ReadAllLines($fetchLog)).Count

@@ -673,6 +673,68 @@ module ClaudeEasy
     dump_config(current) == dump_config(patched.fetch(:config))
   end
 
+  def subscription_change_details(before, after)
+    details = []
+    (before.keys | after.keys).each do |section|
+      left, right = before[section], after[section]
+      next if left == right
+
+      if %w[proxies proxy-groups proxy-providers rule-providers].include?(section)
+        entries = [left, right].map do |value|
+          value.is_a?(Hash) ? value : Array(value).to_h { |entry| [entry.fetch("name"), entry] }
+        end
+        (entries[0].keys | entries[1].keys).each do |name|
+          old, fresh = entries[0][name], entries[1][name]
+          next if old == fresh
+
+          detail = { "section" => section, "action" => old.nil? ? "added" : fresh.nil? ? "removed" : "modified",
+                     "name" => safe_label(name) }
+          if old && fresh
+            detail["fields"] = (old.keys | fresh.keys).select { |key| old[key] != fresh[key] }.map { |key| safe_label(key) }
+          end
+          if section == "proxy-groups"
+            %w[proxies use].each do |key|
+              previous, following = Array((old || {})[key]), Array((fresh || {})[key])
+              next if previous == following
+              detail["added"] = Array(detail["added"]) + (following - previous).map { |v| safe_label(v) }
+              detail["removed"] = Array(detail["removed"]) + (previous - following).map { |v| safe_label(v) }
+            end
+          end
+          details << detail
+        end
+        if left.is_a?(Array) && right.is_a?(Array) &&
+           left.map { |e| e["name"] }.sort == right.map { |e| e["name"] }.sort &&
+           left.map { |e| e["name"] } != right.map { |e| e["name"] }
+          details << { "section" => section, "action" => "reordered" }
+        end
+      elsif section == "rules"
+        { "removed" => Array(left) - Array(right), "added" => Array(right) - Array(left) }.each do |action, rules|
+          rules.each do |rule|
+            parts = rule.to_s.split(",")
+            parts[1] = "[已隐藏]" if parts.first.to_s.match?(/IP|PORT/) && parts.length > 2
+            details << { "section" => section, "action" => action, "name" => safe_label(parts.join(",")) }
+          end
+        end
+        if (Array(left) - Array(right)).empty? && (Array(right) - Array(left)).empty?
+          details << { "section" => section, "action" => "reordered" }
+        end
+      else
+        details << { "section" => safe_label(section), "action" => "modified",
+                     "fields" => redacted_changed_paths({ section => left }, { section => right }).map { |p| safe_label(p) } }
+      end
+    end
+    servers = [before, after].flat_map { |config| Array(config["proxies"]).map { |node| node["server"].to_s } }.reject(&:empty?).uniq
+    redact = lambda do |value|
+      text = value.to_s
+      servers.each { |server| text = text.gsub(server, "[已隐藏]") }
+      text = text.gsub(/(?<![\w])(?:\d{1,3}\.){3}\d{1,3}(?![\w])/, "[已隐藏]")
+      text = text.gsub(/(?<![\w])(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.]*/i, "[已隐藏]")
+      text = text.gsub(/((?:SRC-|DST-|IN-)?PORT,)[^,)]+/, '\1[已隐藏]')
+      safe_label(text)
+    end
+    details.each { |detail| detail.transform_values! { |value| value.is_a?(Array) ? value.map(&redact) : redact.call(value) } }
+  end
+
   def check_subscription_updates(directories, policy, usage_profile:, subscription_name: nil)
     records = remote_subscription_records
     if subscription_name
@@ -711,7 +773,8 @@ module ClaudeEasy
         raise InvalidConfigError, "订阅索引发生变化" unless current_records == [record] &&
           remote_subscription_targets(directories, current_records).first == target
         changed = dump_config(current) != dump_config(patched.fetch(:config))
-        item.merge!("status" => changed ? "pending" : "unchanged", "update_available" => changed)
+        item.merge!("status" => changed ? "pending" : "unchanged", "update_available" => changed,
+                    "details" => subscription_change_details(current, patched.fetch(:config)))
       rescue StandardError => error
         item["code"] = %w[client_process_not_visible client_process_not_unique].include?(error.message) ?
           error.message : "subscription_check_failed"

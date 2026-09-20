@@ -69,6 +69,15 @@ class MacosPatcherTest < Minitest::Test
         current_records = records.map(&:dup)
         remote = base_config
         remote["mixed-port"] = 8999 if scenario == :changed
+        if scenario == :changed
+          remote["proxies"].first["server"] = "replacement.invalid"
+          remote["proxies"].delete_at(1)
+          remote["proxies"] << { "name" => "台湾新增", "type" => "ss", "server" => "private.invalid", "port" => 12345, "password" => "fixture-secret", "cipher" => "aes-128-gcm" }
+          remote["proxy-groups"].first["proxies"] << "台湾新增"
+          remote["rules"].unshift("DOMAIN,example.org,DIRECT")
+          remote["rules"] << "AND,((SRC-IP-CIDR,192.0.2.0/24),(NETWORK,TCP)),DIRECT"
+          remote["proxies"] << { "name" => "private.invalid", "type" => "ss", "server" => "private.invalid", "password" => "fixture-secret" }
+        end
         remote = { "proxies" => [], "rules" => [] } if scenario == :conversion
         fetch = lambda do |target|
           calls << target.fetch(:name)
@@ -95,6 +104,17 @@ class MacosPatcherTest < Minitest::Test
         actual = result.fetch("items").first.fetch("update_available")
         available.nil? ? assert_nil(actual) : assert_equal(available, actual)
         assert_equal [], result.fetch("changes")
+        if scenario == :changed
+          details = result.fetch("items").first.fetch("details")
+          assert_includes details, { "section" => "proxies", "action" => "added", "name" => "台湾新增" }
+          assert_includes details, { "section" => "proxies", "action" => "removed", "name" => "日本家宽 01" }
+          assert_includes details, { "section" => "proxies", "action" => "modified", "name" => "台湾家宽 01", "fields" => ["server"] }
+          assert details.any? { |d| d["section"] == "proxy-groups" && d["added"] == ["台湾新增"] }
+          assert_includes details, { "section" => "rules", "action" => "added", "name" => "DOMAIN,example.org,DIRECT" }
+          refute_includes stdout, "private.invalid"
+          refute_includes stdout, "12345"
+          refute_includes stdout, "192.0.2.0"
+        end
         assert_equal ["Selected"], calls
         assert_equal %w[Other.yaml Selected.yaml], Dir.children(dir).sort
         assert_equal(scenario == :concurrent ? local + "# concurrent\n" : local, File.read(path))
