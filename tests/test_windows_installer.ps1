@@ -1625,12 +1625,16 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
     Assert-True (@([System.IO.File]::ReadAllLines($fetchLog)).Count -eq $fetchCount) 'aliased targets downloaded before rejection'
 
     foreach ($case in @(
+        @{ Raw = '"Team\x20One"'; Name = 'Team One'; Count = 1 },
+        @{ Raw = '"Team\U0001F600"'; Name = 'Team😀'; Count = 1 },
+        @{ Raw = '"Team\_One"'; Name = "Team$([char]0xA0)One"; Count = 1 },
+        @{ Raw = '"Team\\x20One"'; Name = 'Team\x20One'; Count = 1 },
         @{ Raw = "'Bob''s'"; Name = "Bob's"; Count = 1 },
         @{ Raw = '"Team #1"'; Name = 'Team #1'; Count = 1 },
         @{ Raw = 'Team, Premium'; Name = 'Team, Premium'; Count = 1 },
         @{ Raw = 'Other'; Name = ''; Count = 2 }
     )) {
-        Invoke-DeferredProbe "subscription name $($case.Raw)" {
+        & {
         $index = $checkIndex.Replace('name: Selected', ('name: ' + $case.Raw))
         Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $index.Replace('https://other.invalid/sub', 'https://selected.invalid/sub')
         Write-TestUtf8Text (Join-Path $checkProfiles 'B.yaml') $checkBody
