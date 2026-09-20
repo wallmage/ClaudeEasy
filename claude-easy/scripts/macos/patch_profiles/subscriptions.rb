@@ -680,14 +680,24 @@ module ClaudeEasy
       raise InvalidConfigError, "订阅名称无法唯一对应" unless records.length == 1
     end
     raise InvalidConfigError, "订阅清单无效" if records.empty? || records.map { |r| r.fetch(:name) }.uniq.length != records.length
-    items = records.map do |record|
+    targets = records.map do |record|
+      begin
+        remote_subscription_targets(directories, [record]).first
+      rescue StandardError
+        nil
+      end
+    end
+    paths = targets.compact.map { |target| File.expand_path(target.fetch(:path)) }
+    raise InvalidConfigError, "多个订阅对应同一文件" unless paths.uniq.length == paths.length
+    items = records.each_with_index.map do |record, index|
       item = {
         "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(record.fetch(:name))}",
         "name" => safe_label(record.fetch(:name)), "status" => "failed", "update_available" => nil,
         "comparison_basis" => "local_profile_with_saved_patch"
       }
       begin
-        target = remote_subscription_targets(directories, [record]).first
+        target = targets[index]
+        raise InvalidConfigError, "无法确定本地订阅" unless target
         before = regular_file_snapshot_once(target.fetch(:path), "本地订阅")
         source = fetch_remote_subscription(target)
         validate_remote_subscription_source!(target, source)
@@ -697,6 +707,9 @@ module ClaudeEasy
         raise InvalidConfigError, "订阅转换失败" unless %i[updated unchanged].include?(patched.fetch(:status))
         after = regular_file_snapshot_once(target.fetch(:path), "本地订阅")
         raise InvalidConfigError, "本地订阅发生变化" unless before == after
+        current_records = remote_subscription_records.select { |entry| entry.fetch(:name) == record.fetch(:name) }
+        raise InvalidConfigError, "订阅索引发生变化" unless current_records == [record] &&
+          remote_subscription_targets(directories, current_records).first == target
         changed = dump_config(current) != dump_config(patched.fetch(:config))
         item.merge!("status" => changed ? "pending" : "unchanged", "update_available" => changed)
       rescue StandardError => error

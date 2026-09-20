@@ -86,6 +86,17 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
         foreach ($record in $records) {
             if (-not $names.Add([string]$record.Name)) { throw 'ambiguous subscription' }
         }
+        $resolvedPaths = @{}
+        $uniquePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($record in $records) {
+            try {
+                $path = Resolve-RemoteSubscriptionTargetPath -Item $record -Directory (Join-Path $AppHome 'profiles')
+            } catch {
+                $path = $null
+            }
+            if ($path -and -not $uniquePaths.Add($path)) { throw 'ambiguous subscription file' }
+            $resolvedPaths[[string]$record.Uid] = $path
+        }
         foreach ($record in $records) {
             $item = [ordered]@{
                 id = 'ce-subscription-v1-' + (Get-BytesSha256 (ConvertTo-Utf8Bytes ([string]$record.Uid)))
@@ -95,7 +106,8 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
                 comparison_basis = 'local_subscription'
             }
             try {
-                $path = Resolve-RemoteSubscriptionTargetPath -Item $record -Directory (Join-Path $AppHome 'profiles')
+                $path = $resolvedPaths[[string]$record.Uid]
+                if (-not $path) { throw 'missing subscription file' }
                 $before = Get-OptionalFileSnapshot $path '本地订阅'
                 if (-not $before.Exists -or $record.UrlCount -ne 1) { throw 'invalid subscription' }
                 $url = ConvertFrom-SubscriptionScalar ([string]$record.UrlRaw) 'url'

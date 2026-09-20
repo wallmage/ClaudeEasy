@@ -61,21 +61,23 @@ class MacosPatcherTest < Minitest::Test
                  { name: "Other", url: "https://other.invalid/sub" }]
       scenarios = {
         same: ["no_change", false], changed: ["ok", true],
-        invalid: ["failed", nil], conversion: ["failed", nil], concurrent: ["failed", nil]
+        invalid: ["failed", nil], conversion: ["failed", nil], concurrent: ["failed", nil], index_changed: ["failed", nil]
       }
       scenarios.each do |scenario, (status, available)|
         File.write(path, local)
         calls = []
+        current_records = records.map(&:dup)
         remote = base_config
         remote["mixed-port"] = 8999 if scenario == :changed
         remote = { "proxies" => [], "rules" => [] } if scenario == :conversion
         fetch = lambda do |target|
           calls << target.fetch(:name)
           File.write(path, local + "# concurrent\n") if scenario == :concurrent
+          current_records = [records.first.merge(url: "https://replacement.invalid/sub"), records.last] if scenario == :index_changed
           scenario == :invalid ? "invalid: [" : YAML.dump(remote)
         end
         stdout, = capture_io do
-          ClaudeEasy.stub(:remote_subscription_records, records) do
+          ClaudeEasy.stub(:remote_subscription_records, ->(*) { current_records }) do
             ClaudeEasy.stub(:saved_usage_profile, 1) do
               ClaudeEasy.stub(:fetch_remote_subscription, fetch) do
                 ClaudeEasy.stub(:enter_outer_wrapper_lock, ->(*) { flunk "check entered write workflow" }) do
@@ -112,6 +114,15 @@ class MacosPatcherTest < Minitest::Test
           result = ClaudeEasy.check_subscription_updates([dir], @policy, usage_profile: 1)
           assert_equal "partial", result.fetch(:status)
           assert_equal 2, result.fetch(:items).length
+        end
+      end
+      aliases = [records.first, records.first.merge(name: "Selected.yaml")]
+      calls = 0
+      ClaudeEasy.stub(:remote_subscription_records, aliases) do
+        ClaudeEasy.stub(:fetch_remote_subscription, ->(*) { calls += 1; YAML.dump(base_config) }) do
+          result = ClaudeEasy.check_subscription_updates([dir], @policy, usage_profile: 1)
+          assert_equal "failed", result.fetch(:status)
+          assert_equal 0, calls
         end
       end
     end
