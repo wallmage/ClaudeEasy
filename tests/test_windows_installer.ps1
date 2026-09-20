@@ -1613,6 +1613,12 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
         Assert-JsonResult $conflictCheck 'install' 64 | Out-Null
     }
     Assert-True (@([System.IO.File]::ReadAllLines($fetchLog)).Count -eq $fetchCount) 'invalid check fetched a subscription'
+    $aliasIndex = $checkIndex.Replace('name: Other', "name: Other`n    file: A.yaml")
+    Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $aliasIndex
+    $aliasCheck = Invoke-TestPowerShell $checkInstaller @('-AppHome', $checkHome, '-CheckSubscriptionUpdates', '-Json')
+    $aliasResult = Assert-JsonResult $aliasCheck 'install' 1
+    Assert-True ($aliasResult.status -ceq 'failed') 'aliased local baseline was accepted'
+    Assert-True (@([System.IO.File]::ReadAllLines($fetchLog)).Count -eq $fetchCount) 'aliased targets downloaded before rejection'
 
     $missingUpdateWorkflowRejected = $false
     try {
