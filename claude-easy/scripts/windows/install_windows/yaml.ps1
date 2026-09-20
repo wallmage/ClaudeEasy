@@ -62,7 +62,7 @@ function Remove-YamlComment([string]$Text, [ref]$Quote, [ref]$Flow) {
     return $Text
 }
 
-function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
+function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label, [switch]$YamlEscapes) {
     if ([string]::IsNullOrWhiteSpace($Raw)) { throw "$Label 为空。" }
     $quote = ''
     $flow = 0
@@ -72,6 +72,23 @@ function ConvertFrom-SubscriptionScalar([string]$Raw, [string]$Label) {
     }
     if ($value.StartsWith('"') -and $value.EndsWith('"')) {
         try {
+            if ($YamlEscapes) {
+                $yamlEscapeMap = @{
+                    '0' = '\u0000'; 'a' = '\u0007'; 'v' = '\u000b'; 'e' = '\u001b'; ' ' = '\u0020'
+                    '_' = '\u00a0'; 'N' = '\u0085'; 'L' = '\u2028'; 'P' = '\u2029'
+                }
+                $value = [regex]::Replace($value, '\\(\\|x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8}|[0ave _NLP])', [System.Text.RegularExpressions.MatchEvaluator]{
+                    param($match)
+                    $escape = $match.Groups[1].Value
+                    if ($escape -eq '\') { return $match.Value }
+                    if ($escape.StartsWith('x')) { return '\u00' + $escape.Substring(1) }
+                    if ($escape.StartsWith('U')) {
+                        $characters = [char]::ConvertFromUtf32([Convert]::ToInt32($escape.Substring(1), 16))
+                        return (($characters.ToCharArray() | ForEach-Object { '\u{0:x4}' -f [int]$_ }) -join '')
+                    }
+                    return $yamlEscapeMap[$escape]
+                })
+            }
             $decoded = $value | ConvertFrom-Json
         } catch {
             throw "$Label 使用了无效的双引号字符串。"
