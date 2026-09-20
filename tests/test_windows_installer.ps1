@@ -1567,6 +1567,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
 }
 '@)
     foreach ($scenario in @('same', 'changed', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
+        Invoke-DeferredProbe "subscription check $scenario" {
         Write-TestUtf8Text $checkPath $checkBody
         $fetchLog = Join-Path $checkModules 'fetch.log'
         if (Test-Path -LiteralPath $fetchLog) { Remove-Item -LiteralPath $fetchLog }
@@ -1600,6 +1601,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
         }
         Assert-True ((Get-TreeContentSnapshot $checkHome) -ceq $beforeCheck) 'check changed app tree'
         Assert-True (($checkResult | ConvertTo-Json -Depth 20) -notmatch 'fixture-secret|selected.invalid') 'check exposed sensitive content'
+        }
     }
     $fetchCount = @([System.IO.File]::ReadAllLines($fetchLog)).Count
     foreach ($name in @('Missing', '')) {
@@ -1627,6 +1629,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
         @{ Raw = '"Team #1"'; Name = 'Team #1'; Count = 1 },
         @{ Raw = 'Other'; Name = ''; Count = 2 }
     )) {
+        Invoke-DeferredProbe "subscription name $($case.Raw)" {
         $index = $checkIndex.Replace('name: Selected', ('name: ' + $case.Raw))
         Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $index.Replace('https://other.invalid/sub', 'https://selected.invalid/sub')
         Write-TestUtf8Text (Join-Path $checkProfiles 'B.yaml') $checkBody
@@ -1636,6 +1639,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
         $nameResult = Assert-JsonResult (Invoke-TestPowerShell $checkInstaller $arguments) 'install' 0
         Assert-True ($nameResult.status -ceq 'no_change' -and $nameResult.items.Count -eq $case.Count) 'valid subscription names rejected'
         Assert-True ((Get-TreeContentSnapshot $checkHome) -ceq $beforeCheck) 'name selection changed app tree'
+        }
     }
 
     $missingUpdateWorkflowRejected = $false
