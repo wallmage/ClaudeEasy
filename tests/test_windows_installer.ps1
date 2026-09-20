@@ -1546,7 +1546,7 @@ items:
     $checkProfiles = Join-Path $checkHome 'profiles'
     New-Item -ItemType Directory -Path $checkProfiles -Force | Out-Null
     $checkIndex = "items:`n  - uid: A`n    type: remote`n    name: Selected`n    url: https://selected.invalid/sub`n  - uid: B`n    type: remote`n    name: Other`n    url: https://other.invalid/sub`n"
-    $checkBody = "proxies: []`nproxy-groups: []`nrules: [MATCH,DIRECT]`nmode: rule`n"
+    $checkBody = "proxies: []`nproxy-groups: []`nrules: [MATCH,DIRECT]`nmode: rule`ndescription: !!str |`n  [literal`n"
     $checkPath = Join-Path $checkProfiles 'A.yaml'
     Write-TestUtf8Text (Join-Path $checkHome 'profiles.yaml') $checkIndex
     Write-TestUtf8Text (Join-Path $checkProfiles 'B.yaml') 'invalid: ['
@@ -1566,10 +1566,10 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
     return ,([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'response')))
 }
 '@)
+    $fetchLog = Join-Path $checkModules 'fetch.log'
     foreach ($scenario in @('same', 'changed', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
         Invoke-DeferredProbe "subscription check $scenario" {
         Write-TestUtf8Text $checkPath $checkBody
-        $fetchLog = Join-Path $checkModules 'fetch.log'
         if (Test-Path -LiteralPath $fetchLog) { Remove-Item -LiteralPath $fetchLog }
         $response = switch ($scenario) {
             'changed' { $checkBody.Replace('mode: rule', 'mode: global') }
