@@ -44,8 +44,8 @@ macOS 返回 `client_process_not_visible` 时，立即用 `/bin/ps -ax -o comm=`
 
 1. 只读取已保存档位和更新所需状态；更新前不运行任何测试，不做站点、Agent、分流、DNS 或 WebRTC 基线。
 2. 先读取每份远程订阅并与本地配置逐份比对。全部相同时直接返回 `no_change`，不创建备份、不写文件、不触发刷新；有变化时只为变化的订阅创建备份并继续更新。两端都按已保存用途档位重新应用现行补丁并完成平台检查。
-3. 更新成功后，完成与首次运行该档位相同的平台客户端动作和验收。安全更新已经重新应用订阅文件补丁，不得再次运行平台安装命令。档位 1 执行档位 1 全部动作和验收；档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成 ChatGPT、Gemini、Grok 分流验证、DNS 深度测试、WebRTC 测试和本地区域指纹测试。Claude/Anthropic 不打开、不请求、不测试任何远程域名。
-   浏览器验收按 [profiles-and-patch.md](profiles-and-patch.md#patch-验证标准) 执行：Computer Use 并行打开百度、Google、DNS 深度测试、WebRTC 和本地区域指纹页面；ChatGPT 按该节只读核验。各项独立记录，不因单页等待阻塞其他页面。连通性只以百度、Google、ChatGPT 三页能正常打开为准，不再测试 Twitter/X 或其他额外站点。
+3. 更新成功后，完成与首次运行该档位相同的平台客户端动作和验收。安全更新已经重新应用订阅文件补丁，不得再次运行平台安装命令。档位 1 执行档位 1 全部动作和验收；档位 2 继承档位 1 的共同补丁与站点验收，但档位 2 不执行档位 1 的系统代理开启动作，而是直接执行档位 2 的客户端开关；档位 3 继承档位 2，再完成 ChatGPT、Gemini、Grok 分流验证、DNS 深度测试、WebRTC 测试和区域指纹测试。Claude/Anthropic 不打开、不请求、不测试任何远程域名。
+   浏览器验收按 [profiles-and-patch.md](profiles-and-patch.md#patch-验证标准) 执行：Computer Use 并行打开百度、Google、DNS 深度测试、WebRTC 和区域指纹页面；ChatGPT 按该节只读核验。各项独立记录，不因单页等待阻塞其他页面。连通性只以百度、Google、ChatGPT 三页能正常打开为准，不再测试 Twitter/X 或其他额外站点。
 4. 做最终状态复核：逐份确认本轮订阅更新状态、已保存档位、补丁、运行配置、代理组选择、客户端开关、订阅自动更新关闭状态和未完成事务。
 
 Windows 先用 PowerShell/.NET 在后台读取远端正文；只有检测到变化后，才通过已经运行的 Clash Verge Rev 重新加载并完成客户端动作。macOS 更新后的 `macos_client_switch_reconciliation` 运行原生开关协调命令，绝不使用电脑操控操作 ClashX Meta。两端的网页打开和浏览器验收统一由 Computer Use 在用户默认浏览器完成；确实无法启用时才把最少界面动作交给用户并读取结果。未验证项目不得宣称完整完成。
