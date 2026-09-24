@@ -266,6 +266,7 @@ module ClaudeEasy
       restore_backup: nil,
       expected_current_sha256: nil,
       safe_update_all: false,
+      force_rewrite: false,
       reconcile_client_switches: false,
       recover_profile_transaction: false,
       repair_clashx_logs: false,
@@ -294,6 +295,7 @@ module ClaudeEasy
       opts.on("--compare-backup ID", "比较指定备份与当前配置") { |value| options[:compare_backup] = value }
       opts.on("--restore-backup ID", "恢复指定备份") { |value| options[:restore_backup] = value }
       opts.on("--expected-current-sha256 SHA256", "恢复前要求当前配置哈希匹配") { |value| options[:expected_current_sha256] = value }
+      opts.on("--force-rewrite", "全部重新下载并重写，保留更新保护") { options[:force_rewrite] = true }
       opts.on("--safe-update-all", "更新当前存储位置中的全部远程订阅") { options[:safe_update_all] = true }
       opts.on("--check-subscription-updates", "只检查远程订阅是否变化，不修改配置") { options[:check_subscription_updates] = true }
       opts.on("--subscription-name NAME", "只检查完整显示名匹配的订阅") { |value| options[:subscription_name] = value }
@@ -336,6 +338,7 @@ module ClaudeEasy
     incompatible_options = explicit_operations.length > 1 ||
                            (!explicit_operations.empty? &&
                             (options[:dry_run] || !options[:auto_reload]))
+    incompatible_options ||= options[:force_rewrite] && !options[:safe_update_all]
     incompatible_options ||= options[:subscription_name] && !options[:check_subscription_updates]
     incompatible_options ||= options[:check_subscription_updates] &&
       (options[:usage_profile] || options[:wrapper_commit_receipt] || options[:wrapper_commit_nonce] ||
@@ -866,7 +869,7 @@ module ClaudeEasy
       result = safe_update_all(
         targets: targets, policy: policy, backup_root: options[:backup_root],
         usage_profile: options[:usage_profile], guard_storage: guard_storage,
-        expected_storage: expected_storage,
+        expected_storage: expected_storage, force_rewrite: options[:force_rewrite],
         auto_update_disabler: lambda do |operation_lock|
           disable_subscription_auto_update(
             backup_root: options[:backup_root], operation_lock: operation_lock
@@ -900,7 +903,7 @@ module ClaudeEasy
                              else
                                %w[
                                  macos_client_switch_reconciliation site_verification
-                                 route_verification dns_deep_test webrtc_test local_region_fingerprint_test
+                                 route_verification dns_deep_test webrtc_test region_fingerprint_test
                                  final_state_audit
                                ]
                              end
@@ -929,7 +932,9 @@ module ClaudeEasy
                               when :runtime_restore_pending
                                 ["partial", "safe_update_runtime_pending", "订阅文件已恢复原内容或保留外部改动；运行内核仍待恢复或确认。"]
                               when :aborted
-                                if result[:reason] == :rollback_superseded
+                                if result[:reason] == :selection_not_preserved
+                                  ["failed", "selection_not_preserved", "新订阅无法保留当前节点选择；本轮未写入订阅。"]
+                                elsif result[:reason] == :rollback_superseded
                                   ["partial", "safe_update_rollback_superseded", "订阅在回滚前已被外部更新；已保留较新的内容，未覆盖。"]
                                 else
                                   ["failed", "safe_update_failed", "订阅更新失败。"]
@@ -937,9 +942,22 @@ module ClaudeEasy
                               else
                                 ["failed", "safe_update_failed", "订阅更新失败。"]
                               end
+      failures = Array(result[:items]).select { |item| item[:status] == :failed }.map do |item|
+        {
+          "id" => "ce-subscription-v1-#{Digest::SHA256.hexdigest(item.fetch(:name).to_s)}",
+          "label" => safe_label(item.fetch(:name)), "status" => "failed", "reason" => item[:reason].to_s
+        }
+      end
+      unless failures.empty?
+        summary = failures.map do |item|
+          http_status = item["reason"][/\Asubscription_http_([1-5][0-9]{2})\z/, 1]
+          "#{item['label']}：#{http_status ? "服务商返回 HTTP #{http_status}，下载失败" : "下载或校验失败"}"
+        end.join("；") + "。本轮未写入订阅。"
+      end
       return emit_cli_result(
         operation: "safe_update", exit_code: 1, status: status, code: code,
-        summary_zh: summary, profile: options[:usage_profile]
+        summary_zh: summary, profile: options[:usage_profile], items: failures,
+        checks: [{ "name" => "failure_reason", "value" => result[:reason].to_s }]
       ) if options[:json]
       warn summary
       return 1

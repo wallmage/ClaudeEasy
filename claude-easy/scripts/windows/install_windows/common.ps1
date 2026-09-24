@@ -53,7 +53,7 @@ function Get-SafeUpdateRequiredFollowups([int]$Profile) {
             return @(
                 "client_auto_update_reconciliation", "client_switch_verification", "site_verification",
                 "route_verification", "dns_deep_test",
-                "webrtc_test", "local_region_fingerprint_test", "final_state_audit"
+                "webrtc_test", "region_fingerprint_test", "final_state_audit"
             )
         }
         default { throw "用途档位无效，只能是 1、2 或 3。" }

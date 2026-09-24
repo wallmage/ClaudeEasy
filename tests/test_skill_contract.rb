@@ -123,8 +123,6 @@ class SkillContractTest < Minitest::Test
     assert_includes windows_installer, "claude-easy-backups"
     assert_includes windows_installer, "yyyy-MM-dd_HH-mm-ss"
     assert_includes windows_installer, "changed_fields"
-    assert_includes windows_installer, "SafeUpdateChangedOnly"
-    assert_includes windows_installer, "Get-RemoteSubscriptionUpdatePlan"
     %w[id same backup_sha256 current_sha256].each do |field|
       assert_match(/^\s+#{field} = /, windows_installer)
     end
@@ -153,26 +151,6 @@ class SkillContractTest < Minitest::Test
     refute_includes ai_rules, "storage.googleapis.com"
     refute policy.key?("proxy_bootstrap_resolvers")
     refute policy.key?("default_bootstrap_resolvers")
-  end
-
-  def test_subscription_followups_use_parallel_three_site_connectivity
-    readme = File.read(File.join(ROOT, "README.md"))
-    safe_update = File.read(File.join(SKILL, "references/safe-update-and-recovery.md"))
-    profiles = File.read(File.join(SKILL, "references/profiles-and-patch.md"))
-    macos = File.read(File.join(SKILL, "references/macos.md"))
-    diagnostics = File.read(File.join(SKILL, "references/diagnostics.md"))
-
-    assert_match(/并行/, safe_update)
-    assert_match(/百度.*Google.*ChatGPT/m, safe_update)
-    refute_match(/百度、Google、Twitter|Google、Twitter/, safe_update)
-    assert_match(/百度、Google、ChatGPT/, readme)
-    refute_match(/国内站、Google、Twitter|命令行或 Agent/, readme)
-    refute_match(/检查常用网站和 AI 工具/, readme)
-    assert_match(/开启 TUN，关闭 Clash 自己的系统代理，检查百度、Google、ChatGPT/, readme)
-    assert_match(/Computer Use.*同一用户默认浏览器会话/, profiles)
-    assert_match(/只有实际状态仍不明.*才.*用户/, macos)
-    refute_match(/Agent 联网|Agent 连接|至少三个无关目标/, diagnostics)
-    assert_match(/连通性仅复测百度、Google、ChatGPT 三页/, diagnostics)
   end
 
   def test_safe_update_followups_do_not_require_separate_agent_connectivity

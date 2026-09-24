@@ -116,11 +116,21 @@ function Test-IncidentRuntimeIpv6 {
 }
 Test-IncidentRuntimeIpv6
 
+function Test-SelectionCheckDoesNotSwitchNodes {
+    function Get-ClashRuntimeState { return @{ Proxies = [pscustomobject]@{ Main = @{ type = "Selector"; now = "Japan"; all = @("Taiwan", "Japan") } } } }
+    $script:selectionWrites = 0
+    function Invoke-ClashControllerRequest { $script:selectionWrites++; return @{ Status = 204 } }
+    $rejected = $false
+    try { Assert-ClashRuntimeSelections @{} @{ Main = "Taiwan" } } catch { $rejected = $true }
+    Assert-True ($rejected -and $script:selectionWrites -eq 0) "selection check switched a node or accepted drift"
+}
+Test-SelectionCheckDoesNotSwitchNodes
+
 function Test-IncidentControllerReadiness {
     $script:incidentAttempts = 0
     function Wait-ClashVergeRuntimeRefresh { }
     function Get-ClashControllerContext { return [pscustomobject]@{ Ready = $true } }
-    function Restore-ClashRuntimeSelections {
+    function Assert-ClashRuntimeSelections {
         $script:incidentAttempts++
         if ($script:incidentAttempts -eq 1) { throw "controller still starting" }
     }
@@ -280,64 +290,12 @@ Complete-InstallResult 0 'ok' 'installed' 'fixture'
         $completionResult.required_followups -contains "client_auto_update_reconciliation") "disk-only installation was reported without client reconciliation"
 }
 
-$remoteCompareRoot = Join-Path $sandbox "remote-compare"
 New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
-New-Item -ItemType Directory -Path $remoteCompareRoot -Force | Out-Null
-$sameLocalPath = Join-Path $remoteCompareRoot "same.yaml"
-$changedLocalPath = Join-Path $remoteCompareRoot "changed.yaml"
-[System.IO.File]::WriteAllText($sameLocalPath, @'
-# local formatting differs only
-proxies:
-  - name: node-a
-    server: example.com
-'@)
-[System.IO.File]::WriteAllText($changedLocalPath, @'
-proxies:
-  - name: node-b
-    server: old.example.com
-'@)
-$remoteCompareTargets = @(
-    [pscustomobject]@{ Uid = "same"; Name = "Same"; Path = $sameLocalPath; Url = "https://same.invalid/sub" },
-    [pscustomobject]@{ Uid = "changed"; Name = "Changed"; Path = $changedLocalPath; Url = "https://changed.invalid/sub" }
-)
-$remoteComparePlan = @(Get-RemoteSubscriptionUpdatePlan $remoteCompareTargets {
-    param($target)
-    if ($target.Uid -eq "same") {
-        return @'
-proxies:
-    - name: node-a # remote comment
-      server: example.com
-'@
-    }
-    return @'
-proxies:
-  - name: node-b
-    server: new.example.com
-'@
-})
-Assert-True ($remoteComparePlan.Count -eq 2) "remote comparison did not inspect every subscription"
-Assert-True (-not [bool]$remoteComparePlan[0].Changed) "semantic-only YAML formatting change was reported as an update"
-Assert-True ([bool]$remoteComparePlan[1].Changed) "remote subscription content change was not detected"
+
 foreach ($name in @('node-a', 'foo "bar', "Bob 's", 'foo, "bar')) { foreach ($password in @("'prefix #old'", '"prefix \" #old"', "'prefix '' #old'", "|`n      #old", ">-`n      prefix #old", '!!str "secret #old"', '&credential "secret #old"')) {
     $before = "proxies:`n  - name: $name`n    password: $password`n"
     Assert-True (-not (Test-RemoteSubscriptionSemanticEqual (Get-YamlPathFingerprints $before) (Get-YamlPathFingerprints ($before.Replace('#old', '#new'))))) "password content after # was ignored"
 } }
-$flatLocalPath = Join-Path $remoteCompareRoot "flat.yaml"
-[System.IO.File]::WriteAllText($flatLocalPath, @'
-proxies:
-- name: node-a
-  server: example.com
-'@)
-$flatRemoteTarget = [pscustomobject]@{ Uid = "flat"; Name = "Flat"; Path = $flatLocalPath; Url = "https://flat.invalid/sub" }
-$flatRemotePlan = @(Get-RemoteSubscriptionUpdatePlan @($flatRemoteTarget) {
-    return @'
-proxies:
-- name: node-b
-  server: example.com
-'@
-})
-Assert-True ([bool]$flatRemotePlan[0].Changed) "top-level YAML sequence item change was not detected"
-
 function Get-TreeContentSnapshot([string]$Path) {
     $rootPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
@@ -2392,7 +2350,7 @@ rules:
                 "subscription_refresh", "safe_update_verification",
                 "client_auto_update_reconciliation", "client_switch_verification", "site_verification",
                 "route_verification", "dns_deep_test",
-                "webrtc_test", "local_region_fingerprint_test",
+                "webrtc_test", "region_fingerprint_test",
                 "final_state_audit"
             ) -join ","
         )
@@ -2542,31 +2500,22 @@ proxies: [{ name: "Hong Kong #1", type: ss, server: proxy.invalid, port: 443, ci
 proxy-groups: [{ name: "AI", type: select, proxies: ["Hong Kong #1"] }]
 rules: ["MATCH,AI"]
 '@
-    $changedPackage = Join-Path $sandbox "changed-only-package"
-    Copy-Item -LiteralPath (Join-Path $root "claude-easy") -Destination $changedPackage -Recurse
-    $changedInstaller = Join-Path $changedPackage "scripts/install_windows.ps1"
-    $changedModules = Join-Path $changedPackage "scripts/windows/install_windows"
-    [System.IO.File]::WriteAllText((Join-Path $changedModules "first.response"), $firstSafeUpdated)
-    [System.IO.File]::WriteAllText((Join-Path $changedModules "second.response"), $secondSafeOriginal)
-    [System.IO.File]::AppendAllText((Join-Path $changedModules "remote_preflight.ps1"), @'
+    $beforeLegacyRequest = Get-TreeContentSnapshot $safeUpdateCase
+    $legacyRequest = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SafeUpdateChangedOnly", "-Json")
+    $legacyRequestJson = Assert-JsonResult $legacyRequest "install" 64
+    Assert-True ($legacyRequestJson.code -eq "client_refresh_required") "retired updater did not direct refresh to client"
+    Assert-True ((Get-TreeContentSnapshot $safeUpdateCase) -ceq $beforeLegacyRequest) "retired updater modified files"
 
-function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
-    $log = Join-Path $PSScriptRoot "fetch.log"
-    $response = if (Test-Path -LiteralPath $log) { "second.response" } else { "first.response" }
-    [System.IO.File]::AppendAllText($log, "fetch`n")
-    return ,([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $response)))
-}
-'@)
-    [System.IO.File]::AppendAllText((Join-Path $changedModules "safe_update.ps1"), "`nfunction Set-SafeUpdateActivationAttempt { exit 77 }`n")
-    $freshUpdate = Invoke-TestPowerShell $changedInstaller @("-AppHome", $safeUpdateCase, "-SafeUpdateChangedOnly", "-MihomoPath", $fakeCore, "-Json") -SimulateRuntimeRefresh
-    Assert-True ($freshUpdate.ExitCode -eq 77) "fresh changed-only update did not reach durable commit"
+    # Existing v5 transactions remain recoverable after retiring background refresh.
+    $legacySnapshot = Invoke-TestPowerShell $installer @("-AppHome", $safeUpdateCase, "-SnapshotProfiles", "-MihomoPath", $fakeCore, "-Json")
+    Assert-JsonResult $legacySnapshot "install" 0 | Out-Null
     $changedManifestPath = Join-Path $safeUpdateCase "claude-easy-safe-update.json"
     $changedManifest = [System.IO.File]::ReadAllText($changedManifestPath) | ConvertFrom-Json
-    Assert-True ($changedManifest.Version -eq 5 -and @($changedManifest.Profiles).Count -eq 1 -and
-        $changedManifest.Profiles[0].BeforeSha256 -ceq (Get-BytesSha256 ([System.Text.Encoding]::UTF8.GetBytes($firstSafeOriginal))) -and
-        ([System.IO.File]::ReadAllText((Join-Path $safeUpdateProfiles "R-second.yml"))) -ceq $secondSafeOriginal -and
-        @([System.IO.File]::ReadAllLines((Join-Path $changedModules "fetch.log"))).Count -eq 2
-    ) "fresh update did not preserve unchanged subscription and changed-only recovery snapshot"
+    $changedManifest.Version = 5
+    $changedManifest.RefreshStartedAt = [DateTimeOffset]::Now.ToString("o")
+    $changedManifest.Profiles = @($changedManifest.Profiles | Where-Object { $_.File -ceq "R-first.yaml" })
+    $changedManifest.Profiles[0] | Add-Member -NotePropertyName UpdatedSha256 -NotePropertyValue (Get-BytesSha256 (ConvertTo-Utf8Bytes $firstSafeUpdated))
+    [System.IO.File]::WriteAllText($changedManifestPath, ($changedManifest | ConvertTo-Json -Depth 7))
     $concurrentContent = $firstSafeUpdated + "`n# concurrent writer`n"
     foreach ($age in @(0, 181)) {
         [System.IO.File]::WriteAllText((Join-Path $safeUpdateProfiles "R-first.yaml"), $concurrentContent)

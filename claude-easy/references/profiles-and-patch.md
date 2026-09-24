@@ -59,17 +59,17 @@ macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运�
 
 ## Patch 验证标准
 
-档位 1 只验收系统代理、百度、Google、ChatGPT 和速度；档位 2 验收 TUN、Clash 自己的系统代理开关、百度、Google、ChatGPT 和速度。三页连通性由 Computer Use 在同一用户默认浏览器会话中核验；百度、Google 可并行打开，ChatGPT 按 [SKILL.md 共同安全边界](../SKILL.md#共同安全边界) 只读观察用户自行打开的页面。全部取得本轮正常加载证据才算通过；缺项保留未验证。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
+档位 1 只验收系统代理、百度、Google、ChatGPT 和速度；档位 2 验收 TUN、Clash 自己的系统代理开关、百度、Google、ChatGPT 和速度。三页连通性由 Computer Use 在同一用户指定或默认浏览器会话中核验；新标签页并行打开，ChatGPT 只按 [SKILL.md 共同安全边界](../SKILL.md#共同安全边界) 的公共首页例外执行。全部取得本轮正常加载证据才算通过；缺项保留未验证。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
 
 只生成 ChatGPT、Gemini 和 Grok 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`；Windows 控制器只允许本机回环地址，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。每个测试请求都通过当前 Mihomo 回环代理发出，并确认实际连接链包含当前 AI 分组；检测期间代理组或节点选择发生变化即失败。三项全部通过即为分流验证通过。Claude/Anthropic 禁测见 [policy-core.md](policy-core.md)。
 
-档位 3 的浏览器验收只运行下列项目，并由 Computer Use 在同一用户默认浏览器会话中并行启动，不等待单页完成后再打开下一页：
+档位 3 的浏览器验收只运行下列项目，并由 Computer Use 在同一用户指定或默认浏览器会话中并行启动，不等待单页完成后再打开下一页：
 
 然后必须测试：
 
 1. `https://ip.net.coffee/dns/` 的“深度测试”
 2. `https://ip.net.coffee/webrtc/`
-3. `https://clear-valley-ezc5.here.now/`，点击“开始检测并运行 WebRTC 测试”；仓库中的 `assets/claude-region-check.html` 仅用于维护该页面，不作为验收入口
+3. `https://clear-valley-ezc5.here.now/`，点击“开始检测并运行 WebRTC 测试”；仓库中的 `assets/claude-region-check.html` 仅用于维护该页面，不作为验收入口；不打开 `file://` 或另起本地网页服务器验收
 
 DNS 和 WebRTC 页面没有红色提示，且不显示用户未代理的公网 IP、私网地址或本地运营商 DNS，才算通过。区域指纹测试必须给出明确风险等级：绿色低风险才算通过；中等风险或高风险都算失败。不得用“不够单一”“不能完全通过”或其他含糊结论代替成功或失败。
 
@@ -77,7 +77,7 @@ DNS 和 WebRTC 页面没有红色提示，且不显示用户未代理的公网 I
 
 代理只记录每项通过、失败或未验证及失败类别，不把页面显示的公网 IP、私网地址、DNS 地址或运营商名称复制到聊天、JSON 或诊断记录。
 
-macOS 和 Windows 只要当前会话提供电脑操控，就由代理使用 Computer Use 在用户默认浏览器中打开三个测试网站，执行检测并读取结果，不限制浏览器品牌，也不把刷新或测试停给用户。没有电脑操控时先按主入口识别工作台并提供官方启用方法；确实无法启用且这些测试属于当前档位必做项时，才给用户最短操作并等待结果。DNS 或 WebRTC 页面出现红色结果，或区域指纹页面不是低风险，都判定验收失败并继续处理，不得说已经验证。
+macOS 和 Windows 只要当前会话提供电脑操控，就由代理使用 Computer Use 在用户指定或默认浏览器中打开三个测试网站，执行检测并读取结果，不限制浏览器品牌，也不把刷新或测试停给用户。没有电脑操控时先按主入口识别工作台并提供官方启用方法；确实无法启用且这些测试属于当前档位必做项时，才给用户最短操作并等待结果。DNS 或 WebRTC 页面出现红色结果，或区域指纹页面不是低风险，都判定验收失败并继续处理，不得说已经验证。
 
 ### 档位 3 区域指纹闭环
 

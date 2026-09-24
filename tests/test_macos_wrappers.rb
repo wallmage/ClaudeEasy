@@ -1075,6 +1075,7 @@ class MacosWrapperTest < Minitest::Test
         exit 0
       end
       if ARGV.include?("--safe-update-all")
+        abort "missing force flag" unless ARGV.include?("--force-rewrite")
         result = {
           "schema" => "claude-easy.result", "version" => 1, "command" => "patch",
           "platform" => "macos", "client" => "clashx-meta", "operation" => "safe_update",
@@ -1098,7 +1099,7 @@ class MacosWrapperTest < Minitest::Test
         with_supported_app(home) do
           write_usage_profile(home, 3)
           stdout, stderr, status = run_script(
-            installer, "--safe-update", "--json", home: home
+            installer, "--safe-update", "--force-rewrite", "--json", home: home
           )
 
           assert status.success?

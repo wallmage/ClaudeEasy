@@ -262,7 +262,7 @@ module ClaudeEasy
       end
       restorable_selections = requester && runtime_restorable_selections(requester, selections)
       selections_restored = requester && restorable_selections &&
-                            restore_runtime_selections(requester, restorable_selections)
+                            runtime_selections_preserved?(requester, restorable_selections)
       healthy = selections_restored && runtime_health_healthy?(
         requester, selections: restorable_selections, expected_tun: expected_tun,
         connectivity_checker: connectivity_checker,
@@ -1115,7 +1115,7 @@ module ClaudeEasy
     end.join
   end
 
-  def restore_runtime_selections(requester, selections)
+  def runtime_selections_preserved?(requester, selections)
     return false unless selections.is_a?(Hash) &&
                         selections.all? do |name, selected|
                           name.is_a?(String) && !name.empty? &&
@@ -1123,23 +1123,8 @@ module ClaudeEasy
                         end
     return true if selections.empty?
 
-    proxies = runtime_proxies(requester)
-    return false unless proxies
-
-    selections.each do |name, selected|
-      proxy = proxies[name]
-      return false unless proxy.is_a?(Hash) && proxy["type"].to_s.casecmp("Selector").zero?
-      next if proxy["now"] == selected
-      return false unless proxy["all"].is_a?(Array) && proxy["all"].include?(selected)
-
-      code, _body = requester.call(
-        "PUT", "/proxies/#{controller_path_component(name)}", JSON.generate("name" => selected)
-      )
-      return false unless code == 204
-    end
-
-    restored = runtime_selections(requester)
-    restored.is_a?(Hash) && selections.all? { |name, selected| restored[name] == selected }
+    current = runtime_selections(requester)
+    current.is_a?(Hash) && selections.all? { |name, selected| current[name] == selected }
   rescue StandardError
     false
   end
@@ -1219,7 +1204,7 @@ module ClaudeEasy
     )
     code == 204 &&
       restore_runtime_tun_state(requester, expected_tun) &&
-      restore_runtime_selections(requester, selections)
+      runtime_selections_preserved?(requester, selections)
   rescue StandardError
     false
   end
@@ -1559,7 +1544,7 @@ module ClaudeEasy
     tun_restored = restore_runtime_tun_state(requester, expected_tun)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback.call) unless tun_restored
-    selections_restored = restore_runtime_selections(requester, candidate_selections)
+    selections_restored = runtime_selections_preserved?(requester, candidate_selections)
     return pending.call unless profile_result_current?(result)
     return result.merge(status: rollback.call) unless selections_restored
 

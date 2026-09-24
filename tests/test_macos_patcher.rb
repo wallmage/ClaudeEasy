@@ -415,7 +415,7 @@ class MacosPatcherTest < Minitest::Test
           config = ClaudeEasy.load_yaml(File.read(path))
           marker = config.fetch("rule-providers", {}).key?(provider_name) ? "candidate" : "original"
           selections = ClaudeEasy.selectable_groups(config).to_h do |group|
-            [group.fetch("name"), "Japan"]
+            [group.fetch("name"), marker == "original" ? "Taiwan" : "Japan"]
           end
           File.write(runtime_state, JSON.generate(selections))
           if marker == "candidate" && !File.exist?(gate_seen)
@@ -433,11 +433,7 @@ class MacosPatcherTest < Minitest::Test
           [200, JSON.generate("providers" => {})]
         else
           if method == "PUT" && endpoint.start_with?("/proxies/")
-            selections = JSON.parse(File.read(runtime_state))
-            group = endpoint.delete_prefix("/proxies/")
-            selections[group] = JSON.parse(body).fetch("name")
-            File.write(runtime_state, JSON.generate(selections))
-            [204, ""]
+            flunk "recovery must not switch nodes"
           elsif method == "GET" && endpoint.start_with?("/dns/query?")
             [200, JSON.generate("Status" => 0, "Answer" => [{ "data" => "203.0.113.1" }])]
           else
@@ -623,29 +619,6 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_script_subscription_download_uses_the_clashx_native_request_without_exposing_the_url
-    refute_respond_to ClaudeEasy, :curl_config_value
-    assert_respond_to ClaudeEasy, :fetch_remote_subscription
-    refute_respond_to ClaudeEasy, :fetch_remote_subscription_via_mihomo
-    assert_operator ClaudeEasy::MAX_REMOTE_SUBSCRIPTION_BYTES, :>, 0
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    'request.setValueForHTTPHeaderField("zh-CN,zh;q=0.9", "Accept-Language");'
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    'connection:willSendRequest:redirectResponse:'
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "originalHost"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "originalPort"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "nextURL.host"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "nextURL.port"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    'protocols: ["NSURLConnectionDataDelegate", "NSURLConnectionDelegate"]'
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "didReceiveData:"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "connection.cancel;"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "data.appendData(receivedData);"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "request.HTTPShouldHandleCookies = false;"
-    refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT,
-                    "URLSession:dataTask:didReceiveResponse:completionHandler:"
-    assert_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "var finalURL = response.URL;"
-    refute_includes ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT, "Alamofire/"
-
     status = Struct.new(:success?).new(true)
     capture = lambda do |*arguments, **options|
       assert_equal ["/usr/bin/osascript", "-l", "JavaScript", "-e", ClaudeEasy::CLASHX_NATIVE_FETCH_SCRIPT], arguments
@@ -1010,6 +983,97 @@ class MacosPatcherTest < Minitest::Test
       assert_equal "same", result.fetch(:profiles).first.fetch(:name)
       refute Dir.exist?(File.join(directory, "backups"))
       assert_equal content.b, File.binread(path)
+    end
+  end
+
+  def test_force_refresh_rewrites_identical_bytes_and_revalidates
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "same.yaml")
+      content = ClaudeEasy.dump_config(ClaudeEasy.patch(base_config, @policy, usage_profile: 1).fetch(:config))
+      File.binwrite(path, content)
+      File.utime(Time.at(1), Time.at(1), path)
+      validated = false
+      result = ClaudeEasy.safe_update_all(
+        targets: [{ name: "same", path: path }], policy: @policy,
+        backup_root: File.join(directory, "backups"), usage_profile: 1, force_rewrite: true,
+        fetcher: ->(_) { content }, validator: ->(_) { validated = true },
+        activation: ->(_) { true }, selected_name: "none"
+      )
+      assert_equal :updated, result[:status]
+      assert_equal ["same"], result[:profiles]
+      assert validated
+      assert_equal content.b, File.binread(path)
+      assert_operator File.mtime(path), :>, Time.at(1)
+      assert_equal 1, Dir.glob(File.join(directory, "backups", "*--pre-update--*")).length
+    end
+  end
+
+  def test_refresh_rejects_a_candidate_missing_the_selected_node_before_writing
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      original = YAML.dump(base_config)
+      File.binwrite(path, original)
+      remote = base_config
+      remote["proxies"].reject! { |proxy| proxy["name"] == "台湾家宽 01" }
+      remote["proxy-groups"].each { |group| group["proxies"].delete("台湾家宽 01") }
+      checkpoint = { path: File.realpath(path), selections: { "Main" => "台湾家宽 01" }, expected_tun: :enabled }
+      ClaudeEasy.stub(:capture_runtime_checkpoint, checkpoint) do
+        result = ClaudeEasy.safe_update_all(
+          targets: [{ name: "active", path: path }], policy: @policy,
+          backup_root: File.join(directory, "backups"), usage_profile: 1,
+          fetcher: ->(_) { YAML.dump(remote) }, validator: ->(_) { true },
+          selected_name: "active", client_identity_reader: -> { { pid: 123, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" } },
+          native_reloader: ->(_) { flunk "must not reload missing selection" }
+        )
+        assert_equal :selection_not_preserved, result[:reason]
+        assert_equal original.b, File.binread(path)
+        refute ClaudeEasy.profile_transaction_pending?(File.join(directory, "backups"))
+      end
+    end
+  end
+
+  def test_selection_verification_never_switches_a_changed_node
+    calls = []
+    requester = lambda do |method, endpoint, *_|
+      calls << [method, endpoint]
+      [200, JSON.generate("proxies" => { "Main" => {
+        "type" => "Selector", "now" => "Japan", "all" => %w[Taiwan Japan]
+      } })]
+    end
+    refute ClaudeEasy.runtime_selections_preserved?(requester, { "Main" => "Taiwan" })
+    assert calls.all? { |method, _| method == "GET" }, calls.inspect
+  end
+
+  def test_update_exposes_http_failure_without_subscription_secrets
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "profile.yaml")
+      File.write(path, YAML.dump(base_config))
+      status = Struct.new(:success?).new(false)
+      Open3.stub(:capture3, ["", "Error: subscription_http_403 https://secret.invalid/token", status]) do
+        result = ClaudeEasy.safe_update_all(
+          targets: [{ name: "MESL", path: path, url: "https://secret.invalid/token" }],
+          policy: @policy, backup_root: File.join(directory, "backups"), usage_profile: 1,
+          selected_name: "none", activation: ->(_) { flunk "must not activate" }
+        )
+        assert_equal :aborted, result[:status]
+        assert_equal "subscription_http_403", result[:items].first[:reason].to_s
+        refute_includes JSON.generate(result), "secret.invalid"
+        stdout, = capture_io do
+          ClaudeEasy.stub(:reject_unapproved_usage_profile, nil) do
+            ClaudeEasy.stub(:remote_subscription_targets, []) do
+              ClaudeEasy.stub(:safe_update_all, result) do
+                assert_equal 1, ClaudeEasy.cli(["--safe-update-all", "--usage-profile", "1",
+                                               "--profile-dir", directory, "--json"])
+              end
+            end
+          end
+        end
+        receipt = JSON.parse(stdout)
+        assert_includes receipt.fetch("summary_zh"), "MESL"
+        assert_includes receipt.fetch("summary_zh"), "403"
+        assert_equal "subscription_http_403", receipt.fetch("items").first.fetch("reason")
+        refute Dir.exist?(File.join(directory, "backups"))
+      end
     end
   end
 

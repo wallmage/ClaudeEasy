@@ -149,7 +149,8 @@ module ClaudeEasy
     if (!finalURL || unwrap(finalURL.scheme).toLowerCase() !== "https" ||
         finalHost !== originalHost || finalPort !== originalPort) fail("subscription request failed");
     var statusCode = Number(response.statusCode);
-    if (statusCode < 200 || statusCode >= 300 || Number(data.length) === 0 || Number(data.length) > maxBytes) fail("subscription request failed");
+    if (statusCode < 200 || statusCode >= 300) fail("subscription_http_" + statusCode);
+    if (Number(data.length) === 0 || Number(data.length) > maxBytes) fail("subscription request failed");
     $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
   JAVASCRIPT
 
@@ -655,7 +656,7 @@ module ClaudeEasy
       stdin_data: "#{timeout_seconds}\n#{MAX_REMOTE_SUBSCRIPTION_BYTES}\n#{url}\n", binmode: true
     )
     unless status.success? && !stdout.empty?
-      marker = stderr.to_s[/\bclient_process_not_(?:visible|unique)\b/]
+      marker = stderr.to_s[/\b(?:client_process_not_(?:visible|unique)|subscription_http_[1-5][0-9]{2})\b/]
       raise InvalidConfigError, marker || "远程订阅下载失败"
     end
     raise InvalidConfigError, "远程订阅下载失败" if stdout.bytesize > MAX_REMOTE_SUBSCRIPTION_BYTES
@@ -1103,7 +1104,7 @@ module ClaudeEasy
     false
   end
 
-  def safe_update_all(targets:, policy:, backup_root:, usage_profile:,
+  def safe_update_all(targets:, policy:, backup_root:, usage_profile:, force_rewrite: false,
                       fetcher: method(:fetch_remote_subscription),
                       validator: method(:validate_with_mihomo), activation: nil, selected_name: nil,
                       guard_storage: false, expected_storage: nil,
@@ -1196,7 +1197,7 @@ module ClaudeEasy
       begin
         item[:source] = fetcher.call(item.fetch(:target))
         validate_remote_subscription_source!(item.fetch(:target), item.fetch(:source))
-        if remote_subscription_semantically_equal?(
+        if !force_rewrite && remote_subscription_semantically_equal?(
              item.fetch(:target), item.fetch(:original), item.fetch(:source), policy, usage_profile
            )
           item[:unchanged] = true
@@ -1204,10 +1205,10 @@ module ClaudeEasy
         else
           preflight_results << { name: item.fetch(:name), status: :ready }
         end
-      rescue StandardError
+      rescue StandardError => error
+        reason = error.message[/\A(?:subscription_http_[1-5][0-9]{2}|client_process_not_(?:visible|unique))\z/]
         item_results << {
-          name: item.fetch(:name), status: :failed, reason: :download_failed,
-          subscription_switch_possible: true
+          name: item.fetch(:name), status: :failed, reason: reason || :download_failed
         }
       end
     end
@@ -1292,6 +1293,14 @@ module ClaudeEasy
           )
           unless runtime_checkpoint
             return { status: :aborted, failed_profile: "", reason: :client_state_changed }
+          end
+          groups = selectable_groups(load_yaml(active.fetch(:candidate), active.fetch(:name)))
+          preserved = runtime_checkpoint.fetch(:selections).all? do |name, selected|
+            group = groups.find { |candidate| candidate["name"] == name }
+            group && (Array(group["proxies"]).include?(selected) || !Array(group["use"]).empty?)
+          end
+          unless preserved
+            return { status: :aborted, failed_profile: active.fetch(:name), reason: :selection_not_preserved }
           end
         end
       end

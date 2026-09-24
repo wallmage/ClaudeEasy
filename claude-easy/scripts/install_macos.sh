@@ -20,6 +20,7 @@ USAGE_PROFILE=""
 PROFILE_SOURCE=""
 SHOW_PROFILE=0
 SAFE_UPDATE=0
+FORCE_REWRITE=0
 JSON_OUTPUT=0
 OPERATION="install"
 AUTO_UPDATE_RECOVERY_REQUIRED=0
@@ -385,7 +386,7 @@ finish_json_child_failure() {
 
 usage() {
   [ "$JSON_OUTPUT" -eq 0 ] || return 0
-  /usr/bin/printf '%s\n' "用法：install_macos.sh [--profile 1|2|3] [--show-profile] [--safe-update]"
+  /usr/bin/printf '%s\n' "用法：install_macos.sh [--profile 1|2|3] [--show-profile] [--safe-update [--force-rewrite]]"
 }
 
 recover_interrupted_uninstall() {
@@ -686,6 +687,7 @@ run_committing_profile_operation() {
 run_safe_update_profile_operation() {
   safe_update_previous_json_output=$JSON_OUTPUT
   JSON_OUTPUT=1
+  [ "$FORCE_REWRITE" -eq 0 ] || set -- "$@" --force-rewrite
   if run_committing_profile_operation "$@"; then
     safe_update_operation_status=0
   else
@@ -718,6 +720,10 @@ parse_arguments() {
         ;;
       --show-profile)
         SHOW_PROFILE=1
+        shift
+        ;;
+      --force-rewrite)
+        FORCE_REWRITE=1
         shift
         ;;
       --safe-update)
@@ -788,6 +794,10 @@ resolve_usage_profile() {
 }
 
 parse_arguments "$@"
+
+if [ "$FORCE_REWRITE" -eq 1 ] && [ "$SAFE_UPDATE" -ne 1 ]; then
+  finish 64 invalid_request conflicting_operations "--force-rewrite 只能与 --safe-update 一起使用。" parse_arguments
+fi
 
 operation_count=0
 [ "$SHOW_PROFILE" -eq 1 ] && operation_count=$((operation_count + 1))

@@ -87,13 +87,13 @@ try {
         "Get-InstallStateEntry", "Assert-InstallState", "Assert-StateSnapshotUnchanged", "New-InstallStateEntry",
         "Split-YamlLines", "Set-YamlTopLevelScalar", "Set-YamlTunMapping", "Test-GeneratedYaml", "Get-RedactedYamlChangedPaths",
         "Get-RemoteSubscriptionProfileItems", "Get-RemoteSubscriptionTargets", "Get-RemoteSubscriptionAutoUpdateOwnership", "Get-PublicSubscriptionLabel", "Get-PublicSubscriptionResult",
-        "Get-RemoteSubscriptionHttpBytes", "Get-RemoteSubscriptionUpdatePlan", "Get-SubscriptionCheckResult",
+        "Get-RemoteSubscriptionHttpBytes", "Get-SubscriptionCheckResult",
         "Assert-RemoteSubscriptionAutoUpdateOwnershipState", "Merge-RemoteSubscriptionAutoUpdateOwnership", "Assert-ClaudeEasyProxyGroupCollection",
         "Set-RemoteSubscriptionAutoUpdateDisabled", "Assert-RemoteSubscriptionAutoUpdateDisabled",
         "Find-MihomoCore", "Test-MihomoVersion", "Test-MihomoCandidate", "Test-ClashVergeRunning", "Get-ClashVergeProcessIdentity", "Test-ClashVergeProcessIdentity",
         "Build-GlobalScript", "Get-ClaudeEasyManagedScriptEnvelope", "Assert-ClaudeEasyManagedScriptCurrent",
         "Get-ClaudeEasyReactivationHotkey", "Set-ClaudeEasyReactivationHotkey", "Get-ClashVergeReactivationShortcut",
-        "Get-ClashControllerContext", "Get-ClashRuntimeState", "Restore-ClashRuntimeSelections", "Invoke-ClashVergeReactivationShortcut",
+        "Get-ClashControllerContext", "Get-ClashRuntimeState", "Assert-ClashRuntimeSelections", "Invoke-ClashVergeReactivationShortcut",
         "Wait-ClashVergeRuntimeRefresh", "Wait-ClashVergeRuntimeHealthy", "Assert-ClashRuntimeHealthy",
         "Get-SafeUpdateRecoveryItems", "Get-SafeUpdateVerificationTargets", "New-SafeUpdateSnapshotContext",
         "Open-SafeUpdateVersionGuard", "Restore-SafeUpdateFiles", "Test-SafeUpdateActivationRecord", "Set-SafeUpdateActivationAttempt"
@@ -216,7 +216,7 @@ function Test-InstallRuntimeRestored([object]$ActivationContext) {
         (Get-InstallRuntimeSemanticFingerprint ([string]$ActivationContext.RuntimeContext.RuntimeText))) {
         throw "Clash Verge Rev 运行配置未恢复到原内容。"
     }
-    Restore-ClashRuntimeSelections $currentContext $ActivationContext.Selections
+    Assert-ClashRuntimeSelections $currentContext $ActivationContext.Selections
     $currentState = Get-ClashRuntimeState $currentContext
     if (-not (Test-InstallRuntimeStateUnchanged $ActivationContext $currentState)) {
         throw "Clash Verge Rev 原代理选择或 TUN 状态未恢复。"
@@ -562,99 +562,8 @@ if ($SafeUpdateChangedOnly -and (Test-Path -LiteralPath $safeUpdateStatePath -Pa
 }
 
 if ($SafeUpdateChangedOnly -and -not $VerifySafeUpdate) {
-    if ($savedUsageProfile -eq 0) {
-        Complete-InstallResult 10 "invalid_request" "usage_profile_required" "还没有选择用途档位。"
-    }
-    if ($UsageProfile -ne 0 -and $UsageProfile -ne $savedUsageProfile) {
-        Complete-InstallResult 64 "invalid_request" "usage_profile_mismatch" "请求档位与已保存档位不一致；未执行安全更新。"
-    }
-    $script:ClaudeEasyProfile = $savedUsageProfile
-    if (-not (Test-Path -LiteralPath $profilesIndexPath -PathType Leaf)) { throw "找不到远程订阅清单。" }
-    $safeUpdateDeadline = [DateTime]::UtcNow.AddSeconds(180)
-    $indexSnapshot = Get-OptionalFileSnapshot $profilesIndexPath "远程订阅清单"
-    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    try {
-        $indexText = $strictUtf8.GetString($indexSnapshot.Bytes)
-    } catch {
-        throw "远程订阅清单不是有效 UTF-8。"
-    }
-    $profiles = @(Get-RemoteSubscriptionTargets $indexText $profilesDirectory)
-    $plan = @(Get-RemoteSubscriptionUpdatePlan $profiles -AbsoluteDeadline $safeUpdateDeadline)
-    $changed = @($plan | Where-Object { $_.Changed })
-    $compareItems = @($plan | ForEach-Object {
-        Get-PublicSubscriptionResult ([string]$_.Uid) ([string]$_.Name) $(if ($_.Changed) { "pending" } else { "unchanged" })
-    })
-    if ($changed.Count -eq 0) {
-        Complete-InstallResult 0 "no_change" "subscriptions_unchanged" "远端和本地的远程订阅配置完全一样，不需要更新。" @("remote_compare") @("remote_subscription_compare") $compareItems
-    }
-    if ([DateTime]::UtcNow -ge $safeUpdateDeadline) { throw "safe_update_timeout" }
-    if (-not (Test-ClashVergeRunning)) { throw "Clash Verge Rev 没有运行，无法安全加载更新后的订阅。" }
-
-    $runtimeContext = Get-ClashControllerContext $runtimeConfigPath
-    $runtimeState = Get-ClashRuntimeState $runtimeContext
-    $runtimeSelections = $runtimeState.Selections
-    $runtimeTunEnabled = [bool]$runtimeState.TunEnabled
-    $vergeSnapshot = Get-OptionalFileSnapshot $vergePath "verge.yaml"
-    if (-not $vergeSnapshot.Exists) { throw "找不到 verge.yaml。" }
-    $vergeText = $strictUtf8.GetString($vergeSnapshot.Bytes)
-    $reactivationShortcut = Get-ClashVergeReactivationShortcut $vergeText
-    $scriptSnapshot = Get-OptionalFileSnapshot $targetScript "全局扩展脚本"
-    if (-not $scriptSnapshot.Exists) { throw "没有找到已安装的全局扩展脚本。" }
-    $scriptText = $strictUtf8.GetString($scriptSnapshot.Bytes)
-    Assert-ClaudeEasyManagedScriptCurrent $scriptText $savedUsageProfile $enginePath $targetScript
-    Assert-RemoteSubscriptionAutoUpdateDisabled $indexText | Out-Null
-    $core = Find-MihomoCore $MihomoPath
-    $runtimePolicyPath = Join-Path (Join-Path $PSScriptRoot "..\references") "policy.json"
-    $runtimePolicy = $strictUtf8.GetString([System.IO.File]::ReadAllBytes($runtimePolicyPath)) | ConvertFrom-Json
-    $runtimeCurl = Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    foreach ($entry in $changed) {
-        Assert-SubscriptionProtocolPreserved ([string]$entry.LocalText) ([string]$entry.RemoteText)
-        Test-MihomoCandidate $core ([string]$entry.RemoteText) $profilesDirectory $safeUpdateDeadline | Out-Null
-    }
-    $manifestItems = @()
-    foreach ($entry in $changed) {
-        Backup-InitialOnce $entry.Path $backupRoot -SourceBytes $entry.LocalBytes -UseSourceBytes | Out-Null
-        $backup = Backup-Versioned $entry.Path $backupRoot "pre-update" -SourceBytes $entry.LocalBytes -UseSourceBytes -WithMetadata
-        $profile = @($profiles | Where-Object { $_.Uid -ceq $entry.Uid })[0]
-        $manifestItems += [ordered]@{
-            Uid = [string]$entry.Uid
-            File = (Split-Path -Leaf $entry.Path)
-            BeforeSha256 = [string]$backup.Sha256
-            BeforeUpdated = [string]$profile.Updated
-            Backup = (Split-Path -Leaf $backup.Path)
-            UpdatedSha256 = [string]$entry.RemoteSha256
-        }
-    }
-    $manifest = [ordered]@{
-        Version = 5
-        CreatedAt = [DateTimeOffset]::Now.ToString("o")
-        RefreshStartedAt = ([DateTimeOffset]$safeUpdateDeadline.AddSeconds(-180)).ToString("o")
-        Profiles = $manifestItems
-        Runtime = [ordered]@{
-            TunEnabled = $runtimeTunEnabled
-            Selections = @($runtimeSelections.Keys | Sort-Object | ForEach-Object {
-                [ordered]@{ Group = [string]$_; Selection = [string]$runtimeSelections[$_] }
-            })
-        }
-        UpdateDispatchCommittedFor = $null
-    }
-    $writeTargets = @([pscustomobject]@{
-        Path = $safeUpdateStatePath
-        Bytes = ConvertTo-Utf8Bytes (($manifest | ConvertTo-Json -Depth 5) + "`r`n")
-        Existed = $false
-        OriginalBytes = $null
-        OriginalIdentity = $null
-    }) + @($changed | ForEach-Object {
-        [pscustomobject]@{
-            Path = [string]$_.Path
-            Bytes = [byte[]]$_.RemoteBytes
-            Existed = $true
-            OriginalBytes = [byte[]]$_.LocalBytes
-            OriginalIdentity = [string]$_.LocalIdentity
-        }
-    })
-    Invoke-VerifiedFileTransaction $writeTargets -InterruptedRecoveryPolicy "safe_update_running_client"
-    $VerifySafeUpdate = $true
+    Complete-InstallResult 64 "invalid_request" "client_refresh_required" `
+        '订阅刷新请使用客户端“更新所有订阅”；先运行 -SnapshotProfiles 准备备份。'
 }
 
 if ($SnapshotProfiles -or $BeginSafeUpdateRefresh -or $VerifySafeUpdate) {

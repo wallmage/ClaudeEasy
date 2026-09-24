@@ -354,7 +354,7 @@ function Get-ClashRuntimeState([object]$Context) {
     }
 }
 
-function Restore-ClashRuntimeSelections([object]$Context, [object]$Selections) {
+function Assert-ClashRuntimeSelections([object]$Context, [object]$Selections) {
     $current = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {
         $property = Get-ExactJsonProperty $current.Proxies ([string]$name)
@@ -365,10 +365,7 @@ function Restore-ClashRuntimeSelections([object]$Context, [object]$Selections) {
         $members = @($property.Value.all)
         if ($members -cnotcontains $selected) { throw "Clash Verge Rev 无法保留原代理选择。" }
         if ([string]$property.Value.now -ceq $selected) { continue }
-        $endpoint = "/proxies/" + [Uri]::EscapeDataString([string]$name)
-        $body = @{ name = $selected } | ConvertTo-Json -Compress
-        $response = Invoke-ClashControllerRequest $Context "PUT" $endpoint $body
-        if ($response.Status -notin @(200, 204)) { throw "Clash Verge Rev 没有恢复原代理选择。" }
+        throw "Clash Verge Rev 没有保留原代理选择；未切换节点。"
     }
 }
 
@@ -444,7 +441,7 @@ function Wait-ClashVergeRuntimeHealthy(
         try {
             $context = Get-ClashControllerContext $RuntimePath
             if (-not $prepared) {
-                Restore-ClashRuntimeSelections $context $Selections
+                Assert-ClashRuntimeSelections $context $Selections
                 $flush = Invoke-ClashControllerRequest $context "POST" "/cache/dns/flush"
                 if ($flush.Status -notin @(200, 204)) { throw "Clash Verge Rev DNS 缓存清理失败。" }
                 $prepared = $true
@@ -887,7 +884,7 @@ function Assert-ClashRuntimeHealthy(
     [DateTime]$AbsoluteDeadline = [DateTime]::MaxValue
 ) {
     if (-not $ReadOnly) {
-        Restore-ClashRuntimeSelections $Context $Selections
+        Assert-ClashRuntimeSelections $Context $Selections
     }
     $state = Get-ClashRuntimeState $Context
     foreach ($name in @($Selections.Keys)) {

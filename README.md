@@ -4,7 +4,7 @@ ClaudeEasy 是一个给 AI 助手用的 macOS 与 Windows 通用电脑诊断和�
 
 ClaudeEasy 是独立社区项目，与 Anthropic 没有隶属或官方合作关系。
 
-ClaudeEasy 面向不熟悉电脑设置的普通用户。故障排查会追查现象背后的原因，据此制定修复方案；修复请求会继续执行可安全完成的修复，并验证原始问题是否解决。只确认报错不算完成诊断，原因查不清会明确保留未解决状态和证据缺口。回复简短，但不会省略内部因果分析，也不会把自然恢复当成修复成功。网络配置和订阅更新报告变化明细和处理结果。回复使用简体中文，隐藏敏感值和排查流水账。只有系统授权、密码或确实必须手动点击时才会请用户做一步操作。
+ClaudeEasy 面向不熟悉电脑设置的普通用户。故障排查会追查现象背后的原因，据此制定修复方案；修复请求会继续执行可安全完成的修复，并验证原始问题是否解决。只确认报错不算完成诊断，原因查不清会明确保留未解决状态和证据缺口。回复简短，但不会省略内部因果分析，也不会把自然恢复当成修复成功。网络配置和订阅更新先报告处理结果与测试结论，变化按对象简述，需要时再展开明细。回复使用简体中文，隐藏敏感值和排查流水账。只有系统授权、密码或确实必须手动点击时才会请用户做一步操作。
 
 ## 电脑故障诊断
 
@@ -21,7 +21,7 @@ macOS 与 Windows 都支持。
 - **电脑故障诊断：** 在 macOS 与 Windows 上按你描述的问题检查、修复和复测。不是固定全面体检。
 - **按用途配置网络：** 为当前存储位置中的全部订阅应用合适的国内直连、DNS、TUN、AI 分流和 WebRTC 防护。
 - **Diagnostics（网络故障排查）：** 处理速度慢、偶尔断线、网站打不开、节点全红、分流错误或隐私泄漏。先确认原因，再做最小改动。
-- **检查与安全更新订阅：** 检查指定订阅或全部订阅是否变化，报告具体变化但不修改配置；明确要求更新时不中途询问，完成后同时报告变化明细和处理结果。
+- **检查与安全更新订阅：** 检查指定订阅或全部订阅是否变化，报告具体变化但不修改配置；明确要求更新时不中途询问，连续完成更新、补丁与验收；要求重新刷新时，即使内容相同也重写。
 - **管理备份：** 列出、比较和恢复历史版本。
 - **验证结果：** 检查实际运行配置、代理组、规则、DNS、网站连接和必要的浏览器测试，不把“脚本退出成功”当成全部完成。
 
@@ -89,7 +89,7 @@ Windows PowerShell 5.1：
 | 功能 | macOS | Windows |
 | --- | --- | --- |
 | 查看档位 | `bash claude-easy/scripts/install_macos.sh --show-profile` | `.\claude-easy\scripts\install_windows.cmd -ShowUsageProfile` |
-| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json`（先比对） | `powershell.exe -NoProfile -File claude-easy/scripts/install_windows.ps1 -SafeUpdateChangedOnly -Json`（先比对） |
+| 安全更新 | `bash claude-easy/scripts/install_macos.sh --safe-update --json`；全部重写追加 `--force-rewrite` | 先 `-SnapshotProfiles -Json`，再由助手操作客户端“更新所有订阅”并验收 |
 | 列出备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --list-backups --json` | `.\claude-easy\scripts\install_windows.cmd -ListBackups -Json` |
 | 比较备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --compare-backup ID --json` | `.\claude-easy\scripts\install_windows.cmd -CompareBackup ID -Json` |
 | 恢复备份 | `ruby claude-easy/scripts/macos/patch_profiles.rb --restore-backup ID --expected-current-sha256 HASH --json` | `.\claude-easy\scripts\install_windows.cmd -RestoreBackup ID -ExpectedCurrentSha256 HASH -Json` |
@@ -99,13 +99,14 @@ Windows PowerShell 5.1：
 
 ## 检查与更新订阅
 
-只问“有没有更新”时，ClaudeEasy 只做比对，不会修改配置；发现变化会直接说明新增、删除或修改了哪些节点、所属国家或地区，以及代理组、规则等变化。明确要求“更新节点”或“更新订阅”时，ClaudeEasy 不会中途询问是否继续，会直接完成更新和验收，再同时报告处理结果与变化明细。macOS 与 Windows 都先读取远端配置并逐份和本地比对；全部相同就返回 `no_change`，只要有变化就只更新变化的订阅。
+只问“有没有更新”时，只检查并说明变化，不修改配置。明确要求更新时，助手直接完成备份、更新、补丁和当前档位测试，不停在“检查了但没更新”，也不逐项询问是否继续。
 
-1. 直接读取远端订阅并和本地逐份比对；同一新节点进入多个代理组时，会说明这是该节点成为这些组的新选项，不会误报成多个新节点。
-2. 更新前不做站点或浏览器测试。比对确认有变化后，只为变化的远程订阅创建更新前备份。
-3. 更新后按已保存档位完成客户端开关与验收，并确认原 TUN、代理组和节点选择都已恢复。任一无法恢复时拒绝更新。
+- macOS 普通更新只写有变化的订阅；明确要求“重新刷新、全部重写”时，每份远程订阅都会重新下载并写入，内容相同也不跳过。
+- Windows 先保存更新前备份，再操作已运行 Clash Verge Rev 的“更新所有订阅”，随后自动继续补丁和验收。确实无法操作客户端时，才请你完成必要点击。
+- 更新失败会说明哪份订阅、什么原因；可自动处理的继续处理。不会偷偷切换节点或重启 Clash。
+- 档位 3 的地区指纹检测使用 [here.now 在线检测页](https://clear-valley-ezc5.here.now/)，不要求你打开本地 HTML。测试网站会收到公网 IP，不上传订阅或节点凭据。
 
-Windows 先在后台读取远端订阅并完成比对；确有变化时，再通过已经运行的 Clash Verge Rev 重新加载。后续客户端动作和浏览器验收由 Computer Use 在用户默认浏览器完成；确实无法启用才会请你完成最短的必要点击。macOS 的 ClashX Meta 开关优先由原生命令自动处理，浏览器和系统设置由 Computer Use 完成。
+浏览器测试使用你指定的浏览器，未指定时用默认浏览器。ChatGPT 仅在新标签页打开公共首页检查加载，不操作已有会话、不登录、不发送消息。最终先告诉你更新和测试结果，再简述变化；需要时可要求展开明细。
 
 ## 备份与恢复
 
