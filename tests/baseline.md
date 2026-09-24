@@ -14,7 +14,7 @@
 | **structure**（macos-15） | CI scope 分类；Skill 路由合同；策略与代码 parity；Ruby/Shell 语法；空白与 diff 检查；Boa 0.21.1 大订阅 5 秒执行上限（执行通常低于 1 秒） |
 | **structure-node**（ubuntu） | Windows 引擎与 region 页 JS 语法 |
 | **macos** | macOS patcher 与包装器；普通更新无变化短路、强制重写相同订阅、脱敏 HTTP 错误与只读节点选择核验；存储偏好缺失时识别唯一现行本地订阅；dispatch 追加 system-ruby；base-scoped 包装器与生产探针；覆盖 `already_disabled_owned` |
-| **windows** ×3 TestGroup | AST 解析；JSON smoke；installer 套件与远端订阅比对计划；控制器延迟就绪、安装失败后的旧配置加载、受管升级与客户端已验证设置变化；带 `#` 的合法密码变化、档位 3 IPv6 漏检、客户端自动更新后续动作及客户端全部刷新及旧更新事务恢复；base-scoped PS5 路由（core leg）；覆盖运行中三个档位安装、卸载、备份恢复与中断恢复 |
+| **windows** ×3 TestGroup | AST 解析；JSON smoke；installer 套件与远端订阅只读比对；控制器延迟就绪、安装失败后的旧配置加载、受管升级与客户端已验证设置变化；带 `#` 的合法密码变化、档位 3 IPv6 漏检、客户端自动更新后续动作及客户端全部刷新及旧更新事务恢复；base-scoped PS5 路由（core leg）；覆盖运行中三个档位安装、卸载、备份恢复与中断恢复 |
 | **windows-installer-powershell-7**（dispatch） | PS7 完整 installer 套件 |
 | **windows-routes-powershell-7**（dispatch） | PS7 路由验证 |
 | **mihomo** | arm64 当前内核；dispatch 追加 intel 与 minimum 版本 |
