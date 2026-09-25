@@ -29,6 +29,15 @@ test('global transform applies common policy', () => {
   assert.ok(patched.rules.includes('DOMAIN,raw.githubusercontent.com,AI'));
   assert.ok(patched.rules.includes('DOMAIN,storage.googleapis.com,AI'));
 });
+test('routes Meta AI sites and API through the independent AI group', () => {
+  const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
+  for (const domain of ['meta.ai', 'ai.meta.com', 'llama.meta.com']) {
+    assert.ok(patched.rules.includes(`DOMAIN-SUFFIX,${domain},AI`));
+    assert.ok(patched.dns['nameserver-policy'][`+.${domain}`].every((value) => value.endsWith('#AI')));
+  }
+  assert.equal(patched.rules.includes('DOMAIN-SUFFIX,meta.com,AI'), false);
+  assert.equal(patched.rules.includes('DOMAIN-SUFFIX,facebook.com,AI'), false);
+});
 test('routes UDP by deterministic destination and fails closed for AI', () => {
   const patched = engine.claudeEasyTransform(baseConfig(), 'fixture');
   const ai = patched['proxy-groups'].find((group) => group.name === 'AI');

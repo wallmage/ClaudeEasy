@@ -58,7 +58,7 @@ dns:
 
 只有确认没有可选 AI 分组时，才创建 `🤖 AI · ClaudeEasy`。新组直接列出订阅中全部有效的内联代理节点，并通过 `use` 接入全部有效的 `proxy-providers`。不得只把主代理组或“节点列表”作为唯一成员；否则用户无法让普通流量与 AI 流量选择不同节点。名称被其他代理组或内联代理占用时使用没有冲突的编号。重复运行必须复用已创建的组，不能产生重名。没有任何有效内联节点或代理提供者时不创建分组，保持原文件不变并说明原因。
 
-AI 组负责 OpenAI、ChatGPT、Codex、Claude、Anthropic，以及策略文件中列出的 Google AI 和相关服务流量。
+AI 组负责 OpenAI、ChatGPT、Codex、Claude、Anthropic、Meta AI，以及策略文件中列出的 Google AI 和相关服务流量。
 
 ## 节点建议
 

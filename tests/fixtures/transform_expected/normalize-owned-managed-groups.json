@@ -142,6 +142,21 @@
         "https://94.140.14.141/dns-query#🤖 AI · ClaudeEasy",
         "https://101.101.101.101/dns-query#🤖 AI · ClaudeEasy"
       ],
+      "+.meta.ai": [
+        "https://94.140.14.140/dns-query#🤖 AI · ClaudeEasy",
+        "https://94.140.14.141/dns-query#🤖 AI · ClaudeEasy",
+        "https://101.101.101.101/dns-query#🤖 AI · ClaudeEasy"
+      ],
+      "+.ai.meta.com": [
+        "https://94.140.14.140/dns-query#🤖 AI · ClaudeEasy",
+        "https://94.140.14.141/dns-query#🤖 AI · ClaudeEasy",
+        "https://101.101.101.101/dns-query#🤖 AI · ClaudeEasy"
+      ],
+      "+.llama.meta.com": [
+        "https://94.140.14.140/dns-query#🤖 AI · ClaudeEasy",
+        "https://94.140.14.141/dns-query#🤖 AI · ClaudeEasy",
+        "https://101.101.101.101/dns-query#🤖 AI · ClaudeEasy"
+      ],
       "ai.google.dev": [
         "https://94.140.14.140/dns-query#🤖 AI · ClaudeEasy",
         "https://94.140.14.141/dns-query#🤖 AI · ClaudeEasy",
@@ -246,6 +261,9 @@
     "DOMAIN,openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net,🤖 AI · ClaudeEasy",
     "DOMAIN,openaicomproductionae4b.blob.core.windows.net,🤖 AI · ClaudeEasy",
     "DOMAIN,production-openaicom-storage.azureedge.net,🤖 AI · ClaudeEasy",
+    "DOMAIN-SUFFIX,meta.ai,🤖 AI · ClaudeEasy",
+    "DOMAIN-SUFFIX,ai.meta.com,🤖 AI · ClaudeEasy",
+    "DOMAIN-SUFFIX,llama.meta.com,🤖 AI · ClaudeEasy",
     "DOMAIN,ai.google.dev,🤖 AI · ClaudeEasy",
     "DOMAIN-SUFFIX,aistudio.google.com,🤖 AI · ClaudeEasy",
     "DOMAIN-SUFFIX,gemini.google.com,🤖 AI · ClaudeEasy",
@@ -283,6 +301,9 @@
     "DOMAIN,openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net,REJECT",
     "DOMAIN,openaicomproductionae4b.blob.core.windows.net,REJECT",
     "DOMAIN,production-openaicom-storage.azureedge.net,REJECT",
+    "DOMAIN-SUFFIX,meta.ai,REJECT",
+    "DOMAIN-SUFFIX,ai.meta.com,REJECT",
+    "DOMAIN-SUFFIX,llama.meta.com,REJECT",
     "DOMAIN,ai.google.dev,REJECT",
     "DOMAIN-SUFFIX,aistudio.google.com,REJECT",
     "DOMAIN-SUFFIX,gemini.google.com,REJECT",
