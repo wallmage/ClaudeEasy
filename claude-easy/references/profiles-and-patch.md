@@ -32,8 +32,8 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 
 | 档位 | 用途 | 必须做 | 明确不做 | 验收 |
 | --- | --- | --- | --- | --- |
-| **档位 1｜普通浏览** | 国内网站、海外普通网站 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；macOS 原生开关协调命令确认 Clash 系统代理开启，Windows 按平台界面规则确认 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 百度、Google、ChatGPT 能稳定打开，速度无明显异常 |
-| **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，macOS 原生开关协调命令或 Windows 平台界面先开启 TUN，再关闭 Clash 自己的系统代理 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 百度、Google、ChatGPT 能稳定打开，速度无明显异常 |
+| **档位 1｜普通浏览** | 国内网站、海外普通网站 | 给当前存储位置中的全部订阅安装共同国内域名直连基线，关闭订阅自动更新；macOS 原生开关协调命令确认 Clash 系统代理开启，Windows 按平台界面规则确认 | 档位 1 不修改 TUN、IPv6、WebRTC、AI 分组或节点 | 百度、Google、ChatGPT 能稳定打开 |
+| **档位 2｜海外 AI** | ChatGPT、Codex、Gemini、Perplexity 等，不含 Claude | 继承共同国内域名直连基线，保持订阅自动更新关闭；不执行档位 1 的系统代理开启动作，macOS 原生开关协调命令或 Windows 平台界面先开启 TUN，再关闭 Clash 自己的系统代理 | 档位 2 不增加 WebRTC 或 AI 分组补丁，不修改节点 | 百度、Google、ChatGPT 能稳定打开 |
 | **档位 3｜Claude/Claude Code** | Claude 网页、Claude Code，或需要更强的泄漏防护 | 先完成档位 2，再运行完整补丁 | 不自动选择订阅、代理组或节点 | 完成普通站、其他 AI、分流、DNS 深度测试、WebRTC 测试和区域指纹测试 |
 
 档位 2、3 关闭系统代理的目的，是避免 Clash 同时用系统代理和 TUN 重复接管同一流量，不是为了隐藏代理。只关闭 Clash 客户端自己的系统代理开关；不得清除或覆盖 AdGuard、其他 PAC、企业代理或安全软件的设置。AdGuard for Mac 的可选配置只在用户明确要求配置、恢复或导入时读取 [adguard.md](adguard.md)，不属于普通 Patch。不能用 `networksetup`、注册表或系统代理命令把其他产品的配置抹掉。
@@ -59,7 +59,7 @@ macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位，随后运�
 
 ## Patch 验证标准
 
-档位 1 只验收系统代理、百度、Google、ChatGPT 和速度；档位 2 验收 TUN、Clash 自己的系统代理开关、百度、Google、ChatGPT 和速度。三页连通性由 Computer Use 在同一用户指定或默认浏览器会话中核验；新标签页并行打开，ChatGPT 只按 [SKILL.md 共同安全边界](../SKILL.md#共同安全边界) 的公共首页例外执行。全部取得本轮正常加载证据才算通过；缺项保留未验证。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
+档位 1 只验收系统代理、百度、Google 和 ChatGPT；档位 2 验收 TUN、Clash 自己的系统代理开关、百度、Google 和 ChatGPT。三页连通性由 Computer Use 在同一用户指定或默认浏览器会话中核验；新标签页并行打开，ChatGPT 只按 [SKILL.md 共同安全边界](../SKILL.md#共同安全边界) 的公共首页例外执行。全部取得本轮正常加载证据才算通过；缺项保留未验证。不能因为未运行泄漏测试而把档位 1、2 判为失败。以下完整验收只属于档位 3。
 
 只生成 ChatGPT、Gemini 和 Grok 的真实连接，同时读取 Mihomo `/connections`、`/rules`、`/proxies` 与 `/providers/proxies`。macOS 运行 `ruby scripts/macos/verify_routes.rb`，Windows 运行 `powershell.exe -NoProfile -File scripts/windows/verify_routes.ps1`；Windows 控制器只允许本机回环地址，密钥只经标准输入交给 `-SecretStdin`，非空 `-Secret` 必须拒绝。每个测试请求都通过当前 Mihomo 回环代理发出，并确认实际连接链包含当前 AI 分组；检测期间代理组或节点选择发生变化即失败。三项全部通过即为分流验证通过。Claude/Anthropic 禁测见 [policy-core.md](policy-core.md)。
 
@@ -98,7 +98,7 @@ Patch、订阅更新、备份恢复和任何实际修改网络配置的 Diagnost
 
 共同清单：用途档位已保存且与本轮一致；当前存储位置中的目标订阅已处理；订阅自动更新已关闭；客户端开关符合档位；当前运行配置已经验收；原订阅、代理组、节点和允许保留的 TUN 状态没有被意外改变；没有未完成事务或恢复记录；本轮电脑操控修改均已回读；用户原始要求逐项完成。
 
-- **档位 1：** 共同国内直连补丁、Clash 系统代理、百度、Google、ChatGPT 和速度全部通过。
+- **档位 1：** 共同国内直连补丁、Clash 系统代理、百度、Google 和 ChatGPT 全部通过。
 - **档位 2：** 共同清单和档位 1 的适用站点通过；TUN 开启、Clash 系统代理关闭；百度、Google、ChatGPT 通过；没有误加档位 3 增强。
 - **档位 3：** 档位 2 的适用项、完整补丁、ChatGPT/Gemini/Grok 实时分流、DNS 深度测试、WebRTC、区域指纹低风险全部通过。中高风险时完成可自动修改的系统和浏览器设置并逐轮复测；节点选择仍需用户决定时只请求这一项。
 
