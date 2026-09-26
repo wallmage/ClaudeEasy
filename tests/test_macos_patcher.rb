@@ -60,7 +60,8 @@ class MacosPatcherTest < Minitest::Test
       records = [{ name: "Selected", url: "https://selected.invalid/sub" },
                  { name: "Other", url: "https://other.invalid/sub" }]
       scenarios = {
-        same: ["no_change", false], changed: ["ok", true],
+        same: ["no_change", false], mapping_order: ["no_change", false],
+        empty_field: ["ok", true], changed: ["ok", true],
         invalid: ["failed", nil], conversion: ["failed", nil], concurrent: ["failed", nil], index_changed: ["failed", nil]
       }
       scenarios.each do |scenario, (status, available)|
@@ -69,6 +70,11 @@ class MacosPatcherTest < Minitest::Test
         current_records = records.map(&:dup)
         remote = base_config
         remote["mixed-port"] = 8999 if scenario == :changed
+        if scenario == :mapping_order
+          remote = remote.to_a.reverse.to_h
+          remote["proxies"] = remote["proxies"].map { |node| node.to_a.reverse.to_h }
+        end
+        remote["description"] = nil if scenario == :empty_field
         if scenario == :changed
           remote["proxies"].first["server"] = "replacement.invalid"
           remote["proxies"].delete_at(1)
@@ -104,6 +110,15 @@ class MacosPatcherTest < Minitest::Test
         actual = result.fetch("items").first.fetch("update_available")
         available.nil? ? assert_nil(actual) : assert_equal(available, actual)
         assert_equal [], result.fetch("changes")
+        if available
+          refute_empty result.fetch("items").first.fetch("details"), scenario.to_s
+        elsif available == false
+          assert_empty result.fetch("items").first.fetch("details"), scenario.to_s
+        end
+        if scenario == :empty_field
+          assert_includes result.fetch("items").first.fetch("details"),
+                          { "section" => "description", "action" => "added", "fields" => ["description"] }
+        end
         if scenario == :changed
           details = result.fetch("items").first.fetch("details")
           assert_includes details, { "section" => "proxies", "action" => "added", "name" => "台湾新增" }

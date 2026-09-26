@@ -678,7 +678,7 @@ module ClaudeEasy
     details = []
     (before.keys | after.keys).each do |section|
       left, right = before[section], after[section]
-      next if left == right
+      next if before.key?(section) == after.key?(section) && left == right
 
       if %w[proxies proxy-groups proxy-providers rule-providers].include?(section)
         entries = [left, right].map do |value|
@@ -720,8 +720,10 @@ module ClaudeEasy
           details << { "section" => section, "action" => "reordered" }
         end
       else
-        details << { "section" => safe_label(section), "action" => "modified",
-                     "fields" => redacted_changed_paths({ section => left }, { section => right }).map { |p| safe_label(p) } }
+        action = !before.key?(section) ? "added" : !after.key?(section) ? "removed" : "modified"
+        fields = action == "modified" ? redacted_changed_paths({ section => left }, { section => right }) : [section]
+        details << { "section" => safe_label(section), "action" => action,
+                     "fields" => fields.map { |p| safe_label(p) } }
       end
     end
     servers = [before, after].flat_map { |config| Array(config["proxies"]).map { |node| node["server"].to_s } }.reject(&:empty?).uniq
@@ -773,7 +775,7 @@ module ClaudeEasy
         current_records = remote_subscription_records.select { |entry| entry.fetch(:name) == record.fetch(:name) }
         raise InvalidConfigError, "订阅索引发生变化" unless current_records == [record] &&
           remote_subscription_targets(directories, current_records).first == target
-        changed = dump_config(current) != dump_config(patched.fetch(:config))
+        changed = current != patched.fetch(:config)
         item.merge!("status" => changed ? "pending" : "unchanged", "update_available" => changed,
                     "details" => subscription_change_details(current, patched.fetch(:config)))
       rescue StandardError => error

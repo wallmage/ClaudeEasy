@@ -207,13 +207,17 @@ function Get-SubscriptionCheckDetails([string]$Before, [string]$After, [hashtabl
             }
             $oldOrder = @($old.Keys | Where-Object { $new.Contains($_) })
             $newOrder = @($new.Keys | Where-Object { $old.Contains($_) })
-            if (($oldOrder | ConvertTo-Json -Compress) -cne ($newOrder | ConvertTo-Json -Compress)) {
+            if ($section -in @('proxies', 'proxy-groups', 'rules') -and
+                ($oldOrder | ConvertTo-Json -Compress) -cne ($newOrder | ConvertTo-Json -Compress)) {
                 $sectionDetails += @{ section = $section; action = 'reordered'; fields = @() }
             }
-            if ($sectionDetails.Count -eq 0) { throw 'detail unconfirmed' }
             $details += $sectionDetails
         } catch {
-            $details += @{ section = $section; action = $sectionAction; fields = @(); status = 'unconfirmed' }
+            $details += @{
+                section = $section; action = $sectionAction; status = 'unconfirmed'
+                fields = @($paths | Where-Object { ($_ -split '\.')[0] -ceq $section } | ForEach-Object { Protect-SubscriptionDetailName $_ })
+                reason_zh = '该部分未能完整解析；只能确认列出的配置位置有差异，具体节点或成员尚未确认。'
+            }
         }
     }
     return @($details)
@@ -276,13 +280,14 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
                     (Get-BytesSha256 $before.Bytes) -cne (Get-BytesSha256 $after.Bytes) -or
                     -not $indexAfter.Exists -or $index.Identity -cne $indexAfter.Identity -or
                     (Get-BytesSha256 $index.Bytes) -cne (Get-BytesSha256 $indexAfter.Bytes)) { throw 'local snapshot changed' }
-                $changed = -not (Test-RemoteSubscriptionSemanticEqual $local $remote)
-                $item.status = if ($changed) { 'pending' } else { 'unchanged' }
-                $item.update_available = [bool]$changed
                 $item.details = @(Get-SubscriptionCheckDetails $localText $remoteText $local $remote)
                 $item.detail_status = if (@($item.details | Where-Object { $_.status -eq 'unconfirmed' }).Count) { 'unconfirmed' } else { 'confirmed' }
+                if ($item.detail_status -eq 'unconfirmed') { throw 'subscription_details_incomplete' }
+                $changed = $item.details.Count -gt 0
+                $item.status = if ($changed) { 'pending' } else { 'unchanged' }
+                $item.update_available = [bool]$changed
             } catch {
-                $item['code'] = 'subscription_check_failed'
+                $item['code'] = if ($_.Exception.Message -ceq 'subscription_details_incomplete') { 'subscription_details_incomplete' } else { 'subscription_check_failed' }
             }
             $results += [pscustomobject]$item
         }
