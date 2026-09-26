@@ -1551,11 +1551,13 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
     if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'concurrent')) {
         [System.IO.File]::AppendAllText((Join-Path $AppHome 'profiles/A.yaml'), "# concurrent`n")
     }
-    return ,([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'response')))
+    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'response'))
+    if ([Text.Encoding]::UTF8.GetString($bytes) -ceq 'http-error') { throw '远程订阅请求失败（HTTP 403）。' }
+    return ,$bytes
 }
 '@)
     $fetchLog = Join-Path $checkModules 'fetch.log'
-    foreach ($scenario in @('same', 'mapping-order', 'changed', 'reordered', 'unconfirmed', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
+    foreach ($scenario in @('same', 'mapping-order', 'changed', 'reordered', 'unconfirmed', 'http-error', 'invalid', 'truncated-flow', 'truncated-quote', 'concurrent')) {
         Invoke-DeferredProbe "subscription check $scenario" {
         Write-TestUtf8Text $checkPath $checkBody
         if (Test-Path -LiteralPath $fetchLog) { Remove-Item -LiteralPath $fetchLog }
@@ -1564,6 +1566,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
             'mapping-order' { $checkBody -replace '    type: ss(\r?\n)    server: 192\.0\.2\.1', '    server: 192.0.2.1${1}    type: ss' }
             'reordered' { $checkBody.Replace('[Stay 1, Old]', '[Old, Stay 1]') }
             'unconfirmed' { $checkBody.Replace('proxies:', 'proxies: &nodes') }
+            'http-error' { 'http-error' }
             'invalid' { '<html>password=fixture-secret</html>' }
             'truncated-flow' { "proxies: [`n" }
             'truncated-quote' { 'mode: "rule' }
@@ -1596,6 +1599,7 @@ function Get-RemoteSubscriptionHttpBytes([string]$Url, [int]$TimeoutSeconds) {
             } else { Assert-True ($details.Count -eq 0) 'unchanged check invented details' }
         } else {
             Assert-True ($null -eq $checkResult.items[0].update_available) 'failed check claimed a change judgment'
+            if ($scenario -eq 'http-error') { Assert-True ($checkResult.items[0].code -ceq 'subscription_http_403') 'HTTP evidence omitted' }
             if ($scenario -eq 'unconfirmed') {
                 $detail = @($checkResult.items[0].details | Where-Object { $_.section -ceq 'proxies' -and $_.status -ceq 'unconfirmed' })
                 Assert-True ($checkResult.items[0].code -ceq 'subscription_details_incomplete' -and $detail.Count -eq 1 -and $detail[0].fields.Count -gt 0 -and $detail[0].reason_zh) 'incomplete check omitted locations or explanation'

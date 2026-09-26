@@ -288,6 +288,9 @@ function Get-SubscriptionCheckResult([string]$AppHome, [string]$SubscriptionName
                 $item.update_available = [bool]$changed
             } catch {
                 $item['code'] = if ($_.Exception.Message -ceq 'subscription_details_incomplete') { 'subscription_details_incomplete' } else { 'subscription_check_failed' }
+                if ($_.Exception.Message -match '^远程订阅请求失败（HTTP ([1-5][0-9]{2})）。$') {
+                    $item['code'] = 'subscription_http_' + $Matches[1]
+                }
             }
             $results += [pscustomobject]$item
         }
