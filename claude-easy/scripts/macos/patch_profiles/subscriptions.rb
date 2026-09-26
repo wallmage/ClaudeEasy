@@ -779,7 +779,7 @@ module ClaudeEasy
         item.merge!("status" => changed ? "pending" : "unchanged", "update_available" => changed,
                     "details" => subscription_change_details(current, patched.fetch(:config)))
       rescue StandardError => error
-        item["code"] = %w[client_process_not_visible client_process_not_unique].include?(error.message) ?
+        item["code"] = error.message.match?(/\A(?:client_process_not_(?:visible|unique)|subscription_http_[1-5][0-9]{2})\z/) ?
           error.message : "subscription_check_failed"
       end
       item

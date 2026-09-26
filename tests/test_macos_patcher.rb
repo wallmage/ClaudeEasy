@@ -62,7 +62,7 @@ class MacosPatcherTest < Minitest::Test
       scenarios = {
         same: ["no_change", false], mapping_order: ["no_change", false],
         empty_field: ["ok", true], changed: ["ok", true],
-        invalid: ["failed", nil], conversion: ["failed", nil], concurrent: ["failed", nil], index_changed: ["failed", nil]
+        http_error: ["failed", nil], invalid: ["failed", nil], conversion: ["failed", nil], concurrent: ["failed", nil], index_changed: ["failed", nil]
       }
       scenarios.each do |scenario, (status, available)|
         File.write(path, local)
@@ -87,6 +87,7 @@ class MacosPatcherTest < Minitest::Test
         remote = { "proxies" => [], "rules" => [] } if scenario == :conversion
         fetch = lambda do |target|
           calls << target.fetch(:name)
+          raise ClaudeEasy::InvalidConfigError, "subscription_http_403" if scenario == :http_error
           File.write(path, local + "# concurrent\n") if scenario == :concurrent
           current_records = [records.first.merge(url: "https://replacement.invalid/sub"), records.last] if scenario == :index_changed
           scenario == :invalid ? "invalid: [" : YAML.dump(remote)
@@ -109,6 +110,7 @@ class MacosPatcherTest < Minitest::Test
         assert_equal status, result.fetch("status"), scenario.to_s
         actual = result.fetch("items").first.fetch("update_available")
         available.nil? ? assert_nil(actual) : assert_equal(available, actual)
+        assert_equal "subscription_http_403", result.fetch("items").first.fetch("code") if scenario == :http_error
         assert_equal [], result.fetch("changes")
         if available
           refute_empty result.fetch("items").first.fetch("details"), scenario.to_s
