@@ -1198,28 +1198,40 @@ module ClaudeEasy
     false
   end
 
-  def reload_profile_runtime(requester, path, expected_tun: :ignore, selections: {})
+  def reload_profile_runtime(requester, path, expected_tun: :ignore, selections: {}, diagnostics: nil)
+    diagnostics ||= {}
+    diagnostics[:failure_stage] = "profile_reload"
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(path))
     )
-    code == 204 &&
-      restore_runtime_tun_state(requester, expected_tun) &&
-      runtime_selections_preserved?(requester, selections)
-  rescue StandardError
+    diagnostics[:http_status] = code unless code == 204
+    return false unless code == 204
+    diagnostics[:failure_stage] = "runtime_tun"
+    return false unless restore_runtime_tun_state(requester, expected_tun)
+    diagnostics[:failure_stage] = "runtime_selections"
+    runtime_selections_preserved?(requester, selections)
+  rescue StandardError => error
+    diagnostics[:error_class] = error.class.name
     false
   end
 
   def runtime_health_healthy?(requester, selections:, expected_tun:, connectivity_checker: nil,
                               precommit_condition: nil, required_proxy_group: nil,
-                              flush_caches: true, check_dns: true)
+                              flush_caches: true, check_dns: true, diagnostics: nil)
+    diagnostics ||= {}
+    diagnostics[:failure_stage] = "runtime_profile_context"
     return false unless runtime_precommit_allowed?(precommit_condition)
 
     if flush_caches
+      diagnostics[:failure_stage] = "runtime_dns_flush"
       code, _body = requester.call("POST", "/cache/dns/flush", nil)
+      diagnostics[:http_status] = code unless [200, 204].include?(code)
       return false unless [200, 204].include?(code)
     end
+    diagnostics[:failure_stage] = "runtime_tun"
     return false if expected_tun != :ignore && tun_state(requester: requester) != expected_tun
 
+    diagnostics[:failure_stage] = "runtime_selections"
     proxies = runtime_proxies(requester)
     return false unless proxies
 
@@ -1231,18 +1243,60 @@ module ClaudeEasy
     end
     return false unless after.is_a?(Hash) && selections.is_a?(Hash)
     return false unless selections.all? { |name, selected| after.key?(name) && after[name] == selected }
+    diagnostics[:failure_stage] = "runtime_proxy_group"
     return false if required_proxy_group &&
                     !runtime_proxy_group_safe?(requester, required_proxy_group, proxies: proxies)
     if check_dns
+      diagnostics[:failure_stage] = "runtime_dns"
       return false unless dns_runtime_healthy?(requester, "www.baidu.com")
     end
 
+    diagnostics[:failure_stage] = "runtime_connectivity"
     connectivity_checker ||= lambda do
       default_connectivity_healthy?(requester: requester, tun_mode: expected_tun)
     end
     return false unless connectivity_checker.call
 
+    diagnostics[:failure_stage] = "runtime_profile_context"
     runtime_precommit_allowed?(precommit_condition)
+  rescue StandardError => error
+    diagnostics[:error_class] = error.class.name
+    false
+  end
+
+  def superseded_profile_transaction_healthy?(active, transaction, requester: nil, socket: nil,
+                                             connectivity_checker: nil, precommit_condition: nil)
+    if requester.nil?
+      socket ||= controller_socket
+      return false unless socket
+      requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
+    end
+    path = File.realpath(active.fetch(:path))
+    snapshot = regular_file_snapshot_once(path, "当前配置")
+    originals = transaction.fetch(:original_snapshots)
+    return false if originals.empty?
+    restored = lambda do
+      originals.all? do |target, original|
+        File.realpath(target) == target &&
+          regular_file_snapshot_once(target, "恢复配置").fetch(:bytes) == original.fetch(:bytes)
+      end
+    end
+    return false unless restored.call && runtime_precommit_allowed?(precommit_condition)
+    return false unless runtime_matches_profile?(requester, path)
+    checkpoint = capture_runtime_checkpoint(path, require_tun: :preserve, requester: requester)
+    return false unless checkpoint
+    checkpoint[:selections] = runtime_selections(requester)
+    return false unless checkpoint[:selections]
+    return false unless runtime_health_healthy?(
+      requester, selections: checkpoint[:selections], expected_tun: checkpoint[:expected_tun],
+      connectivity_checker: connectivity_checker, precommit_condition: precommit_condition,
+      flush_caches: false, check_dns: false
+    )
+    runtime_matches_profile?(requester, path) &&
+      runtime_checkpoint_current?(checkpoint, requester: requester) && restored.call &&
+      File.realpath(active.fetch(:path)) == path &&
+      regular_file_snapshot_once(path, "当前配置").values_at(:identity, :bytes) ==
+        snapshot.values_at(:identity, :bytes) && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
     false
   end
@@ -1250,23 +1304,28 @@ module ClaudeEasy
   def reload_recovered_profile_runtime(work_items, require_tun:, socket: nil, requester: nil,
                                        connectivity_checker: nil, precommit_condition: nil,
                                        runtime_checkpoint: nil, transaction: nil,
-                                       runtime_profile_state_reader: nil)
+                                       runtime_profile_state_reader: nil, diagnostics: nil)
+    diagnostics ||= {}
+    diagnostics[:failure_stage] = "recovery_active_profile"
     active = work_items.find { |item| item.fetch(:active) }
     if active.nil? && runtime_checkpoint
       active = work_items.find do |item|
         File.realpath(item.fetch(:path)) == runtime_checkpoint[:path]
-      rescue StandardError
+      rescue StandardError => error
+    diagnostics[:error_class] = error.class.name
         false
       end
     end
     return false unless active
 
+    diagnostics[:failure_stage] = "controller_discovery"
     if requester.nil?
       socket ||= controller_socket
       return false unless socket
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
+    diagnostics[:failure_stage] = "recovery_checkpoint"
     if runtime_checkpoint
       return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
 
@@ -1277,6 +1336,7 @@ module ClaudeEasy
         runtime_profile_state_reader ||= lambda do |path, candidate|
           runtime_loaded_profile_state(requester, path, candidate)
         end
+        diagnostics[:failure_stage] = "recovery_loaded_profile"
         case runtime_profile_state_reader.call(active.fetch(:path), candidate_bytes)
         when :restored
           runtime_checkpoint = capture_runtime_checkpoint(
@@ -1311,20 +1371,24 @@ module ClaudeEasy
                        :ignore
                      end
     end
+    diagnostics[:failure_stage] = "recovery_selections"
     return false unless selections
+    diagnostics[:failure_stage] = "recovery_tun"
     return false if expected_tun == :unknown
+    diagnostics[:failure_stage] = "runtime_profile_context"
     return false unless runtime_precommit_allowed?(precommit_condition)
+    diagnostics[:failure_stage] = "recovery_checkpoint"
     return false if dispatch_checkpoint &&
                     !runtime_checkpoint_current?(dispatch_checkpoint, requester: requester)
 
     return false unless reload_profile_runtime(
-      requester, active.fetch(:path), expected_tun: expected_tun, selections: selections
+      requester, active.fetch(:path), expected_tun: expected_tun, selections: selections, diagnostics: diagnostics
     )
 
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker,
-      precommit_condition: precommit_condition, check_dns: false
+      precommit_condition: precommit_condition, check_dns: false, diagnostics: diagnostics
     )
     healthy && runtime_precommit_allowed?(precommit_condition)
   rescue StandardError
@@ -1479,25 +1543,30 @@ module ClaudeEasy
   def activate_updated_profile(result, socket: nil, requester: nil, connectivity_checker: nil,
                                require_tun: true, precommit_condition: nil,
                                require_safe_ai: false, runtime_checkpoint: nil)
-    pending = -> { result.merge(status: :reload_failed_restore_pending) }
+    diagnostics = { failure_stage: "profile_snapshot" }
+    pending = -> { result.merge(diagnostics).merge(status: :reload_failed_restore_pending, failure_stage: "profile_snapshot") }
     reload_attempted = false
     return pending.call unless profile_result_current?(result)
 
+    diagnostics[:failure_stage] = "controller_discovery"
     if requester.nil?
       socket ||= controller_socket
-      return result.merge(status: rollback_before_runtime_reload(result)) unless socket
+      return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result)) unless socket
 
       requester = ->(method, endpoint, body) { controller_request(socket, method, endpoint, body) }
     end
+    diagnostics[:failure_stage] = "runtime_checkpoint"
     if runtime_checkpoint
       unless runtime_checkpoint[:path] == File.realpath(result.fetch(:path))
-        return result.merge(status: rollback_before_runtime_reload(result))
+        return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result))
       end
       before = runtime_checkpoint[:selections]
       expected_tun = runtime_checkpoint[:expected_tun]
     else
+      diagnostics[:failure_stage] = "capture_selections"
       before = runtime_selections(requester)
-      return result.merge(status: rollback_before_runtime_reload(result)) unless before
+      return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result)) unless before
+      diagnostics[:failure_stage] = "capture_tun"
       expected_tun = if require_tun == :preserve
                        tun_state(requester: requester)
                      elsif require_tun
@@ -1516,51 +1585,60 @@ module ClaudeEasy
         runtime_checkpoint: rollback_checkpoint
       )
     end
-    return result.merge(status: rollback_before_runtime_reload(result)) if expected_tun == :unknown
+    return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result)) if expected_tun == :unknown
+    diagnostics[:failure_stage] = "candidate_selections"
     candidate_selections = runtime_selections_for_profile(before, result.fetch(:path))
-    return result.merge(status: rollback_before_runtime_reload(result)) unless candidate_selections
+    return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result)) unless candidate_selections
+    diagnostics[:failure_stage] = "runtime_proxy_group"
     required_proxy_group = profile_ai_runtime_group(result.fetch(:path)) if require_safe_ai
     if require_safe_ai && !required_proxy_group
-      return result.merge(status: rollback_before_runtime_reload(result))
+      return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result))
     end
+    diagnostics[:failure_stage] = "runtime_checkpoint"
     if runtime_checkpoint && !runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
-      return result.merge(status: rollback_before_runtime_reload(result))
+      return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result))
     end
+    diagnostics[:failure_stage] = "runtime_profile_context"
     unless runtime_precommit_allowed?(precommit_condition)
       status = restore_profile_bytes(result) ? :reload_failed_rolled_back : :reload_failed_rollback_conflict
-      return result.merge(status: status)
+      return result.merge(diagnostics).merge(status: status)
     end
     return pending.call unless profile_result_current?(result)
     if runtime_checkpoint && !runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
-      return result.merge(status: rollback_before_runtime_reload(result))
+      return result.merge(diagnostics).merge(status: rollback_before_runtime_reload(result))
     end
 
+    diagnostics[:failure_stage] = "profile_reload"
     reload_attempted = true
     code, _body = requester.call(
       "PUT", "/configs?force=true", JSON.generate("path" => File.expand_path(result.fetch(:path)))
     )
     return pending.call unless profile_result_current?(result)
-    return result.merge(status: rollback.call) unless code == 204
+    diagnostics[:http_status] = code unless code == 204
+    return result.merge(diagnostics).merge(status: rollback.call) unless code == 204
+    diagnostics[:failure_stage] = "runtime_tun"
     tun_restored = restore_runtime_tun_state(requester, expected_tun)
     return pending.call unless profile_result_current?(result)
-    return result.merge(status: rollback.call) unless tun_restored
+    return result.merge(diagnostics).merge(status: rollback.call) unless tun_restored
+    diagnostics[:failure_stage] = "runtime_selections"
     selections_restored = runtime_selections_preserved?(requester, candidate_selections)
     return pending.call unless profile_result_current?(result)
-    return result.merge(status: rollback.call) unless selections_restored
+    return result.merge(diagnostics).merge(status: rollback.call) unless selections_restored
 
     healthy = runtime_health_healthy?(
       requester, selections: candidate_selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker,
       precommit_condition: precommit_condition,
-      required_proxy_group: required_proxy_group
+      required_proxy_group: required_proxy_group, diagnostics: diagnostics
     )
     return pending.call unless profile_result_current?(result)
-    return result.merge(status: rollback.call) unless
+    return result.merge(diagnostics).merge(status: rollback.call) unless
       runtime_precommit_allowed?(precommit_condition)
     return result.merge(reloaded: true) if healthy
 
-    result.merge(status: rollback.call)
-  rescue StandardError
+    result.merge(diagnostics).merge(status: rollback.call)
+  rescue StandardError => error
+    diagnostics[:error_class] = error.class.name
     status = if reload_attempted
                rollback_after_reload_failure(
                  result, requester, result[:path], selections: before,
@@ -1571,7 +1649,7 @@ module ClaudeEasy
              else
                rollback_before_runtime_reload(result)
              end
-    result.merge(status: status)
+    result.merge(diagnostics).merge(status: status)
   end
 
   def rollback_before_runtime_reload(result)

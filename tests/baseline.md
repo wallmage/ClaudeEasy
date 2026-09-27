@@ -13,7 +13,7 @@
 | **scope** | 分类器误选/漏选 job 或 platform flag |
 | **structure**（macos-15） | CI scope 分类；Skill 路由合同；策略与代码 parity；Ruby/Shell 语法；空白与 diff 检查；Boa 0.21.1 大订阅 5 秒执行上限（执行通常低于 1 秒） |
 | **structure-node**（ubuntu） | Windows 引擎与 region 页 JS 语法 |
-| **macos** | macOS patcher 与包装器；普通更新无变化短路、强制重写相同订阅、脱敏 HTTP 错误与只读节点选择核验；存储偏好缺失时识别唯一现行本地订阅；dispatch 追加 system-ruby；base-scoped 包装器与生产探针；覆盖 `already_disabled_owned`、首次缺失自动更新字段的关闭与恢复、无原生命令时的客户端界面完成回读及失败后的自动跟进回执、无效偏好拒写、逐项失败原因、操作锁权限拒绝及安装子步骤错误保留 |
+| **macos** | macOS patcher 与包装器；普通更新无变化短路、强制重写相同订阅、脱敏 HTTP 错误与只读节点选择核验；存储偏好缺失时识别唯一现行本地订阅；dispatch 追加 system-ruby；base-scoped 包装器与生产探针；覆盖 `already_disabled_owned`、首次缺失自动更新字段的关闭与恢复、无原生命令时的客户端界面完成回读及失败后的自动跟进回执、无效偏好拒写、逐项失败阶段及 HTTP 状态、操作锁权限拒绝、安装子步骤错误与已知恢复回执保留；旧事务与当前订阅不同时核验恢复，含配置不符、连通失败及并发变化拒绝 |
 | **windows** ×3 TestGroup | AST 解析；JSON smoke；installer 套件与远端订阅只读比对；控制器延迟就绪、安装失败后的旧配置加载、受管升级与客户端已验证设置变化；带 `#` 的合法密码变化、档位 3 IPv6 漏检、客户端自动更新后续动作及客户端全部刷新及旧更新事务恢复；base-scoped PS5 路由（core leg）；覆盖运行中三个档位安装、卸载、备份恢复与中断恢复 |
 | **windows-installer-powershell-7**（dispatch） | PS7 完整 installer 套件 |
 | **windows-routes-powershell-7**（dispatch） | PS7 路由验证 |

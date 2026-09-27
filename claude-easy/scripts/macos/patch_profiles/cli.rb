@@ -192,7 +192,9 @@ module ClaudeEasy
              end
     item = { "profile" => safe_label(File.basename(result[:path].to_s)), "status" => status }
     item["reason"] = result[:status].to_s unless %w[updated unchanged].include?(status)
-    item["error_class"] = result[:error_class] if result[:error_class]
+    %i[failure_stage http_status error_class].each do |key|
+      item[key.to_s] = result[key] if result[key]
+    end
     item
   end
 
@@ -669,9 +671,10 @@ module ClaudeEasy
     expected_storage = storage_mode if guard_storage
     directories = guard_storage ? default_profile_directories : options[:profile_dirs]
     if options[:recover_profile_transaction]
+      recovery_details = {}
       result = recover_pending_profile_transaction(
         options[:backup_root], directories: directories,
-        guard_storage: guard_storage, expected_storage: expected_storage
+        guard_storage: guard_storage, expected_storage: expected_storage, diagnostics: recovery_details
       )
       if result == :profile_directory_missing
         return emit_cli_result(
@@ -685,9 +688,10 @@ module ClaudeEasy
         return emit_cli_result(
           operation: "recover_profile_transaction", exit_code: 1, status: "partial",
           code: "profile_transaction_runtime_pending",
-          summary_zh: "配置文件已恢复，但当前运行配置未能恢复。"
+          summary_zh: "当前运行配置的恢复或核验尚未完成。",
+          checks: recovery_details.map { |name, value| { "name" => name.to_s, "value" => value } }
         ) if options[:json]
-        warn "配置文件已恢复，但当前运行配置未能恢复。"
+        warn "当前运行配置的恢复或核验尚未完成。"
         return 1
       end
       if options[:json]
@@ -1109,7 +1113,8 @@ module ClaudeEasy
         operation: "patch_profiles", exit_code: PROFILE_COMMIT_STATE_UNCERTAIN_EXIT,
         status: "partial", code: "profile_recovery_pending",
         summary_zh: "配置恢复尚未完成；必须保留当前档位并在下次运行时继续恢复。",
-        profile: options[:usage_profile]
+        profile: options[:usage_profile],
+        items: [{ "status" => "pending", "error_class" => error.class.name }]
       ) if json_mode
       warn "配置恢复尚未完成；必须保留当前档位并在下次运行时继续恢复。"
       return PROFILE_COMMIT_STATE_UNCERTAIN_EXIT

@@ -896,8 +896,9 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
-  def test_failed_profile_change_preserves_the_previous_saved_profile
-    failing_patcher = <<~RUBY
+  def test_failed_profile_change_preserves_saved_profile_and_recovery_evidence
+    failing_patcher = <<~'RUBY'
+      require_relative "result_contract"
       if ARGV.include?("--print-core-status")
         puts "supported"
         exit 0
@@ -907,17 +908,20 @@ class MacosWrapperTest < Minitest::Test
         puts "already_disabled"
         exit 0
       end
-      exit 1
+      exit 1 unless ENV["RECOVERY_RECEIPT"]
+      File.write(ARGV[ARGV.index("--wrapper-commit-receipt") + 1], "invalid") if ENV["RECOVERY_RECEIPT"] == "invalid"
+      puts ClaudeEasyResult.build(
+        command: "patch", operation: "patch_profiles", ok: false, status: "partial",
+        code: "profile_recovery_pending", exit_code: 77, summary_zh: "运行内核恢复失败。",
+        items: [{ "status" => "failed", "failure_stage" => "restore_load", "http_status" => 503 }],
+        checks: [{ "name" => "controller_restore", "status" => "failed" }]
+      ).to_json
+      exit 77
     RUBY
     with_supported_mihomo_installer(patcher_source: failing_patcher) do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          state = usage_state_path(home)
-          FileUtils.mkdir_p(File.dirname(state))
-          system("/usr/bin/plutil", "-create", "xml1", state)
-          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
-          File.chmod(0o600, state)
+          state = write_usage_profile(home, 1)
           original = File.binread(state)
 
           stdout, _stderr, status = run_script(installer, "--profile", "2", home: home)
@@ -938,6 +942,23 @@ class MacosWrapperTest < Minitest::Test
             "/usr/bin/plutil", "-extract", "Profile", "raw", state
           ).first.strip
           assert_equal original, File.binread(state)
+
+          [false, true].each do |bad_receipt|
+            state = write_usage_profile(home, 1)
+            stdout, stderr, status = run_script(
+              installer, "--profile", "2", "--json", home: home,
+              extra_env: { "RECOVERY_RECEIPT" => bad_receipt ? "invalid" : "valid" }
+            )
+            result = assert_json_result(stdout, status, command: "install")
+            assert_equal 1, status.exitstatus, stderr
+            assert_equal(bad_receipt ? "operation_result_unknown_recovery_intent" : "profile_recovery_pending", result["code"])
+            unless bad_receipt
+              assert_equal "运行内核恢复失败。", result["summary_zh"]
+              assert_equal [{ "status" => "failed", "failure_stage" => "restore_load", "http_status" => 503 }], result["items"]
+              assert_equal [{ "name" => "controller_restore", "status" => "failed" }], result["checks"]
+            end
+            assert_equal "2", Open3.capture2("/usr/bin/plutil", "-extract", "Profile", "raw", state).first.strip
+          end
         end
       end
     end

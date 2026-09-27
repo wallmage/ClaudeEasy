@@ -722,6 +722,17 @@ finish_profile_operation_result_failure() {
       "$OPERATION"
   fi
   [ "$PROFILE_OPERATION_RESULT_UNKNOWN" -eq 1 ] || return 0
+  if [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 77 ] &&
+     [ "$PROFILE_OPERATION_RECEIPT_INVALID" -eq 0 ] && valid_child_json &&
+     /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -rjson -e '
+       result = JSON.parse(STDIN.read)
+       exit(result["code"] == "profile_recovery_pending" &&
+            result["status"] == "partial" && result["exit_code"] == 77 &&
+            result["ok"] == false ? 0 : 1)
+     '; then
+    finish_json_child_failure "$child_json" partial profile_recovery_pending \
+      "配置恢复尚未完成；必须保留当前档位并在下次运行时继续恢复。" "$OPERATION"
+  fi
   finish 1 partial operation_result_unknown_recovery_intent \
     "无法确认配置是否提交；保存档位和自动更新状态保持不变，请按同一档位重试以完成恢复。" \
     "$OPERATION"

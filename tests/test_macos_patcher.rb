@@ -140,7 +140,9 @@ class MacosPatcherTest < Minitest::Test
 
   def test_patch_failure_json_preserves_the_reason
     %i[invalid validation_failed validation_timeout no_main_group no_ai_nodes io_error error].each do |reason|
-      item = ClaudeEasy.result_item(path: "Example.yaml", status: reason)
+      item = ClaudeEasy.result_item(path: "Example.yaml", status: reason, failure_stage: "profile_reload", http_status: 503)
+      assert_equal "profile_reload", item["failure_stage"]
+      assert_equal 503, item["http_status"]
       assert_equal "skipped", item["status"]
       assert_equal reason.to_s, item["reason"]
     end
@@ -621,6 +623,90 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_runtime_health_reports_the_failed_check_without_response_secrets
+    [:dns_flush, :tun, :selections, :dns, :connectivity].each do |failure|
+      details = {}
+      requester = lambda do |method, endpoint, *_arguments|
+        case [method, endpoint]
+        when ["POST", "/cache/dns/flush"]
+          failure == :dns_flush ? [503, "private-response"] : [204, ""]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => failure != :tun })]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => failure == :selections ? "Other" : "Saved" }
+          })]
+        when ["GET", "/dns/query?name=www.baidu.com&type=A"]
+          [200, JSON.generate("Answer" => failure == :dns ? [] : [{ "type" => 1, "data" => "1.2.3.4" }])]
+        else flunk "unexpected request #{method} #{endpoint}"
+        end
+      end
+      refute ClaudeEasy.runtime_health_healthy?(
+        requester, selections: { "Main" => "Saved" }, expected_tun: :enabled,
+        connectivity_checker: -> { failure != :connectivity }, diagnostics: details
+      )
+      assert_equal "runtime_#{failure}", details[:failure_stage]
+      assert_equal 503, details[:http_status] if failure == :dns_flush
+      refute_includes JSON.generate(details), "private-response"
+    end
+  end
+
+  def test_recovery_closes_old_transaction_only_when_current_profile_is_verified
+    [false, true].product([:verified, :wrong_runtime, :unhealthy, :selection_changed, :selector_changed, :file_changed]).each do |native, scenario|
+      Dir.mktmpdir do |temporary|
+        directory = File.realpath(temporary)
+        old = File.join(directory, "old.yaml")
+        current = File.join(directory, "current.yaml")
+        backup = File.join(directory, "backups")
+        original = YAML.dump("proxies" => [{ "name" => "Old", "type" => "ss" }])
+        candidate = YAML.dump("proxies" => [{ "name" => "Candidate", "type" => "ss" }])
+        current_bytes = YAML.dump("proxies" => [{ "name" => "New", "type" => "ss" }])
+        File.binwrite(old, original)
+        File.binwrite(current, current_bytes)
+        ClaudeEasy.prepare_profile_transaction(
+          [{ path: old, original: original, candidate: candidate }], backup,
+          roots: [directory], runtime_checkpoint: {
+            path: old, selections: {}, expected_tun: :disabled
+          }, activation_identity: native ? { pid: 123, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" } : nil
+        )
+        File.binwrite(old, candidate)
+        selected = "New"
+        requester = lambda do |method, endpoint, *_arguments|
+          assert_equal "GET", method, "recovery must not load a profile or change a selection"
+          case endpoint
+          when "/proxies"
+            name = scenario == :wrong_runtime ? "Candidate" : "New"
+            [200, JSON.generate("proxies" => { name => { "type" => "Shadowsocks" }, "GLOBAL" => { "type" => "Selector", "now" => selected, "all" => ["New", "Other"] } })]
+          when "/providers/proxies" then [200, '{"providers":{}}']
+          when "/configs" then [200, '{"tun":{"enable":false}}']
+          else flunk "unexpected endpoint #{endpoint}"
+          end
+        end
+        stable = true
+        healthy = lambda do
+          stable = false if scenario == :selection_changed
+          selected = "Other" if scenario == :selector_changed
+          File.binwrite(old, "external edit") if scenario == :file_changed
+          scenario != :unhealthy
+        end
+        diagnostics = {}
+        result = ClaudeEasy.stub(:running_mihomo_config_paths, [current]) do
+          ClaudeEasy.resume_profile_transaction(
+            backup, roots: [directory], work_items: [
+              { path: old, active: false }, { path: current, active: true }
+            ], reload_runtime: true, require_tun: :preserve, requester: requester,
+            connectivity_checker: healthy, precommit_condition: -> { stable }, diagnostics: diagnostics
+          )
+        end
+        assert_equal(scenario == :verified ? :recovered : :runtime_restore_pending, result, scenario)
+        assert_equal(scenario != :verified, ClaudeEasy.profile_transaction_pending?(backup), scenario)
+        assert_equal "recovery_active_profile_verification", diagnostics[:failure_stage] unless scenario == :verified
+        assert_equal current_bytes, File.binread(current)
+        assert_equal(scenario == :file_changed ? "external edit" : original, File.binread(old))
+      end
+    end
+  end
+
   def test_profile_transaction_records_the_pre_reload_runtime_checkpoint
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
@@ -718,13 +804,15 @@ class MacosPatcherTest < Minitest::Test
         selections: { "Main" => "Taiwan" }
       }
 
+      diagnostics = {}
       restored = ClaudeEasy.reload_recovered_profile_runtime(
         [{ path: profile, active: true }], require_tun: :preserve,
         requester: requester, connectivity_checker: -> { true },
-        runtime_checkpoint: checkpoint
+        runtime_checkpoint: checkpoint, diagnostics: diagnostics
       )
 
       refute restored
+      assert_equal "recovery_loaded_profile", diagnostics[:failure_stage]
       assert_equal "Japan", selected
       refute tun_enabled
     end
@@ -1275,42 +1363,47 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
-  def test_activation_does_not_reload_runtime_when_tun_is_unknown_before_candidate_load
-    Dir.mktmpdir do |directory|
-      profile = File.join(directory, "active.yaml")
-      original = YAML.dump(base_config)
-      candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
-      File.binwrite(profile, candidate)
-      stat = File.stat(profile)
-      result = {
-        path: profile, rollback_bytes: original.b,
-        patched_digest: Digest::SHA256.hexdigest(candidate.b),
-        patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
-      }
-      reloads = 0
-      requester = lambda do |method, endpoint, _body = nil|
-        case [method, endpoint]
-        when ["GET", "/proxies"]
-          [200, JSON.generate("proxies" => {
-            "Main" => { "type" => "Selector", "now" => "Taiwan" }
-          })]
-        when ["GET", "/configs"]
-          [200, JSON.generate("tun" => {})]
-        when ["PUT", "/configs?force=true"]
-          reloads += 1
-          [204, ""]
-        else
-          raise "unexpected controller request: #{method} #{endpoint}"
+  def test_activation_preserves_failure_stage_after_rollback
+    { before_tun: "capture_tun", http: "profile_reload", after_tun: "runtime_tun", dns: "runtime_dns" }.each do |failure, stage|
+      Dir.mktmpdir do |directory|
+        profile = File.join(directory, "active.yaml")
+        original = YAML.dump(base_config)
+        candidate = YAML.dump(base_config.merge("subscription-marker" => "candidate"))
+        File.binwrite(profile, candidate)
+        stat = File.stat(profile)
+        result = {
+          path: profile, rollback_bytes: original.b,
+          patched_digest: Digest::SHA256.hexdigest(candidate.b),
+          patched_identity: [stat.dev, stat.ino], patched_path: File.realpath(profile)
+        }
+        reloads = 0
+        requester = lambda do |method, endpoint, _body = nil|
+          case [method, endpoint]
+          when ["GET", "/proxies"]
+            [200, JSON.generate("proxies" => {
+              "Main" => { "type" => "Selector", "now" => "台湾家宽 01" }
+            })]
+          when ["GET", "/configs"]
+            enabled = failure == :before_tun ? nil : !(failure == :after_tun && reloads == 1)
+            [200, JSON.generate("tun" => { "enable" => enabled })]
+          when ["PUT", "/configs?force=true"]
+            reloads += 1
+            failure == :http && reloads == 1 ? [500, "private-response"] : [204, ""]
+          when ["POST", "/cache/dns/flush"] then [204, ""]
+          when ["GET", "/dns/query?name=www.baidu.com&type=A"] then [200, '{"Answer":[]}']
+          else flunk "unexpected controller request: #{method} #{endpoint}"
+          end
         end
+        activated = ClaudeEasy.activate_updated_profile(
+          result, requester: requester, require_tun: :preserve, connectivity_checker: -> { true }
+        )
+        assert_equal(failure == :after_tun ? :reload_failed_restore_pending : :reload_failed_rolled_back, activated.fetch(:status), failure)
+        assert_equal stage, activated[:failure_stage], failure
+        assert_equal 500, activated[:http_status] if failure == :http
+        assert_equal original.b, File.binread(profile)
+        assert_equal({ before_tun: 0, after_tun: 1, http: 2, dns: 2 }.fetch(failure), reloads)
+        refute_includes JSON.generate(ClaudeEasy.result_item(activated)), "private-response"
       end
-
-      activated = ClaudeEasy.activate_updated_profile(
-        result, requester: requester, require_tun: :preserve
-      )
-
-      assert_equal :reload_failed_rolled_back, activated.fetch(:status)
-      assert_equal original.b, File.binread(profile)
-      assert_equal 0, reloads
     end
   end
 
@@ -1353,48 +1446,6 @@ class MacosPatcherTest < Minitest::Test
 
       assert_equal true, result[:reloaded]
       assert_equal candidate.b, File.binread(profile)
-    end
-  end
-
-  def test_activation_restores_profile_when_tun_state_is_unknown
-    Dir.mktmpdir do |directory|
-      profile = File.join(directory, "friend.yaml")
-      original = YAML.dump(base_config)
-      candidate = YAML.dump(base_config.merge("changed" => true))
-      File.binwrite(profile, candidate)
-      reloads = 0
-      requester = lambda do |method, endpoint, _body|
-        case [method, endpoint]
-        when ["GET", "/proxies"]
-          [200, JSON.generate("proxies" => {
-            "Main" => { "type" => "Selector", "now" => "Taiwan" }
-          })]
-        when ["GET", "/configs"]
-          [200, JSON.generate("tun" => { "enable" => nil })]
-        when ["PUT", "/configs?force=true"]
-          reloads += 1
-          [204, ""]
-        when ["POST", "/cache/fakeip/flush"], ["POST", "/cache/dns/flush"]
-          [204, ""]
-        else
-          [404, ""]
-        end
-      end
-
-      committed = File.stat(profile)
-      result = ClaudeEasy.activate_updated_profile(
-        {
-          path: profile, rollback_bytes: original.b,
-          patched_digest: Digest::SHA256.hexdigest(candidate.b),
-          patched_identity: [committed.dev, committed.ino],
-          patched_path: File.realpath(profile)
-        },
-        requester: requester, connectivity_checker: -> { true }, require_tun: :preserve
-      )
-
-      assert_equal :reload_failed_rolled_back, result.fetch(:status)
-      assert_equal original.b, File.binread(profile)
-      assert_equal 0, reloads
     end
   end
 

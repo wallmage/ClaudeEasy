@@ -7,6 +7,8 @@ description: Use when a user invokes ClaudeEasy, starts its network setup, or an
 
 ## 首次启用与任务入口
 
+安装、更新或同步成功替换本 Skill 后，立即重新读取已安装的 `SKILL.md`，再按新路由重读本任务所需策略；已读旧版不再作为执行依据。适用于手动与定时任务，保留本轮授权、选择、事务和完成清单。
+
 触发后先识别以下入口，再读取对应策略：
 
 - 仅呼出 Skill、只说“开始”“启用”且未提出具体问题：直接进入 `legacy_network` 的 Patch。按用途档位策略用公开入口读取本机档位；未设置时第一条实质回复展示三档选项，不问“需要处理什么问题”，不等待“配置网络”关键词。读取失败或状态损坏先诊断，不冒充未设置。已有有效档位则按原档位检查并补齐配置与验收，不重新选择。
@@ -127,7 +129,7 @@ AdGuard 是高级可选能力：默认不检测、不安装、不配置，也不
 - **Diagnostics 模块**：慢、间歇失败、打不开、全红、分流异常或泄漏时使用。不能因为用户提到 Clash 就先运行补丁。
 - **订阅检查与更新**：用户询问是否有更新，或明确要求更新全部订阅时使用；它不是 Patch 或 Diagnostics 的隐含步骤。
 
-如果本次由 schedule task 触发，第一步运行 `scripts/check_skill_update.sh`（macOS）或 `scripts/check_skill_update.ps1`（Windows）检查 GitHub 版本；返回 `skill_updated` 时重新读取已安装的 `SKILL.md`，再按新版本继续。随后按本次请求选择只检查或更新入口。
+如果本次由 schedule task 触发，第一步运行 `scripts/check_skill_update.sh`（macOS）或 `scripts/check_skill_update.ps1`（Windows）检查 GitHub 版本；更新后按首次入口重读规则继续，再按本次请求选择只检查或更新入口。
 
 ### 平台入口
 

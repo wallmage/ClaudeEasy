@@ -654,14 +654,25 @@ module ClaudeEasy
 
   def resume_profile_transaction(backup_root, roots:, work_items:, reload_runtime:,
                                  require_tun:, socket: nil, requester: nil,
-                                 connectivity_checker: nil, precommit_condition: nil)
+                                 connectivity_checker: nil, precommit_condition: nil, diagnostics: nil)
     pending = profile_transaction_pending?(backup_root)
     transaction = recover_profile_transaction(
       backup_root, roots: roots, keep_transaction: pending
     )
     return :none unless pending
     return :recovered if transaction == :committed
-    runtime_recovered = if transaction[:activation_state]
+    active = work_items.find { |item| item[:active] }
+    checkpoint = transaction[:runtime_checkpoint]
+    superseded = active && checkpoint && File.realpath(active.fetch(:path)) != checkpoint[:path]
+    diagnostics ||= {}
+    diagnostics[:failure_stage] = superseded ? "recovery_active_profile_verification" : "runtime_recovery"
+    runtime_recovered = if superseded
+                          reload_runtime && superseded_profile_transaction_healthy?(
+                            active, transaction, requester: requester, socket: socket,
+                            connectivity_checker: connectivity_checker,
+                            precommit_condition: precommit_condition
+                          )
+                        elsif transaction[:activation_state]
                           usage_profile = saved_usage_profile if reload_runtime
                           client_identity = clashx_running_identity if usage_profile
                           usage_profile && client_identity && reload_recovered_safe_update_runtime(
@@ -677,7 +688,7 @@ module ClaudeEasy
                             requester: requester, connectivity_checker: connectivity_checker,
                             precommit_condition: precommit_condition,
                             runtime_checkpoint: transaction.fetch(:runtime_checkpoint, nil),
-                            transaction: transaction
+                            transaction: transaction, diagnostics: diagnostics
                           )
                         end
     return :runtime_restore_pending unless runtime_recovered
@@ -689,7 +700,7 @@ module ClaudeEasy
   end
 
   def recover_pending_profile_transaction(backup_root, directories:, selected_name: nil,
-                                          guard_storage: false, expected_storage: nil)
+                                          guard_storage: false, expected_storage: nil, diagnostics: nil)
     operation_lock = profile_operation_lock(backup_root)
     transaction_state = cleanup_committed_profile_transaction(backup_root)
     return :committed_cleaned if transaction_state == :committed
@@ -702,6 +713,8 @@ module ClaudeEasy
                           expected_storage: expected_storage
                         )
                       end
+    diagnostics ||= {}
+    diagnostics[:failure_stage] = "recovery_active_profile"
     return :runtime_restore_pending if selected_name.nil? && runtime_context.nil?
 
     selected = runtime_context ? runtime_context.fetch(:selected) : selected_name
@@ -717,7 +730,7 @@ module ClaudeEasy
     work_items = profile_work_items(directories, selected, active_root)
     resume_profile_transaction(
       backup_root, roots: directories, work_items: work_items, reload_runtime: true,
-      require_tun: :preserve, precommit_condition: precommit_condition
+      require_tun: :preserve, precommit_condition: precommit_condition, diagnostics: diagnostics
     )
   ensure
     operation_lock&.close
@@ -892,16 +905,17 @@ module ClaudeEasy
     begin
       work_items = profile_work_items(roots, selected, active_root)
       if !dry_run && backup_root
+        recovery_details = {}
         recovery = resume_profile_transaction(
           backup_root, roots: roots, work_items: work_items, reload_runtime: auto_reload,
           require_tun: runtime_tun_requirement(usage_profile), socket: socket, requester: requester,
           connectivity_checker: connectivity_checker,
-          precommit_condition: precommit_condition
+          precommit_condition: precommit_condition, diagnostics: recovery_details
         )
         if recovery == :runtime_restore_pending
           return work_items.map do |item|
             status = item.fetch(:active) ? :reload_failed_restore_pending : :batch_aborted
-            base_result(nil, status).merge(path: item.fetch(:path), active: item.fetch(:active))
+            base_result(nil, status).merge(recovery_details).merge(path: item.fetch(:path), active: item.fetch(:active))
           end
         end
       end
@@ -948,7 +962,7 @@ module ClaudeEasy
             unless runtime_checkpoint
               return preflight.map do |preview|
                 status = preview.fetch(:active) ? :runtime_check_failed : :batch_aborted
-                preview.merge(status: status, dry_run: false)
+                preview.merge(status: status, dry_run: false, failure_stage: "capture_runtime_checkpoint")
               end
             end
           end
