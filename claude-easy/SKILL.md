@@ -1,9 +1,26 @@
 ---
 name: claude-easy
-description: Use when an agent needs to diagnose, analyze, or fix any macOS or Windows computer problem, or run a bounded observation window for an intermittent one; diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; safely update all Clash subscriptions or restore backups; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
+description: Use when a user invokes ClaudeEasy, starts its network setup, or an agent needs to diagnose, analyze, or fix any macOS or Windows computer problem, or run a bounded observation window for an intermittent one; diagnose slow, intermittent, unavailable, misrouted, or leaking network behavior; safely update all Clash subscriptions or restore backups; or configure ClashX Meta or Clash Verge Rev for browsing, overseas AI, Claude, or Claude Code.
 ---
 
 # ClaudeEasy 电脑诊断与网络配置
+
+## 首次启用与任务入口
+
+触发后先识别以下入口，再读取对应策略：
+
+- 仅呼出 Skill、只说“开始”“启用”且未提出具体问题：直接进入 `legacy_network` 的 Patch。按用途档位策略用公开入口读取本机档位；未设置时第一条实质回复展示三档选项，不问“需要处理什么问题”，不等待“配置网络”关键词。读取失败或状态损坏先诊断，不冒充未设置。已有有效档位则按原档位检查并补齐配置与验收，不重新选择。
+- 用户已明确提出电脑故障、只检查订阅、更新或其他具体任务：遵守该请求，不强制首次配置、不把只读请求变为写入。
+
+其余请求按用户原话完成一次内部分流。内部路由名为 `legacy_network` 或 `general_computer`，只供代理使用：不向用户展示，也不询问属于哪类问题。
+
+- 用户明确描述网络访问、连接速度、DNS、代理、分流、网络泄漏、订阅、节点、TUN、系统代理，或要把 Clash 当网络/配置问题处理：内部路由为 `legacy_network`。
+- 只提到 Clash 客户端崩溃、卡住、占 CPU 或窗口打不开，且没有上一则网络症状：内部路由为 `general_computer`。
+- 其他具体请求，包括无法从原话确定类别的模糊故障：内部路由为 `general_computer`。
+
+若内部路由为 `general_computer`，只有原始问题随后被证明符合上文 `legacy_network` 条件时才转入，并停止通用分支写入、携带已取得事实。Clash 崩溃、卡住、占 CPU 或窗口打不开不得转入，即使日志出现代理端口、TUN 或监听地址。发现 Clash 进程不等于属于网络。
+
+本文件保留代理入口、内部分流、共同边界、执行顺序和不可突破的安全边界。网络模块选择只属于网络流程。
 
 ## 最高原则：用户沟通与执行
 
@@ -28,9 +45,9 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 ### 执行原则
 
 1. **一句话触发完整闭环。** 代理按当前流程策略自行读取本机能取得的证据，连续完成检查、诊断、修复、复测；能自行取得的信息不得反问用户。
-2. **没完成就继续做。** 一次方法失败时，先确认原状态，再沿受支持入口诊断、修复并继续剩余步骤。操作请求不能降格为只检查；中间成功、待验收列表不是收尾。用户催促或纠正属于继续原任务，不重新索要已给授权。
+2. **没完成就继续做。** 一次方法失败时，先核对实际状态、事务和失败原因，修复后重试受影响入口，再接着未完成项；脚本停止写入不等于代理停止任务。内部保留用户选择、已完成项、待处理项和证据；失败回退不撤销本轮选择，不重新问档位。新消息、上下文压缩和用户催促后继续同一清单。中间成功、待验收列表不能作为最终回复；不要求用户说“继续”。
 3. **共同安全边界允许的界面操作由代理完成。** 可靠脚本或结构化接口优先；必须点击正常应用窗口时使用当前会话实际提供的电脑操控（Computer Use）。用户明确要求更新、修复、配置、恢复或执行其他完整流程时，该授权包含 Skill 与本轮已读策略明确披露、且属于该流程固定步骤的界面操作、联网测试和数据传输；包括 DNS、WebRTC 与区域指纹测试按既有披露向测试服务发送公网 IP。不得把同一流程拆到每个页面或验收项重复询问；用户再说“直接操作”“直接做完”“不要停”或同义表达时更不得重复询问。该授权不扩展到流程外动作，也不覆盖工作台、操作系统或高风险动作实际触发的强制确认。
-4. **只有真实阻塞才暂停。** 仅限密码、验证码、MFA、实体操作、系统权限弹窗、工具或系统实际要求的即时确认、不可恢复风险、外部服务确实不可用，或无法从本机证据消除的安全歧义。已披露并已授权的固定流程步骤不属于新的隐私确认或安全歧义。用户同时操作浏览器或页面状态变化时，重新读取状态、使用独立标签页并继续原流程；不得要求用户停止操作或回复后再继续。暂停时只说用户现在要做的一个动作；收到回复立即继续原流程。
+4. **仅真实阻塞才暂停。** 脚本报错、字段缺失、单次超时、控件失效或测试失败先由代理诊断，不能直接交给用户。暂停前必须有证据确认密码、验证码、MFA、实体操作、系统强制授权、工具明确拒绝、外部服务不可用或无法安全消除的状态歧义，并完成其余不依赖该阻碍的工作。系统必须本人确认时只请求该确认；不能要求用户改开关、运行命令、下载订阅、打开测试页或回报排障结果。能力确实缺失且无受支持自动入口时，简短说明具体限制与未完成项，保留继续位置，不编造手动替代流程、不声称成功、不无限重试。页面变化先重新读取或使用独立标签页；状态恢复后自行回读继续，不要求固定回复口令。
 5. **保留证据，简短交付。** 内部记录覆盖全部请求对象，最终回复按开头沟通原则。详细差异供用户追问时读取，不为补明细重新下载、更新或恢复配置。缺少比较基准就标为未确认，不猜测；用户指出漏项时直接补查结果。
 
 ## 诊断会话导出
@@ -46,23 +63,11 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 以下边界适用于 macOS、Windows、网络与通用流程，以及所有诊断、修复、复测和恢复。执行原则、完成闸门和界面授权均受本节约束；不得请求临时例外或以用户催促、测试、回滚为由绕过。
 
 - **绝对禁止代理切换节点，任何情况都不允许。** 不得通过界面、控制器、API、脚本、配置或改变代理组选择直接或间接改换用户当前节点；不得先切换再恢复。只能读取当前选择和证据。正式更新与恢复入口只核验原选择，不主动写回；使用正式入口，不为每次更新重新搜索源码。入口实际失败或发现反证时再追踪实现。
-- **节点建议保持同地区、同类型。** 怀疑当前节点有问题时，建议仅限与当前节点**同地区、同类型**的候选，由用户自己调整。例如台湾家宽 2 只建议台湾家宽 1；不得建议日本等其他地区，也不得从家宽改为普通或数据中心节点。先从现有配置确认候选地区与类型；不明确则不推荐，没有符合条件的候选就说明没有，不跨区或降级兜底。
+- **节点建议保持同地区、同类型。** 用户主动询问节点候选时，建议仅限与当前节点**同地区、同类型**的候选，由用户自己调整。例如台湾家宽 2 只建议台湾家宽 1；不得建议日本等其他地区，也不得从家宽改为普通或数据中心节点。先从现有配置确认候选地区与类型；不明确则不推荐，没有符合条件的候选就说明没有，不跨区或降级兜底。
 - **AI 会话和工作台只读。** 包括 Claude、Claude Code、Codex、ChatGPT、Cursor 等桌面应用、网页、终端交互会话及内置工具。Computer Use 仅可读取已有画面、截图和界面状态；不得点击、输入、滚动、导航或刷新已有 AI 页面、切换会话、新建、Fork、重试、发送、继续、停止、关闭或重启。不得用 API、命令或其他工具绕过界面禁令操作 AI 会话、任务或进程。需要交互才能取得证据时，由用户自己操作；代理继续只读取日志和已有状态，不把任务副本当作无影响的测试环境。网络连通验收唯一例外：允许在用户指定或默认浏览器的新标签页打开 `https://chatgpt.com/`，只读取页面加载状态；不登录、不输入、不发送消息、不操作会话、不改已有标签页。遇到认证页只记录证据，不把登录操作纳入测试。其他 AI 页面仍不得主动打开。
 
 1. **绝对不要退出、停止或重启 Clash 客户端或其内核。** 适用于 ClashX Meta、Clash Verge Rev，以及 Mihomo 与辅助进程。不得执行、建议或要求用户这样做。
-2. **不得运行 Clash 客户端主程序做检查。** 禁止直接执行 ClashX Meta 或 Clash Verge Rev 主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。不得用于诊断、审查、测试、版本查询或只读探测。这些动作可能创建第二个客户端并中断现有 Mihomo。macOS 客户端版本只从 `Info.plist` 读取；实时状态读取进程、日志、偏好或本地控制器；内核版本只检查 Mihomo。客户端未运行时保持未运行；无法取得实时状态时只在机器结果标记未验证，不能为检查而启动。通用流程不得把任一 Clash 客户端当作普通应用启动、退出、停止、重启或 Computer Use 操作。Clash 当应用的取证只走日志、崩溃报告、进程快照。Windows 网络流程操作已经运行的 Clash Verge Rev 见下文平台界面能力。
-
-## 内部路由
-
-触发后、读取任何策略文件之前，按用户原话完成一次内部分流。内部路由名为 `legacy_network` 或 `general_computer`，只供代理使用：不向用户展示，也不询问属于哪类问题。
-
-- 用户明确描述网络访问、连接速度、DNS、代理、分流、网络泄漏、订阅、节点、TUN、系统代理，或要把 Clash 当网络/配置问题处理：内部路由为 `legacy_network`。
-- 只提到 Clash 客户端崩溃、卡住、占 CPU 或窗口打不开，且没有上一则网络症状：内部路由为 `general_computer`。
-- 其他请求，包括无法从原话确定的模糊问题：内部路由为 `general_computer`。
-
-若内部路由为 `general_computer`，只有原始问题随后被证明符合上文 `legacy_network` 条件时才转入，并停止通用分支写入、携带已取得事实。Clash 崩溃、卡住、占 CPU 或窗口打不开不得转入，即使日志出现代理端口、TUN 或监听地址。发现 Clash 进程不等于属于网络。
-
-本文件保留代理入口、内部分流、共同边界、执行顺序和不可突破的安全边界。网络模块选择只属于网络流程。
+2. **不得运行 Clash 客户端主程序做检查。** 禁止直接执行 ClashX Meta 或 Clash Verge Rev 主程序、传入 `--version`、用 `open`/LaunchServices 打开应用，或通过 Computer Use 启动未运行的客户端。不得用于诊断、审查、测试、版本查询或只读探测。这些动作可能创建第二个客户端并中断现有 Mihomo。macOS 客户端版本只从 `Info.plist` 读取；实时状态读取进程、日志、偏好或本地控制器；内核版本只检查 Mihomo。客户端未运行时保持未运行；无法取得实时状态时只在机器结果标记未验证，不能为检查而启动。通用流程不得把任一 Clash 客户端当作普通应用启动、退出、停止、重启或 Computer Use 操作。Clash 当应用的取证只走日志、崩溃报告、进程快照。两端网络流程操作已运行客户端见下文平台界面能力。
 
 ## 通用流程
 
@@ -72,11 +77,13 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 
 内部路由为 `legacy_network` 时执行本节全部规则。完整执行现有网络策略读取路由、平台边界和完成闸门。
 
-**完成闸门不通过不得收尾。** Patch、更新、恢复或修复必须通过 [profiles-and-patch.md](references/profiles-and-patch.md) 的当前档位完成清单；任一必要项失败就继续诊断、修复和复测。
+**完成闸门不通过不得收尾。** Patch、更新、恢复或修复从开始就维护 [profiles-and-patch.md](references/profiles-and-patch.md) 的当前档位完成清单；每次动作后更新证据和下一项，不等准备收尾才检查。
+
+完整配置顺序：用途选择 → 环境与自动操作能力检查 → 备份和安装补丁 → 客户端开关与运行配置 → 当前档位全部测试 → 修复失败项并复测 → 最终复核。选择档位即启动整条流程；公开脚本返回成功或 `required_followups` 仅是交接给代理的下一阶段，不是交接给用户。故障诊断完成后回到被打断阶段，不遗忘剩余验收；禁止绕过事务保护、临时改脚本或伪造成功来继续。
 
 ### 策略读取路由
 
-所有网络任务先完整阅读 [references/policy-core.md](references/policy-core.md)，再按下表读取任务模块。纯订阅检查只读表中指定小节；其他任务完整读取所选文件及当前平台的 [references/macos.md](references/macos.md) 或 [references/windows.md](references/windows.md)，不得读取另一平台后混用规则。
+所有网络任务先完整阅读 [references/policy-core.md](references/policy-core.md)，再按下表读取任务模块。按工具输出上限分别或分段读取；返回截断时补读缺失段，不能把未读平台规则当成没有规则。纯订阅检查只读表中指定小节；其他任务完整读取所选文件及当前平台的 [references/macos.md](references/macos.md) 或 [references/windows.md](references/windows.md)，不得读取另一平台后混用规则。
 
 | 任务 | 必须读取 | 条件追加 |
 | --- | --- | --- |
@@ -94,21 +101,21 @@ description: Use when an agent needs to diagnose, analyze, or fix any macOS or W
 
 AdGuard 是高级可选能力：默认不检测、不安装、不配置，也不因发现 AdGuard 进程或窗口而自动启用。只有用户明确说“配置 AdGuard”“恢复 AdGuard 配置”或“导入 AdGuard 备份”时，才读取 `references/adguard.md` 并使用 Computer Use 操作已经运行或可见的 AdGuard 窗口。
 
-每次配置或修复先按共同安全边界排除禁止操作的目标，再检查当前会话的工具清单，只有实际可调用、且能操作该目标窗口的电脑操控工具才算这项动作已启用。需要打开网页或运行网页检测时，使用 Computer Use 操作用户指定浏览器，未指定时用默认浏览器；不得使用 Codex 或其他工作台的内置浏览器打开内容，不限制 Safari、Chrome、Edge 或其他浏览器。只会控制浏览器标签页时，不能用来改系统设置或点 Clash。没有工具时，从运行环境读取当前工作台；能够识别时只查询该产品的最新官方说明，不凭产品名猜测能力。Codex 与 ZCode by Z.ai 已知支持电脑操控，但仍以当前会话是否提供工具为准；支持而未启用时，给出当前平台的官方启用步骤并等待用户完成。当前工作台不支持时，建议改用支持电脑操控的工作台；若本档位后续不需要任何界面动作，继续自动流程，不为能力检测单独阻塞。
+选择档位后、首次写入前，按后续必做动作核验当前会话实际提供的工具。区分浏览器控制、普通窗口和菜单栏能力；工具说明与实际只读定位共同确认，不能仅凭工作台名称、无主窗口或一次控件失败断言不能操作。可靠脚本或结构化接口优先；需要界面或原生入口失败时，按平台策略由 Computer Use 接替并回读。
 
-启用引导先读取当前会话实际提供的工具及其说明，区分正常应用窗口操控与浏览器标签页操控；能列出 Chrome 窗口不代表能可靠读取网页 URL，浏览器未连接也不代表全部电脑操控不可用。只有工具说明、当前可见界面或该工作台当前平台的官方说明确认过的入口才能告诉用户；不得凭记忆编造“设置 → 计算机使用”等菜单，或把另一工作台的插件步骤照搬过来。用户说找不到入口时先核对实际界面，不重复同一路径。工具强制拒绝不得绕过；Windows 目标无法操作时按平台文件交接该动作，其余安全取证继续。
+网页验收使用用户指定浏览器，否则默认浏览器；不使用工作台内置浏览器，不限制浏览器品牌。页面变化、旧元素或首次调用失败时，重新取得当前截图或结构化状态，修正目标后继续；同一证据下不重复盲点，也不把一个目标失败扩大为全部工具不可用。
 
-用户明确要求“使用 Computer Use 代为操作电脑”时，视为本轮相关电脑操作已经授权；不得再询问“是否同意”或要求回复授权。只在系统强制的密码、验证码、MFA、权限弹窗或工具策略即时确认时暂停；授权范围仍限于用户明确请求的操作，不扩展到无关动作。
+工具缺失时检查可发现的连接器与工具、真实连接状态和官方支持入口；能在授权范围内自动连接或修复的自行处理。不得编造菜单、绕过工具拒绝或操作受禁 AI 工作台。确实需要系统本人授权时按执行原则暂停；确无自动能力时保留阻塞，不把配置或测试交给用户。工具恢复后先回读现场，再接着清单执行。
 
-- **Windows：** 有电脑操控时操作已经运行的 Clash Verge Rev、用户默认浏览器和其他正常窗口；没有时先用安全脚本，只有确实不存在自动入口的界面动作才交给用户。
-- **macOS：** 不用电脑操控附加 ClashX Meta；客户端开关走 [macos.md](references/macos.md) 原生命令。用户默认浏览器、AdGuard、系统设置等正常窗口由电脑操控完成。
+- **Windows：** 使用已运行 Clash Verge Rev 的正常窗口；具体动作与核验见 [windows.md](references/windows.md)。
+- **macOS：** ClashX Meta 原生命令优先；已运行客户端的菜单栏接替条件与核验见 [macos.md](references/macos.md)。默认浏览器、系统设置及已明确授权的 AdGuard 由 Computer Use 操作。
 
 ### 不可突破的边界
 
 1. **Clash 启停禁令见上文共同安全边界。**
 2. **不得运行 Clash 客户端主程序做检查。** 细节见共同安全边界。
 3. **Claude/Anthropic 远程域名永久禁测；** AI 联网与分流验收只测 ChatGPT、Gemini 和 Grok。细节见 [policy-core.md](references/policy-core.md) 与 [profiles-and-patch.md](references/profiles-and-patch.md) 区域指纹闭环。
-4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。macOS 只通过原生开关协调命令修改 ClashX Meta 的 TUN 和系统代理；Windows 按 [windows.md](references/windows.md) 操作 Clash Verge Rev；AdGuard for Mac 只通过它自己的正常窗口调整兼容设置。
+4. 只按已保存用途档位操作，不切换订阅、代理组或节点，不覆盖第三方 PAC。两端客户端开关按各自平台策略执行与验收；AdGuard for Mac 只通过它自己的正常窗口调整兼容设置。
 5. 更新请求直接运行正式更新入口；普通更新、强制重写与 Windows 客户端刷新见 [safe-update-and-recovery.md](references/safe-update-and-recovery.md)。
 6. 只处理 Clash 当前存储位置中的订阅；macOS 存储偏好缺失、且当前订阅只在本地目录唯一出现时自动按本地处理。仍存在多个匹配位置时才停止对应写入。见 [macos.md](references/macos.md)。
 7. 写入候选必须通过 YAML 重读、二次转换一致性检查和 Mihomo 1.19.27 以上版本的 30 秒校验；失败时保持原文件。见 [policy-core.md](references/policy-core.md)。

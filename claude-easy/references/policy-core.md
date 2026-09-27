@@ -29,7 +29,7 @@
 
 **Claude/Anthropic 远程域名永久禁测：** 相关网站、API 和域名一律不打开、不请求、不测试。禁止通过浏览器、Computer Use、curl、脚本、DNS、WebRTC、分流验证或任何其他方式向这些域名产生测试流量；用户当次要求也不能覆盖。只允许静态检查配置，AI 联网与分流验收只测试 ChatGPT、Gemini 和 Grok。区域指纹入口、执行时机与通过条件只按 [profiles-and-patch.md](profiles-and-patch.md#patch-验证标准)。
 
-Clash Verge Rev 有正常主窗口，Windows 当前会话按 SKILL.md 确认可用的电脑操控时可以操作已经运行的客户端。ClashX Meta 是纯菜单栏应用，没有主窗口；macOS 不得用电脑操控操作、读取或验证 ClashX Meta，也不得尝试附加一次。macOS 客户端开关只走平台原生命令和结构化验收；电脑操控仍可用于有正常窗口的浏览器和 AdGuard。能力检测、启用和缺失时的处理以 `SKILL.md` 为准，不得把 Windows 的失败处理套到 macOS 菜单栏应用。
+电脑操控能力检测、授权和缺失处理以 `SKILL.md` 为准；已运行客户端的具体操作与回读分别以 macOS、Windows 平台文件为准。
 
 Clash 启停禁令以 `SKILL.md` 共同安全边界为准，本文件不缩小。中国用户通常依赖客户端越过 GFW；关闭客户端或内核会让 AI 助手断线，并可能让修复停在一半。
 
@@ -50,7 +50,7 @@ ClaudeEasy 有两个独立模块：
 
 所有公开命令都显式支持 JSON v1：macOS 使用 `--json`，Windows 使用 `-Json`。默认模式继续输出中文信息，失败分支也必须输出摘要，不能只返回退出码。JSON 模式的标准输出只能有一个对象，不能混入日志；对象中的 `exit_code` 必须与进程退出码一致。`code` 和 `operation` 是稳定的机器标识，`command` 只允许 `install`、`uninstall`、`patch`、`verify_routes`。所有必填字段、状态值和字段类型以 [result-contract.json](result-contract.json) 为准。安装包任一必需模块缺失时都在修改 AppHome 前返回退出码 `6` 和 `incomplete_package`。
 
-Skill 调用脚本时优先使用 JSON 模式，依据 `code`、逐项 `reason`、`error_class` 判断，`messages` 仅补充脱敏证据。`skipped` 只表示未处理，不代表文件缺失；原因不足时读取实际配置位置与原始失败证据，不推断丢失、不要求重新下载。分流验证只报告代理组已识别和各目标的检查状态。
+Skill 调用脚本时优先使用 JSON 模式，依据 `code`、逐项 `reason`、`error_class` 判断，`messages` 仅补充脱敏证据，脚本中的操作提示由代理执行，不转发为要求用户代办。`skipped` 只表示未处理，不代表文件缺失；原因不足时读取实际配置位置与原始失败证据，不推断丢失、不要求重新下载。分流验证只报告代理组已识别和各目标的检查状态。
 
 ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持兼容。内部代码按配置转换、备份与事务、Mihomo 校验、订阅处理、运行状态和 CLI 组织；入口只负责参数、编排与结果输出。拆分不能改变事务顺序、安全边界或既有退出码。
 
@@ -68,10 +68,10 @@ ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持
 - 找不到主代理组：不修改，不猜节点。
 - 没有已有 AI 分组，并且订阅中找不到任何有效内联节点或代理提供者：不创建空组，机器结果标记没有可用 AI 节点。
 - 已有 Windows 全局脚本只有一个同步 `main`：先运行原脚本，再运行 ClaudeEasy 补丁。Clash Verge Rev 当前不会等待 Promise，因此必须拒绝 `async function main`。
-- 已有 Windows 脚本结构无法安全组合：保留原文件，先直接读取本地 `Script.js` 分析；只有当前环境确实无法读取时，才请用户提供一次所需内容。
+- 已有 Windows 脚本结构无法安全组合：保留原文件，先直接读取本地 `Script.js` 分析；无法读取时继续诊断访问失败，按主入口处理真实阻塞，不要求用户复制文件。
 - 两端都原样保留已有的 REALITY `short-id` 文本，不补齐、不截断、不猜缺失值。macOS 读写 YAML 时显式保护容易被误判为数字的有效十六进制文本；Windows 的对象转换不得改变该字段。
 - 当前配置只有自动刷新和运行检查全部通过，才能向用户说“已更新并自动生效”。刷新失败、恢复结果和内核状态写入机器结果，按完成闸门继续处理；只有真实阻塞或用户主动询问时才用日常语言说明。
-- ClashX Meta 正在运行时保持运行；配置事务不通过 AppleScript 或 System Events 操作界面，不修改 `restoreTunProxy`，也不切换代理组或节点。档位要求的 TUN 与系统代理状态只由 macOS 平台策略规定的原生开关协调命令处理；Foundation JXA 只用于订阅请求。
+- ClashX Meta 正在运行时保持运行；配置事务不通过 AppleScript 或 System Events 操作界面，不修改 `restoreTunProxy`，也不切换代理组或节点。档位要求的 TUN 与系统代理按 macOS 平台策略协调并验收；Foundation JXA 只用于订阅请求。
 - 远程 `proxy-providers` 在 Mihomo 写入前检查中可能需要网络；离线检查失败时保留原文件并继续诊断连接，确认设备本身未联网且无法自动恢复时，才请用户连接网络。
 
 ## 输出格式
@@ -82,4 +82,4 @@ ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持
 已经设置完成，可以正常使用。
 ```
 
-未完成的机器状态不能转述成结尾。仍可安全推进时继续处理；遇到真实阻塞时只说一个用户动作，例如：“还差一步：请在系统弹窗中点‘允许’，完成后回复我。” 用户主动要求技术详情时，才按机器结果说明具体状态，并继续隐藏 IP、DNS 和密钥等敏感内容。
+未完成的机器状态不能转述成结尾。仍可安全推进时继续处理；真实阻塞与恢复执行只按主入口执行原则，不另设人工交接。 用户主动要求技术详情时，才按机器结果说明具体状态，并继续隐藏 IP、DNS 和密钥等敏感内容。

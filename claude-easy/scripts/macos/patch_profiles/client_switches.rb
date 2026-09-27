@@ -156,9 +156,6 @@ module ClaudeEasy
     return manual_client_switch_result(:client_not_running) unless identity
 
     command_support_reader ||= method(:clashx_script_commands_supported?)
-    return manual_client_switch_result(:native_commands_unavailable) unless
-      command_support_reader.call(identity)
-
     requester = current_runtime_requester if state_reader.nil? || connectivity_checker.nil?
     state_reader ||= -> { clashx_client_switch_state(requester: requester) }
     connectivity_checker ||= lambda do
@@ -180,6 +177,8 @@ module ClaudeEasy
       unless tun_matches
         return manual_client_switch_result(:state_ambiguous, changes) unless
           state[:tun_effective] == :disabled && state[:tun_intent] == false
+        return manual_client_switch_result(:native_commands_unavailable, changes) unless
+          command_support_reader.call(identity)
         return manual_client_switch_result(:native_command_failed, changes) unless
           command_sender.call(identity, :tun_mode)
 
@@ -224,6 +223,8 @@ module ClaudeEasy
                             state[:system_proxy_intent] == true
                         end
       return manual_client_switch_result(:state_ambiguous, changes) unless safe_transition
+      return manual_client_switch_result(:native_commands_unavailable, changes) unless
+        command_support_reader.call(identity)
       return manual_client_switch_result(:native_command_failed, changes) unless
         command_sender.call(identity, :system_proxy)
 

@@ -51,6 +51,53 @@ class MacosPatcherTest < Minitest::Test
     @policy = JSON.parse(File.read(POLICY_PATH)) if PATCHER_AVAILABLE
   end
 
+  def test_client_switches_can_verify_ui_completion_without_native_commands
+    identity = { pid: 123, started: "stable", executable: "/fixture/ClashX Meta" }
+    [1, 2, 3].each do |profile|
+      state = {
+        tun_effective: :enabled, tun_intent: true,
+        system_proxy_effective: profile == 1 ? :clash : :disabled,
+        system_proxy_intent: profile == 1
+      }
+      arguments = {
+        usage_profile: profile, identity_reader: -> { identity },
+        command_support_reader: ->(_identity) { false }, state_reader: -> { state },
+        command_sender: ->(*) { flunk "unsupported native command sent" },
+        connectivity_checker: -> { true }
+      }
+      result = ClaudeEasy.reconcile_clashx_client_switches(**arguments)
+      assert_equal :unchanged, result[:status]
+      assert result[:checks].any? { |check| check["name"] == "connectivity" && check["ok"] }
+      result = ClaudeEasy.reconcile_clashx_client_switches(**arguments.merge(connectivity_checker: -> { false }))
+      assert_equal :connectivity_unverified, result[:reason]
+      state[:system_proxy_effective] = profile == 1 ? :disabled : :clash
+      state[:system_proxy_intent] = profile != 1
+      result = ClaudeEasy.reconcile_clashx_client_switches(**arguments)
+      assert_equal :native_commands_unavailable, result[:reason]
+      next if profile == 1
+
+      state[:tun_effective], state[:tun_intent] = :disabled, false
+      result = ClaudeEasy.reconcile_clashx_client_switches(**arguments)
+      assert_equal :native_commands_unavailable, result[:reason]
+    end
+  end
+
+  def test_client_switch_failure_retains_automatic_followup
+    failed = ClaudeEasy.manual_client_switch_result(:native_commands_unavailable)
+    stdout, = capture_io do
+      ClaudeEasy.stub(:reject_unapproved_usage_profile, nil) do
+        ClaudeEasy.stub(:reconcile_clashx_client_switches, failed) do
+          assert_equal 1, ClaudeEasy.cli(%w[--reconcile-client-switches --usage-profile 3 --json])
+        end
+      end
+    end
+    receipt = JSON.parse(stdout)
+    assert_equal "client_switch_manual_required", receipt["code"]
+    assert_equal ["native_commands_unavailable"], receipt["warnings"]
+    assert_equal false, receipt["workflow_complete"]
+    assert_includes receipt.fetch("required_followups"), "macos_client_switch_reconciliation"
+  end
+
   def test_auto_update_missing_preference_round_trip_and_read_failures
     domain = "com.metacubex.ClashX.meta"
     ok = Struct.new(:success?).new(true)

@@ -484,17 +484,17 @@ module ClaudeEasy
 
       reason = result.fetch(:reason).to_s
       message = if result.fetch(:reason) == :third_party_proxy_active
-                  "检测到第三方 PAC、自动发现或其他代理，未改动系统代理；请先决定是否保留该代理，不要直接覆盖。"
-                elsif options[:usage_profile] == 1
-                  "请点击菜单栏 ClashX Meta 图标，确认“设置为系统代理”已勾选；只有未勾选时才点击一次。完成后回复“已完成”。"
+                  "检测到第三方代理；已保留原设置，需继续检查代理归属冲突。"
                 else
-                  "请点击菜单栏 ClashX Meta 图标，确认“TUN 模式”已勾选，只有未勾选时才点击一次；再确认“设置为系统代理”未勾选，只有已勾选时才点击一次。完成后回复“已完成”。"
+                  "客户端开关尚未验收；需继续诊断，通过可用的自动入口完成后回读状态与连接。"
                 end
       return emit_cli_result(
         operation: "reconcile_client_switches", exit_code: 1, status: "failed",
-        code: "client_switch_manual_required", summary_zh: "无法安全自动完成 ClashX Meta 客户端开关。",
+        code: "client_switch_manual_required", summary_zh: "ClashX Meta 客户端开关尚未完成验收。",
         profile: options[:usage_profile], changes: result.fetch(:changes),
-        checks: result.fetch(:checks), messages: [message], warnings: [reason]
+        checks: result.fetch(:checks), messages: [message], warnings: [reason],
+        workflow_complete: false, completed_scope: "client_switch_check",
+        required_followups: %w[macos_client_switch_reconciliation]
       ) if options[:json]
       warn message
       return 1

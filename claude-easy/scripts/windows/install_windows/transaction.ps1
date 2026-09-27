@@ -2097,7 +2097,7 @@ function Assert-StateSnapshotUnchanged([object]$Entry, [object]$Snapshot, [strin
     }
     $actual = if ([bool]$Snapshot.Exists) { Get-BytesSha256 $Snapshot.Bytes } else { "" }
     if ($actual -ne $expected) {
-        throw "$Label 在上次安装后被其他程序修改。为避免覆盖这些改动，请先卸载补丁或备份并手动处理该文件。"
+        throw "$Label 在上次安装后被其他程序修改。已停止对应写入并保留文件，需核对差异和所有权后继续处理。"
     }
 }
 

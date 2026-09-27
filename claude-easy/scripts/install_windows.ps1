@@ -769,7 +769,7 @@ if ($VerifySafeUpdate) {
                         $manifestSnapshot.Identity "safe_update_running_client"
                     Complete-InstallResult 1 "rolled_back" "safe_update_rolled_back" "更新验收失败；已确认全部订阅文件和更新前运行状态均已恢复。"
                 } catch {
-                    Complete-InstallResult 1 "partial" "safe_update_legacy_runtime_recovery_pending" "旧版运行状态恢复记录无法确认是否已触发过客户端重载；未重复发送，请手动确认运行状态。" @() @("runtime_unverified")
+                    Complete-InstallResult 1 "partial" "safe_update_legacy_runtime_recovery_pending" "旧版运行状态恢复记录无法确认是否已触发过客户端重载；未重复发送，需继续只读核对运行状态。" @() @("runtime_unverified")
                 }
             }
             $runtimeRecoveryIdentity = Get-ClashVergeProcessIdentity
