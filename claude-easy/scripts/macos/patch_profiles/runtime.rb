@@ -1361,16 +1361,16 @@ module ClaudeEasy
         return false unless recovered
       end
     end
-    require_runtime_file = !controller_reloaded
+    require_runtime_file = original && candidate && original.fetch(:bytes) != candidate && !controller_reloaded
     return false unless runtime_matches_profile?(
-      requester, path, require_runtime_file: require_runtime_file
+      requester, path, require_runtime_file: require_runtime_file, strict_identity: true
     )
     return false unless runtime_health_healthy?(
       requester, selections: checkpoint[:selections], expected_tun: checkpoint[:expected_tun],
       connectivity_checker: connectivity_checker, precommit_condition: guarded_precommit,
       flush_caches: false, check_dns: false
     )
-    runtime_matches_profile?(requester, path, require_runtime_file: require_runtime_file) &&
+    runtime_matches_profile?(requester, path, require_runtime_file: require_runtime_file, strict_identity: true) &&
       runtime_checkpoint_current?(checkpoint, requester: requester) && guarded_precommit.call
   rescue StandardError
     false

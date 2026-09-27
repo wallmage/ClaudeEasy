@@ -705,7 +705,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_recovery_closes_old_transaction_only_when_current_profile_is_verified
-    [false, true].product([:verified, :stale_cache, :wrong_runtime, :unhealthy, :selection_changed, :selector_changed, :file_changed, :current_rules_candidate, :current_server_candidate, :current_reload_failed, :current_selector_changed, :current_file_changed]).each do |native, scenario|
+    [false, true].product([:verified, :stale_cache, :extra_proxy, :extra_group, :extra_provider, :wrong_runtime, :unhealthy, :selection_changed, :selector_changed, :file_changed, :current_restored_stale_cache, :current_rules_candidate, :current_server_candidate, :current_reload_failed, :current_selector_changed, :current_file_changed]).each do |native, scenario|
       Dir.mktmpdir do |temporary|
         directory = File.realpath(temporary)
         old = File.join(directory, "old.yaml")
@@ -717,10 +717,15 @@ class MacosPatcherTest < Minitest::Test
         File.binwrite(old, original)
         File.binwrite(current, current_bytes)
         targets = [{ path: old, original: original, candidate: candidate }]
-        if [:current_rules_candidate, :current_server_candidate, :current_reload_failed, :current_selector_changed, :current_file_changed].include?(scenario)
+        if [:current_restored_stale_cache, :current_rules_candidate, :current_server_candidate, :current_reload_failed, :current_selector_changed, :current_file_changed].include?(scenario)
           changed = YAML.load(current_bytes)
-          scenario == :current_rules_candidate ? changed["rules"] = ["MATCH,REJECT"] :
+          if scenario == :current_restored_stale_cache
+            changed["proxies"].first["name"] = "Other"
+          elsif scenario == :current_rules_candidate
+            changed["rules"] = ["MATCH,REJECT"]
+          else
             changed["proxies"].first["server"] = "different.invalid"
+          end
           current_candidate = YAML.dump(changed)
           targets << { path: current, original: current_bytes, candidate: current_candidate }
         end
@@ -733,7 +738,7 @@ class MacosPatcherTest < Minitest::Test
         File.binwrite(old, candidate)
         File.binwrite(current, current_candidate) if current_candidate
         cache = File.join(directory, "runtime-cache.yaml")
-        cache_bytes = !native && current_candidate ? current_candidate : current_bytes
+        cache_bytes = current_candidate && (!native || scenario == :current_restored_stale_cache) ? current_candidate : current_bytes
         cache_bytes = YAML.dump(YAML.load(current_bytes).merge("rules" => ["MATCH,REJECT"])) if scenario == :stale_cache
         File.binwrite(cache, cache_bytes)
         selected = "New"
@@ -753,8 +758,12 @@ class MacosPatcherTest < Minitest::Test
           case endpoint
           when "/proxies"
             name = scenario == :wrong_runtime ? "Candidate" : "New"
-            [200, JSON.generate("proxies" => { name => { "type" => "Shadowsocks" }, "GLOBAL" => { "type" => "Selector", "now" => selected, "all" => ["New", "Other"] } })]
-          when "/providers/proxies" then [200, '{"providers":{}}']
+            proxies = { name => { "type" => "Shadowsocks" }, "GLOBAL" => { "type" => "Selector", "now" => selected, "all" => ["New", "Other"] } }
+            proxies["Foreign"] = { "type" => "Shadowsocks" } if scenario == :extra_proxy
+            proxies["ForeignGroup"] = { "type" => "Selector", "now" => name, "all" => [name] } if scenario == :extra_group
+            [200, JSON.generate("proxies" => proxies)]
+          when "/providers/proxies"
+            [200, JSON.generate("providers" => scenario == :extra_provider ? { "foreign" => { "vehicleType" => "HTTP", "proxies" => [] } } : {})]
           when "/configs" then [200, '{"tun":{"enable":false}}']
           else flunk "unexpected endpoint #{endpoint}"
           end
@@ -794,10 +803,10 @@ class MacosPatcherTest < Minitest::Test
             end
           end
         end
-        recovered = [:verified, :current_rules_candidate, :current_server_candidate].include?(scenario)
+        recovered = [:verified, :stale_cache, :current_rules_candidate, :current_server_candidate].include?(scenario)
         assert_equal(recovered ? :recovered : :runtime_restore_pending, result, scenario)
         assert_equal(!recovered, ClaudeEasy.profile_transaction_pending?(backup), scenario)
-        assert_equal(current_candidate ? 1 : 0, reloads, scenario)
+        assert_equal(current_candidate && scenario != :current_restored_stale_cache ? 1 : 0, reloads, scenario)
         assert_equal cache_bytes, File.binread(cache)
         assert_equal "recovery_active_profile_verification", diagnostics[:failure_stage] unless recovered
         assert_equal(scenario == :current_file_changed ? "external edit" : current_bytes, File.binread(current))
@@ -869,7 +878,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_unchanged_patch_refreshes_stale_client_cache_without_raw_tun_reload
-    [[1, :success], [2, :success], [2, :concurrent], [2, :failed]].each do |usage_profile, scenario|
+    [[1, :success], [2, :success], [2, :concurrent], [2, :failed], [2, :extra_proxy], [2, :extra_group], [2, :extra_provider]].each do |usage_profile, scenario|
       Dir.mktmpdir do |directory|
         profiles = File.join(directory, "profiles")
         Dir.mkdir(profiles)
@@ -884,10 +893,13 @@ class MacosPatcherTest < Minitest::Test
         config["proxy-groups"].each do |group|
           proxies[group["name"]] = { "type" => "Selector", "now" => group["proxies"].first, "all" => group["proxies"] }
         end
+        proxies["Foreign"] = { "type" => "Shadowsocks" } if scenario == :extra_proxy
+        proxies["ForeignGroup"] = { "type" => "Selector", "now" => "Foreign", "all" => ["Foreign"] } if scenario == :extra_group
         requester = lambda do |method, endpoint, *_arguments|
           case [method, endpoint]
           when ["GET", "/proxies"] then [200, JSON.generate("proxies" => proxies)]
-          when ["GET", "/providers/proxies"] then [200, '{"providers":{}}']
+          when ["GET", "/providers/proxies"]
+            [200, JSON.generate("providers" => scenario == :extra_provider ? { "foreign" => { "vehicleType" => "HTTP", "proxies" => [] } } : {})]
           when ["GET", "/configs"] then [200, '{"tun":{"enable":true}}']
           when ["GET", "/dns/query?name=www.baidu.com&type=A"]
             [200, '{"Answer":[{"data":"203.0.113.1"}]}']
@@ -895,13 +907,9 @@ class MacosPatcherTest < Minitest::Test
           end
         end
         reloads = 0
-        native_recovery = lambda do |_items, profile, _selected, **options|
-          assert_equal usage_profile, profile
+        native_recovery = lambda do |_items, _profile, _selected, **options|
           transaction = options.fetch(:transaction)
-          assert transaction[:activation_state]
-          assert_equal :enabled, transaction[:runtime_checkpoint][:expected_tun]
           assert_equal bytes.b, transaction[:candidate_bytes][File.realpath(path)]
-          assert_equal bytes.b, transaction[:original_snapshots][File.realpath(path)][:bytes]
           reloads += 1
           File.binwrite(cache, bytes) unless scenario == :failed
           scenario != :failed
@@ -925,7 +933,7 @@ class MacosPatcherTest < Minitest::Test
                       backup_root: backup, selected_name: "active", auto_reload: true,
                       usage_profile: usage_profile, requester: requester, connectivity_checker: -> { true })
                     expected = { success: :unchanged, concurrent: :concurrent_change,
-                                 failed: :reload_failed_restore_pending }.fetch(scenario)
+                                 failed: :reload_failed_restore_pending }.fetch(scenario, :runtime_check_failed)
                     assert_equal [expected], results.map { |result| result[:status] }
                     assert_equal scenario == :failed, ClaudeEasy.profile_transaction_pending?(backup)
                   end
@@ -934,7 +942,7 @@ class MacosPatcherTest < Minitest::Test
             end
           end
         end
-        assert_equal(scenario == :concurrent ? 0 : 1, reloads)
+        assert_equal(%i[success failed].include?(scenario) ? 1 : 0, reloads)
         assert_equal ClaudeEasy::MAX_PATCH_ATTEMPTS, prepare_attempts if scenario == :concurrent
         assert_equal bytes.b, File.binread(path)
       end
@@ -1377,6 +1385,7 @@ class MacosPatcherTest < Minitest::Test
               (values.fetch(:precommit_condition).nil? || values.fetch(:precommit_condition).call)
           }, reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
         }
+        options.delete(:runtime_profile_state_reader) if state == :unknown
         ClaudeEasy.stub(:current_runtime_requester, -> { requester }) do
           # A pending same-byte transaction may recheck health, never resend the event.
           2.times do

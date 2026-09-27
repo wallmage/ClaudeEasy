@@ -958,7 +958,7 @@ module ClaudeEasy
             controller_request(socket, method, endpoint, body)
           }) || current_runtime_requester
           if cache_requester && !runtime_matches_profile?(cache_requester, active_path) &&
-             runtime_matches_profile?(cache_requester, active_path, require_runtime_file: false)
+             runtime_matches_profile?(cache_requester, active_path, require_runtime_file: false, strict_identity: true)
             identity = clashx_running_identity
             checkpoint = capture_runtime_checkpoint(active_path, require_tun: :preserve, requester: cache_requester)
             if identity && checkpoint && runtime_precommit_allowed?(precommit_condition)
