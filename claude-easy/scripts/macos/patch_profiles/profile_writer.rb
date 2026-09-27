@@ -950,22 +950,28 @@ module ClaudeEasy
 
         transaction = nil
         runtime_checkpoint = nil
-        if backup_root && preflight.any? { |preview| preview.fetch(:status) == :updated }
-          active_pair = work_items.zip(preflight).find { |item, _preview| item.fetch(:active) }
-          active_preview = active_pair&.last
-          if auto_reload && active_preview && active_preview.fetch(:status) == :updated
-            runtime_checkpoint = capture_runtime_checkpoint(
-              active_pair.first.fetch(:path),
-              require_tun: runtime_tun_requirement(usage_profile),
-              socket: socket, requester: requester
-            )
-            unless runtime_checkpoint
-              return preflight.map do |preview|
-                status = preview.fetch(:active) ? :runtime_check_failed : :batch_aborted
-                preview.merge(status: status, dry_run: false, failure_stage: "capture_runtime_checkpoint")
-              end
+        active_pair = work_items.zip(preflight).find { |item, _preview| item.fetch(:active) }
+        active_preview = active_pair&.last
+        if auto_reload && active_preview && active_preview.fetch(:status) == :updated
+          runtime_checkpoint = capture_runtime_checkpoint(
+            active_pair.first.fetch(:path),
+            require_tun: runtime_tun_requirement(usage_profile),
+            socket: socket, requester: requester
+          )
+          unless runtime_checkpoint
+            return preflight.map do |preview|
+              status = preview.fetch(:active) ? :runtime_check_failed : :batch_aborted
+              preview.merge(status: status, dry_run: false, failure_stage: "capture_runtime_checkpoint")
             end
           end
+          if usage_profile == 3 && runtime_checkpoint[:expected_tun] == :disabled
+            return preflight.map do |preview|
+              preview.merge(status: preview[:active] ? :client_switch_required : :batch_aborted,
+                            dry_run: false, failure_stage: "client_tun_preparation")
+            end
+          end
+        end
+        if backup_root && preflight.any? { |preview| preview.fetch(:status) == :updated }
           transaction_items = work_items.zip(preflight).map do |item, preview|
             {
               path: item.fetch(:path),

@@ -37,7 +37,9 @@ PROFILE_OPERATION_CHILD_STATUS=0
 PROFILE_OPERATION_RECEIPT_PATH=""
 PROFILE_OPERATION_RECEIPT_NONCE=""
 PROFILE_OPERATION_RECEIPT_COMMITTED=0
+PROFILE_OPERATION_RECEIPT_PENDING=0
 PROFILE_OPERATION_RECEIPT_INVALID=0
+PROFILE_OPERATION_CLIENT_SWITCH_REQUIRED=0
 PROFILE_OPERATION_RESULT_FAILED=0
 PROFILE_OPERATION_RESULT_UNKNOWN=0
 OPERATION_LOCK_REQUIRED=1
@@ -54,6 +56,20 @@ valid_child_json() {
     require ARGV.fetch(0)
     exit ClaudeEasyResult.valid_child_json?(STDIN.read) ? 0 : 1
   ' "$RESULT_CONTRACT_SOURCE"
+}
+
+valid_client_switch_required_child_json() {
+  valid_child_json || return 1
+  /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -rjson -e '
+    value = JSON.parse(STDIN.read)
+    valid = value["command"] == "patch" && value["operation"] == "patch_profiles" &&
+      value["ok"] == false && value["status"] == "partial" &&
+      value["code"] == "client_switch_required" && value["exit_code"] == 79 &&
+      value["profile"] == Integer(ARGV.fetch(0), 10) &&
+      value["workflow_complete"] == false && value["completed_scope"] == "client_switch_check" &&
+      value["required_followups"] == %w[macos_client_switch_reconciliation patch_profiles]
+    exit(valid ? 0 : 1)
+  ' "$USAGE_PROFILE" 2>/dev/null
 }
 
 run_with_update_deadline() {
@@ -612,7 +628,9 @@ run_committing_profile_operation() {
     return 1
   fi
   PROFILE_OPERATION_RECEIPT_COMMITTED=0
+  PROFILE_OPERATION_RECEIPT_PENDING=0
   PROFILE_OPERATION_RECEIPT_INVALID=0
+  PROFILE_OPERATION_CLIENT_SWITCH_REQUIRED=0
   PROFILE_OPERATION_RESULT_FAILED=0
   PROFILE_OPERATION_RESULT_UNKNOWN=0
   if [ "$JSON_OUTPUT" -eq 1 ]; then
@@ -666,7 +684,7 @@ run_committing_profile_operation() {
   receipt_value=$(/bin/cat "$PROFILE_OPERATION_RECEIPT_PATH" 2>/dev/null || true)
   case "$receipt_value" in
     "1:$PROFILE_OPERATION_RECEIPT_NONCE") PROFILE_OPERATION_RECEIPT_COMMITTED=1 ;;
-    "0:$PROFILE_OPERATION_RECEIPT_NONCE") ;;
+    "0:$PROFILE_OPERATION_RECEIPT_NONCE") PROFILE_OPERATION_RECEIPT_PENDING=1 ;;
     *) PROFILE_OPERATION_RECEIPT_INVALID=1 ;;
   esac
   /bin/rm -f "$PROFILE_OPERATION_RECEIPT_PATH"
@@ -675,7 +693,21 @@ run_committing_profile_operation() {
   if [ "$PROFILE_OPERATION_SIGNAL" -ne 0 ]; then
     finish_profile_operation_signal
   fi
-  if [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 0 ] ||
+  if [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 79 ]; then
+    preserve_profile_operation_state
+    client_switch_result_valid=1
+    if [ "$JSON_OUTPUT" -eq 1 ] && ! valid_client_switch_required_child_json; then
+      client_switch_result_valid=0
+      child_json=""
+    fi
+    if [ "$PROFILE_OPERATION_RECEIPT_PENDING" -eq 1 ] &&
+       [ "$client_switch_result_valid" -eq 1 ]; then
+      PROFILE_OPERATION_CLIENT_SWITCH_REQUIRED=1
+    else
+      PROFILE_OPERATION_RECOVERY_INTENT=1
+      PROFILE_OPERATION_RESULT_UNKNOWN=1
+    fi
+  elif [ "$PROFILE_OPERATION_CHILD_STATUS" -eq 0 ] ||
      [ "$PROFILE_OPERATION_RECEIPT_COMMITTED" -eq 1 ]; then
     preserve_profile_operation_state
     PROFILE_OPERATION_COMMITTED=1
@@ -719,6 +751,11 @@ finish_profile_operation_result_failure() {
   if [ "$PROFILE_OPERATION_RESULT_FAILED" -eq 1 ]; then
     finish 1 partial operation_committed_result_failed \
       "配置已经提交，但结果传输失败；保存档位和自动更新状态保持不变，请按同一档位重试。" \
+      "$OPERATION"
+  fi
+  if [ "$PROFILE_OPERATION_CLIENT_SWITCH_REQUIRED" -eq 1 ]; then
+    finish 79 partial client_switch_required \
+      "需先完成 ClashX Meta 客户端开关协调，再按同档重跑安装。" \
       "$OPERATION"
   fi
   [ "$PROFILE_OPERATION_RESULT_UNKNOWN" -eq 1 ] || return 0

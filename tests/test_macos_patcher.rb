@@ -497,6 +497,59 @@ class MacosPatcherTest < Minitest::Test
     client.close
   end
 
+  def test_profile_three_prepares_client_tun_before_writing_any_profile
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "active.yaml")
+      other = File.join(directory, "other.yaml")
+      backups = File.join(directory, "backups")
+      original = YAML.dump(base_config.merge("tun" => { "enable" => false }))
+      [path, other].each { |file| File.binwrite(file, original) }
+      enabled = false
+      reloads = 0
+      requester = lambda do |method, endpoint, body = nil|
+        case [method, endpoint]
+        when ["GET", "/configs"]
+          [200, JSON.generate("tun" => { "enable" => enabled })]
+        when ["GET", "/proxies"]
+          [200, JSON.generate("proxies" => {
+            "Main" => { "type" => "Selector", "now" => "台湾家宽 01", "all" => base_config["proxy-groups"].first["proxies"] },
+            "AI" => { "type" => "Selector", "now" => "Main", "all" => ["Main"] },
+            "台湾家宽 01" => { "type" => "Shadowsocks" },
+            "日本家宽 01" => { "type" => "Shadowsocks" },
+            "美国家宽 01" => { "type" => "Shadowsocks" }
+          })]
+        when ["GET", "/providers/proxies"]
+          [200, JSON.generate("providers" => {})]
+        when ["PUT", "/configs?force=true"]
+          reloads += 1
+          enabled = YAML.load_file(JSON.parse(body).fetch("path")).dig("tun", "enable") == true
+          [204, ""]
+        when ["POST", "/cache/dns/flush"]
+          [204, ""]
+        else
+          if method == "GET" && endpoint.start_with?("/dns/query?")
+            [200, JSON.generate("Answer" => [{ "type" => 1, "data" => "203.0.113.1" }])]
+          else
+            flunk "unexpected request #{method} #{endpoint}"
+          end
+        end
+      end
+      arguments = { directory: directory, policy_path: POLICY_PATH, backup_root: backups,
+                    selected_name: "active", auto_reload: true, usage_profile: 3,
+                    requester: requester, connectivity_checker: -> { true } }
+      results = ClaudeEasy.run(**arguments)
+      assert_equal :client_switch_required, results.find { |result| result[:active] }[:status]
+      [path, other].each { |file| assert_equal original.b, File.binread(file) }
+      assert_equal 0, reloads
+      refute ClaudeEasy.profile_transaction_pending?(backups)
+      enabled = true # Client UI reconciliation completed; retry the same profile.
+      results = ClaudeEasy.stub(:running_mihomo_config_paths, [path]) { ClaudeEasy.run(**arguments) }
+      assert results.all? { |result| result[:status] == :updated }, results.inspect
+      assert_equal 1, reloads
+      refute ClaudeEasy.profile_transaction_pending?(backups)
+    end
+  end
+
   def test_next_run_recovers_runtime_killed_after_active_reload
     Dir.mktmpdir do |directory|
       profile = File.join(directory, "active.yaml")
@@ -652,7 +705,7 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_recovery_closes_old_transaction_only_when_current_profile_is_verified
-    [false, true].product([:verified, :wrong_runtime, :unhealthy, :selection_changed, :selector_changed, :file_changed]).each do |native, scenario|
+    [false, true].product([:verified, :wrong_runtime, :unhealthy, :selection_changed, :selector_changed, :file_changed, :current_rules_candidate, :current_server_candidate, :current_reload_failed, :current_selector_changed, :current_file_changed]).each do |native, scenario|
       Dir.mktmpdir do |temporary|
         directory = File.realpath(temporary)
         old = File.join(directory, "old.yaml")
@@ -663,16 +716,36 @@ class MacosPatcherTest < Minitest::Test
         current_bytes = YAML.dump("proxies" => [{ "name" => "New", "type" => "ss" }])
         File.binwrite(old, original)
         File.binwrite(current, current_bytes)
+        targets = [{ path: old, original: original, candidate: candidate }]
+        if [:current_rules_candidate, :current_server_candidate, :current_reload_failed, :current_selector_changed, :current_file_changed].include?(scenario)
+          changed = YAML.load(current_bytes)
+          scenario == :current_rules_candidate ? changed["rules"] = ["MATCH,REJECT"] :
+            changed["proxies"].first["server"] = "different.invalid"
+          current_candidate = YAML.dump(changed)
+          targets << { path: current, original: current_bytes, candidate: current_candidate }
+        end
         ClaudeEasy.prepare_profile_transaction(
-          [{ path: old, original: original, candidate: candidate }], backup,
+          targets, backup,
           roots: [directory], runtime_checkpoint: {
             path: old, selections: {}, expected_tun: :disabled
           }, activation_identity: native ? { pid: 123, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" } : nil
         )
         File.binwrite(old, candidate)
+        File.binwrite(current, current_candidate) if current_candidate
         selected = "New"
-        requester = lambda do |method, endpoint, *_arguments|
-          assert_equal "GET", method, "recovery must not load a profile or change a selection"
+        reloads = 0
+        requester = lambda do |method, endpoint, body = nil|
+          if method == "PUT" && endpoint == "/configs?force=true"
+            refute native, "native recovery must not use the controller to load"
+            assert_equal current, JSON.parse(body).fetch("path")
+            assert_equal current_bytes, File.binread(current)
+            reloads += 1
+            selected = "Other" if scenario == :current_selector_changed
+            File.binwrite(current, "external edit") if scenario == :current_file_changed
+            next [scenario == :current_reload_failed ? 503 : 204, ""]
+          end
+          next [204, ""] if method == "POST" && endpoint == "/cache/dns/flush"
+          assert_equal "GET", method, "recovery must not switch nodes"
           case endpoint
           when "/proxies"
             name = scenario == :wrong_runtime ? "Candidate" : "New"
@@ -690,18 +763,39 @@ class MacosPatcherTest < Minitest::Test
           scenario != :unhealthy
         end
         diagnostics = {}
-        result = ClaudeEasy.stub(:running_mihomo_config_paths, [current]) do
-          ClaudeEasy.resume_profile_transaction(
-            backup, roots: [directory], work_items: [
-              { path: old, active: false }, { path: current, active: true }
-            ], reload_runtime: true, require_tun: :preserve, requester: requester,
-            connectivity_checker: healthy, precommit_condition: -> { stable }, diagnostics: diagnostics
-          )
+        native_recovery = lambda do |targets, profile, selected_name, **options|
+          assert native
+          assert_equal [current], targets.map { |target| target[:path] }
+          assert_equal 3, profile
+          assert_equal "current.yaml", selected_name
+          assert_equal current, options[:runtime_checkpoint][:path]
+          assert_equal({}, options[:runtime_checkpoint][:selections])
+          assert_equal old, options[:transaction][:runtime_checkpoint][:path]
+          reloads += 1
+          selected = "Other" if scenario == :current_selector_changed
+          File.binwrite(current, "external edit") if scenario == :current_file_changed
+          scenario != :current_reload_failed
         end
-        assert_equal(scenario == :verified ? :recovered : :runtime_restore_pending, result, scenario)
-        assert_equal(scenario != :verified, ClaudeEasy.profile_transaction_pending?(backup), scenario)
-        assert_equal "recovery_active_profile_verification", diagnostics[:failure_stage] unless scenario == :verified
-        assert_equal current_bytes, File.binread(current)
+        result = ClaudeEasy.stub(:saved_usage_profile, 3) do
+          ClaudeEasy.stub(:clashx_running_identity, { pid: 123 }) do
+            ClaudeEasy.stub(:reload_recovered_safe_update_runtime, native_recovery) do
+              ClaudeEasy.stub(:running_mihomo_config_paths, [current]) do
+                ClaudeEasy.resume_profile_transaction(
+                  backup, roots: [directory], work_items: [
+                    { path: old, active: false }, { path: current, active: true }
+                  ], reload_runtime: true, require_tun: :preserve, requester: requester,
+                  connectivity_checker: healthy, precommit_condition: -> { stable }, diagnostics: diagnostics
+                )
+              end
+            end
+          end
+        end
+        recovered = [:verified, :current_rules_candidate, :current_server_candidate].include?(scenario)
+        assert_equal(recovered ? :recovered : :runtime_restore_pending, result, scenario)
+        assert_equal(!recovered, ClaudeEasy.profile_transaction_pending?(backup), scenario)
+        assert_equal(current_candidate ? 1 : 0, reloads, scenario)
+        assert_equal "recovery_active_profile_verification", diagnostics[:failure_stage] unless recovered
+        assert_equal(scenario == :current_file_changed ? "external edit" : current_bytes, File.binread(current))
         assert_equal(scenario == :file_changed ? "external edit" : original, File.binread(old))
       end
     end

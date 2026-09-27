@@ -42,7 +42,7 @@ Shell 在创建操作锁文件前先区分用途档位文件不存在、有效�
 
 macOS 与 Windows 的三个档位都把 `profile.store-selected` 设为 `true`，并保留 `profile` 下的其他设置，使 Mihomo 重新加载订阅后继续使用原代理组选择。
 
-macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位；安装成功且档位回读一致后，运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 不增加 IPv6、WebRTC 或 AI 分组补丁；TUN 与系统代理按上表协调。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置的文件写入由安装程序完成：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读，再按 Windows 平台文件完成客户端内存设置核对。任一平台无法安全识别、备份、写入或确认时，当前写入流程停止并保持原状态；代理立即转入诊断，修复后重新执行，不把脚本停止当作任务结束。
+macOS 用 `bash scripts/install_macos.sh --profile N` 保存档位。第三档若 TUN 未开启，安装器在新补丁写入前返回 `client_switch_required`，保留已选档位和自动更新关闭状态；代理立即执行下述开关协调，再按同档重跑安装，不能把此中间结果当成完成。安装成功或收到该中间结果且档位回读一致后，运行 `ruby scripts/macos/patch_profiles.rb --reconcile-client-switches --usage-profile N --json`；Windows 用 `.\scripts\install_windows.cmd -UsageProfile N`。三个档位都先检查 Mihomo，关闭订阅自动更新，并安装共同国内域名直连基线；档位 1、2 不增加 IPv6、WebRTC 或 AI 分组补丁；TUN 与系统代理按上表协调。Windows 三档都安装全局脚本，脚本内写入数字档位；档位 1、2 只执行共同基线，只有档位 3 继续执行其余完整补丁。自动更新设置的文件写入由安装程序完成：macOS 把 ClashX Meta 偏好项 `kAutoUpdateEnable` 写为布尔假值并立即回读；Windows 把 `profiles.yaml` 中每个 `type: remote` 项目的 `option.allow_auto_update` 写为 `false` 并逐项回读，再按 Windows 平台文件完成客户端内存设置核对。任一平台无法安全识别、备份、写入或确认时，当前写入流程停止并保持原状态；代理立即转入诊断，修复后重新执行，不把脚本停止当作任务结束。
 
 ## Patch 检查顺序
 

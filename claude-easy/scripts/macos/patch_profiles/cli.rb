@@ -3,6 +3,7 @@ module ClaudeEasy
 
   WRAPPER_COMMIT_RECEIPT_FAILURE_EXIT = 75
   PROFILE_COMMIT_STATE_UNCERTAIN_EXIT = 77
+  CLIENT_SWITCH_REQUIRED_EXIT = 79
   class WrapperCommitReceiptError < StandardError; end
 
   def usage_profile_state_path
@@ -125,6 +126,7 @@ module ClaudeEasy
     when :reload_failed_rolled_back then "#{name}：自动刷新失败，已恢复原配置"
     when :reload_failed_restore_pending then "#{name}：自动刷新失败；文件已恢复，运行内核恢复失败"
     when :reload_failed_rollback_conflict then "#{name}：自动刷新失败；订阅同时发生变化，未覆盖新内容"
+    when :client_switch_required then "#{name}：需先完成 ClashX Meta 客户端开关协调，再按同档重跑"
     when :runtime_check_failed, :batch_aborted, :duplicate_target
       "#{name}：已跳过：处理失败"
     when :error then "#{name}：已跳过：处理失败"
@@ -1014,8 +1016,19 @@ module ClaudeEasy
     end
     operation_succeeded = results.all? { |result| %i[updated unchanged].include?(result[:status]) }
     recovery_pending = results.any? { |result| result[:status] == :reload_failed_restore_pending }
+    client_switch_required = results.any? { |result| result[:status] == :client_switch_required }
     mark_wrapper_commit_receipt(options) if operation_succeeded
     if options[:json]
+      if client_switch_required
+        return emit_cli_result(
+          operation: "patch_profiles", exit_code: CLIENT_SWITCH_REQUIRED_EXIT,
+          status: "partial", code: "client_switch_required",
+          summary_zh: "需先完成 ClashX Meta 客户端开关协调，再按同档重跑安装。",
+          profile: options[:usage_profile], items: results.map { |result| result_item(result) },
+          workflow_complete: false, completed_scope: "client_switch_check",
+          required_followups: %w[macos_client_switch_reconciliation patch_profiles]
+        )
+      end
       status, code, summary = batch_json_status(results)
       if recovery_pending
         status = "partial"
@@ -1035,6 +1048,7 @@ module ClaudeEasy
       )
     end
     results.each { |result| puts chinese_status(result) }
+    return CLIENT_SWITCH_REQUIRED_EXIT if client_switch_required
     return PROFILE_COMMIT_STATE_UNCERTAIN_EXIT if recovery_pending
 
     operation_succeeded ? 0 : 1

@@ -1281,22 +1281,71 @@ module ClaudeEasy
           regular_file_snapshot_once(target, "恢复配置").fetch(:bytes) == original.fetch(:bytes)
       end
     end
-    return false unless restored.call && runtime_precommit_allowed?(precommit_condition)
-    return false unless runtime_matches_profile?(requester, path)
-    checkpoint = capture_runtime_checkpoint(path, require_tun: :preserve, requester: requester)
+    guarded_precommit = lambda do
+      restored.call && File.realpath(active.fetch(:path)) == path &&
+        regular_file_snapshot_once(path, "当前配置").values_at(:identity, :bytes) ==
+          snapshot.values_at(:identity, :bytes) &&
+        runtime_precommit_allowed?(precommit_condition)
+    end
+    return false unless guarded_precommit.call
+    checkpoint = capture_runtime_checkpoint(
+      path, require_tun: :preserve, requester: requester
+    )
     return false unless checkpoint
-    checkpoint[:selections] = runtime_selections(requester)
+    reload_checkpoint = checkpoint
+    checkpoint = checkpoint.merge(selections: runtime_selections(requester))
     return false unless checkpoint[:selections]
+    original = originals[path]
+    candidate = transaction.fetch(:candidate_bytes)[path]
+    if original && candidate && original.fetch(:bytes) != candidate
+      runtime_state = runtime_loaded_profile_state(requester, path, candidate)
+      unless runtime_state == :restored
+        recovered = if transaction[:activation_state]
+                      usage_profile = saved_usage_profile
+                      client_identity = clashx_running_identity if usage_profile
+                      usage_profile && client_identity && reload_recovered_safe_update_runtime(
+                        [active], usage_profile, File.basename(path),
+                        precommit_condition: guarded_precommit,
+                        runtime_checkpoint: reload_checkpoint, transaction: transaction,
+                        client_identity: client_identity,
+                        runtime_checkpoint_checker: lambda { |current|
+                          runtime_checkpoint_current?(current, requester: requester)
+                        },
+                        runtime_checkpoint_reader: lambda { |current_path|
+                          capture_runtime_checkpoint(
+                            current_path, require_tun: :preserve, requester: requester
+                          )
+                        },
+                        runtime_profile_state_reader: lambda { |current_path, current_candidate|
+                          runtime_loaded_profile_state(
+                            requester, current_path, current_candidate
+                          )
+                        },
+                        runtime_waiter: lambda { |identity, **options|
+                          wait_for_clashx_safe_runtime(
+                            identity, **options, requester_factory: -> { requester }
+                          )
+                        }
+                      )
+                    else
+                      reload_recovered_profile_runtime(
+                        [active], require_tun: :preserve, requester: requester,
+                        connectivity_checker: connectivity_checker,
+                        precommit_condition: guarded_precommit,
+                        runtime_checkpoint: reload_checkpoint, transaction: transaction
+                      )
+                    end
+        return false unless recovered
+      end
+    end
+    return false unless runtime_matches_profile?(requester, path)
     return false unless runtime_health_healthy?(
       requester, selections: checkpoint[:selections], expected_tun: checkpoint[:expected_tun],
-      connectivity_checker: connectivity_checker, precommit_condition: precommit_condition,
+      connectivity_checker: connectivity_checker, precommit_condition: guarded_precommit,
       flush_caches: false, check_dns: false
     )
     runtime_matches_profile?(requester, path) &&
-      runtime_checkpoint_current?(checkpoint, requester: requester) && restored.call &&
-      File.realpath(active.fetch(:path)) == path &&
-      regular_file_snapshot_once(path, "当前配置").values_at(:identity, :bytes) ==
-        snapshot.values_at(:identity, :bytes) && runtime_precommit_allowed?(precommit_condition)
+      runtime_checkpoint_current?(checkpoint, requester: requester) && guarded_precommit.call
   rescue StandardError
     false
   end

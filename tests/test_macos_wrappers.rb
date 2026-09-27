@@ -964,6 +964,103 @@ class MacosWrapperTest < Minitest::Test
     end
   end
 
+  def test_first_profile_three_install_preserves_pending_client_switch_state
+    patcher = <<~'RUBY'
+      %w[base64 digest fileutils json open3 optparse psych rbconfig rexml/document tempfile time uri].each do |name|
+        require name
+      end
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+        exit 0
+      end
+      exit 0 if ARGV.include?("--snapshot-initial")
+      if ARGV.include?("--disable-subscription-auto-update")
+        puts "disabled"
+        exit 0
+      end
+      if ARGV.include?("--restore-owned-subscription-auto-update")
+        File.write(File.join(ENV.fetch("HOME"), "auto-update-restored"), "yes")
+        puts "restored"
+        exit 0
+      end
+
+      %w[
+        result_contract operation_lock usage_profile_state patch_profiles/transform
+        patch_profiles/backups patch_profiles/mihomo patch_profiles/profile_writer
+        patch_profiles/subscriptions patch_profiles/runtime patch_profiles/log_repair patch_profiles/cli
+      ].each { |name| require_relative name }
+      if ENV["INVALID_CLIENT_SWITCH_RESULT"] == "1"
+        original_emit = ClaudeEasy.method(:emit_cli_result)
+        ClaudeEasy.define_singleton_method(:emit_cli_result) do |**attributes|
+          if attributes[:code] == "client_switch_required"
+            attributes = attributes.merge(
+              code: "partially_completed", workflow_complete: true, required_followups: []
+            )
+          end
+          original_emit.call(**attributes)
+        end
+      end
+      module ClaudeEasy
+        class << self
+          attr_accessor :client_switch_receipt_path
+          def storage_mode; :local; end
+          def default_profile_directories; [ENV.fetch("HOME")]; end
+          def run(**_options)
+            File.binwrite(client_switch_receipt_path, "invalid") if ENV["INVALID_CLIENT_SWITCH_RECEIPT"] == "1"
+            [{
+              path: File.join(ENV.fetch("HOME"), "active.yaml"), active: true,
+              status: :client_switch_required, failure_stage: "client_tun_preparation"
+            }]
+          end
+        end
+      end
+      receipt_index = ARGV.index("--wrapper-commit-receipt")
+      ClaudeEasy.client_switch_receipt_path = receipt_index && ARGV.fetch(receipt_index + 1)
+      exit ClaudeEasy.cli
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      [
+        { arguments: ["--profile", "3"], exit: 79 },
+        { arguments: ["--profile", "3", "--json"], exit: 79, code: "client_switch_required" },
+        { arguments: ["--profile", "3", "--json"], exit: 1,
+          code: "operation_result_unknown_recovery_intent", invalid_receipt: true },
+        { arguments: ["--profile", "3", "--json"], exit: 1,
+          code: "operation_result_unknown_recovery_intent", invalid_result: true }
+      ].each do |test_case|
+        Dir.mktmpdir do |home|
+          with_supported_app(home) do
+            env = {}
+            env["INVALID_CLIENT_SWITCH_RECEIPT"] = "1" if test_case[:invalid_receipt]
+            env["INVALID_CLIENT_SWITCH_RESULT"] = "1" if test_case[:invalid_result]
+            stdout, stderr, status = run_script(
+              installer, *test_case.fetch(:arguments), home: home, extra_env: env
+            )
+
+            assert_equal test_case.fetch(:exit), status.exitstatus, "#{stdout}\n#{stderr}"
+            assert_equal "3", Open3.capture2(
+              "/usr/bin/plutil", "-extract", "Profile", "raw", usage_state_path(home)
+            ).first.strip
+            refute File.exist?(File.join(home, "auto-update-restored"))
+            if test_case[:code]
+              result = assert_json_result(stdout, status, command: "install")
+              assert_equal test_case.fetch(:code), result.fetch("code")
+              if status.exitstatus == 79
+                assert_equal "partial", result.fetch("status")
+                assert_equal false, result.fetch("workflow_complete")
+                assert_equal %w[macos_client_switch_reconciliation patch_profiles],
+                             result.fetch("required_followups")
+              elsif test_case[:invalid_result]
+                refute result.key?("workflow_complete")
+              end
+            else
+              assert_includes stdout, "客户端开关"
+            end
+          end
+        end
+      end
+    end
+  end
+
   def test_strong_kill_after_profile_application_keeps_new_profile_as_recovery_intent
     patcher = <<~'RUBY'
       require "json"
