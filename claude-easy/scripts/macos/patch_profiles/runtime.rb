@@ -1297,6 +1297,7 @@ module ClaudeEasy
     return false unless checkpoint[:selections]
     original = originals[path]
     candidate = transaction.fetch(:candidate_bytes)[path]
+    controller_reloaded = false
     if original && candidate && original.fetch(:bytes) != candidate
       runtime_state = runtime_loaded_profile_state(requester, path, candidate)
       unless runtime_state == :restored
@@ -1304,7 +1305,7 @@ module ClaudeEasy
                       usage_profile = saved_usage_profile
                       client_identity = clashx_running_identity if usage_profile
                       usage_profile && client_identity && reload_recovered_safe_update_runtime(
-                        [active], usage_profile, File.basename(path),
+                        [active.merge(path: path)], usage_profile, File.basename(path),
                         precommit_condition: guarded_precommit,
                         runtime_checkpoint: reload_checkpoint, transaction: transaction,
                         client_identity: client_identity,
@@ -1328,8 +1329,8 @@ module ClaudeEasy
                         }
                       )
                     else
-                      reload_recovered_profile_runtime(
-                        [active], require_tun: :preserve, requester: requester,
+                      controller_reloaded = reload_recovered_profile_runtime(
+                        [active.merge(path: path)], require_tun: :preserve, requester: requester,
                         connectivity_checker: connectivity_checker,
                         precommit_condition: guarded_precommit,
                         runtime_checkpoint: reload_checkpoint, transaction: transaction
@@ -1338,13 +1339,16 @@ module ClaudeEasy
         return false unless recovered
       end
     end
-    return false unless runtime_matches_profile?(requester, path)
+    require_runtime_file = !controller_reloaded
+    return false unless runtime_matches_profile?(
+      requester, path, require_runtime_file: require_runtime_file
+    )
     return false unless runtime_health_healthy?(
       requester, selections: checkpoint[:selections], expected_tun: checkpoint[:expected_tun],
       connectivity_checker: connectivity_checker, precommit_condition: guarded_precommit,
       flush_caches: false, check_dns: false
     )
-    runtime_matches_profile?(requester, path) &&
+    runtime_matches_profile?(requester, path, require_runtime_file: require_runtime_file) &&
       runtime_checkpoint_current?(checkpoint, requester: requester) && guarded_precommit.call
   rescue StandardError
     false
@@ -1355,6 +1359,7 @@ module ClaudeEasy
                                        runtime_checkpoint: nil, transaction: nil,
                                        runtime_profile_state_reader: nil, diagnostics: nil)
     diagnostics ||= {}
+    recovery_precommit = precommit_condition
     diagnostics[:failure_stage] = "recovery_active_profile"
     active = work_items.find { |item| item.fetch(:active) }
     if active.nil? && runtime_checkpoint
@@ -1366,6 +1371,7 @@ module ClaudeEasy
       end
     end
     return false unless active
+    active_path = File.realpath(active.fetch(:path))
 
     diagnostics[:failure_stage] = "controller_discovery"
     if requester.nil?
@@ -1376,42 +1382,67 @@ module ClaudeEasy
     end
     diagnostics[:failure_stage] = "recovery_checkpoint"
     if runtime_checkpoint
-      return false unless runtime_checkpoint[:path] == File.realpath(active.fetch(:path))
+      return false unless runtime_checkpoint[:path] == active_path
 
       dispatch_checkpoint = runtime_checkpoint
       unless runtime_checkpoint_current?(runtime_checkpoint, requester: requester)
         candidate_bytes = transaction && transaction[:candidate_bytes] &&
-                          transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
+                          transaction[:candidate_bytes][active_path]
         runtime_profile_state_reader ||= lambda do |path, candidate|
           runtime_loaded_profile_state(requester, path, candidate)
         end
         diagnostics[:failure_stage] = "recovery_loaded_profile"
-        case runtime_profile_state_reader.call(active.fetch(:path), candidate_bytes)
+        case runtime_profile_state_reader.call(active_path, candidate_bytes)
         when :restored
           runtime_checkpoint = capture_runtime_checkpoint(
-            active.fetch(:path), require_tun: :preserve, requester: requester
+            active_path, require_tun: :preserve, requester: requester
           )
           return false unless runtime_checkpoint
           dispatch_checkpoint = runtime_checkpoint
         when :candidate
           # The candidate load may reset selectors; restore the saved checkpoint.
           dispatch_checkpoint = capture_runtime_checkpoint(
-            active.fetch(:path), require_tun: :preserve, requester: requester
+            active_path, require_tun: :preserve, requester: requester
           )
           return false unless dispatch_checkpoint
         else
-          return false
+          path = active_path
+          original = transaction && transaction[:original_snapshots] &&
+                     transaction[:original_snapshots][path]
+          restored_identity = profile_runtime_identity(path)
+          candidate_identity = profile_runtime_identity_from_bytes(
+            candidate_bytes, "配置事务候选"
+          )
+          return false unless original && restored_identity &&
+                              restored_identity == candidate_identity &&
+                              runtime_matches_profile?(
+                                requester, path, require_runtime_file: false
+                              )
+
+          snapshot = regular_file_snapshot_once(path, "恢复配置")
+          return false unless snapshot.values_at(:identity, :bytes) ==
+                              original.values_at(:identity, :bytes)
+          recovery_precommit = lambda do
+            File.realpath(active.fetch(:path)) == path &&
+              regular_file_snapshot_once(path, "恢复配置").values_at(:identity, :bytes) ==
+              snapshot.values_at(:identity, :bytes) &&
+              runtime_precommit_allowed?(precommit_condition)
+          end
+          dispatch_checkpoint = capture_runtime_checkpoint(
+            path, require_tun: :preserve, requester: requester
+          )
+          return false unless dispatch_checkpoint
         end
       end
 
       selections = runtime_selections_for_profile(
-        runtime_checkpoint[:selections], active.fetch(:path)
+        runtime_checkpoint[:selections], active_path
       )
       expected_tun = runtime_checkpoint[:expected_tun]
     else
       selections = runtime_selections(requester)
       return false unless selections
-      selections = runtime_selections_for_profile(selections, active.fetch(:path))
+      selections = runtime_selections_for_profile(selections, active_path)
       expected_tun = if require_tun == :preserve
                        tun_state(requester: requester)
                      elsif require_tun
@@ -1425,21 +1456,21 @@ module ClaudeEasy
     diagnostics[:failure_stage] = "recovery_tun"
     return false if expected_tun == :unknown
     diagnostics[:failure_stage] = "runtime_profile_context"
-    return false unless runtime_precommit_allowed?(precommit_condition)
+    return false unless runtime_precommit_allowed?(recovery_precommit)
     diagnostics[:failure_stage] = "recovery_checkpoint"
     return false if dispatch_checkpoint &&
                     !runtime_checkpoint_current?(dispatch_checkpoint, requester: requester)
 
     return false unless reload_profile_runtime(
-      requester, active.fetch(:path), expected_tun: expected_tun, selections: selections, diagnostics: diagnostics
+      requester, active_path, expected_tun: expected_tun, selections: selections, diagnostics: diagnostics
     )
 
     healthy = runtime_health_healthy?(
       requester, selections: selections, expected_tun: expected_tun,
       connectivity_checker: connectivity_checker,
-      precommit_condition: precommit_condition, check_dns: false, diagnostics: diagnostics
+      precommit_condition: recovery_precommit, check_dns: false, diagnostics: diagnostics
     )
-    healthy && runtime_precommit_allowed?(precommit_condition)
+    healthy && runtime_precommit_allowed?(recovery_precommit)
   rescue StandardError
     false
   end
