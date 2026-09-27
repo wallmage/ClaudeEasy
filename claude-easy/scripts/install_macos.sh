@@ -43,6 +43,11 @@ PROFILE_OPERATION_RESULT_UNKNOWN=0
 OPERATION_LOCK_REQUIRED=1
 SAFE_UPDATE_TIMEOUT_SECONDS=180
 child_json=""
+INTERNAL_INSTALL_EXIT_RECEIPT=""
+if [ "${CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD:-0}" = "1" ]; then
+  INTERNAL_INSTALL_EXIT_RECEIPT="${CLAUDE_EASY_INSTALL_EXIT_RECEIPT:-}"
+fi
+unset CLAUDE_EASY_INSTALL_EXIT_RECEIPT
 
 valid_child_json() {
   /usr/bin/printf '%s' "$child_json" | /usr/bin/ruby -e '
@@ -208,6 +213,11 @@ unexpected_exit() {
       /usr/bin/printf '%s\n' "[ClaudeEasy] 安装流程意外中止；已尝试恢复用途档位与订阅自动更新。"
     fi
   fi
+  if [ -n "${CLAUDE_EASY_INSTALL_EXIT_RECEIPT:-}" ] &&
+     [ -f "$CLAUDE_EASY_INSTALL_EXIT_RECEIPT" ] &&
+     [ ! -L "$CLAUDE_EASY_INSTALL_EXIT_RECEIPT" ]; then
+    /usr/bin/printf 'unexpected:%s\n' "$unexpected_status" >"$CLAUDE_EASY_INSTALL_EXIT_RECEIPT"
+  fi
   exit "$unexpected_status"
 }
 
@@ -357,6 +367,14 @@ run_subscription_auto_update_disable() {
   trap 'exit 143' TERM
   if [ "$AUTO_UPDATE_OPERATION_SIGNAL" -ne 0 ]; then
     exit "$AUTO_UPDATE_OPERATION_SIGNAL"
+  fi
+  if [ "$auto_update_status" -ne 0 ]; then
+    valid_child_json || child_json="{}"
+    child_json=$(/usr/bin/printf '%s' "$child_json" | /usr/bin/ruby "$RESULT_CONTRACT_SOURCE" \
+      --merge-child-stdin --command patch --operation disable_subscription_auto_update --ok false \
+      --status failed --code auto_update_failed --exit-code "$auto_update_status" \
+      --summary "无法关闭订阅自动更新。" --message "$auto_update_result")
+    say "$auto_update_result"
   fi
   return "$auto_update_status"
 }
@@ -885,18 +903,31 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
         --verify-held-lock "$OPERATION_LOCK_PATH"; then
       finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。" "$OPERATION"
     fi
+    CLAUDE_EASY_INSTALL_EXIT_RECEIPT=$INTERNAL_INSTALL_EXIT_RECEIPT
   else
+    operation_result_receipt=$(/usr/bin/mktemp -t claude-easy-install-result) ||
+      finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。" "$OPERATION"
     trap ':' HUP INT TERM
     set +e
-    /usr/bin/ruby "$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"
+    CLAUDE_EASY_INSTALL_EXIT_RECEIPT="$operation_result_receipt" \
+      /usr/bin/ruby "$OPERATION_LOCK_SOURCE" "$OPERATION_LOCK_PATH" /bin/sh "$0" "$@"
     operation_lock_status=$?
     set -e
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    operation_result_state=$(/bin/cat "$operation_result_receipt" 2>/dev/null || true)
+    /bin/rm -f "$operation_result_receipt"
+    if [ "$operation_result_state" = "unexpected:$operation_lock_status" ]; then
+      trap - EXIT HUP INT TERM
+      exit "$operation_lock_status"
+    fi
     case "$operation_lock_status" in
       75)
         finish 1 failed operation_in_progress "另一个 ClaudeEasy 操作正在进行，请稍后重试。" "$OPERATION"
+        ;;
+      78)
+        finish 1 failed operation_permission_denied "当前执行环境拒绝访问 ClaudeEasy 状态目录；未修改配置，请通过工作台授权后重试。" "$OPERATION"
         ;;
       76)
         finish 1 failed operation_lock_failed "无法建立 ClaudeEasy 操作锁；未执行任何修改。" "$OPERATION"

@@ -94,6 +94,11 @@ module ClaudeEasy
       "operation_in_progress" : "operation_lock_failed"
     summary = status == ClaudeEasyOperationLock::BUSY_EXIT ?
       "另一个 ClaudeEasy 操作正在进行，请稍后重试。" : "无法建立 ClaudeEasy 操作锁；未执行任何修改。"
+    if status == ClaudeEasyOperationLock::PERMISSION_EXIT
+      code = "operation_permission_denied"
+      summary = "当前执行环境拒绝访问 ClaudeEasy 状态目录；未修改配置，请通过工作台授权后重试。"
+      status = ClaudeEasyOperationLock::FAILED_EXIT
+    end
     return emit_cli_result(
       operation: "operation_lock", exit_code: status, status: "failed",
       code: code, summary_zh: summary
@@ -185,7 +190,10 @@ module ClaudeEasy
                "skipped"
              else "failed"
              end
-    { "profile" => safe_label(File.basename(result[:path].to_s)), "status" => status }
+    item = { "profile" => safe_label(File.basename(result[:path].to_s)), "status" => status }
+    item["reason"] = result[:status].to_s unless %w[updated unchanged].include?(status)
+    item["error_class"] = result[:error_class] if result[:error_class]
+    item
   end
 
   def batch_json_status(results)
@@ -604,7 +612,8 @@ module ClaudeEasy
       rescue InvalidConfigError, SystemCallError, IOError => error
         return emit_cli_result(
           operation: "disable_subscription_auto_update", exit_code: 1, status: "failed",
-          code: "auto_update_failed", summary_zh: "无法关闭订阅自动更新。"
+          code: "auto_update_failed", summary_zh: "无法关闭订阅自动更新。",
+          messages: [safe_label(error.message)]
         ) if options[:json]
         warn safe_label(error.message)
         return 1
@@ -635,7 +644,8 @@ module ClaudeEasy
       rescue InvalidConfigError, SystemCallError, IOError => error
         return emit_cli_result(
           operation: "restore_owned_subscription_auto_update", exit_code: 1, status: "failed",
-          code: "auto_update_restore_failed", summary_zh: "无法安全恢复订阅自动更新。"
+          code: "auto_update_restore_failed", summary_zh: "无法安全恢复订阅自动更新。",
+          messages: [safe_label(error.message)]
         ) if options[:json]
         warn safe_label(error.message)
         return 1
@@ -1050,7 +1060,7 @@ module ClaudeEasy
     return emit_cli_result(
       operation: options[:safe_update_all] ? "safe_update" : "patch_profiles",
       exit_code: 1, status: "failed", code: "invalid_configuration",
-      summary_zh: "ClaudeEasy 运行失败。"
+      summary_zh: "ClaudeEasy 运行失败。", messages: [safe_label(error.message)]
     ) if json_mode
     warn "ClaudeEasy 运行失败：#{safe_label(error.message)}。"
     1

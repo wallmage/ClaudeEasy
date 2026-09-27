@@ -270,6 +270,9 @@ if [ "$OPERATION_LOCK_REQUIRED" -eq 1 ]; then
         fi
         finish 1 failed operation_in_progress "另一个 ClaudeEasy 操作正在进行，请稍后重试。"
         ;;
+      78)
+        finish 1 failed operation_permission_denied "当前执行环境拒绝访问 ClaudeEasy 状态目录；未修改配置，请通过工作台授权后重试。"
+        ;;
       76)
         if [ "$operation_result_state" = "unexpected:76" ]; then
           trap - EXIT HUP INT TERM

@@ -24,6 +24,7 @@ module ClaudeEasyOperationLock
   LOCK_TIMEOUT_SECONDS = 5
   BUSY_EXIT = 75
   FAILED_EXIT = 76
+  PERMISSION_EXIT = 78
   HELD_ENV = "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_HELD".freeze
   HELD_FD_ENV = "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_FD".freeze
   HELD_IDENTITY_ENV = "CLAUDE_EASY_INTERNAL_OPERATION_LOCK_IDENTITY".freeze
@@ -237,7 +238,11 @@ module ClaudeEasyOperationLock
 
     lock_path = File.expand_path(arguments.fetch(0))
     command = arguments.drop(1)
-    handle = acquire(lock_path)
+    begin
+      handle = acquire(lock_path)
+    rescue Errno::EACCES, Errno::EPERM
+      return PERMISSION_EXIT
+    end
     return BUSY_EXIT unless handle
 
     handle.close_on_exec = false

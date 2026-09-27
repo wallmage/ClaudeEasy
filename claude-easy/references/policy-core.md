@@ -50,11 +50,13 @@ ClaudeEasy 有两个独立模块：
 
 所有公开命令都显式支持 JSON v1：macOS 使用 `--json`，Windows 使用 `-Json`。默认模式继续输出中文信息，失败分支也必须输出摘要，不能只返回退出码。JSON 模式的标准输出只能有一个对象，不能混入日志；对象中的 `exit_code` 必须与进程退出码一致。`code` 和 `operation` 是稳定的机器标识，`command` 只允许 `install`、`uninstall`、`patch`、`verify_routes`。所有必填字段、状态值和字段类型以 [result-contract.json](result-contract.json) 为准。安装包任一必需模块缺失时都在修改 AppHome 前返回退出码 `6` 和 `incomplete_package`。
 
-Skill 调用脚本时优先使用 JSON 模式，并依据字段判断结果，不解析中文文案。分流验证只报告代理组已识别和各目标的检查状态。
+Skill 调用脚本时优先使用 JSON 模式，依据 `code`、逐项 `reason`、`error_class` 判断，`messages` 仅补充脱敏证据。`skipped` 只表示未处理，不代表文件缺失；原因不足时读取实际配置位置与原始失败证据，不推断丢失、不要求重新下载。分流验证只报告代理组已识别和各目标的检查状态。
 
 ClaudeEasy 的公开脚本固定在 `claude-easy/`，参数和调用方式保持兼容。内部代码按配置转换、备份与事务、Mihomo 校验、订阅处理、运行状态和 CLI 组织；入口只负责参数、编排与结果输出。拆分不能改变事务顺序、安全边界或既有退出码。
 
 ## 异常处理
+
+权限拒绝与锁占用分别处理。`operation_permission_denied` 或 `EPERM`/`EACCES`：按当前工具支持的流程申请实际被拒绝目录的权限，再重试原入口；不能靠删锁、sudo、改文件权限或重启 Clash 绕过。`operation_in_progress` 才表示其他流程持锁。导出中缺少授权记录时，不推定已获授权。每条诊断命令单独保留退出码与输出，后续命令成功不能覆盖前一步失败。
 
 - `401 unauthorized`、HTML、空文件或损坏 YAML：机器结果标记订阅无效，等待以后刷新出有效订阅。
 - Mihomo 拒绝候选文件：保留原文件，机器结果标记内核校验失败。

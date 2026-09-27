@@ -51,6 +51,54 @@ class MacosPatcherTest < Minitest::Test
     @policy = JSON.parse(File.read(POLICY_PATH)) if PATCHER_AVAILABLE
   end
 
+  def test_auto_update_missing_preference_round_trip_and_read_failures
+    domain = "com.metacubex.ClashX.meta"
+    ok = Struct.new(:success?).new(true)
+    [nil, "<true/>", "<false/>", "<string>true</string>", "<true/><false/>", :unreadable].each do |original|
+      Dir.mktmpdir do |backup|
+        value = original
+        writes = []
+        runner = lambda do |*args, **options|
+          if args[0] == "/usr/bin/defaults"
+            case args[1]
+            when "export"
+              next ["", "denied", Struct.new(:success?).new(false)] if value == :unreadable
+              field = value ? "<key>kAutoUpdateEnable</key>#{value}" : ""
+              next ["<plist version=\"1.0\"><dict>#{field}</dict></plist>", "", ok]
+            when "write", "delete"
+              writes << args[1]
+              value = args[1] == "delete" ? nil : "<#{args.last}/>"
+              next ["", "", ok]
+            end
+          end
+          Open3.capture3(*args, **options)
+        end
+        if [nil, "<true/>", "<false/>"].include?(original)
+          result = ClaudeEasy.disable_subscription_auto_update(backup_root: backup, runner: runner, preference_domain: domain)
+          assert_includes [:disabled, :already_disabled], result[:status]
+          assert_equal "<false/>", value
+          ClaudeEasy.restore_owned_subscription_auto_update(backup_root: backup, runner: runner)
+          original.nil? ? assert_nil(value) : assert_equal(original, value)
+          assert_nil ClaudeEasy.auto_update_ownership_state(backup)
+        else
+          assert_raises(ClaudeEasy::InvalidConfigError) do
+            ClaudeEasy.disable_subscription_auto_update(backup_root: backup, runner: runner, preference_domain: domain)
+          end
+          assert_empty writes
+          assert_nil ClaudeEasy.auto_update_ownership_state(backup)
+        end
+      end
+    end
+  end
+
+  def test_patch_failure_json_preserves_the_reason
+    %i[invalid validation_failed validation_timeout no_main_group no_ai_nodes io_error error].each do |reason|
+      item = ClaudeEasy.result_item(path: "Example.yaml", status: reason)
+      assert_equal "skipped", item["status"]
+      assert_equal reason.to_s, item["reason"]
+    end
+  end
+
   def test_subscription_check_selects_once_without_writes_and_reports_failures
     Dir.mktmpdir do |dir|
       path = File.join(dir, "Selected.yaml")

@@ -158,23 +158,75 @@ class MacosWrapperTest < Minitest::Test
     result
   end
 
+  def test_operation_lock_permission_failure_is_actionable
+    with_supported_mihomo_installer do |installer|
+      prepend_operation_lock_fault(installer, <<~'RUBY')
+        class << File
+          alias permission_probe_open open
+          def open(path, *args, &block)
+            raise Errno::EPERM, "private-path" if path.to_s.end_with?(".claude-easy-wrapper.lock")
+            permission_probe_open(path, *args, &block)
+          end
+        end
+      RUBY
+      [installer, File.join(File.dirname(installer), "uninstall_macos.sh")].each do |script|
+        Dir.mktmpdir do |home|
+          with_supported_app(home) do
+            args = script == installer ? ["--profile", "3", "--json"] : ["--json"]
+            stdout, stderr, status = run_script(script, *args, home: home)
+            result = assert_json_result(stdout, status, command: script == installer ? "install" : "uninstall")
+            assert_equal "operation_permission_denied", result["code"], stderr
+            refute File.exist?(usage_state_path(home))
+            refute_includes stdout + stderr, "private-path"
+          end
+        end
+      end
+    end
+  end
+
+  def test_auto_update_failure_preserves_child_evidence
+    patcher = <<~'RUBY'
+      if ARGV.include?("--print-core-status")
+        puts "supported"
+      elsif ARGV.include?("--disable-subscription-auto-update")
+        warn "无法读取 ClashX Meta 偏好设置"
+        exit 1
+      elsif ARGV.include?("--restore-owned-subscription-auto-update")
+        puts "not_owned"
+      end
+      exit 0
+    RUBY
+    with_supported_mihomo_installer(patcher_source: patcher) do |installer|
+      Dir.mktmpdir do |home|
+        with_supported_app(home) do
+          stdout, _, status = run_script(installer, "--profile", "3", "--json", home: home)
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal 9, status.exitstatus
+          assert_includes result["messages"].join, "无法读取 ClashX Meta 偏好设置"
+          refute File.exist?(usage_state_path(home))
+        end
+      end
+    end
+  end
+
   def test_installer_restores_the_previous_profile_when_profile_publication_cannot_sync
     with_supported_mihomo_installer do |installer|
       Dir.mktmpdir do |home|
         with_supported_app(home) do
-          state = usage_state_path(home)
-          FileUtils.mkdir_p(File.dirname(state))
-          system("/usr/bin/plutil", "-create", "xml1", state)
-          system("/usr/bin/plutil", "-insert", "Version", "-integer", "1", state)
-          system("/usr/bin/plutil", "-insert", "Profile", "-integer", "1", state)
-          File.chmod(0o600, state)
+          state = write_usage_profile(home, 1)
           marker = File.join(home, "profile-sync-failed")
           prepend_operation_lock_fault(installer, <<~'RUBY')
-            if ARGV[0] == "--sync-file" &&
-               ARGV[1].to_s.end_with?("/usage-profile.plist") &&
-               !File.exist?(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"))
-              File.binwrite(ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE"), "failed")
-              exit 76
+            module ClaudeEasyOperationLock
+              singleton_class.prepend(Module.new do
+                def sync_regular_file(path)
+                  marker = ENV.fetch("CLAUDE_EASY_TEST_SYNC_FAILURE")
+                  if path.end_with?("/usage-profile.plist") && !File.exist?(marker)
+                    File.binwrite(marker, "failed")
+                    raise Errno::EPERM
+                  end
+                  super
+                end
+              end)
             end
           RUBY
 
@@ -184,6 +236,8 @@ class MacosWrapperTest < Minitest::Test
           )
 
           refute status.success?, "#{stdout}\n#{stderr}"
+          result = assert_json_result(stdout, status, command: "install")
+          refute_equal "operation_permission_denied", result["code"]
           assert File.file?(marker)
           saved = Open3.capture2(
             "/usr/bin/plutil", "-extract", "Profile", "raw", state
@@ -1071,6 +1125,10 @@ class MacosWrapperTest < Minitest::Test
       end
       exit 0 if ARGV.include?("--snapshot-initial")
       if ARGV.include?("--disable-subscription-auto-update")
+        if ENV["CLAUDE_EASY_TEST_RECHECK_FAILURE"] == "1"
+          warn "无法读取 ClashX Meta 偏好设置"
+          exit 1
+        end
         puts "already_disabled"
         exit 0
       end
@@ -1109,6 +1167,18 @@ class MacosWrapperTest < Minitest::Test
           assert_equal "safe_update_completed", result.fetch("code")
           assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
           assert_equal ["remote_subscriptions"], result.fetch("changes")
+
+          stdout, _, status = run_script(
+            installer, "--safe-update", "--force-rewrite", "--json", home: home,
+            extra_env: { "CLAUDE_EASY_TEST_RECHECK_FAILURE" => "1" }
+          )
+          result = assert_json_result(stdout, status, command: "install")
+          assert_equal "partial", result.fetch("status")
+          assert_equal "auto_update_recovery_pending", result.fetch("code")
+          assert_equal ["remote_subscriptions"], result.fetch("changes")
+          assert_equal "订阅 A", result.fetch("items").fetch(0).fetch("label")
+          assert_includes result.fetch("messages").join, "无法读取 ClashX Meta 偏好设置"
+          assert_equal "subscription_update", result.fetch("completed_scope")
         end
       end
     end

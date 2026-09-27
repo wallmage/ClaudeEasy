@@ -190,8 +190,9 @@ module ClaudeEasy
                record["InstalledState"] == "disabled"
       current = record.is_a?(Hash) &&
                 record.keys.sort == %w[Domain Key OriginalValue Phase Version] &&
-                [2, 3].include?(record["Version"]) && record["OriginalValue"].is_a?(String) &&
-                subscription_auto_update_state(record["OriginalValue"]) == :enabled &&
+                [2, 3, 4].include?(record["Version"]) &&
+                ((record["OriginalValue"].is_a?(String) && subscription_auto_update_state(record["OriginalValue"]) == :enabled) ||
+                 (record["Version"] == 4 && record["OriginalValue"].nil?)) &&
                 (record["Version"] == 2 ? %w[prepared installed] : %w[prepared installed released]).include?(record["Phase"])
       valid = (legacy || current) &&
               AUTO_UPDATE_DOMAINS.include?(record["Domain"]) &&
@@ -252,7 +253,7 @@ module ClaudeEasy
   def write_auto_update_ownership_state(backup_root, domain, original_value, phase, existing: nil)
     root = secure_backup_root!(backup_root)
     state = {
-      "Version" => 3,
+      "Version" => original_value.nil? ? 4 : 3,
       "Domain" => domain,
       "Key" => "kAutoUpdateEnable",
       "OriginalValue" => original_value,
@@ -290,7 +291,7 @@ module ClaudeEasy
 
   def delete_auto_update_ownership_state(state)
     event = {
-      "Version" => 3,
+      "Version" => state.fetch("OriginalValue").nil? ? 4 : 3,
       "Domain" => state.fetch("Domain"),
       "Key" => "kAutoUpdateEnable",
       "OriginalValue" => state.fetch("OriginalValue"),
@@ -363,6 +364,29 @@ module ClaudeEasy
     plist_raw_value(exported.fetch(:plist), key, runner: runner)
   end
 
+  def subscription_auto_update_value(exported)
+    raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
+
+    document = REXML::Document.new(exported.fetch(:plist))
+    dictionary = document.elements["plist/dict"]
+    raise InvalidConfigError, "ClashX Meta 偏好设置格式无效" unless dictionary
+
+    entries = dictionary.elements.to_a
+    unless entries.length.even? && entries.each_slice(2).all? { |key, _value| key.name == "key" }
+      raise InvalidConfigError, "ClashX Meta 偏好设置格式无效"
+    end
+    matches = entries.each_slice(2).select { |key, _value| key.text == "kAutoUpdateEnable" }
+    return nil if matches.empty?
+
+    value = matches.first.last
+    unless matches.one? && %w[true false].include?(value.name) && value.elements.empty? && value.text.to_s.strip.empty?
+      raise InvalidConfigError, "ClashX Meta 订阅自动更新字段不是唯一布尔值"
+    end
+    value.name
+  rescue REXML::ParseException
+    raise InvalidConfigError, "ClashX Meta 偏好设置格式无效"
+  end
+
   def disable_subscription_auto_update(backup_root:, runner: Open3.method(:capture3), operation_lock: nil,
                                        preference_domain: clashx_preference_domain)
     owns_operation_lock = operation_lock.nil?
@@ -379,7 +403,7 @@ module ClaudeEasy
 
       domain = ownership.fetch("Domain")
       original = ownership.fetch("OriginalValue")
-      current = plist_raw_value(owned_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+      current = subscription_auto_update_value(owned_export)
       current_state = subscription_auto_update_state(current)
       raise InvalidConfigError, "无法确认 ClashX Meta 订阅自动更新状态" if current_state == :unknown
 
@@ -409,7 +433,7 @@ module ClaudeEasy
       raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
 
       domain = exported.fetch(:domain)
-      original = plist_raw_value(exported.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+      original = subscription_auto_update_value(exported)
       state = subscription_auto_update_state(original)
       return { status: :already_disabled, domain: domain } if state == :disabled
       raise InvalidConfigError, "无法确认 ClashX Meta 订阅自动更新状态" unless state == :enabled
@@ -430,8 +454,7 @@ module ClaudeEasy
     end
 
     before_write = defaults_export_named_domain(domain, runner: runner)
-    before_value = before_write &&
-                   plist_raw_value(before_write.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+    before_value = subscription_auto_update_value(before_write)
     unless before_value == current && subscription_auto_update_state(before_value) == :enabled
       raise InvalidConfigError, "订阅自动更新设置在修改前发生变化"
     end
@@ -443,8 +466,7 @@ module ClaudeEasy
       write_status.success?
 
     verified_export = defaults_export_named_domain(domain, runner: runner)
-    verified_value = verified_export &&
-                     plist_raw_value(verified_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+    verified_value = subscription_auto_update_value(verified_export)
     raise IOError, "ClashX Meta 订阅自动更新设置回读失败" unless
       subscription_auto_update_state(verified_value) == :disabled
 
@@ -466,18 +488,19 @@ module ClaudeEasy
     exported = defaults_export_named_domain(ownership.fetch("Domain"), runner: runner)
     raise InvalidConfigError, "无法读取 ClashX Meta 偏好设置" unless exported
 
-    current = plist_raw_value(exported.fetch(:plist), "kAutoUpdateEnable", runner: runner)
+    current = subscription_auto_update_value(exported)
     state = subscription_auto_update_state(current)
     if state == :disabled
-      _output, error, write_status = runner.call(
-        "/usr/bin/defaults", "write", ownership.fetch("Domain"), "kAutoUpdateEnable", "-bool", "true"
-      )
+      arguments = ownership.fetch("OriginalValue").nil? ?
+        ["delete", ownership.fetch("Domain"), "kAutoUpdateEnable"] :
+        ["write", ownership.fetch("Domain"), "kAutoUpdateEnable", "-bool", "true"]
+      _output, error, write_status = runner.call("/usr/bin/defaults", *arguments)
       raise IOError, "无法恢复 ClashX Meta 订阅自动更新：#{error.to_s.strip}" unless write_status.success?
 
       verified_export = defaults_export_named_domain(ownership.fetch("Domain"), runner: runner)
-      verified_value = verified_export &&
-                       plist_raw_value(verified_export.fetch(:plist), "kAutoUpdateEnable", runner: runner)
-      raise IOError, "ClashX Meta 订阅自动更新恢复后回读失败" unless subscription_auto_update_state(verified_value) == :enabled
+      verified_value = subscription_auto_update_value(verified_export)
+      restored = ownership.fetch("OriginalValue").nil? ? verified_value.nil? : subscription_auto_update_state(verified_value) == :enabled
+      raise IOError, "ClashX Meta 订阅自动更新恢复后回读失败" unless restored
       result = :restored
     elsif state == :enabled
       result = :already_restored
@@ -603,7 +626,9 @@ module ClaudeEasy
     :unknown
   end
 
-  def subscription_auto_update_state(value = defaults_read("kAutoUpdateEnable"))
+  def subscription_auto_update_state(value = subscription_auto_update_value(defaults_export_domain))
+    return :enabled if value.nil?
+
     normalized = value.to_s.strip.downcase
     return :disabled if %w[0 false no].include?(normalized)
     return :enabled if %w[1 true yes].include?(normalized)

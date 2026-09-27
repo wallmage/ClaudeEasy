@@ -851,10 +851,10 @@ module ClaudeEasy
     base_result(nil, :concurrent_change).merge(path: path)
   rescue Psych::Exception, JSON::ParserError, InvalidConfigError, SystemStackError
     base_result(nil, :invalid).merge(path: path)
-  rescue SystemCallError, IOError
-    base_result(nil, :io_error).merge(path: path)
-  rescue StandardError
-    base_result(nil, :error).merge(path: path)
+  rescue SystemCallError, IOError => error
+    base_result(nil, :io_error).merge(path: path, error_class: error.class.name)
+  rescue StandardError => error
+    base_result(nil, :error).merge(path: path, error_class: error.class.name)
   end
 
   def run(directory: nil, directories: nil, policy_path:, dry_run: false, backup_root: nil,
