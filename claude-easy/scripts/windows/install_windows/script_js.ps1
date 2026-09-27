@@ -361,7 +361,7 @@ function Assert-JavaScriptCanCompose([string]$Text) {
     }
     $matches = [regex]::Matches($analysis.Code, $lineStart + '\s*function\s+main\s*\(')
     if ($matches.Count -ne 1) {
-        throw "检测到已有全局扩展脚本，但无法安全合并。原脚本没有被修改，请把提示和 Script.js 截图发回来。"
+        throw "已有全局扩展脚本缺少唯一的同步 main 入口，无法安全合并。已保留原脚本，需继续分析入口结构。"
     }
     Assert-JavaScriptReservedIdentifiers $Text
     Assert-JavaScriptDoesNotUseDynamicCode $Text

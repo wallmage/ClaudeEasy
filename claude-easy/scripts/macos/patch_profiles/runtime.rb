@@ -387,10 +387,19 @@ module ClaudeEasy
 
   def runtime_matches_profile_config?(requester, config, runtime_path_reader: nil,
                                       require_runtime_file: true,
-                                      previous_profile_identity: nil)
+                                      previous_profile_identity: nil, strict_identity: false)
     expected = profile_runtime_identity_from_config(config)
     actual = runtime_loaded_identity(requester)
     return false unless expected && actual
+
+    if strict_identity
+      return false unless expected[:providers] == actual[:providers]
+      groups = actual[:groups].keys - (expected[:groups].key?("GLOBAL") ? [] : ["GLOBAL"])
+      return false unless groups.sort == expected[:groups].keys.sort
+      provider_nodes = runtime_provider_proxies(requester)
+      return false unless provider_nodes &&
+                          (actual[:proxies] - expected[:proxies] - provider_nodes.keys).empty?
+    end
 
     if require_runtime_file
       runtime_path_reader ||= method(:running_mihomo_config_paths)
@@ -409,6 +418,13 @@ module ClaudeEasy
       loaded = actual[:groups][name]
       return false unless loaded.is_a?(Array)
       group = Array(config["proxy-groups"]).find { |item| item.is_a?(Hash) && item["name"] == name }
+      if strict_identity
+        dynamic = !Array(group["use"]).empty? ||
+                  %w[include-all include-all-providers].any? { |key| group[key] == true }
+        allowed = members + (dynamic ? provider_nodes.keys : [])
+        allowed += expected[:proxies] if group["include-all"] == true || group["include-all-proxies"] == true
+        return false unless (loaded - allowed).empty?
+      end
       if explicit_group_members_are_filtered?(group)
         return false if members.any? && loaded.empty?
         return false unless loaded.all? { |member| members.include?(member) }
@@ -423,12 +439,13 @@ module ClaudeEasy
   end
 
   def runtime_matches_profile?(requester, path, runtime_path_reader: nil,
-                               require_runtime_file: true, previous_profile_identity: nil)
+                               require_runtime_file: true, previous_profile_identity: nil,
+                               strict_identity: false)
     config = load_yaml(File.read(path, encoding: "UTF-8"), path)
     runtime_matches_profile_config?(
       requester, config, runtime_path_reader: runtime_path_reader,
       require_runtime_file: require_runtime_file,
-      previous_profile_identity: previous_profile_identity
+      previous_profile_identity: previous_profile_identity, strict_identity: strict_identity
     )
   rescue StandardError
     false
@@ -1416,7 +1433,7 @@ module ClaudeEasy
           return false unless original && restored_identity &&
                               restored_identity == candidate_identity &&
                               runtime_matches_profile?(
-                                requester, path, require_runtime_file: false
+                                requester, path, require_runtime_file: false, strict_identity: true
                               )
 
           snapshot = regular_file_snapshot_once(path, "恢复配置")
@@ -1426,6 +1443,7 @@ module ClaudeEasy
             File.realpath(active.fetch(:path)) == path &&
               regular_file_snapshot_once(path, "恢复配置").values_at(:identity, :bytes) ==
               snapshot.values_at(:identity, :bytes) &&
+              runtime_matches_profile?(requester, path, require_runtime_file: false, strict_identity: true) &&
               runtime_precommit_allowed?(precommit_condition)
           end
           dispatch_checkpoint = capture_runtime_checkpoint(

@@ -952,6 +952,47 @@ module ClaudeEasy
         runtime_checkpoint = nil
         active_pair = work_items.zip(preflight).find { |item, _preview| item.fetch(:active) }
         active_preview = active_pair&.last
+        if backup_root && auto_reload && active_preview && active_preview[:status] == :unchanged
+          active_path = active_pair.first.fetch(:path)
+          cache_requester = requester || (socket && lambda { |method, endpoint, body|
+            controller_request(socket, method, endpoint, body)
+          }) || current_runtime_requester
+          if cache_requester && !runtime_matches_profile?(cache_requester, active_path) &&
+             runtime_matches_profile?(cache_requester, active_path, require_runtime_file: false)
+            identity = clashx_running_identity
+            checkpoint = capture_runtime_checkpoint(active_path, require_tun: :preserve, requester: cache_requester)
+            if identity && checkpoint && runtime_precommit_allowed?(precommit_condition)
+              begin
+                prepare_profile_transaction(
+                  [{ path: active_path, original: active_preview.fetch(:transaction_original),
+                     candidate: active_preview.fetch(:transaction_candidate) }],
+                  backup_root, roots: roots, runtime_checkpoint: checkpoint, activation_identity: identity
+                )
+              rescue ConcurrentProfileChangeError
+                next if batch_attempt + 1 < MAX_PATCH_ATTEMPTS
+
+                return preflight.map do |result|
+                  result.merge(status: :concurrent_change, dry_run: false, transaction_commit: false)
+                end
+              end
+              details = {}
+              recovered = resume_profile_transaction(
+                backup_root, roots: roots, work_items: work_items, reload_runtime: true,
+                require_tun: :preserve, socket: socket, requester: cache_requester,
+                connectivity_checker: connectivity_checker,
+                precommit_condition: precommit_condition, diagnostics: details
+              )
+              unless recovered == :recovered
+                return preflight.map do |preview|
+                  preview.merge(details).merge(
+                    status: preview[:active] ? :reload_failed_restore_pending : :batch_aborted,
+                    dry_run: false
+                  )
+                end
+              end
+            end
+          end
+        end
         if auto_reload && active_preview && active_preview.fetch(:status) == :updated
           runtime_checkpoint = capture_runtime_checkpoint(
             active_pair.first.fetch(:path),

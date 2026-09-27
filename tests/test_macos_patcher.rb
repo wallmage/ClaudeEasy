@@ -868,14 +868,91 @@ class MacosPatcherTest < Minitest::Test
     end
   end
 
+  def test_unchanged_patch_refreshes_stale_client_cache_without_raw_tun_reload
+    [[1, :success], [2, :success], [2, :concurrent], [2, :failed]].each do |usage_profile, scenario|
+      Dir.mktmpdir do |directory|
+        profiles = File.join(directory, "profiles")
+        Dir.mkdir(profiles)
+        path = File.join(profiles, "active.yaml")
+        cache = File.join(directory, "cache.yaml")
+        backup = File.join(directory, "backups")
+        config = ClaudeEasy.patch(base_config, @policy, usage_profile: usage_profile).fetch(:config)
+        bytes = ClaudeEasy.dump_config(config)
+        File.binwrite(path, bytes)
+        File.binwrite(cache, YAML.dump(config.merge("rules" => ["MATCH,REJECT"])))
+        proxies = config["proxies"].to_h { |proxy| [proxy["name"], { "type" => "Shadowsocks" }] }
+        config["proxy-groups"].each do |group|
+          proxies[group["name"]] = { "type" => "Selector", "now" => group["proxies"].first, "all" => group["proxies"] }
+        end
+        requester = lambda do |method, endpoint, *_arguments|
+          case [method, endpoint]
+          when ["GET", "/proxies"] then [200, JSON.generate("proxies" => proxies)]
+          when ["GET", "/providers/proxies"] then [200, '{"providers":{}}']
+          when ["GET", "/configs"] then [200, '{"tun":{"enable":true}}']
+          when ["GET", "/dns/query?name=www.baidu.com&type=A"]
+            [200, '{"Answer":[{"data":"203.0.113.1"}]}']
+          else flunk "unchanged client refresh must not use raw controller mutation: #{method} #{endpoint}"
+          end
+        end
+        reloads = 0
+        native_recovery = lambda do |_items, profile, _selected, **options|
+          assert_equal usage_profile, profile
+          transaction = options.fetch(:transaction)
+          assert transaction[:activation_state]
+          assert_equal :enabled, transaction[:runtime_checkpoint][:expected_tun]
+          assert_equal bytes.b, transaction[:candidate_bytes][File.realpath(path)]
+          assert_equal bytes.b, transaction[:original_snapshots][File.realpath(path)][:bytes]
+          reloads += 1
+          File.binwrite(cache, bytes) unless scenario == :failed
+          scenario != :failed
+        end
+        prepare = ClaudeEasy.method(:prepare_profile_transaction)
+        prepare_attempts = 0
+        guarded_prepare = lambda do |*args, **options|
+          prepare_attempts += 1
+          if scenario == :concurrent
+            raise ClaudeEasy::ConcurrentProfileChangeError, "injected concurrent edit"
+          end
+          prepare.call(*args, **options)
+        end
+        ClaudeEasy.stub(:prepare_profile_transaction, guarded_prepare) do
+          ClaudeEasy.stub(:saved_usage_profile, usage_profile) do
+            ClaudeEasy.stub(:clashx_running_identity, { pid: 123, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }) do
+              ClaudeEasy.stub(:running_mihomo_config_paths, [cache]) do
+                ClaudeEasy.stub(:reload_recovered_safe_update_runtime, native_recovery) do
+                  (scenario == :success ? 2 : 1).times do
+                    results = ClaudeEasy.run(directory: profiles, policy_path: POLICY_PATH,
+                      backup_root: backup, selected_name: "active", auto_reload: true,
+                      usage_profile: usage_profile, requester: requester, connectivity_checker: -> { true })
+                    expected = { success: :unchanged, concurrent: :concurrent_change,
+                                 failed: :reload_failed_restore_pending }.fetch(scenario)
+                    assert_equal [expected], results.map { |result| result[:status] }
+                    assert_equal scenario == :failed, ClaudeEasy.profile_transaction_pending?(backup)
+                  end
+                end
+              end
+            end
+          end
+        end
+        assert_equal(scenario == :concurrent ? 0 : 1, reloads)
+        assert_equal ClaudeEasy::MAX_PATCH_ATTEMPTS, prepare_attempts if scenario == :concurrent
+        assert_equal bytes.b, File.binread(path)
+      end
+    end
+  end
+
   def test_old_tun_failure_recovers_without_proxy_identity_changes
-    [:candidate, :other_runtime, :reload_failed, :changed_file].each do |scenario|
+    [:candidate, :provider, :other_runtime, :extra_proxy, :extra_group, :extra_provider, :after_extra_proxy, :reload_failed, :changed_file].each do |scenario|
       Dir.mktmpdir do |directory|
         path = File.join(directory, "active.yaml")
         backup = File.join(directory, "backups")
         config = { "proxies" => [{ "name" => "Node", "type" => "ss" }],
                    "proxy-groups" => [{ "name" => "Main", "type" => "select", "proxies" => ["Node"] }],
                    "tun" => { "enable" => false }, "rules" => ["MATCH,DIRECT"] }
+        if scenario == :provider
+          config["proxy-providers"] = { "remote" => { "type" => "http", "url" => "https://fixture.invalid" } }
+          config["proxy-groups"].first["use"] = ["remote"]
+        end
         original = YAML.dump(config)
         candidate = YAML.dump(config.merge("tun" => { "enable" => true }, "rules" => ["MATCH,REJECT"]))
         File.binwrite(path, original)
@@ -892,11 +969,22 @@ class MacosPatcherTest < Minitest::Test
           case [method, endpoint]
           when ["GET", "/proxies"]
             node = scenario == :other_runtime ? "Other" : "Node"
-            [200, JSON.generate("proxies" => {
+            proxies = {
               node => { "type" => "Shadowsocks" },
-              "Main" => { "type" => "Selector", "now" => node, "all" => [node] }
-            })]
-          when ["GET", "/providers/proxies"] then [200, '{"providers":{}}']
+              "Main" => { "type" => "Selector", "now" => node, "all" => [node] },
+              "GLOBAL" => { "type" => "Selector", "now" => "Main", "all" => ["Main", node] }
+            }
+            if scenario == :provider
+              proxies["Remote"] = { "type" => "Shadowsocks" }
+              proxies["Main"]["all"] << "Remote"
+            end
+            proxies["Foreign"] = { "type" => "Shadowsocks" } if scenario == :extra_proxy || (scenario == :after_extra_proxy && reloads.positive?)
+            proxies["ForeignGroup"] = { "type" => "Selector", "now" => node, "all" => [node] } if scenario == :extra_group
+            [200, JSON.generate("proxies" => proxies)]
+          when ["GET", "/providers/proxies"]
+            providers = scenario == :extra_provider ? { "foreign" => {} } : {}
+            providers["remote"] = { "proxies" => [{ "name" => "Remote", "type" => "Shadowsocks" }] } if scenario == :provider
+            [200, JSON.generate("providers" => providers)]
           when ["GET", "/configs"] then [200, JSON.generate("tun" => { "enable" => tun })]
           when ["PUT", "/configs?force=true"]
             assert_equal File.realpath(path), JSON.parse(body).fetch("path")
@@ -914,10 +1002,12 @@ class MacosPatcherTest < Minitest::Test
           reload_runtime: true, require_tun: :preserve, requester: requester,
           connectivity_checker: -> { true }, precommit_condition: -> { true }
         )
-        assert_equal(scenario == :candidate ? :recovered : :runtime_restore_pending, result, scenario)
-        assert_equal(scenario != :candidate, ClaudeEasy.profile_transaction_pending?(backup))
-        assert_equal(scenario == :other_runtime ? 0 : 1, reloads)
-        assert_equal([:other_runtime, :reload_failed].include?(scenario), tun)
+        recovered = [:candidate, :provider].include?(scenario)
+        assert_equal(recovered ? :recovered : :runtime_restore_pending, result, scenario)
+        assert_equal(!recovered, ClaudeEasy.profile_transaction_pending?(backup))
+        foreign = [:other_runtime, :extra_proxy, :extra_group, :extra_provider].include?(scenario)
+        assert_equal(foreign ? 0 : 1, reloads)
+        assert_equal(foreign || scenario == :reload_failed, tun)
         assert_equal(scenario == :changed_file ? "external edit" : original, File.binread(path))
       end
     end
