@@ -345,7 +345,10 @@ module ClaudeEasy
     return nil unless payload["providers"].is_a?(Hash)
 
     providers = payload.fetch("providers").keys.map(&:to_s).sort
-    { proxies: leaf_names, groups: groups, providers: providers }
+    compatible = payload.fetch("providers").each_with_object([]) do |(name, provider), names|
+      names << name if provider.is_a?(Hash) && provider["vehicleType"] == "Compatible"
+    end
+    { proxies: leaf_names, groups: groups, providers: providers, compatible_providers: compatible }
   rescue StandardError
     nil
   end
@@ -393,10 +396,11 @@ module ClaudeEasy
     return false unless expected && actual
 
     if strict_identity
-      return false unless expected[:providers] == actual[:providers]
+      implicit = actual[:compatible_providers] & (["default"] + expected[:groups].keys)
+      return false unless expected[:providers] == actual[:providers] - implicit
       groups = actual[:groups].keys - (expected[:groups].key?("GLOBAL") ? [] : ["GLOBAL"])
       return false unless groups.sort == expected[:groups].keys.sort
-      provider_nodes = runtime_provider_proxies(requester)
+      provider_nodes = runtime_provider_proxies(requester, provider_names: expected[:providers])
       return false unless provider_nodes &&
                           (actual[:proxies] - expected[:proxies] - provider_nodes.keys).empty?
     end
@@ -686,14 +690,15 @@ module ClaudeEasy
     end
   end
 
-  def runtime_provider_proxies(requester)
+  def runtime_provider_proxies(requester, provider_names: nil)
     status, body = requester.call("GET", "/providers/proxies", nil)
     return nil unless status == 200
 
     providers = JSON.parse(body)["providers"]
     return nil unless providers.is_a?(Hash)
 
-    providers.each_value.each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |provider, proxies|
+    providers.each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |(name, provider), proxies|
+      next if provider_names && !provider_names.include?(name)
       next unless provider.is_a?(Hash)
 
       Array(provider["proxies"]).each do |proxy|
@@ -1371,6 +1376,22 @@ module ClaudeEasy
     false
   end
 
+  def ambiguous_profile_recovery_guard(requester, path, candidate_bytes, original, precommit_condition)
+    expected_path = File.realpath(path)
+    restored_identity = profile_runtime_identity(expected_path)
+    candidate_identity = profile_runtime_identity_from_bytes(candidate_bytes, "配置事务候选")
+    return nil unless requester && original && restored_identity && restored_identity == candidate_identity
+
+    guard = lambda do
+      File.realpath(path) == expected_path &&
+        regular_file_snapshot_once(expected_path, "恢复配置").values_at(:identity, :bytes) ==
+        original.values_at(:identity, :bytes) &&
+        runtime_matches_profile?(requester, expected_path, require_runtime_file: false, strict_identity: true) &&
+        runtime_precommit_allowed?(precommit_condition)
+    end
+    guard if guard.call
+  end
+
   def reload_recovered_profile_runtime(work_items, require_tun:, socket: nil, requester: nil,
                                        connectivity_checker: nil, precommit_condition: nil,
                                        runtime_checkpoint: nil, transaction: nil,
@@ -1410,14 +1431,8 @@ module ClaudeEasy
         end
         diagnostics[:failure_stage] = "recovery_loaded_profile"
         case runtime_profile_state_reader.call(active_path, candidate_bytes)
-        when :restored
-          runtime_checkpoint = capture_runtime_checkpoint(
-            active_path, require_tun: :preserve, requester: requester
-          )
-          return false unless runtime_checkpoint
-          dispatch_checkpoint = runtime_checkpoint
-        when :candidate
-          # The candidate load may reset selectors; restore the saved checkpoint.
+        when :restored, :candidate
+          # Loaded identity does not prove that the saved TUN and selections survived.
           dispatch_checkpoint = capture_runtime_checkpoint(
             active_path, require_tun: :preserve, requester: requester
           )
@@ -1426,26 +1441,11 @@ module ClaudeEasy
           path = active_path
           original = transaction && transaction[:original_snapshots] &&
                      transaction[:original_snapshots][path]
-          restored_identity = profile_runtime_identity(path)
-          candidate_identity = profile_runtime_identity_from_bytes(
-            candidate_bytes, "配置事务候选"
+          recovery_precommit = ambiguous_profile_recovery_guard(
+            requester, active.fetch(:path), candidate_bytes, original, precommit_condition
           )
-          return false unless original && restored_identity &&
-                              restored_identity == candidate_identity &&
-                              runtime_matches_profile?(
-                                requester, path, require_runtime_file: false, strict_identity: true
-                              )
+          return false unless recovery_precommit
 
-          snapshot = regular_file_snapshot_once(path, "恢复配置")
-          return false unless snapshot.values_at(:identity, :bytes) ==
-                              original.values_at(:identity, :bytes)
-          recovery_precommit = lambda do
-            File.realpath(active.fetch(:path)) == path &&
-              regular_file_snapshot_once(path, "恢复配置").values_at(:identity, :bytes) ==
-              snapshot.values_at(:identity, :bytes) &&
-              runtime_matches_profile?(requester, path, require_runtime_file: false, strict_identity: true) &&
-              runtime_precommit_allowed?(precommit_condition)
-          end
           dispatch_checkpoint = capture_runtime_checkpoint(
             path, require_tun: :preserve, requester: requester
           )

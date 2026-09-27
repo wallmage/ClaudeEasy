@@ -982,8 +982,18 @@ class MacosPatcherTest < Minitest::Test
             proxies["ForeignGroup"] = { "type" => "Selector", "now" => node, "all" => [node] } if scenario == :extra_group
             [200, JSON.generate("proxies" => proxies)]
           when ["GET", "/providers/proxies"]
-            providers = scenario == :extra_provider ? { "foreign" => {} } : {}
-            providers["remote"] = { "proxies" => [{ "name" => "Remote", "type" => "Shadowsocks" }] } if scenario == :provider
+            members = [{ "name" => "Node", "type" => "Shadowsocks" }]
+            inline = members + [{ "name" => "DIRECT", "type" => "Direct" },
+                                { "name" => "REJECT", "type" => "Reject" },
+                                { "name" => "Main", "type" => "Selector" }]
+            inline << { "name" => "Foreign", "type" => "Shadowsocks" } if
+              scenario == :extra_proxy || (scenario == :after_extra_proxy && reloads.positive?)
+            providers = {
+              "default" => { "vehicleType" => "Compatible", "proxies" => inline },
+              "Main" => { "vehicleType" => "Compatible", "proxies" => members }
+            }
+            providers["foreign"] = { "vehicleType" => "Compatible", "proxies" => members } if scenario == :extra_provider
+            providers["remote"] = { "vehicleType" => "HTTP", "proxies" => [{ "name" => "Remote", "type" => "Shadowsocks" }] } if scenario == :provider
             [200, JSON.generate("providers" => providers)]
           when ["GET", "/configs"] then [200, JSON.generate("tun" => { "enable" => tun })]
           when ["PUT", "/configs?force=true"]
@@ -1324,32 +1334,62 @@ class MacosPatcherTest < Minitest::Test
   end
 
   def test_recovered_safe_update_runtime_uses_the_saved_checkpoint
-    Dir.mktmpdir do |directory|
-      path = File.join(directory, "active.yaml")
-      File.binwrite(path, YAML.dump(base_config))
-      identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
-      checkpoint = { path: File.realpath(path), expected_tun: :disabled, selections: {} }
-      bytes = File.binread(path)
-      transaction = ClaudeEasy.prepare_profile_transaction(
-        [{ path: path, original: bytes, candidate: bytes }],
-        File.join(directory, "backups"), roots: [directory],
-        runtime_checkpoint: checkpoint, activation_identity: identity
-      )
-      observed_tun = nil
-      restored = ClaudeEasy.reload_recovered_safe_update_runtime(
-        [{ name: "active", path: path }], 1, "active",
-        precommit_condition: -> { true }, runtime_checkpoint: checkpoint,
-        transaction: transaction, client_identity: identity,
-        runtime_checkpoint_checker: ->(_current) { true },
-        native_reloader: ->(_current) { true },
-        runtime_waiter: lambda { |_current, **options|
-          observed_tun = options.fetch(:expected_tun)
-          true
-        }, reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
-      )
-
-      assert restored
-      assert_equal :disabled, observed_tun
+    [:unknown, :current, :restored, :candidate, :foreign, :changed_after, :unresolved].each do |state|
+      Dir.mktmpdir do |directory|
+        path = File.join(directory, "active.yaml")
+        config = base_config
+        bytes = YAML.dump(config)
+        File.binwrite(path, bytes)
+        identity = { pid: 12_345, started: "same", executable: "/Applications/ClashX Meta.app/Contents/MacOS/ClashX Meta" }
+        checkpoint = { path: File.realpath(path), expected_tun: :disabled,
+                       selections: { "Main" => "台湾家宽 01", "AI" => "Main" } }
+        live = checkpoint.merge(expected_tun: state == :current ? :disabled : :enabled,
+                                selections: state == :current ? checkpoint[:selections] :
+                                  { "Main" => "日本家宽 01", "AI" => "Main" })
+        transaction = ClaudeEasy.prepare_profile_transaction(
+          [{ path: path, original: bytes, candidate: bytes }],
+          File.join(directory, "backups"), roots: [directory],
+          runtime_checkpoint: checkpoint, activation_identity: identity
+        )
+        proxies = config["proxies"].to_h { |proxy| [proxy["name"], { "type" => "Shadowsocks" }] }
+        config["proxy-groups"].each do |group|
+          proxies[group["name"]] = { "type" => "Selector", "all" => group["proxies"] }
+        end
+        proxies["Foreign"] = { "type" => "Shadowsocks" } if state == :foreign
+        requester = lambda do |_method, endpoint, _body|
+          [200, JSON.generate(endpoint == "/proxies" ? { "proxies" => proxies } : { "providers" => {} })]
+        end
+        reloads = 0
+        options = {
+          transaction: transaction, client_identity: identity,
+          runtime_checkpoint_checker: ->(current) { current == live },
+          runtime_checkpoint_reader: ->(_path) { live.dup },
+          runtime_profile_state_reader: ->(*) { %i[foreign changed_after].include?(state) ? :unknown : state },
+          native_reloader: lambda { |_current|
+            reloads += 1
+            proxies["Foreign"] = { "type" => "Shadowsocks" } if state == :changed_after
+            true
+          },
+          runtime_waiter: lambda { |_current, **values|
+            assert_equal checkpoint[:expected_tun], values.fetch(:expected_tun)
+            assert_equal checkpoint[:selections], values.fetch(:selections)
+            state != :unresolved &&
+              (values.fetch(:precommit_condition).nil? || values.fetch(:precommit_condition).call)
+          }, reload_snapshot_reader: -> { { "log" => [1, 2, 3] } }
+        }
+        ClaudeEasy.stub(:current_runtime_requester, -> { requester }) do
+          # A pending same-byte transaction may recheck health, never resend the event.
+          2.times do
+            restored = ClaudeEasy.reload_recovered_safe_update_runtime(
+              [{ path: path }], 1, "active", **options
+            )
+            assert_equal !%i[foreign changed_after unresolved].include?(state), restored, state.to_s
+          end
+        end
+        assert_equal state == :foreign ? 0 : 1, reloads
+        assert_equal checkpoint, transaction[:runtime_checkpoint]
+        assert ClaudeEasy.profile_transaction_pending?(File.join(directory, "backups")) if state == :unresolved
+      end
     end
   end
 

@@ -1033,16 +1033,20 @@ module ClaudeEasy
                         transaction[:candidate_bytes][File.realpath(active.fetch(:path))]
       runtime_profile_state_reader ||= method(:current_runtime_loaded_profile_state)
       case runtime_profile_state_reader.call(active.fetch(:path), candidate_bytes)
-      when :restored
-        runtime_checkpoint = runtime_checkpoint_reader.call(active.fetch(:path))
-        return false unless runtime_checkpoint
-        dispatch_checkpoint = runtime_checkpoint
-      when :candidate
-        # The candidate load may reset selectors; restore the saved checkpoint.
+      when :restored, :candidate
+        # Loaded identity does not prove that the saved TUN and selections survived.
         dispatch_checkpoint = runtime_checkpoint_reader.call(active.fetch(:path))
         return false unless dispatch_checkpoint
       else
-        return false
+        path = File.realpath(active.fetch(:path))
+        original = transaction[:original_snapshots] && transaction[:original_snapshots][path]
+        precommit_condition = ambiguous_profile_recovery_guard(
+          current_runtime_requester, active.fetch(:path), candidate_bytes, original, precommit_condition
+        )
+        return false unless precommit_condition
+
+        dispatch_checkpoint = runtime_checkpoint_reader.call(path)
+        return false unless dispatch_checkpoint
       end
     end
 
@@ -1083,6 +1087,7 @@ module ClaudeEasy
 
     begin
       return false unless runtime_checkpoint_checker.call(dispatch_checkpoint)
+      return false unless runtime_precommit_allowed?(precommit_condition)
       return false unless reload_already_requested || native_reloader.call(client_identity)
 
       previous_profile_identity = profile_runtime_identity_from_bytes(
@@ -1098,9 +1103,8 @@ module ClaudeEasy
         reload_already_requested: reload_already_requested,
         previous_profile_identity: previous_profile_identity
       )
-      validated && safe_update_runtime_snapshot_current?(
-        active.fetch(:path), restored_snapshot
-      )
+      validated && runtime_precommit_allowed?(precommit_condition) &&
+        safe_update_runtime_snapshot_current?(active.fetch(:path), restored_snapshot)
     ensure
       close_clashx_reload_receipt(reload_receipt) if reload_receipt
     end
