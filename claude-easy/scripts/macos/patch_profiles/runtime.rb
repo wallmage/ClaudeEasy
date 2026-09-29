@@ -28,11 +28,11 @@ module ClaudeEasy
     "no_proxy" => nil, "NO_PROXY" => nil
   }.freeze
 
-  def clashx_running_identity(runner: Open3.method(:capture3))
+  def clashx_running_identity(runner: Open3.method(:capture3), on_query_error: nil)
     output, _error, status = runner.call(
       "/bin/ps", "axww", "-o", "pid=", "-o", "lstart=", "-o", "comm="
     )
-    return nil unless status.success?
+    return on_query_error unless status.success?
 
     matches = output.each_line.each_with_object([]) do |line, found|
       match = line.match(/\A\s*(\d+)\s+(.{24})\s+(.+ClashX Meta\.app\/Contents\/MacOS\/ClashX Meta)\s*\z/)
@@ -45,7 +45,7 @@ module ClaudeEasy
     end
     matches.length == 1 ? matches.first : nil
   rescue StandardError
-    nil
+    on_query_error
   end
 
   def same_clashx_process?(left, right)

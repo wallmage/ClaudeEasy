@@ -151,8 +151,9 @@ module ClaudeEasy
                                        sleeper: ->(seconds) { sleep seconds }, attempts: 20)
     return manual_client_switch_result(:invalid_profile) unless [1, 2, 3].include?(usage_profile)
 
-    identity_reader ||= method(:clashx_running_identity)
+    identity_reader ||= -> { clashx_running_identity(on_query_error: :process_query_unavailable) }
     identity = identity_reader.call
+    return manual_client_switch_result(:process_query_unavailable) if identity == :process_query_unavailable
     return manual_client_switch_result(:client_not_running) unless identity
 
     command_support_reader ||= method(:clashx_script_commands_supported?)

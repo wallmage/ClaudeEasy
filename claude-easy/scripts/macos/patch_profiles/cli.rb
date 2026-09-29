@@ -487,7 +487,9 @@ module ClaudeEasy
       end
 
       reason = result.fetch(:reason).to_s
-      message = if result.fetch(:reason) == :third_party_proxy_active
+      message = if result.fetch(:reason) == :process_query_unavailable
+                  "进程查询不可用，无法确认 ClashX Meta 是否运行；请继续通过控制器及实时状态取证。"
+                elsif result.fetch(:reason) == :third_party_proxy_active
                   "检测到第三方代理；已保留原设置，需继续检查代理归属冲突。"
                 else
                   "客户端开关尚未验收；需继续诊断，通过可用的自动入口完成后回读状态与连接。"

@@ -98,6 +98,20 @@ class MacosPatcherTest < Minitest::Test
     assert_includes receipt.fetch("required_followups"), "macos_client_switch_reconciliation"
   end
 
+  def test_process_query_failure_does_not_claim_client_is_stopped
+    failed = Struct.new(:success?).new(false)
+    identity = ClaudeEasy.clashx_running_identity(
+      runner: ->(*) { ["", "process list unavailable", failed] },
+      on_query_error: :process_query_unavailable
+    )
+    assert_equal :process_query_unavailable, identity
+
+    ClaudeEasy.stub(:clashx_running_identity, ->(**_options) { identity }) do
+      result = ClaudeEasy.reconcile_clashx_client_switches(usage_profile: 3)
+      assert_equal :process_query_unavailable, result[:reason]
+    end
+  end
+
   def test_auto_update_missing_preference_round_trip_and_read_failures
     domain = "com.metacubex.ClashX.meta"
     ok = Struct.new(:success?).new(true)
